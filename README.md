@@ -80,12 +80,18 @@
 - **Interfaz Moderna y Homogénea:** Paneles laterales unificados con ancho mínimo de 420 px, máximo de 520 px y predeterminado de 520 px en todos los módulos, diseño visual armónico en tonos azulados oscuros (`#161622`) y controles compactados verticalmente (selectores en línea en Apilador y Revelador).
 - **Vitrina de Resultados Integrada (Showcase):** Panel visual en la pestaña de Configuración con visor responsivo antialias que exhibe astrofotografía real de paisaje procesada de principio a fin con Apilator, acreditación de autoría (*Fotografía y Procesado: Shilmar*) e inspección a resolución nativa.
 - **Aceleración por GPU y JIT Dual:** Soporte automático para NVIDIA CUDA mediante CuPy, compilación JIT de CPU multinúcleo con Numba (kernels paralelos LLVM), y conmutación transparente a CPU estándar si no se dispone de librerías aceleradoras.
-- **Estrategias de Memoria Configurables:** Modos automático, memoria RAM intermedia de alta velocidad o volcado temporal a disco SSD para equipos con recursos limitados.
-- **Detección Automática de Binarios:** Localización y validación dinámica de ejecutables externos de StarNet++ CLI y GraXpert con indicadores en tiempo real de disponibilidad.
-
-- **Perfiles de Color ICC Embebidos (Fidelidad Cromática):** Soporte nativo para incrustar perfiles de color estándar (**sRGB**, **Adobe RGB 1998**, **ProPhoto RGB**) en el Tag 34675 (`InterColorProfile`) de los archivos TIFF exportados en todos los módulos (Apilador, Revelador, Startrails y Eclipses), garantizando consistencia cromática idéntica en Photoshop, Lightroom y navegadores.
-- **Indicadores de Recorte (Clipping) Estilo Lightroom:** Alertas visuales interactivas en las esquinas del histograma para sombras empastadas (azul) y luces quemadas (rojo), superposición vectorial acelerada en el lienzo (< 3 ms) y atajo global de teclado **`J`**.
 - **Aceleración LibRaw Multihilo:** Desentrelazado Bayer paralelo con LibRaw/rawpy y paralelización de tomas maestras de calibración que acelera la integración entre un 20% y 25%.
+- **Estrategias de Memoria Configurables:** Modos automático (umbral del 70% de RAM disponible), memoria RAM intermedia de alta velocidad o volcado temporal a disco SSD para equipos con recursos limitados.
+- **Detección Automática de Binarios:** Localización y validación dinámica de ejecutables externos de StarNet++ CLI y GraXpert con indicadores en tiempo real de disponibilidad.
+- **Indicadores de Recorte (Clipping) Estilo Lightroom:** Alertas visuales interactivas en las esquinas del histograma para sombras empastadas (azul) y luces quemadas (rojo), superposición vectorial acelerada en el lienzo (< 3 ms) y atajo global de teclado **`J`**.
+
+### 8. Fidelidad Cromática y Perfiles de Color ICC
+- **Incrustación de Metadatos ICC en TIFF (Tag 34675):** Soporte nativo para incrustar perfiles de color en la cabecera `InterColorProfile` de los archivos TIFF exportados en todos los módulos (Apilador, Revelador, Startrails y Eclipses), garantizando que las imágenes conserven su gama tonal y saturación de forma idéntica en Adobe Photoshop, Adobe Lightroom, Capture One o navegadores web.
+- **Espacios de Color Estándar Suministrados:**
+  - **sRGB:** Perfil estándar universal para publicación en internet y pantallas convencionales.
+  - **Adobe RGB (1998):** Gama amplia recomendada para impresión fotográfica y pantallas de artes gráficas.
+  - **ProPhoto RGB (ROMM RGB):** Gamut ultra-amplio de alta fidelidad adaptado a la astrofotografía para preservar tonos extremos de nebulosas ($H\alpha$, $O\text{III}$) y estrellas saturadas sin recorte cromático.
+- **Selector Persistente en Ajustes:** Selección del perfil de salida en la pestaña de Ajustes con persistencia en `config.json`.
 
 ---
 
@@ -101,7 +107,10 @@ apilator/
 │   ├── gpu_backend.py       # Detección y gestión de aceleración NVIDIA CUDA / CuPy
 │   ├── graxpert_bridge.py   # Conector CLI con GraXpert AI
 │   ├── icc_manager.py       # Gestión e incrustación de perfiles ICC en TIFF (Tag 34675)
-│   ├── icc_profiles/        # Perfiles de color estándar (sRGB, AdobeRGB1998, ProPhotoRGB)
+│   ├── icc_profiles/        # Perfiles de color ICC estándar embebibles
+│   │   ├── AdobeRGB1998.icc # Espacio amplio para monitores profesionales e impresión
+│   │   ├── ProPhotoRGB.icc  # Espacio de gamut extendido (ROMM RGB) para astrofotografía
+│   │   └── sRGB.icc         # Espacio estándar universal para web y visualización
 │   ├── masking.py           # Algoritmos de segmentación y refinado guiado de máscaras
 │   ├── project_manager.py   # Serialización y persistencia de proyectos (.mwstack)
 │   ├── stacking.py          # Motor de calibración (Dark/Flat/Bias), alineación y apilado
@@ -115,7 +124,7 @@ apilator/
     ├── main_window.py       # Ventana principal y gestión de pestañas maestras
     ├── tab_developer.py     # Pestaña de revelado y composición de capas
     ├── tab_eclipse.py       # Pestaña de procesado integral de eclipses solares y lunares
-    ├── tab_settings.py      # Pestaña de configuración de rutas, ICC y parámetros
+    ├── tab_settings.py      # Pestaña de configuración de rutas, selector ICC y parámetros
     ├── tab_stacker.py       # Pestaña de apilado dual, calibración y máscaras
     ├── tab_startrails.py    # Pestaña de generación de trazas de estrellas (Startrails)
     ├── widgets/
