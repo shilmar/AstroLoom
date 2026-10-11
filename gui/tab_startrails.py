@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from core.stacking import load_image_as_float32
 from core.startrails import generate_startrail
+from core.icc_manager import save_tiff_with_icc
 from gui.canvas import MaskCanvas
 
 
@@ -969,8 +970,8 @@ class StartrailsTab(QWidget):
                 out_img = np.ascontiguousarray(np.clip(img * 65535.0 + 0.5, 0.0, 65535.0), dtype=np.uint16)
                 desc = "TIFF 16-bit entero (Photoshop / Lightroom)"
 
-            tifffile.imwrite(path, out_img, compression='zlib', photometric=photometric)
-            self.log(f"Imagen guardada exitosamente ({desc}): {path}")
+            save_tiff_with_icc(path, out_img, compression='zlib', photometric=photometric)
+            self.log(f"Imagen guardada exitosamente ({desc} con perfil ICC): {path}")
             QMessageBox.information(
                 self, "Exportación Completada",
                 f"Imagen de trazas guardada con éxito en:\n{path}\n\nFormato: {desc} ({out_img.shape[1]}x{out_img.shape[0]} px)"
@@ -992,7 +993,7 @@ class StartrailsTab(QWidget):
 
         try:
             out_f32 = np.ascontiguousarray(np.clip(img, 0.0, 1.0), dtype=np.float32)
-            tifffile.imwrite(temp_path, out_f32, compression='zlib', photometric='rgb')
+            save_tiff_with_icc(temp_path, out_f32, compression='zlib', photometric='rgb')
             self.log(f"Imagen transferida al Revelador: {temp_path}")
             self.export_to_developer.emit(temp_path)
         except Exception as e:

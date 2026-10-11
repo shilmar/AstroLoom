@@ -1,5 +1,9 @@
 # core/stacking.py
 import os
+
+# Configuración de hilos OpenMP para LibRaw y bibliotecas numéricas nativas
+os.environ.setdefault("OMP_NUM_THREADS", str(os.cpu_count() or 4))
+
 import gc
 import cv2
 import numpy as np
@@ -133,17 +137,28 @@ if HAS_NUMBA:
         pass
 
 
-def load_image_as_float32(filepath: str) -> np.ndarray:
-    """Carga imágenes optimizando memoria con operaciones in-place."""
+def load_image_as_float32(filepath: str, color_space: str = None) -> np.ndarray:
+    """Carga imágenes optimizando memoria con operaciones in-place y espacio de color configurado."""
     ext = os.path.splitext(filepath)[1].lower()
 
     if ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw']:
+        from core.icc_manager import get_rawpy_colorspace
+        if color_space is None:
+            from core.config_manager import get_config_val
+            color_space = get_config_val("icc_profile", "srgb")
+        raw_cs = get_rawpy_colorspace(color_space)
+
         with rawpy.imread(filepath) as raw:
             rgb = raw.postprocess(
                 gamma=(2.222, 4.5),
                 no_auto_bright=True,
                 output_bps=16,
-                use_camera_wb=True
+                use_camera_wb=True,
+                output_color=raw_cs,
+                demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD,
+                fbdd_noise_reduction=rawpy.FBDDNoiseReductionMode.Off,
+                median_filter_passes=0,
+                adjust_maximum_thr=0.0
             )
             img_f32 = rgb.astype(np.float32)
             del rgb
@@ -226,39 +241,48 @@ def _median_stack_chunked(file_paths: list, chunk_size: int = 500, temp_dir: str
     pid = os.getpid()
 
     try:
-        # 1. Volcar cada imagen a binario en disco secuencialmente (máximo 1 imagen en RAM)
-        for i, p in enumerate(file_paths):
+        # 1. Volcar cada imagen a binario en disco en paralelo (multi-hilo en CPU)
+        def _process_calib_frame(item):
+            i, p = item
             img = load_image_as_float32(p)
             tmp_p = os.path.join(work_dir, f"calib_tmp_{pid}_{i:04d}.bin")
             img.tofile(tmp_p)
-            tmp_files.append(tmp_p)
             del img
+            return tmp_p
+
+        max_workers = min(4, max(1, (os.cpu_count() or 4) - 1), len(file_paths))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            tmp_files = list(executor.map(_process_calib_frame, enumerate(file_paths)))
 
         # 2. Asignar matriz final
         master = np.empty((h, w, c), dtype=np.float32)
-        bytes_per_row = w * c * 4
         n_frames = len(tmp_files)
 
-        # 3. Mediana por bloques de filas
-        for y1 in range(0, h, chunk_size):
-            y2 = min(h, y1 + chunk_size)
-            chunk_rows = y2 - y1
-            read_bytes = chunk_rows * bytes_per_row
-            offset = y1 * bytes_per_row
+        # 3. Mediana por bloques de filas con mapeo de memoria directo
+        mms = [np.memmap(tf, dtype=np.float32, mode="r", shape=(h, w, c)) for tf in tmp_files]
+        try:
+            for y1 in range(0, h, chunk_size):
+                y2 = min(h, y1 + chunk_size)
+                chunk_rows = y2 - y1
 
-            chunk_buf = np.empty((n_frames, chunk_rows, w, c), dtype=np.float32)
-            for f_idx, tf in enumerate(tmp_files):
-                with open(tf, "rb") as fp:
-                    fp.seek(offset)
-                    raw_bytes = fp.read(read_bytes)
-                    chunk_buf[f_idx] = np.frombuffer(raw_bytes, dtype=np.float32).reshape((chunk_rows, w, c))
+                chunk_buf = np.empty((n_frames, chunk_rows, w, c), dtype=np.float32)
+                for f_idx, mm in enumerate(mms):
+                    chunk_buf[f_idx] = mm[y1:y2]
 
-            if HAS_NUMBA:
-                flat_chunk = chunk_buf.reshape(n_frames, -1)
-                master[y1:y2] = _median_kernel_numba(flat_chunk).reshape((chunk_rows, w, c))
-            else:
-                master[y1:y2] = np.median(chunk_buf, axis=0).astype(np.float32)
-            del chunk_buf
+                if HAS_NUMBA:
+                    flat_chunk = chunk_buf.reshape(n_frames, -1)
+                    master[y1:y2] = _median_kernel_numba(flat_chunk).reshape((chunk_rows, w, c))
+                else:
+                    master[y1:y2] = np.median(chunk_buf, axis=0).astype(np.float32)
+                del chunk_buf
+        finally:
+            for mm in mms:
+                if hasattr(mm, "_mmap") and mm._mmap is not None:
+                    try:
+                        mm._mmap.close()
+                    except Exception:
+                        pass
+            del mms
 
     finally:
         # Limpieza de temporales
@@ -503,13 +527,72 @@ def save_frame_float32(filepath: str, img_float32: np.ndarray):
     del raw_data
 
 
+class StorageModeDecision(tuple):
+    """
+    Decisión de estrategia de almacenamiento intermedio.
+    Compatible tanto con desempaquetado de tupla (use_ram, description),
+    acceso a propiedades (.use_ram, .description), como evaluación booleana (if decision:).
+    """
+    def __new__(cls, use_ram: bool, description: str):
+        return super().__new__(cls, (use_ram, description))
+
+    @property
+    def use_ram(self) -> bool:
+        return self[0]
+
+    @property
+    def description(self) -> str:
+        return self[1]
+
+    def __bool__(self) -> bool:
+        return self[0]
+
+
+def evaluate_storage_mode(strategy: str, num_frames: int, h: int, w: int, c: int, has_ground: bool) -> StorageModeDecision:
+    """
+    Determina de forma dinámica y segura si usar memoria RAM (True) o Caché en Disco .bin (False).
+    Calcula la huella de memoria en base a las dimensiones, número de fotogramas y modo de suelo.
+    """
+    bytes_per_frame = h * w * c * 4  # float32 = 4 bytes por elemento
+    multiplier = 2 if has_ground else 1
+    estimated_total_bytes = num_frames * bytes_per_frame * multiplier
+    est_gb = estimated_total_bytes / (1024 ** 3)
+
+    try:
+        import psutil
+        free_bytes = psutil.virtual_memory().available
+        free_gb = free_bytes / (1024 ** 3)
+    except Exception:
+        free_bytes = None
+        free_gb = 0.0
+
+    if strategy == "disk":
+        return StorageModeDecision(False, f"Caché en Disco SSD ({est_gb:.1f} GB estimados, forzado en Ajustes)")
+
+    if strategy == "ram":
+        if free_bytes is not None and estimated_total_bytes > (free_bytes * 0.85):
+            return StorageModeDecision(False, f"Caché en Disco SSD (RAM insuficiente: se requieren {est_gb:.1f} GB y solo hay {free_gb:.1f} GB libres)")
+        ram_txt = f"{free_gb:.1f} GB libres" if free_bytes else "RAM disponible"
+        return StorageModeDecision(True, f"Memoria RAM Ultra-rápida ({est_gb:.1f} GB requeridos / {ram_txt})")
+
+    # Modo "auto" (por defecto)
+    if free_bytes is not None:
+        if estimated_total_bytes < (free_bytes * 0.70):
+            return StorageModeDecision(True, f"Memoria RAM Automática ({est_gb:.1f} GB requeridos < 70% de {free_gb:.1f} GB libres)")
+        else:
+            return StorageModeDecision(False, f"Caché en Disco SSD Automático ({est_gb:.1f} GB requeridos superan 70% de {free_gb:.1f} GB libres)")
+
+    return StorageModeDecision(False, "Caché en Disco SSD (psutil no disponible para medir RAM libre)")
+
+
 def align_single_light_task(args: tuple) -> dict:
     (
         idx, path, total_lights, temp_dir, mode,
         p_md, p_mf, p_mb, p_mask, p_ref_gray,
         ref_kps_pts, ref_desc, norm_type,
         w, h, lp_method, lp_strength, ref_stats
-    ) = args
+    ) = args[:18]
+    use_ram_buffer = bool(args[18]) if len(args) > 18 else False
 
     filename = os.path.basename(path)
     res = {
@@ -604,16 +687,25 @@ def align_single_light_task(args: tuple) -> dict:
         )
         del warped, sky_mask
 
-        p_sky = os.path.join(temp_dir, f"sky_{idx-1:04d}.bin")
-        save_frame_float32(p_sky, warped_processed)
-        res["sky_data"] = p_sky
+        if use_ram_buffer:
+            res["sky_data"] = np.ascontiguousarray(warped_processed, dtype=np.float32)
+            if mode == "fixed_tripod":
+                res["gnd_data"] = np.ascontiguousarray(raw_frame, dtype=np.float32)
+            else:
+                del raw_frame
+        else:
+            p_sky = os.path.join(temp_dir, f"sky_{idx-1:04d}.bin")
+            save_frame_float32(p_sky, warped_processed)
+            res["sky_data"] = p_sky
 
-        if mode == "fixed_tripod":
-            p_gnd = os.path.join(temp_dir, f"gnd_{idx-1:04d}.bin")
-            save_frame_float32(p_gnd, raw_frame)
-            res["gnd_data"] = p_gnd
+            if mode == "fixed_tripod":
+                p_gnd = os.path.join(temp_dir, f"gnd_{idx-1:04d}.bin")
+                save_frame_float32(p_gnd, raw_frame)
+                res["gnd_data"] = p_gnd
 
-        del warped_processed, raw_frame
+            del raw_frame
+
+        del warped_processed
 
         res["success"] = True
         res["inliers"] = num_inliers
@@ -631,25 +723,14 @@ def align_single_light_task(args: tuple) -> dict:
 # =========================================================================
 
 def _process_single_chunk_cpu(args):
-    frames_source, y_start, y_end, w, c, kappa, lp_method, lp_strength = args
+    source_arrays, y_start, y_end, w, c, kappa, lp_method, lp_strength = args
     actual_rows = y_end - y_start
-    n_frames = len(frames_source)
-    is_ram_mode = isinstance(frames_source[0], np.ndarray)
+    n_frames = len(source_arrays)
 
+    # Slicing directo de memoria (idéntico para matrices en RAM o archivos np.memmap en disco)
     sub_stack = np.empty((n_frames, actual_rows, w, c), dtype=np.float32)
-
-    if is_ram_mode:
-        for i, arr in enumerate(frames_source):
-            sub_stack[i] = arr[y_start:y_end]
-    else:
-        bytes_per_row = w * c * 4
-        current_read_bytes = actual_rows * bytes_per_row
-        offset = y_start * bytes_per_row
-        for i, f in enumerate(frames_source):
-            with open(f, "rb") as fp:
-                fp.seek(offset)
-                raw_bytes = fp.read(current_read_bytes)
-                sub_stack[i] = np.frombuffer(raw_bytes, dtype=np.float32).reshape((actual_rows, w, c))
+    for i, arr in enumerate(source_arrays):
+        sub_stack[i] = arr[y_start:y_end]
 
     chunk_result = np.empty((actual_rows, w, c), dtype=np.float32)
 
@@ -709,22 +790,43 @@ def stream_stack_auto(
 ) -> np.ndarray:
     """
     Motor canónico de integración matemática mediante franjas (chunks) 
-    y paralelización multi-hilo en CPU.
+    y paralelización multi-hilo en CPU con acceso unificado a memoria.
     """
     h, w, c = shape
     stacked_out = np.zeros((h, w, c), dtype=np.float32)
 
-    tasks = []
-    for y in range(0, h, chunk_rows):
-        y_end = min(y + chunk_rows, h)
-        tasks.append((frames_source, y, y_end, w, c, kappa, lp_method, lp_strength))
+    is_file_mode = len(frames_source) > 0 and isinstance(frames_source[0], str)
+    mms = []
 
-    if max_workers is None:
-        max_workers = max(1, min(4, (os.cpu_count() or 4) - 1))
+    try:
+        if is_file_mode:
+            # Mapeo de memoria por archivo una sola vez: cero syscalls de apertura/cierre en las franjas
+            mms = [np.memmap(f, dtype=np.float32, mode="r", shape=(h, w, c)) for f in frames_source]
+            source_arrays = mms
+        else:
+            source_arrays = frames_source
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for y_start, y_end, chunk_data in executor.map(_process_single_chunk_cpu, tasks):
-            stacked_out[y_start:y_end, :, :] = chunk_data
+        tasks = []
+        for y in range(0, h, chunk_rows):
+            y_end = min(y + chunk_rows, h)
+            tasks.append((source_arrays, y, y_end, w, c, kappa, lp_method, lp_strength))
+
+        if max_workers is None:
+            max_workers = max(1, min(4, (os.cpu_count() or 4) - 1))
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for y_start, y_end, chunk_data in executor.map(_process_single_chunk_cpu, tasks):
+                stacked_out[y_start:y_end, :, :] = chunk_data
+
+    finally:
+        # Cierre explícito de descriptores mapeados para evitar bloqueos WinError 32 en Windows
+        for mm in mms:
+            if hasattr(mm, "_mmap") and mm._mmap is not None:
+                try:
+                    mm._mmap.close()
+                except Exception:
+                    pass
+        del mms
 
     gc.collect()
     return stacked_out

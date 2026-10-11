@@ -5,7 +5,35 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
-## [0.6.4] - 2026-10-10
+## [0.6.5] - 2026-10-11
+
+### Añadido
+* **Arquitectura Completa de Perfiles de Color ICC (Fidelidad Cromática Profesional):**
+  - Incorporación de perfiles ICC estándar en formato binario (`core/icc_profiles/`): **sRGB v2**, **Adobe RGB 1998** y **ProPhoto RGB** (ROMM RGB de amplio gamut para astrofotografía).
+  - Módulo gestor `core/icc_manager.py` con utilidades de incrustación de metadatos ICC en el Tag 34675 (`InterColorProfile`) de la cabecera TIFF mediante `tifffile` y `PIL.ImageCms`.
+  - Extracción y mapeo automático del espacio de color nativo de cámaras RAW (`rawpy.ColorSpace`) a perfiles ICC estandarizados.
+  - Selector interactivo de perfil de color en la pestaña de Ajustes (`gui/tab_settings.py`) con persistencia en `config.json`.
+  - Incrustación transversal de perfiles ICC en todas las rutinas de exportación TIFF de la aplicación: Apilador (`gui/worker.py`), Revelador (`gui/tab_developer.py`), Startrails (`gui/tab_startrails.py`) y Eclipses (`gui/tab_eclipse.py`).
+  - Garantiza visualización y reproducción idéntica sin desaturación ni dominantes al abrir los resultados en Adobe Photoshop, Adobe Lightroom, Capture One o visores web.
+* **Indicadores de Recorte (Clipping) de Sombras y Luces en el Canvas (Estilo Lightroom / Camera Raw):**
+  - Botones interactivos triangulares en las esquinas del widget de curvas e histograma (`gui/widgets/curve_widget.py`):
+    - Esquina superior izquierda (Sombras): alerta en azul si hay píxeles en negro puro (`RGB = 0`).
+    - Esquina superior derecha (Luces): alerta en rojo si hay píxeles quemados al límite de rango (`RGB = 255`).
+    - Detección reactiva en el histograma logarítmico con iluminación suave de advertencia y clic individual para alternar cada canal.
+  - Atajo global de teclado **`J`** en el Revelador para alternar simultáneamente ambos indicadores (sombras y luces), protegido contra interferencias con campos numéricos o de texto.
+  - Capa de superposición vectorial acelerada en el lienzo (`gui/canvas.py`), calculada en NumPy en menos de 3 ms a 60 fps con azul puro (`#0070ff`) para negros empastados y rojo puro (`#ff1744`) para altas luces quemadas.
+  - Compatibilidad nativa e instantánea con el modo de ampliación Zoom 1:1.
+
+### Modificado
+* **Ajuste del Umbral de Almacenamiento RAM Intermedio al 70%:**
+  - Optimización de la gestión dinámica de memoria en `core/stacking.py`: elevación del límite automático de almacenamiento en RAM del 60% al **70%**, aprovechando al máximo la capacidad en estaciones de trabajo y equipos con 32 GB / 64 GB de memoria sin riesgo de contención.
+* **Actualización de Versión:** Incremento general a **v0.6.5** en la ventana principal (`gui/main_window.py`).
+
+### Rendimiento
+* **Aceleración del Revelado RAW con LibRaw Multihilo:**
+  - Configuración optimizada de parámetros de desempaquetado y revelado de la matriz Bayer en `rawpy.RawPy.postprocess` (`demosaic_algorithm=AHD`, `fbdd_noise_reduction=Off`, `median_filter_passes=0`, `adjust_maximum_thr=0.0`) y forzado de uso de todos los núcleos lógicos del procesador vía variable de entorno `OMP_NUM_THREADS`.
+  - Paralelización de franjas en la mediana de tomas maestras de calibración (`_median_stack_chunked`) mediante `ThreadPoolExecutor`.
+  - **Reducción verificada en proyecto real completo** (31 Lights + 7 Darks + 12 Flats + 7 Bias + 1 Suelo RAW): el tiempo total de apilado disminuye de **1m 26s a 1m 05s** (reducción directa de 21 segundos, ~25% más rápido).
 
 ### Añadido
 * **Motor Kappa-Sigma y Rechazo Estadístico Compilado con Numba (JIT LLVM):**

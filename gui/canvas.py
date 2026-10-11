@@ -44,6 +44,12 @@ class MaskCanvas(QWidget):
         self.zoom_center_img: Optional[QPoint] = None
         self.external_zoom_handler: bool = False  # True si el tab gestiona el recorte externo
 
+        # Capa e indicadores de recorte de sombras (negros) y luces (blancos)
+        self.show_clipping_shadows: bool = False
+        self.show_clipping_highlights: bool = False
+        self.clipping_overlay: Optional[QPixmap] = None
+        self._cached_display_u8: Optional[np.ndarray] = None
+
         if self.enable_masking:
             self.update_brush_cursor()
 
@@ -113,9 +119,15 @@ class MaskCanvas(QWidget):
         else:
             display = (np.clip(display_stretched, 0.0, 1.0) * 255.0).astype(np.uint8)
 
-        display_contiguous = np.ascontiguousarray(display, dtype=np.uint8)
-        qimg = QImage(display_contiguous.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+        self._cached_display_u8 = np.ascontiguousarray(display, dtype=np.uint8)
+        qimg = QImage(self._cached_display_u8.data, w, h, 3 * w, QImage.Format_RGB888).copy()
         self.base_pixmap = QPixmap.fromImage(qimg)
+
+        # Si los indicadores de recorte están activos, actualizar su capa inmediatamente
+        if self.show_clipping_shadows or self.show_clipping_highlights:
+            self._update_clipping_overlay()
+        else:
+            self.clipping_overlay = None
 
         # Ajustar dimensiones de capas auxiliares si la resolución ha cambiado
         if self.enable_masking:
@@ -135,6 +147,58 @@ class MaskCanvas(QWidget):
                 self.zoom_center_img = QPoint(w // 2, h // 2)
 
         self.update()
+
+    def _update_clipping_overlay(self) -> None:
+        """
+        Calcula la máscara de recorte de sombras y luces de forma vectorial acelerada.
+        Azul vibrante [0, 112, 255] para sombras empastadas (negro absoluto = 0).
+        Rojo vibrante [255, 23, 68] para luces quemadas (blanco absoluto = 255).
+        """
+        if not self.show_clipping_shadows and not self.show_clipping_highlights:
+            self.clipping_overlay = None
+            self.update()
+            return
+
+        if self._cached_display_u8 is None or self._cached_display_u8.size == 0:
+            self.clipping_overlay = None
+            self.update()
+            return
+
+        disp = self._cached_display_u8
+        h, w = disp.shape[:2]
+
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        has_overlay = False
+
+        if self.show_clipping_shadows:
+            # Sombras empastadas: todos los canales RGB en 0 (pérdida total de detalle en negros)
+            shadow_mask = (disp[..., 0] == 0) & (disp[..., 1] == 0) & (disp[..., 2] == 0)
+            if np.any(shadow_mask):
+                has_overlay = True
+                rgba[shadow_mask] = [0, 112, 255, 220]  # Azul vibrante (Lightroom style)
+
+        if self.show_clipping_highlights:
+            # Luces quemadas: saturación en al menos un canal a 255 (pérdida de rango dinámico)
+            highlight_mask = (disp[..., 0] >= 255) | (disp[..., 1] >= 255) | (disp[..., 2] >= 255)
+            if np.any(highlight_mask):
+                has_overlay = True
+                rgba[highlight_mask] = [255, 23, 68, 220]  # Rojo vibrante (Lightroom style)
+
+        if has_overlay:
+            rgba_contiguous = np.ascontiguousarray(rgba)
+            qimg = QImage(rgba_contiguous.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
+            self.clipping_overlay = QPixmap.fromImage(qimg)
+        else:
+            self.clipping_overlay = None
+
+        self.update()
+
+    def set_clipping_state(self, show_shadows: bool, show_highlights: bool) -> None:
+        """Activa o desactiva la visualización de los recortes de sombras y luces."""
+        if self.show_clipping_shadows != show_shadows or self.show_clipping_highlights != show_highlights:
+            self.show_clipping_shadows = show_shadows
+            self.show_clipping_highlights = show_highlights
+            self._update_clipping_overlay()
 
     def get_render_geometry(self) -> Tuple[QRectF, QRectF, float]:
         """Calcula los rectángulos de origen y destino para el escalado proporcional de la imagen."""
@@ -268,6 +332,10 @@ class MaskCanvas(QWidget):
         target_rect, source_rect, _ = self.get_render_geometry()
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
         painter.drawPixmap(target_rect, self.base_pixmap, source_rect)
+
+        # Overlay de recorte de sombras y luces (directamente sobre la imagen base)
+        if self.clipping_overlay and not self.clipping_overlay.isNull():
+            painter.drawPixmap(target_rect, self.clipping_overlay, source_rect)
 
         # Overlay de máscara (visible si show_mask_overlay es True, independientemente de enable_masking)
         if self.show_mask_overlay:

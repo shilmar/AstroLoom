@@ -43,6 +43,7 @@ from core.eclipse import (
     apply_coronal_highpass
 )
 from core.stacking import load_image_as_float32
+from core.icc_manager import save_tiff_with_icc
 
 
 class ToggleSwitch(QWidget):
@@ -1600,8 +1601,8 @@ class EclipseTab(QWidget):
                 out_img = np.ascontiguousarray(np.clip(img * 65535.0 + 0.5, 0.0, 65535.0), dtype=np.uint16)
                 desc = "TIFF 16-bit entero (Photoshop / Lightroom)"
 
-            tifffile.imwrite(path, out_img, compression='zlib', photometric=photometric)
-            self.log(f"Imagen guardada exitosamente ({desc}): {path}")
+            save_tiff_with_icc(path, out_img, compression='zlib', photometric=photometric)
+            self.log(f"Imagen guardada exitosamente ({desc} con perfil ICC): {path}")
             QMessageBox.information(
                 self, "Exportación Completada",
                 f"Imagen guardada con éxito en:\n{path}\n\nFormato: {desc} ({out_img.shape[1]}x{out_img.shape[0]} px)"
@@ -1623,7 +1624,7 @@ class EclipseTab(QWidget):
         try:
             photometric = 'minisblack' if img.ndim == 2 else 'rgb'
             out_img = np.ascontiguousarray(np.clip(img, 0.0, 1.0), dtype=np.float32)
-            tifffile.imwrite(temp_path, out_img, compression='zlib', photometric=photometric)
+            save_tiff_with_icc(temp_path, out_img, compression='zlib', photometric=photometric)
             self.log("Transfiriendo imagen 32-bit al Revelador...")
             self.export_to_developer.emit(temp_path)
         except Exception as e:

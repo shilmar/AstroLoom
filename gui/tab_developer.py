@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 import tifffile
 from PySide6.QtWidgets import (
+    QApplication,
     QWidget, 
     QVBoxLayout, 
     QHBoxLayout, 
@@ -16,6 +17,8 @@ from PySide6.QtWidgets import (
     QSlider, 
     QSplitter,
     QDoubleSpinBox, 
+    QLineEdit,
+    QPlainTextEdit,
     QTextEdit, 
     QComboBox, 
     QSpinBox,
@@ -23,7 +26,7 @@ from PySide6.QtWidgets import (
     QFrame
 )
 from PySide6.QtCore import Qt, QCoreApplication
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence
 from core.stacking import load_image_as_float32
 from core.stretch import (
     calculate_mtf_params, 
@@ -43,6 +46,7 @@ from core.stretch import (
 from gui.widgets.curve_widget import CurveWidget
 from gui.canvas import MaskCanvas
 from gui.worker import GraXpertWorker, StarNetWorker
+from core.icc_manager import save_tiff_with_icc
 from core.config_manager import load_config
 
 
@@ -237,6 +241,7 @@ class DeveloperTab(QWidget):
         # Curva de Tono con Histograma
         self.curve_widget = CurveWidget()
         self.curve_widget.curveChanged.connect(self.update_stretch_preview)
+        self.curve_widget.clippingChanged.connect(self.canvas.set_clipping_state)
         stretch_layout.addWidget(self.curve_widget)
 
         row_crv_btn = QHBoxLayout()
@@ -642,7 +647,31 @@ class DeveloperTab(QWidget):
         splitter.setStretchFactor(1, 10)
         splitter.setSizes([520, 1400])
         
+        # Atajo global 'J' para alternar indicadores de recorte (Lightroom / Camera Raw style)
+        self.shortcut_clipping = QShortcut(QKeySequence(Qt.Key_J), self)
+        self.shortcut_clipping.setContext(Qt.WindowShortcut)
+        self.shortcut_clipping.activated.connect(self._on_toggle_clipping_shortcut)
+
         layout.addWidget(splitter)
+
+    def _on_toggle_clipping_shortcut(self) -> None:
+        """Alterna los indicadores de recorte con la tecla 'J' ignorando entradas de texto activas."""
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            return
+        if hasattr(self, 'curve_widget'):
+            self.curve_widget.toggle_both_clipping()
+            act = self.curve_widget.clip_shadows_active or self.curve_widget.clip_highlights_active
+            estado = "ACTIVADOS (Azul=Negros, Rojo=Blancos)" if act else "DESACTIVADOS"
+            self.log_message(f"[CANVAS] Indicadores de recorte (J): {estado}")
+
+    def keyPressEvent(self, event) -> None:
+        """Captura directa de la tecla 'J' como mecanismo redundante de alta fiabilidad."""
+        if event.key() == Qt.Key_J:
+            self._on_toggle_clipping_shortcut()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _apply_styles(self) -> None:
         """Aplica la hoja de estilos unificada consistente con el módulo de Startrails, Stacker y Ajustes."""
@@ -1467,12 +1496,12 @@ class DeveloperTab(QWidget):
                 desc = "JPEG 8-bit"
             elif "32-bit" in selected_filter:
                 out32 = np.ascontiguousarray(np.clip(processed, 0.0, 1.0), dtype=np.float32)
-                tifffile.imwrite(p, out32, compression='zlib', photometric='rgb')
-                desc = "TIFF 32-bit float"
+                save_tiff_with_icc(p, out32, compression='zlib', photometric='rgb')
+                desc = "TIFF 32-bit float (ICC)"
             else:
                 u16 = np.ascontiguousarray((np.clip(processed, 0.0, 1.0) * 65535.0), dtype=np.uint16)
-                tifffile.imwrite(p, u16, compression='zlib', photometric='rgb')
-                desc = "TIFF 16-bit"
+                save_tiff_with_icc(p, u16, compression='zlib', photometric='rgb')
+                desc = "TIFF 16-bit (ICC)"
 
             self.log_message(f"Imagen guardada en: {os.path.basename(p)} ({desc})")
             QMessageBox.information(

@@ -1070,7 +1070,8 @@ class StackerTab(QWidget):
             "lp_strength": selected_lp_strength,
             "use_gpu": is_gpu_enabled(),
             "storage_strategy": saved_storage,
-            "cpu_workers": cpu_workers  
+            "cpu_workers": cpu_workers,
+            "icc_profile": app_cfg.get("icc_profile", "srgb")
         }
 
         self.worker = StackingWorker(cfg)

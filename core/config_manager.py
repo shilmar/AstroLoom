@@ -18,6 +18,7 @@ DEFAULT_CONFIG = {
     "lp_method": "standard",
     "lp_strength": 0.5,
     "starnet_exe": "",
+    "icc_profile": "srgb",
 }
 
 CONFIG_FILE = os.path.join(APP_ROOT, "config.json")

@@ -29,31 +29,18 @@ from core.stacking import (
     calibrate_light,
     preprocess_subframe_lp,          
     align_single_light_task,
-    save_frame_float32
+    save_frame_float32,
+    evaluate_storage_mode,
+    StorageModeDecision
 )
 from core.graxpert_bridge import run_graxpert_background_extraction
 from core.starnet_bridge import run_starnet
-
-
-def evaluate_storage_mode(strategy: str, num_frames: int, h: int, w: int, c: int, has_ground: bool) -> bool:
-    """
-    Determina si usar memoria RAM (True) o Caché en Disco .bin (False).
-    En modo auto, usa RAM solo si la estimación total ocupa menos del 60% de la RAM disponible.
-    """
-    if strategy == "disk":
-        return False
-    if strategy == "ram":
-        return True
-
-    try:
-        import psutil
-        free_bytes = psutil.virtual_memory().available
-        bytes_per_frame = h * w * c * 4  # float32
-        multiplier = 2 if has_ground else 1
-        estimated_total_bytes = num_frames * bytes_per_frame * multiplier
-        return estimated_total_bytes < (free_bytes * 0.60)
-    except Exception:
-        return False
+from core.icc_manager import (
+    extract_icc_profile, 
+    get_icc_profile_bytes, 
+    get_profile_description, 
+    save_tiff_with_icc
+)
 
 
 def _terminate_executor_processes(executor: ProcessPoolExecutor):
@@ -246,6 +233,22 @@ class StackingWorker(QThread):
             ref_raw = load_image_as_float32(ref_path)
             h, w, c = ref_raw.shape
 
+            use_ram_buffer, storage_msg = evaluate_storage_mode(
+                storage_strategy, len(lights), h, w, c, need_stack_ground
+            )
+            self.status_changed.emit(f"[Fase 2/4] Estrategia de almacenamiento: {storage_msg}")
+
+            icc_profile = self.config.get("icc_profile", "srgb")
+            ref_icc = extract_icc_profile(ref_path)
+            if ref_icc is not None:
+                icc_bytes_to_embed = ref_icc
+                icc_desc = get_profile_description(ref_icc)
+                self.status_changed.emit(f"[Fase 2/4] Perfil de color detectado en referencia: {icc_desc}")
+            else:
+                icc_bytes_to_embed = get_icc_profile_bytes(icc_profile)
+                icc_desc = get_profile_description(icc_bytes_to_embed)
+                self.status_changed.emit(f"[Fase 2/4] Perfil de color ICC incrustado: {icc_desc}")
+
             if sky_mask is not None and sky_mask.shape != (h, w):
                 sky_mask = cv2.resize(sky_mask, (w, h), interpolation=cv2.INTER_LINEAR)
 
@@ -297,6 +300,9 @@ class StackingWorker(QThread):
             ref_gray.tofile(p_ref_gray)
             del ref_gray
 
+            # Si necesitamos suelo (modo dual o solo referencia), preservamos una copia antes del procesado de cielo
+            ref_raw_ground = ref_sky.copy() if (need_stack_ground or ground_mode == "reference") else None
+
             # Preprocesar fondo in-place sin duplicaciones
             ref_sky_processed = preprocess_subframe_lp(
                 ref_sky,
@@ -306,16 +312,27 @@ class StackingWorker(QThread):
                 ref_stats=ref_stats
             )
 
-            p_sky_0 = os.path.join(temp_dir, "sky_0000.bin")
-            save_frame_float32(p_sky_0, ref_sky_processed)
-            sky_frames_collection.append(p_sky_0)
+            if use_ram_buffer:
+                sky_frames_collection.append(ref_sky_processed)
+                if need_stack_ground and ref_raw_ground is not None:
+                    ground_frames_collection.append(ref_raw_ground)
+                    if ground_mode != "reference":
+                        ref_raw_ground = None
+            else:
+                p_sky_0 = os.path.join(temp_dir, "sky_0000.bin")
+                save_frame_float32(p_sky_0, ref_sky_processed)
+                sky_frames_collection.append(p_sky_0)
 
-            if need_stack_ground:
-                p_gnd_0 = os.path.join(temp_dir, "gnd_0000.bin")
-                save_frame_float32(p_gnd_0, ref_sky_processed)
-                ground_frames_collection.append(p_gnd_0)
+                if need_stack_ground and ref_raw_ground is not None:
+                    p_gnd_0 = os.path.join(temp_dir, "gnd_0000.bin")
+                    save_frame_float32(p_gnd_0, ref_raw_ground)
+                    ground_frames_collection.append(p_gnd_0)
+                    if ground_mode != "reference":
+                        del ref_raw_ground
+                        ref_raw_ground = None
+                del ref_sky_processed
 
-            del ref_sky, ref_sky_processed
+            del ref_sky
             if 'ref_raw' in locals():
                 del ref_raw
             gc.collect()
@@ -328,7 +345,6 @@ class StackingWorker(QThread):
                 self.cancelled.emit()
                 return
 
-            # Sub-fase de alineación concurrente (15% -> 60%)
             # Sub-fase de alineación concurrente (15% -> 60%)
             t0_align = time.perf_counter()
             total_lights = len(lights)
@@ -343,7 +359,8 @@ class StackingWorker(QThread):
                     idx, path, total_lights, temp_dir, mode,
                     p_md, p_mf, p_mb, p_mask, p_ref_gray,
                     ref_kps_pts, ref_desc, norm_type,
-                    w, h, lp_method, lp_strength, ref_stats
+                    w, h, lp_method, lp_strength, ref_stats,
+                    use_ram_buffer
                 )
                 tasks.append(task_args)
 
@@ -440,6 +457,10 @@ class StackingWorker(QThread):
                 lp_strength=lp_strength
             )
 
+            # Liberación inmediata de la colección de cielo de la memoria RAM / disco
+            sky_frames_collection.clear()
+            gc.collect()
+
             if self._is_cancelled:
                 del sky_stacked
                 self.cancelled.emit()
@@ -475,6 +496,10 @@ class StackingWorker(QThread):
                         kappa=kappa
                     )
                     
+                    # Liberación inmediata de la colección de suelo de la memoria RAM / disco
+                    ground_frames_collection.clear()
+                    gc.collect()
+
                     if self._is_cancelled:
                         del sky_stacked, ground_layer
                         self.cancelled.emit()
@@ -487,6 +512,7 @@ class StackingWorker(QThread):
                 elif ground_mode == "reference" and ref_raw_ground is not None:
                     self.status_changed.emit("[Fase 3/4] Usando suelo de la toma de referencia (sin promediar)...")
                     ground_layer = ref_raw_ground
+                    ref_raw_ground = None
 
                 # MODO 3: Suelo externo asignado desde la pestaña Suelo
                 elif ground_mode == "external" and external_ground_path:
@@ -538,26 +564,19 @@ class StackingWorker(QThread):
                 self.cancelled.emit()
                 return
 
-            # Guardado TIFF final con metadatos fotométricos RGB explícitos
+            # Guardado TIFF final con metadatos fotométricos RGB y perfil ICC incrustado
             t0_io = time.perf_counter()
             self.progress_changed.emit(98)
-            self.status_changed.emit(f"[Fase 4/4] Guardando TIFF de 32 bits en: {os.path.basename(output_path)}...")
+            self.status_changed.emit(f"[Fase 4/4] Guardando TIFF de 32 bits ({icc_desc}) en: {os.path.basename(output_path)}...")
             
-            if os.path.exists(output_path):
-                try:
-                    os.remove(output_path)
-                except Exception:
-                    pass
-
-            out32_clean = np.ascontiguousarray(final_composite.astype(np.float32))
-
-            # Blindaje contra NaNs e Infs generados por CUDA/OpenCV en divisiones por cero
-            if np.isnan(out32_clean).any() or np.isinf(out32_clean).any():
-                out32_clean = np.nan_to_num(out32_clean, nan=0.0, posinf=1.0, neginf=0.0)
-            out32_clean = np.clip(out32_clean, 0.0, 1.0)
-
-            tifffile.imwrite(output_path, out32_clean, compression='zlib', photometric='rgb')
-            del out32_clean, final_composite
+            save_tiff_with_icc(
+                output_path,
+                final_composite,
+                icc_bytes=icc_bytes_to_embed,
+                compression='zlib',
+                photometric='rgb'
+            )
+            del final_composite
 
             dt_io = time.perf_counter() - t0_io
             self.status_changed.emit(f"-> Guardado TIFF completado en {dt_io:.1f}s.")

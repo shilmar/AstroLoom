@@ -16,6 +16,7 @@ Hoja de Ruta (Futuras funcionalidades anotadas):
 import os
 import gc
 from typing import Optional, Callable, Dict, Any, List, Tuple
+from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
 from core.stacking import load_image_as_float32
@@ -145,32 +146,40 @@ def clean_frame_streaks(
 
     # 1. Diferencia positiva de luminancia respecto a los fotogramas vecinos
     diff = np.maximum(0.0, current_img - ref_bg)
-    diff_lum = 0.2126 * diff[..., 0] + 0.7152 * diff[..., 1] + 0.0722 * diff[..., 2]
+    diff_lum = cv2.cvtColor(diff, cv2.COLOR_RGB2GRAY)
 
     # 2. Si se proporciona máscara de horizonte, enfocar exclusivamente en el cielo
     # Ignora el movimiento de copas de árboles, follaje o hierba que se muevan con el viento
     h, w = diff_lum.shape
     sky_mask_bool = None
     if sky_mask is not None:
-        if sky_mask.shape[:2] != (h, w):
-            sm_res = cv2.resize(sky_mask.astype(np.float32), (w, h), interpolation=cv2.INTER_NEAREST)
+        if isinstance(sky_mask, np.ndarray) and sky_mask.dtype == bool:
+            if sky_mask.shape[:2] == (h, w):
+                sky_mask_bool = sky_mask
+            else:
+                sm_res = cv2.resize(sky_mask.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
+                sky_mask_bool = (sm_res > 0)
         else:
             sm_res = sky_mask.astype(np.float32)
-        if sm_res.ndim == 3:
-            sm_res = sm_res[..., 0]
-        if sm_res.max() > 1.05:
-            sm_res /= 255.0
-        sky_mask_bool = (sm_res > 0.3)
+            if sm_res.shape[:2] != (h, w):
+                sm_res = cv2.resize(sm_res, (w, h), interpolation=cv2.INTER_NEAREST)
+            if sm_res.ndim == 3:
+                sm_res = sm_res[..., 0]
+            if sm_res.max() > 1.05:
+                sm_res /= 255.0
+            sky_mask_bool = (sm_res > 0.3)
         diff_lum_analysis = diff_lum.copy()
         diff_lum_analysis[~sky_mask_bool] = 0.0
     else:
         diff_lum_analysis = diff_lum
 
-    # 3. Umbral adaptativo sobre el ruido del cielo
+    # 3. Umbral adaptativo sobre el ruido del cielo (submuestreo optimizado)
     if sky_mask_bool is not None and np.any(sky_mask_bool):
-        sample_vals = diff_lum[sky_mask_bool]
+        sub_mask = sky_mask_bool[::8, ::8]
+        sub_diff = diff_lum[::8, ::8]
+        sample_vals = sub_diff[sub_mask] if np.any(sub_mask) else sub_diff
     else:
-        sample_vals = diff_lum
+        sample_vals = diff_lum[::8, ::8]
 
     bg_val = float(np.median(sample_vals))
     mad_noise = float(1.4826 * np.median(np.abs(sample_vals - bg_val)))
@@ -234,6 +243,51 @@ def clean_frame_streaks(
     return cleaned_img, found_streaks
 
 
+def extract_dilated_stars(
+    img: np.ndarray,
+    radius: int = 3,
+    threshold_factor: float = 3.0,
+    sky_mask_bool: Optional[np.ndarray] = None,
+    kernel: Optional[np.ndarray] = None
+) -> np.ndarray:
+    """
+    Aísla las estrellas del fotograma mediante umbral adaptativo sobre el fondo y las dilata
+    para el puenteo continuo (Gap Filling).
+    
+    :param img: Fotograma float32 RGB [0, 1].
+    :param radius: Radio de dilatación en píxeles.
+    :param threshold_factor: Multiplicador sobre el MAD de ruido.
+    :param sky_mask_bool: Máscara booleana precalculada (True = cielo, False = suelo).
+    :param kernel: Elemento estructurante morfológico precalculado (opcional).
+    :return: Matriz float32 RGB con las estrellas dilatadas.
+    """
+    h, w = img.shape[:2]
+    lum = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+
+    if sky_mask_bool is not None and sky_mask_bool.shape[:2] == (h, w):
+        sub_mask = sky_mask_bool[::8, ::8]
+        sub_lum = lum[::8, ::8]
+        sample = sub_lum[sub_mask] if np.any(sub_mask) else sub_lum
+    else:
+        sample = lum[::8, ::8]
+
+    bg = float(np.median(sample))
+    mad = float(1.4826 * np.median(np.abs(sample - bg)))
+    thresh = bg + max(mad * threshold_factor, 0.015)
+
+    stars = np.maximum(0.0, img - thresh)
+
+    if sky_mask_bool is not None and sky_mask_bool.shape[:2] == (h, w):
+        stars[~sky_mask_bool] = 0.0
+
+    if kernel is None:
+        k_size = max(3, int(radius * 2 + 1))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+
+    dilated = cv2.dilate(stars, kernel)
+    return dilated
+
+
 def compute_gap_bridge(
     prev_img: np.ndarray,
     curr_img: np.ndarray,
@@ -254,49 +308,32 @@ def compute_gap_bridge(
     :return: Matriz float32 RGB con los puentes de estrellas calculados (0 en fondo y suelo).
     """
     h, w = prev_img.shape[:2]
-    lum_p = 0.299 * prev_img[..., 0] + 0.587 * prev_img[..., 1] + 0.114 * prev_img[..., 2]
-    lum_c = 0.299 * curr_img[..., 0] + 0.587 * curr_img[..., 1] + 0.114 * curr_img[..., 2]
-
     sky_mask_bool = None
     if sky_mask is not None:
-        sm = sky_mask.astype(np.float32)
-        if sm.shape[:2] != (h, w):
-            sm = cv2.resize(sm, (w, h), interpolation=cv2.INTER_NEAREST)
-        if sm.ndim == 3:
-            sm = sm[..., 0]
-        if sm.max() > 1.05:
-            sm /= 255.0
-        sky_mask_bool = (sm > 0.3)
-
-    if sky_mask_bool is not None and np.any(sky_mask_bool):
-        sample_p = lum_p[sky_mask_bool]
-        sample_c = lum_c[sky_mask_bool]
-    else:
-        sample_p = lum_p
-        sample_c = lum_c
-
-    bg_p = float(np.median(sample_p))
-    mad_p = float(1.4826 * np.median(np.abs(sample_p - bg_p)))
-    thresh_p = bg_p + max(mad_p * threshold_factor, 0.015)
-
-    bg_c = float(np.median(sample_c))
-    mad_c = float(1.4826 * np.median(np.abs(sample_c - bg_c)))
-    thresh_c = bg_c + max(mad_c * threshold_factor, 0.015)
-
-    stars_p = np.maximum(0.0, prev_img - thresh_p)
-    stars_c = np.maximum(0.0, curr_img - thresh_c)
-
-    if sky_mask_bool is not None:
-        stars_p[~sky_mask_bool] = 0.0
-        stars_c[~sky_mask_bool] = 0.0
+        if isinstance(sky_mask, np.ndarray) and sky_mask.dtype == bool:
+            if sky_mask.shape[:2] == (h, w):
+                sky_mask_bool = sky_mask
+            else:
+                sm_res = cv2.resize(sky_mask.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
+                sky_mask_bool = (sm_res > 0)
+        else:
+            sm = sky_mask.astype(np.float32)
+            if sm.shape[:2] != (h, w):
+                sm = cv2.resize(sm, (w, h), interpolation=cv2.INTER_NEAREST)
+            if sm.ndim == 3:
+                sm = sm[..., 0]
+            if sm.max() > 1.05:
+                sm /= 255.0
+            sky_mask_bool = (sm > 0.3)
 
     k_size = max(3, int(radius * 2 + 1))
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
-    d_p = cv2.dilate(stars_p, k)
-    d_c = cv2.dilate(stars_c, k)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+
+    d_p = extract_dilated_stars(prev_img, radius=radius, threshold_factor=threshold_factor, sky_mask_bool=sky_mask_bool, kernel=kernel)
+    d_c = extract_dilated_stars(curr_img, radius=radius, threshold_factor=threshold_factor, sky_mask_bool=sky_mask_bool, kernel=kernel)
+
     bridge_stars = np.minimum(d_p, d_c)
     bridge_stars[bridge_stars < 0.005] = 0.0
-
     return bridge_stars
 
 
@@ -368,21 +405,32 @@ def generate_startrail(
         min_floor = float(cp.get("min_floor", 0.0))
         comet_weights = compute_comet_weights(n_files, tail_frames, decay_type, direction, min_floor)
 
-    # 3. Preparación de la máscara de horizonte si el suelo limpio está activo
+    # 3. Preparación de la máscara de horizonte si el suelo limpio está activo o para gap/streaks
     mask_3c = None
-    if use_clean_ground and mask is not None:
+    sky_mask_bool = None
+    if mask is not None:
         mask_f = mask.astype(np.float32)
         if mask_f.max() > 1.0:
             mask_f /= 255.0
         if mask_f.ndim == 3:
             mask_f = mask_f[..., 0]
 
-        if feather_radius > 0:
-            k = max(3, int(feather_radius * 4) | 1)
-            mask_f = cv2.GaussianBlur(mask_f, (k, k), float(feather_radius))
+        if use_clean_ground:
+            if feather_radius > 0:
+                k = max(3, int(feather_radius * 4) | 1)
+                mask_feathered = cv2.GaussianBlur(mask_f, (k, k), float(feather_radius))
+            else:
+                mask_feathered = mask_f
 
-        mask_f = np.clip(mask_f, 0.0, 1.0)
-        mask_3c = np.repeat(mask_f[:, :, np.newaxis], 3, axis=2)
+            mask_feathered = np.clip(mask_feathered, 0.0, 1.0)
+            mask_3c = np.repeat(mask_feathered[:, :, np.newaxis], 3, axis=2)
+
+        sky_mask_bool = (mask_f > 0.3)
+
+    gap_kernel = None
+    if fill_gaps:
+        k_size = max(3, int(gap_fill_radius * 2 + 1))
+        gap_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
 
     # 4. Acumulación progresiva streaming
     sky_acc = None
@@ -405,6 +453,7 @@ def generate_startrail(
 
         prev_clean: Optional[np.ndarray] = None
         prev_weight: float = 1.0
+        prev_dilated_stars: Optional[np.ndarray] = None
 
         for i in range(n_files):
             if abort_flag and abort_flag():
@@ -414,6 +463,13 @@ def generate_startrail(
             pct = int(10 + (i / n_files) * 80)
 
             curr = get_frame(i)
+            h, w = curr.shape[:2]
+
+            # Ajustar dimensiones de la máscara una sola vez si difiere en resolución
+            if sky_mask_bool is not None and sky_mask_bool.shape[:2] != (h, w):
+                sm_res = cv2.resize(sky_mask_bool.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
+                sky_mask_bool = (sm_res > 0)
+
             if i == 0 and n_files >= 3:
                 ref_A = get_frame(1)
                 ref_B = get_frame(2)
@@ -430,7 +486,7 @@ def generate_startrail(
             # Detección y supresión de satélites / aviones
             cleaned_img, num_streaks = clean_frame_streaks(
                 curr, ref_A, ref_B,
-                sky_mask=mask,
+                sky_mask=sky_mask_bool,
                 sensitivity=streak_sensitivity
             )
 
@@ -456,19 +512,33 @@ def generate_startrail(
             if sky_acc is None:
                 sky_acc = frame_sky.copy()
             else:
-                if fill_gaps and prev_clean is not None:
-                    bridge = compute_gap_bridge(
-                        prev_clean, cleaned_img,
+                if fill_gaps:
+                    curr_dilated_stars = extract_dilated_stars(
+                        cleaned_img,
                         radius=gap_fill_radius,
                         threshold_factor=gap_fill_threshold_factor,
-                        sky_mask=mask
+                        sky_mask_bool=sky_mask_bool,
+                        kernel=gap_kernel
                     )
-                    if mode == "comet" and comet_weights is not None:
-                        w_bridge = 0.5 * (prev_weight + curr_weight)
-                        bridge = bridge * w_bridge
-                    np.maximum(sky_acc, bridge, out=sky_acc)
+                    if prev_dilated_stars is not None:
+                        bridge = np.minimum(prev_dilated_stars, curr_dilated_stars)
+                        bridge[bridge < 0.005] = 0.0
+                        if mode == "comet" and comet_weights is not None:
+                            w_bridge = 0.5 * (prev_weight + curr_weight)
+                            bridge = bridge * w_bridge
+                        np.maximum(sky_acc, bridge, out=sky_acc)
+                    prev_dilated_stars = curr_dilated_stars
 
                 np.maximum(sky_acc, frame_sky, out=sky_acc)
+
+            if fill_gaps and prev_dilated_stars is None:
+                prev_dilated_stars = extract_dilated_stars(
+                    cleaned_img,
+                    radius=gap_fill_radius,
+                    threshold_factor=gap_fill_threshold_factor,
+                    sky_mask_bool=sky_mask_bool,
+                    kernel=gap_kernel
+                )
 
             prev_clean = cleaned_img
             prev_weight = curr_weight
@@ -482,58 +552,90 @@ def generate_startrail(
         loaded_frames.clear()
 
     else:
-        # Acumulación directa estándar
+        # Acumulación directa estándar con prefetching asíncrono y arrastre de estrellas dilatadas
         prev_img: Optional[np.ndarray] = None
         prev_weight: float = 1.0
+        prev_dilated_stars: Optional[np.ndarray] = None
 
-        for i, path in enumerate(files):
-            if abort_flag and abort_flag():
-                raise InterruptedError("Procesamiento de trazas cancelado por el usuario.")
+        prefetch_exec = ThreadPoolExecutor(max_workers=1)
+        try:
+            future_next = prefetch_exec.submit(load_image_as_float32, files[0])
 
-            fname = os.path.basename(path)
-            pct = int(10 + (i / n_files) * 80)
-            if progress_callback:
-                progress_callback(pct, f"Integrando toma ({i+1}/{n_files}): {fname}")
+            for i, path in enumerate(files):
+                if abort_flag and abort_flag():
+                    raise InterruptedError("Procesamiento de trazas cancelado por el usuario.")
 
-            img = load_image_as_float32(path)
+                fname = os.path.basename(files[i])
+                pct = int(10 + (i / n_files) * 80)
+                if progress_callback:
+                    progress_callback(pct, f"Integrando toma ({i+1}/{n_files}): {fname}")
 
-            if master_dark is not None and master_dark.shape == img.shape:
-                img = np.maximum(0.0, img - master_dark)
+                img = future_next.result()
 
-            if i == ref_idx:
-                ref_frame = img.copy()
+                # Lanzar en segundo plano la precarga de la siguiente toma
+                if i + 1 < n_files:
+                    future_next = prefetch_exec.submit(load_image_as_float32, files[i + 1])
+                else:
+                    future_next = None
 
-            curr_weight = comet_weights[i] if (mode == "comet" and comet_weights is not None) else 1.0
-            if mode == "comet" and comet_weights is not None:
-                frame_sky = img * curr_weight
-            else:
-                frame_sky = img
+                if master_dark is not None and master_dark.shape == img.shape:
+                    img = np.maximum(0.0, img - master_dark)
 
-            if sky_acc is None:
-                sky_acc = frame_sky.copy()
-            else:
-                if fill_gaps and prev_img is not None:
-                    bridge = compute_gap_bridge(
-                        prev_img, img,
+                h, w = img.shape[:2]
+                if sky_mask_bool is not None and sky_mask_bool.shape[:2] != (h, w):
+                    sm_res = cv2.resize(sky_mask_bool.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
+                    sky_mask_bool = (sm_res > 0)
+
+                if i == ref_idx:
+                    ref_frame = img.copy()
+
+                curr_weight = comet_weights[i] if (mode == "comet" and comet_weights is not None) else 1.0
+                if mode == "comet" and comet_weights is not None:
+                    frame_sky = img * curr_weight
+                else:
+                    frame_sky = img
+
+                if sky_acc is None:
+                    sky_acc = frame_sky.copy()
+                else:
+                    if fill_gaps:
+                        curr_dilated_stars = extract_dilated_stars(
+                            img,
+                            radius=gap_fill_radius,
+                            threshold_factor=gap_fill_threshold_factor,
+                            sky_mask_bool=sky_mask_bool,
+                            kernel=gap_kernel
+                        )
+                        if prev_dilated_stars is not None:
+                            bridge = np.minimum(prev_dilated_stars, curr_dilated_stars)
+                            bridge[bridge < 0.005] = 0.0
+                            if mode == "comet" and comet_weights is not None:
+                                w_bridge = 0.5 * (prev_weight + curr_weight)
+                                bridge = bridge * w_bridge
+                            np.maximum(sky_acc, bridge, out=sky_acc)
+                        prev_dilated_stars = curr_dilated_stars
+
+                    np.maximum(sky_acc, frame_sky, out=sky_acc)
+
+                if fill_gaps and prev_dilated_stars is None:
+                    prev_dilated_stars = extract_dilated_stars(
+                        img,
                         radius=gap_fill_radius,
                         threshold_factor=gap_fill_threshold_factor,
-                        sky_mask=mask
+                        sky_mask_bool=sky_mask_bool,
+                        kernel=gap_kernel
                     )
-                    if mode == "comet" and comet_weights is not None:
-                        w_bridge = 0.5 * (prev_weight + curr_weight)
-                        bridge = bridge * w_bridge
-                    np.maximum(sky_acc, bridge, out=sky_acc)
 
-                np.maximum(sky_acc, frame_sky, out=sky_acc)
+                prev_img = img
+                prev_weight = curr_weight
 
-            prev_img = img
-            prev_weight = curr_weight
-
-            if use_clean_ground and mask_3c is not None and ground_mode == "average":
-                if ground_sum is None:
-                    ground_sum = img.astype(np.float64)
-                else:
-                    ground_sum += img
+                if use_clean_ground and mask_3c is not None and ground_mode == "average":
+                    if ground_sum is None:
+                        ground_sum = img.astype(np.float64)
+                    else:
+                        ground_sum += img
+        finally:
+            prefetch_exec.shutdown(wait=False, cancel_futures=True)
 
     if sky_acc is None:
         raise RuntimeError("No se pudo acumular ninguna imagen válida.")

@@ -83,6 +83,10 @@
 - **Estrategias de Memoria Configurables:** Modos automático, memoria RAM intermedia de alta velocidad o volcado temporal a disco SSD para equipos con recursos limitados.
 - **Detección Automática de Binarios:** Localización y validación dinámica de ejecutables externos de StarNet++ CLI y GraXpert con indicadores en tiempo real de disponibilidad.
 
+- **Perfiles de Color ICC Embebidos (Fidelidad Cromática):** Soporte nativo para incrustar perfiles de color estándar (**sRGB**, **Adobe RGB 1998**, **ProPhoto RGB**) en el Tag 34675 (`InterColorProfile`) de los archivos TIFF exportados en todos los módulos (Apilador, Revelador, Startrails y Eclipses), garantizando consistencia cromática idéntica en Photoshop, Lightroom y navegadores.
+- **Indicadores de Recorte (Clipping) Estilo Lightroom:** Alertas visuales interactivas en las esquinas del histograma para sombras empastadas (azul) y luces quemadas (rojo), superposición vectorial acelerada en el lienzo (< 3 ms) y atajo global de teclado **`J`**.
+- **Aceleración LibRaw Multihilo:** Desentrelazado Bayer paralelo con LibRaw/rawpy y paralelización de tomas maestras de calibración que acelera la integración entre un 20% y 25%.
+
 ---
 
 ## Estructura del Proyecto
@@ -96,6 +100,8 @@ apilator/
 │   ├── eclipse.py           # Detección de limbo, alineación subpíxel, fusión HDR y NRGF continuo
 │   ├── gpu_backend.py       # Detección y gestión de aceleración NVIDIA CUDA / CuPy
 │   ├── graxpert_bridge.py   # Conector CLI con GraXpert AI
+│   ├── icc_manager.py       # Gestión e incrustación de perfiles ICC en TIFF (Tag 34675)
+│   ├── icc_profiles/        # Perfiles de color estándar (sRGB, AdobeRGB1998, ProPhotoRGB)
 │   ├── masking.py           # Algoritmos de segmentación y refinado guiado de máscaras
 │   ├── project_manager.py   # Serialización y persistencia de proyectos (.mwstack)
 │   ├── stacking.py          # Motor de calibración (Dark/Flat/Bias), alineación y apilado
@@ -105,13 +111,15 @@ apilator/
 └── gui/
     ├── assets/              # Recursos gráficos y fotografía de demostración
     │   └── showcase_milkyway.jpg
-    ├── canvas.py            # Visor interactivo QGraphicsView acelerado con zoom 1:1
+    ├── canvas.py            # Visor interactivo QGraphicsView acelerado con zoom 1:1 y clipping
     ├── main_window.py       # Ventana principal y gestión de pestañas maestras
     ├── tab_developer.py     # Pestaña de revelado y composición de capas
     ├── tab_eclipse.py       # Pestaña de procesado integral de eclipses solares y lunares
-    ├── tab_settings.py      # Pestaña de configuración de rutas y parámetros
+    ├── tab_settings.py      # Pestaña de configuración de rutas, ICC y parámetros
     ├── tab_stacker.py       # Pestaña de apilado dual, calibración y máscaras
     ├── tab_startrails.py    # Pestaña de generación de trazas de estrellas (Startrails)
+    ├── widgets/
+    │   └── curve_widget.py  # Curvas tonales, histograma logarítmico y botones de clipping
     └── worker.py            # Orquestador de tareas en segundo plano multihilo (QThread)
 ```
 
@@ -126,6 +134,7 @@ apilator/
   - `rawpy` (decodificación de archivos RAW de cámara)
   - `tifffile` (lectura y escritura de imágenes TIFF de alta profundidad)
   - `astropy` (gestión de archivos FITS astronómicos)
+  - `Pillow` (gestión de perfiles de color ICC y metadatos)
   - `imagecodecs` (códecs extendidos de compresión de imagen)
   - `psutil` (monitorización de recursos de memoria y CPU)
   - *(Opcional)* `cupy` (aceleración por GPU NVIDIA CUDA)
@@ -218,9 +227,9 @@ python run_app.py
 [x] Rutina específica de apilado y alineación para eclipses solares y lunares (Módulo Eclipses con NRGF continuo y detección subpíxel).
 [x] Módulo dedicado de Trazas de Estrellas (Startrails) con streaming O(1), efecto cometa, suelo limpio y supresión automática de satélites/aviones.
 [x] Relleno continuo de saltos entre tomas (Gap Filling) en Startrails.
+[x] Exportación de perfiles de color ICC embebidos en TIFF (sRGB / AdobeRGB / ProPhoto).
 [ ] Generación y exportación de secuencia acumulativa de fotogramas para vídeo Time-Lapse.
 [ ] Módulo de composición panorámica para mosaicos nocturnos.
-[ ] Exportación de perfiles de color ICC embebidos (sRGB / AdobeRGB / ProPhoto).
 ---
 
 ## Licencia

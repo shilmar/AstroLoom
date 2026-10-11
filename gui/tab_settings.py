@@ -228,6 +228,31 @@ class SettingsTab(QWidget):
         row_px.addStretch()
         def_layout.addLayout(row_px)
 
+        # Perfil de color ICC incrustado
+        row_icc = QHBoxLayout()
+        lbl_icc = QLabel("Perfil de color ICC incrustado en TIFF:")
+        row_icc.addWidget(lbl_icc)
+        self.combo_icc = QComboBox()
+        self.combo_icc.addItem("🌐 sRGB (Estándar Web y Pantallas)", "srgb")
+        self.combo_icc.addItem("🎨 Adobe RGB (1998) (Gama amplia)", "adobe")
+        self.combo_icc.addItem("🌌 ProPhoto RGB (Gama ultra-ancha / Astrofotografía)", "prophoto")
+
+        saved_icc = self.cfg.get("icc_profile", "srgb")
+        idx_icc = self.combo_icc.findData(saved_icc)
+        if idx_icc >= 0:
+            self.combo_icc.setCurrentIndex(idx_icc)
+
+        self.combo_icc.setToolTip(
+            "Define el espacio de color para la decodificación RAW y el perfil ICC incrustado en el TIFF:\n"
+            "- sRGB: Máxima compatibilidad con visores web, móviles y monitores estándar.\n"
+            "- Adobe RGB (1998): Mayor riqueza en cianes, verdes y fotografía de paisaje.\n"
+            "- ProPhoto RGB: Gama máxima para astrofotografía a 16/32 bits, evitando cualquier\n"
+            "  recorte de color (gamut clipping) en nebulosas intensas (H-Alfa, OIII)."
+        )
+        row_icc.addWidget(self.combo_icc)
+        row_icc.addStretch()
+        def_layout.addLayout(row_icc)
+
         left_layout.addWidget(grp_defaults)
 
         # -------------------------------------------------------------
@@ -561,6 +586,7 @@ class SettingsTab(QWidget):
         self.cfg["preview_max_dim"] = self.spin_proxy.value()
         self.cfg["cpu_workers"] = self.spin_cpu_workers.value()
         self.cfg["storage_strategy"] = self.combo_storage.currentData()
+        self.cfg["icc_profile"] = self.combo_icc.currentData()
 
         save_config(self.cfg)
         QMessageBox.information(self, "Ajustes", "Configuración guardada correctamente en config.json.")

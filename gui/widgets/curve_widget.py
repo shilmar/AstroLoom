@@ -5,8 +5,8 @@ Genera tablas de consulta (LUT) de alta precisión con interpolación monótona 
 from typing import List, Optional, Tuple
 import cv2
 import numpy as np
-from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QCursor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
 try:
@@ -23,14 +23,17 @@ class CurveWidget(QWidget):
     """
     Controlador gráfico de curva de transferencia tonal.
     Permite modelar curvas de contraste en espacio continuo con visualización
-    de histograma astronómico logarítmico en segundo plano.
+    de histograma astronómico logarítmico en segundo plano e indicadores
+    interactivos de recorte (clipping) de sombras y luces estilo Lightroom.
     """
     curveChanged = Signal()
+    clippingChanged = Signal(bool, bool)  # (clip_shadows, clip_highlights)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setMinimumSize(220, 180)
         self.setFixedHeight(190)
+        self.setMouseTracking(True)
 
         # Puntos de control normalizados [(x, y)] en rango [0.0, 1.0]
         self.points: List[Tuple[float, float]] = [(0.0, 0.0), (1.0, 1.0)]
@@ -42,6 +45,12 @@ class CurveWidget(QWidget):
 
         # Histograma logarítmico de luminancia normalizado (256 bins para pintado rápido)
         self.hist_data: Optional[np.ndarray] = None
+
+        # Estado de los indicadores de recorte de sombras y luces
+        self.clip_shadows_active: bool = False
+        self.clip_highlights_active: bool = False
+        self.has_shadow_clip: bool = False
+        self.has_highlight_clip: bool = False
 
     def reset_curve(self) -> None:
         """Restablece la curva a la función identidad f(x) = x."""
@@ -55,9 +64,12 @@ class CurveWidget(QWidget):
         """
         Calcula el histograma de luminancia con compresión logarítmica
         a partir de un submuestreo de la imagen suministrada usando OpenCV.
+        Detecta si existen valores extremos recortados (sombras a 0 o luces a 255).
         """
         if img_rgb is None or img_rgb.size == 0:
             self.hist_data = None
+            self.has_shadow_clip = False
+            self.has_highlight_clip = False
             self.update()
             return
 
@@ -71,6 +83,11 @@ class CurveWidget(QWidget):
         u8 = (gray * 255.0).astype(np.uint8)
 
         hist = cv2.calcHist([u8], [0], None, [256], [0, 256]).ravel()
+
+        # Detección de presencia de píxeles recortados en el histograma
+        self.has_shadow_clip = bool(hist[0] > 0)
+        self.has_highlight_clip = bool(hist[255] > 0)
+
         hist_log = np.log1p(hist)
         max_v = float(np.max(hist_log))
         if max_v > 1e-5:
@@ -78,6 +95,34 @@ class CurveWidget(QWidget):
         else:
             self.hist_data = None
         self.update()
+
+    def toggle_shadow_clipping(self) -> None:
+        """Alterna el indicador de recorte de sombras (negros empastados)."""
+        self.clip_shadows_active = not self.clip_shadows_active
+        self.clippingChanged.emit(self.clip_shadows_active, self.clip_highlights_active)
+        self.update()
+
+    def toggle_highlight_clipping(self) -> None:
+        """Alterna el indicador de recorte de luces (blancos quemados)."""
+        self.clip_highlights_active = not self.clip_highlights_active
+        self.clippingChanged.emit(self.clip_shadows_active, self.clip_highlights_active)
+        self.update()
+
+    def toggle_both_clipping(self) -> None:
+        """Alterna simultáneamente los indicadores de sombras y luces (atajo J)."""
+        new_state = not (self.clip_shadows_active or self.clip_highlights_active)
+        self.clip_shadows_active = new_state
+        self.clip_highlights_active = new_state
+        self.clippingChanged.emit(self.clip_shadows_active, self.clip_highlights_active)
+        self.update()
+
+    def set_clipping_state(self, shadows: bool, highlights: bool) -> None:
+        """Establece explícitamente el estado de los indicadores de recorte."""
+        if self.clip_shadows_active != shadows or self.clip_highlights_active != highlights:
+            self.clip_shadows_active = shadows
+            self.clip_highlights_active = highlights
+            self.clippingChanged.emit(self.clip_shadows_active, self.clip_highlights_active)
+            self.update()
 
     def _update_lut(self) -> None:
         """Calcula la LUT interpolada garantizando monotonicidad estricta en X."""
@@ -204,6 +249,71 @@ class CurveWidget(QWidget):
         painter.setPen(QPen(QColor("#4c566a"), 1.5))
         painter.drawRect(margin, margin, inner_w, inner_h)
 
+        # --- Botones Indicadores de Recorte (Lightroom / Camera Raw style) ---
+        # 1. Indicador de Sombras (Esquina Superior Izquierda)
+        tl_x = margin + 3
+        tl_y = margin + 3
+        tl_w, tl_h = 16, 14
+        tl_box = QRectF(tl_x, tl_y, tl_w, tl_h)
+
+        if self.clip_shadows_active:
+            bg_sh = QColor(10, 36, 68, 230)
+            border_sh = QColor(0, 112, 255)
+            icon_sh = QColor(0, 160, 255)
+        elif self.has_shadow_clip:
+            bg_sh = QColor(20, 26, 36, 180)
+            border_sh = QColor(40, 80, 130)
+            icon_sh = QColor(64, 140, 220)
+        else:
+            bg_sh = QColor(25, 28, 34, 160)
+            border_sh = QColor(55, 62, 74)
+            icon_sh = QColor(85, 95, 110)
+
+        painter.setBrush(QBrush(bg_sh))
+        painter.setPen(QPen(border_sh, 1))
+        painter.drawRoundedRect(tl_box, 2.0, 2.0)
+
+        tri_sh = QPainterPath()
+        tri_sh.moveTo(tl_x + 8.0, tl_y + 3.0)
+        tri_sh.lineTo(tl_x + 3.5, tl_y + 11.0)
+        tri_sh.lineTo(tl_x + 12.5, tl_y + 11.0)
+        tri_sh.closeSubpath()
+        painter.setBrush(QBrush(icon_sh))
+        painter.setPen(Qt.NoPen)
+        painter.drawPath(tri_sh)
+
+        # 2. Indicador de Luces (Esquina Superior Derecha)
+        tr_x = margin + inner_w - 19
+        tr_y = margin + 3
+        tr_w, tr_h = 16, 14
+        tr_box = QRectF(tr_x, tr_y, tr_w, tr_h)
+
+        if self.clip_highlights_active:
+            bg_hl = QColor(68, 16, 26, 230)
+            border_hl = QColor(255, 23, 68)
+            icon_hl = QColor(255, 64, 96)
+        elif self.has_highlight_clip:
+            bg_hl = QColor(36, 20, 26, 180)
+            border_hl = QColor(130, 40, 60)
+            icon_hl = QColor(220, 64, 90)
+        else:
+            bg_hl = QColor(25, 28, 34, 160)
+            border_hl = QColor(55, 62, 74)
+            icon_hl = QColor(85, 95, 110)
+
+        painter.setBrush(QBrush(bg_hl))
+        painter.setPen(QPen(border_hl, 1))
+        painter.drawRoundedRect(tr_box, 2.0, 2.0)
+
+        tri_hl = QPainterPath()
+        tri_hl.moveTo(tr_x + 8.0, tr_y + 3.0)
+        tri_hl.lineTo(tr_x + 3.5, tr_y + 11.0)
+        tri_hl.lineTo(tr_x + 12.5, tr_y + 11.0)
+        tri_hl.closeSubpath()
+        painter.setBrush(QBrush(icon_hl))
+        painter.setPen(Qt.NoPen)
+        painter.drawPath(tri_hl)
+
     # -------------------------------------------------------------
     # Gestión de Eventos de Ratón
     # -------------------------------------------------------------
@@ -220,6 +330,22 @@ class CurveWidget(QWidget):
         margin = 12
         inner_w = self.width() - 2 * margin
         inner_h = self.height() - 2 * margin
+
+        tl_rect = QRect(margin + 1, margin + 1, 20, 18)
+        tr_rect = QRect(margin + inner_w - 21, margin + 1, 20, 18)
+
+        if event.button() == Qt.LeftButton:
+            if tl_rect.contains(pos):
+                self.toggle_shadow_clipping()
+                return
+            elif tr_rect.contains(pos):
+                self.toggle_highlight_clipping()
+                return
+
+        # Si el usuario hace clic derecho en el botón de recorte, ignorar para proteger puntos
+        if tl_rect.contains(pos) or tr_rect.contains(pos):
+            return
+
         mx, my = self._to_norm(pos)
 
         clicked_idx = None
@@ -257,8 +383,28 @@ class CurveWidget(QWidget):
             self.curveChanged.emit()
 
     def mouseMoveEvent(self, event) -> None:
+        pos = event.position().toPoint()
+        margin = 12
+        inner_w = self.width() - 2 * margin
+        tl_rect = QRect(margin + 1, margin + 1, 20, 18)
+        tr_rect = QRect(margin + inner_w - 21, margin + 1, 20, 18)
+
+        if not self.dragging:
+            if tl_rect.contains(pos):
+                state_str = "Activo" if self.clip_shadows_active else "Inactivo"
+                clip_status = " (Recorte detectado)" if self.has_shadow_clip else ""
+                self.setToolTip(f"Aviso de Recorte de Sombras (Azul) [{state_str}]{clip_status}\nClic para alternar (Atajo: J)")
+                self.setCursor(Qt.PointingHandCursor)
+            elif tr_rect.contains(pos):
+                state_str = "Activo" if self.clip_highlights_active else "Inactivo"
+                clip_status = " (Recorte detectado)" if self.has_highlight_clip else ""
+                self.setToolTip(f"Aviso de Recorte de Luces (Rojo) [{state_str}]{clip_status}\nClic para alternar (Atajo: J)")
+                self.setCursor(Qt.PointingHandCursor)
+            else:
+                self.setToolTip("Curva de Tonos e Histograma Logarítmico")
+                self.setCursor(Qt.ArrowCursor)
+
         if self.dragging and self.selected_idx is not None:
-            pos = event.position().toPoint()
             mx, my = self._to_norm(pos)
 
             idx = self.selected_idx
@@ -279,3 +425,7 @@ class CurveWidget(QWidget):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
             self.dragging = False
+
+    def leaveEvent(self, event) -> None:
+        self.setCursor(Qt.ArrowCursor)
+        super().leaveEvent(event)

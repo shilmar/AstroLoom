@@ -12,7 +12,9 @@ rawpy>=0.20.0
 tifffile>=2023.7.0
 imagecodecs>=2024.1.1
 astropy>=6.0.0
+Pillow>=10.0.0
 
 # Gestión de memoria y recursos
 psutil>=5.9.0
+
 
