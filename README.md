@@ -250,9 +250,15 @@ python run_app.py
 [x] Pipeta de Balance de Blancos (Eyedropper) interactiva con neutralización analítica exacta.
 [x] Lupa de Inspección Flotante (Floating Magnifier) con zoom dinámico de rueda de ratón.
 [x] Curvas Selectivas de Color (Hue vs Sat y Luma vs Sat) con espectro arcoíris continuo.
+[x] Diseñador de secuencia y collage de eclipses con cribado de trepidación, cálculo de % de ocultación y exportación PSD nativo por capas (16-bit).
+[x] Indicador de progreso y estado visual explícito en la ingesta masiva de archivos ("Cargando ficheros..." -> "Carga finalizada") en el módulo de eclipses y collage.
+[ ] Navegación interactiva con Zoom y Paneo en el visor de previsualización del Diseñador de Collage.
+[ ] Detección y recomendación automática de fenómenos singulares de contacto: Perlas de Baily y Anillo de Diamante (Diamond Ring).
+[ ] Margen y radio de recorte adaptativo / configurable para evitar cortar rayos solares, destellos del anillo de diamante y filamentos de la corona (o máscara de capa editable no destructiva en PSD).
+[ ] Capa dedicada de marcas horarias EXIF y textos en la exportación de archivos PSD de Photoshop.
+[ ] Aceleración multiproceso/multihilo en el cribado masivo del collage de eclipses con selector configurable de rendimiento (Velocidad half-size RAW vs Máxima resolución nativa).
 [ ] Módulo de composición panorámica para mosaicos nocturnos (Nightscape Panorama Stitcher).
 [ ] Modo automático de gestión de memoria RAM según carga del sistema (psutil).
-[ ] Composición y collage automático de fases de eclipse (secuencia temporal de totalidad y parcialidad).
 [ ] Deshacer / Rehacer (Undo / Redo) con historial de pasos en el Revelador.
 [ ] Anti-parpadeo (Deflicker) y morphing temporal entre fotogramas en Startrails / Time-Lapse.
 [ ] Miniaturas previas (Thumbnails) en las tablas de archivos y estimación de tiempo restante (ETA) en barra de progreso.

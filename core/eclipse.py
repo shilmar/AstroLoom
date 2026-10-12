@@ -15,6 +15,7 @@ Incluye:
 import os
 import cv2
 import numpy as np
+import datetime
 from typing import Tuple, List, Dict, Optional, Any
 from PIL import Image, ExifTags
 from scipy.optimize import minimize
@@ -24,16 +25,19 @@ from core.stacking import load_image_as_float32
 
 def extract_exposure_info(filepath: str) -> Dict[str, Any]:
     """
-    Extrae la información de exposición (tiempo de obturación, ISO, apertura)
+    Extrae la información de exposición (tiempo de obturación, ISO, apertura, timestamp)
     desde los metadatos EXIF de la imagen (RAW, TIFF, JPEG).
     """
     info = {
         "filepath": filepath,
         "filename": os.path.basename(filepath),
         "exposure_s": 1.0,
+        "exp_time": 1.0,
         "shutter_str": "1.0s",
         "iso": 100,
         "aperture": 0.0,
+        "timestamp": 0.0,
+        "time_str": "--:--:--",
     }
 
     ext = os.path.splitext(filepath)[1].lower()
@@ -52,6 +56,18 @@ def extract_exposure_info(filepath: str) -> Dict[str, Any]:
                     aperture = getattr(other, 'aperture', None)
                     if aperture is not None and float(aperture) > 0:
                         info["aperture"] = float(aperture)
+
+                    ts = getattr(other, 'timestamp', None)
+                    if ts is not None:
+                        if isinstance(ts, datetime.datetime):
+                            info["timestamp"] = float(ts.timestamp())
+                            info["time_str"] = ts.strftime("%H:%M:%S")
+                        elif isinstance(ts, (int, float)) and ts > 0:
+                            info["timestamp"] = float(ts)
+                            try:
+                                info["time_str"] = datetime.datetime.fromtimestamp(ts).strftime("%H:%M:%S")
+                            except Exception:
+                                pass
         except Exception:
             pass
     else:
@@ -89,10 +105,31 @@ def extract_exposure_info(filepath: str) -> Dict[str, Any]:
                             info["aperture"] = float(fnum)
                         except (ValueError, TypeError):
                             pass
+
+                    date_str = exif.get("DateTimeOriginal") or exif.get("DateTimeDigitized") or exif.get("DateTime")
+                    if date_str and isinstance(date_str, str):
+                        for fmt in ("%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+                            try:
+                                dt = datetime.datetime.strptime(date_str.strip(), fmt)
+                                info["timestamp"] = float(dt.timestamp())
+                                info["time_str"] = dt.strftime("%H:%M:%S")
+                                break
+                            except ValueError:
+                                pass
+        except Exception:
+            pass
+
+    # Fallback si no hubo timestamp EXIF
+    if info.get("timestamp", 0.0) <= 0.0:
+        try:
+            mtime = os.path.getmtime(filepath)
+            info["timestamp"] = float(mtime)
+            info["time_str"] = datetime.datetime.fromtimestamp(mtime).strftime("%H:%M:%S")
         except Exception:
             pass
 
     exp_val = info["exposure_s"]
+    info["exp_time"] = exp_val
     if exp_val < 0.99:
         denom = int(round(1.0 / exp_val))
         info["shutter_str"] = f"1/{denom}s"
@@ -257,26 +294,43 @@ def detect_eclipse_disk(
     init_cx, init_cy, init_r = None, None, None
 
     if mode == "solar":
-        # En eclipse solar, la Luna es un hueco oscuro cerrado dentro de la corona brillante
-        thresh = np.percentile(small_gray, 95)
-        bright = (small_gray > thresh).astype(np.uint8) * 255
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        bright_closed = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, kernel)
-        contours, hierarchy = cv2.findContours(bright_closed, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
-        if hierarchy is not None:
-            max_area = 0
-            best_hole = None
-            for i, h_info in enumerate(hierarchy[0]):
-                if h_info[3] != -1:  # Hueco interior
-                    area = cv2.contourArea(contours[i])
-                    if area > max_area and area > 100:
-                        max_area = area
-                        best_hole = contours[i]
-            if best_hole is not None:
-                (hcx, hcy), hr = cv2.minEnclosingCircle(best_hole)
-                init_cx = float(hcx / scale)
-                init_cy = float(hcy / scale)
-                init_r = float(hr / scale)
+        best_hole = None
+        max_val = float(small_gray.max())
+        if max_val > 0.08:
+            # En eclipse solar totalidad, la Luna es un hueco oscuro cerrado dentro de la corona brillante
+            th_hole = max(0.025, max_val * 0.15)
+            bright = (small_gray > th_hole).astype(np.uint8) * 255
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+            bright_closed = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, kernel)
+            contours, hierarchy = cv2.findContours(bright_closed, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+            if hierarchy is not None:
+                max_area = 0
+                for i, h_info in enumerate(hierarchy[0]):
+                    if h_info[3] != -1:  # Hueco interior
+                        area = cv2.contourArea(contours[i])
+                        if area > 400 and area > max_area:
+                            max_area = area
+                            best_hole = contours[i]
+
+        if best_hole is not None:
+            (hcx, hcy), hr = cv2.minEnclosingCircle(best_hole)
+            init_cx = float(hcx / scale)
+            init_cy = float(hcy / scale)
+            init_r = float(hr / scale)
+        else:
+            # En fases parciales o anillo de diamante, el Sol es un creciente o disco brillante.
+            # Usamos un umbral del 45% del brillo máximo para aislar el disco solar de nubes y resplandor crepuscular.
+            if max_val > 0.02:
+                thresh_val = max(0.015, max_val * 0.45)
+                bright_crescent = (small_gray > thresh_val).astype(np.uint8) * 255
+                cnts, _ = cv2.findContours(bright_crescent, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if cnts:
+                    c_best = max(cnts, key=cv2.contourArea)
+                    if cv2.contourArea(c_best) > 30:
+                        (hcx, hcy), hr = cv2.minEnclosingCircle(c_best)
+                        init_cx = float(hcx / scale)
+                        init_cy = float(hcy / scale)
+                        init_r = float(hr / scale)
     else:
         # En eclipse lunar, la Luna es el objeto brillante circular.
         # Evitamos percentiles globales fijos (p80) que seleccionan nubes o resplandor difuso.
@@ -343,10 +397,17 @@ def detect_eclipse_disk(
 
     # Si expected_radius está disponible y es válido, optimizar centro anclando R
     if expected_radius is not None and expected_radius > 10:
+        if mode == "solar" and best_hole is None:
+            return float(init_cx), float(init_cy), float(expected_radius)
         opt_cx, opt_cy = optimize_center_circular_flux(gray, init_cx, init_cy, expected_radius, mode=mode)
         return float(opt_cx), float(opt_cy), float(expected_radius)
 
-    # Detección completa de centro y radio
+    if mode == "solar" and best_hole is None:
+        # En fase parcial solar, el contorno envolvente es la mejor aproximación del disco/creciente.
+        # Evitamos el escaneo radial 360° que fallaría al no haber limbo en el lado oculto por la Luna.
+        return float(init_cx), float(init_cy), float(init_r)
+
+    # Detección completa de centro y radio (Totalidad solar o eclipse lunar)
     r_min = max(5.0, init_r - 35.0)
     r_max = init_r + 35.0
 

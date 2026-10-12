@@ -26,10 +26,10 @@ from PySide6.QtWidgets import (
     QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
     QProgressBar, QMessageBox, QGroupBox, QRadioButton, QSlider,
     QDoubleSpinBox, QSplitter, QTextEdit, QScrollArea, QCheckBox,
-    QSizePolicy, QAbstractItemView
+    QSizePolicy, QAbstractItemView, QApplication
 )
 from PySide6.QtCore import Qt, Signal, QThread, QPoint, QPointF, QRectF
-from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QImage, QCursor, QFont, QTextCursor
+from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QImage, QCursor, QFont, QTextCursor, QBrush
 
 from core.eclipse import (
     extract_exposure_info,
@@ -907,6 +907,14 @@ class EclipseTab(QWidget):
         self.btn_send_to_dev.clicked.connect(self._on_send_to_developer_clicked)
         export_layout.addWidget(self.btn_send_to_dev)
 
+        self.btn_open_collage = QPushButton("🎨 Diseñador de Secuencia y Collage...")
+        self.btn_open_collage.setFixedHeight(38)
+        self.btn_open_collage.setCursor(Qt.PointingHandCursor)
+        self.btn_open_collage.setStyleSheet("font-weight: bold; background: #2e1c4e; color: #e1bee7; border: 1px solid #ba68c8; padding: 6px;")
+        self.btn_open_collage.setToolTip("Abre el diseñador de collage para cribar calidad, seleccionar tomas simétricas y exportar a PSD por capas")
+        self.btn_open_collage.clicked.connect(self._on_open_collage_clicked)
+        export_layout.addWidget(self.btn_open_collage)
+
         left_layout.addWidget(grp_export)
 
         scroll_area.setWidget(panel_content)
@@ -1163,7 +1171,15 @@ class EclipseTab(QWidget):
         if not new_paths:
             return
 
-        for p in new_paths:
+        total_new = len(new_paths)
+        self.log(f"Cargando {total_new} ficheros de eclipse...")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, total_new)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat(f"Cargando ficheros... (%v/{total_new})")
+        QApplication.processEvents()
+
+        for idx, p in enumerate(new_paths):
             info = extract_exposure_info(p)
             info["cx"] = None
             info["cy"] = None
@@ -1172,6 +1188,12 @@ class EclipseTab(QWidget):
             info["shift_y"] = 0.0
             info["is_ref"] = False
             self.bracketing_files.append(info)
+            if (idx + 1) % 15 == 0 or idx == total_new - 1:
+                self.progress_bar.setValue(idx + 1)
+                QApplication.processEvents()
+
+        self.progress_bar.setFormat("Detectando limbo en toma de referencia...")
+        QApplication.processEvents()
 
         self.bracketing_files.sort(key=lambda x: x["exposure_s"])
 
@@ -1198,7 +1220,8 @@ class EclipseTab(QWidget):
 
         self._refresh_table()
         self.table_brack.selectRow(self.ref_file_idx)
-        self.log(f"Se cargaron {len(new_paths)} tomas de bracketing (Total: {len(self.bracketing_files)}).")
+        self.progress_bar.setVisible(False)
+        self.log(f"Carga finalizada: se cargaron {total_new} tomas de bracketing (Total: {len(self.bracketing_files)}).")
 
     def _on_load_bracketing_clicked(self):
         filters = "Imágenes Astrofotográficas (*.arw *.cr2 *.cr3 *.nef *.dng *.raw *.tif *.tiff *.fits *.fit *.jpg *.jpeg);;Todos (*.*)"
@@ -1705,4 +1728,24 @@ class EclipseTab(QWidget):
             self.export_to_developer.emit(temp_path)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error transfiriendo al Revelador: {e}")
+
+    @property
+    def mode(self) -> str:
+        if hasattr(self, 'rb_solar') and self.rb_solar is not None:
+            return "solar" if self.rb_solar.isChecked() else "lunar"
+        return "solar"
+
+    def _on_open_collage_clicked(self):
+        """Abre la ventana interactiva del diseñador de secuencia y collage de eclipses."""
+        try:
+            from gui.dialog_eclipse_collage import EclipseCollageDialog
+            initial_fps = [item["filepath"] for item in self.bracketing_files] if hasattr(self, 'bracketing_files') and self.bracketing_files else []
+            dlg = EclipseCollageDialog(parent=self, initial_filepaths=initial_fps, mode=self.mode)
+            dlg.exec()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Error al abrir collage", f"No se pudo abrir el diseñador de collage:\n{e}")
+
+
 
