@@ -255,6 +255,8 @@ python run_app.py
 [ ] Navegación interactiva con Zoom y Paneo en el visor de previsualización del Diseñador de Collage.
 [ ] Detección y recomendación automática de fenómenos singulares de contacto: Perlas de Baily y Anillo de Diamante (Diamond Ring).
 [ ] Margen y radio de recorte adaptativo / configurable para evitar cortar rayos solares, destellos del anillo de diamante y filamentos de la corona (o máscara de capa editable no destructiva en PSD).
+[ ] Nueva modalidad de maquetación: Cinta Horizontal con escala romboidal/progresiva (`<>`) con el centro prominente y extremos compactos.
+[ ] Indicadores numéricos de valor (etiquetas en tiempo real: px / %) y tooltips explicativos en los controles deslizantes de Espaciado y Escala de Totalidad.
 [ ] Capa dedicada de marcas horarias EXIF y textos en la exportación de archivos PSD de Photoshop.
 [ ] Aceleración multiproceso/multihilo en el cribado masivo del collage de eclipses con selector configurable de rendimiento (Velocidad half-size RAW vs Máxima resolución nativa).
 [ ] Módulo de composición panorámica para mosaicos nocturnos (Nightscape Panorama Stitcher).
