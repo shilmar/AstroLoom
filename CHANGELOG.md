@@ -5,6 +5,38 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-10-12
+
+### Añadido
+* **Modo Comparador "Antes / Después" con Cortina Divisoria (Split-View) en el Revelador:**
+  - Cortina interactiva deslizable que divide el lienzo en dos zonas para comparar la imagen original neutra y el procesado activo en tiempo real.
+  - Soporte completo para orientación **Vertical** (izquierda: Antes, derecha: Después) y **Horizontal** (arriba: Antes, abajo: Después).
+  - Selector de orientación dinámico `[ ⇋ Vertical ]` / `[ ⥯ Horizontal ]` en la barra superior de herramientas del lienzo.
+  - Atajos de teclado: **`Y`** para activar/desactivar el comparador y **`Shift + Y`** para conmutar entre orientación horizontal y vertical.
+  - Arrastre interactivo con ratón, cursores contextuales según la orientación (`↔` para vertical, `↕` para horizontal), y doble clic para recentrado rápido al 50%.
+  - Etiquetas flotantes identificativas `[ ANTES ]` y `[ DESPUÉS ]` adaptadas automáticamente al eje de corte.
+* **Barra Superior de Herramientas del Canvas en el Revelador:**
+  - Nueva barra superior sobre el lienzo para acceso directo a herramientas visuales críticas sin saturar el panel lateral.
+  - Acceso inmediato al aviso de Clipping (`[ 👁️ Clipping (J) ]`), conmutador de división (`[ ◫ Dividir Vista (Y) ]`) y orientación de cortina (`[ ⇋ Vertical / ⥯ Horizontal ]`).
+* **Motor de Exportación de Vídeo Time-Lapse (.mp4) en Startrails:**
+  - Integración en streaming de memoria dentro del bucle de acumulación (tanto en modo supresión de satélites como directo).
+  - Codificación nativa a través de OpenCV `VideoWriter` con códec estándar `mp4v` en formato `.mp4` (reproducible en Windows Media Player, VLC, Premiere, navegadores, etc., sin requerir librerías DLL adicionales).
+  - Cálculo adaptativo de dimensiones con preservación de la relación de aspecto (`compute_target_video_dims`) que garantiza dimensiones pares (múltiplos de 2) para compatibilidad con codificadores de vídeo.
+  - Resoluciones configurables: **1080p Full HD**, **4K Ultra HD** y **Resolución Original del Sensor**.
+  - Selector de cadencia de fotogramas: 24 FPS (cinemático), 30 FPS, 60 FPS y 12 FPS.
+  - Exportación opcional de fotogramas secuenciales acumulativos en `.jpg` numerados para post-producción externa.
+  - Estabilidad de suelo limpio: cuando la opción de suelo limpio está activa, fusiona cada fotograma del vídeo con el suelo de referencia para evitar parpadeos de exposición en el paisaje.
+  - Botón directo `▶️ Reproducir Vídeo Time-Lapse` que abre el vídeo terminado en el reproductor del sistema.
+* **Realce y Preservación de Color Estelar en Startrails (*Star Color Recovery & Boost*):**
+  - Algoritmo de recuperación espectral en núcleos quemados (*Core Color Recovery*): detecta núcleos sobreexpuestos saturados a blanco ($V > 0.75, S < 0.35$) y difunde la crominancia rica de los bordes y halos no quemados mediante representación cartesiana continua $u = S \cos(H)$, $v = S \sin(H)$ (evitando discontinuidades angulares en $0^\circ/360^\circ$).
+  - Las trazas de estrellas recuperan su tonalidad estelar original (azules de Rigel/Vega, naranjas de Betelgeuse/Aldebarán, amarillos de Capella) manteniendo su brillo natural.
+  - Amplificación selectiva de saturación estelar (*Star Saturation Boost*) modulada por una máscara estelar suave con protección total del fondo del cielo oscuro y del suelo.
+  - Botón interactivo `✨ Aplicar a la Imagen Actual (Retoque Rápido)`: permite reajustar los deslizadores de saturación y recuperación de núcleos y actualizar el visor en ~0.4 segundos sobre la imagen ya calculada sin volver a apilar las tomas.
+  - Sincronización transparente con el generador de vídeo Time-Lapse.
+
+### Modificado
+* **Actualización de Versión:** Incremento general a **v0.6.6** en la ventana principal (`gui/main_window.py`).
+
 ## [0.6.5] - 2026-10-11
 
 ### Añadido

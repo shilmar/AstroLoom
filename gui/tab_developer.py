@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QFrame
 )
 from PySide6.QtCore import Qt, QCoreApplication
-from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence
+from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap
 from core.stacking import load_image_as_float32
 from core.stretch import (
     calculate_mtf_params, 
@@ -95,6 +95,12 @@ class DeveloperTab(QWidget):
         self.view_layer_mode = 0     # 0: Compuesta, 1: Solo Fondo, 2: Solo Estrellas
         self.contrast_starless_val = 0.0
         self.denoise_strength = 0.0  # <-- CORREGIDO: Inicialización obligatoria
+
+        # Parámetros del comparador Antes / Después
+        self.initial_bp: float = 0.0
+        self.initial_mtf: float = 0.1
+        self.has_custom_snapshot: bool = False
+        self.snapshot_before_pixmap: Optional[QPixmap] = None
 
         self._setup_ui()
         self._apply_styles()
@@ -241,7 +247,7 @@ class DeveloperTab(QWidget):
         # Curva de Tono con Histograma
         self.curve_widget = CurveWidget()
         self.curve_widget.curveChanged.connect(self.update_stretch_preview)
-        self.curve_widget.clippingChanged.connect(self.canvas.set_clipping_state)
+        self.curve_widget.clippingChanged.connect(self.on_clipping_changed_sync)
         stretch_layout.addWidget(self.curve_widget)
 
         row_crv_btn = QHBoxLayout()
@@ -642,7 +648,18 @@ class DeveloperTab(QWidget):
         left_container_layout.addWidget(self.txt_log, 0)
 
         splitter.addWidget(left_container)
-        splitter.addWidget(self.canvas)
+
+        # Contenedor derecho: Barra de herramientas superior + Canvas
+        right_container = QWidget()
+        right_layout = QVBoxLayout(right_container)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+
+        self.canvas_toolbar = self._create_canvas_toolbar()
+        right_layout.addWidget(self.canvas_toolbar)
+        right_layout.addWidget(self.canvas, 1)
+
+        splitter.addWidget(right_container)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 10)
         splitter.setSizes([520, 1400])
@@ -652,7 +669,109 @@ class DeveloperTab(QWidget):
         self.shortcut_clipping.setContext(Qt.WindowShortcut)
         self.shortcut_clipping.activated.connect(self._on_toggle_clipping_shortcut)
 
+        # Atajo global 'Y' para alternar la cortina divisoria Antes/Después
+        self.shortcut_split = QShortcut(QKeySequence(Qt.Key_Y), self)
+        self.shortcut_split.setContext(Qt.WindowShortcut)
+        self.shortcut_split.activated.connect(self._on_toggle_split_shortcut)
+
+        # Atajo global 'Shift+Y' para alternar la orientación de la cortina divisoria
+        self.shortcut_split_orientation = QShortcut(QKeySequence("Shift+Y"), self)
+        self.shortcut_split_orientation.setContext(Qt.WindowShortcut)
+        self.shortcut_split_orientation.activated.connect(self._on_toggle_split_orientation_shortcut)
+
         layout.addWidget(splitter)
+
+    def _create_canvas_toolbar(self) -> QWidget:
+        """Crea la barra de herramientas superior del visor interactivo."""
+        toolbar = QWidget()
+        toolbar.setObjectName("canvas_toolbar")
+        toolbar.setFixedHeight(38)
+
+        tb_layout = QHBoxLayout(toolbar)
+        tb_layout.setContentsMargins(8, 3, 8, 3)
+        tb_layout.setSpacing(8)
+
+        # 1. Botón Comparador Antes / Después
+        self.btn_split_view = QPushButton("◫ Antes / Después (Y)")
+        self.btn_split_view.setCheckable(True)
+        self.btn_split_view.setCursor(Qt.PointingHandCursor)
+        self.btn_split_view.setToolTip(
+            "Activa la cortina divisoria interactiva para comparar el estado original ('Antes')\n"
+            "con el revelado actual ('Después'). Puedes arrastrar la línea con el ratón o hacer doble clic para centrar.\n"
+            "Atajo de teclado: Y"
+        )
+        self.btn_split_view.toggled.connect(self.on_split_view_toggled)
+        tb_layout.addWidget(self.btn_split_view)
+
+        # 1b. Botón Orientación Cortina (Vertical / Horizontal)
+        self.btn_split_orientation = QPushButton("⇋ Vertical")
+        self.btn_split_orientation.setCursor(Qt.PointingHandCursor)
+        self.btn_split_orientation.setEnabled(False)
+        self.btn_split_orientation.setToolTip(
+            "Alterna la orientación de la cortina divisoria:\n"
+            "• ⇋ Vertical: Izquierda ('Antes') / Derecha ('Después')\n"
+            "• ⥯ Horizontal: Arriba ('Antes') / Abajo ('Después')\n"
+            "Atajo de teclado: Shift+Y"
+        )
+        self.btn_split_orientation.clicked.connect(self.on_toggle_split_orientation)
+        tb_layout.addWidget(self.btn_split_orientation)
+
+        # 2. Botón Fijar como Antes (Snapshot)
+        self.btn_set_before = QPushButton("📸 Fijar como Antes")
+        self.btn_set_before.setCursor(Qt.PointingHandCursor)
+        self.btn_set_before.setToolTip(
+            "Congela el procesado actual como la nueva referencia de 'Antes'\n"
+            "para evaluar cambios incrementales sucesivos."
+        )
+        self.btn_set_before.clicked.connect(self.on_set_before_clicked)
+        tb_layout.addWidget(self.btn_set_before)
+
+        # Separador vertical
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.VLine)
+        sep1.setFrameShadow(QFrame.Sunken)
+        sep1.setStyleSheet("color: #3b4252; margin: 4px 2px;")
+        tb_layout.addWidget(sep1)
+
+        # 3. Botón Indicador de Recorte (Clipping)
+        self.btn_toggle_clipping = QPushButton("⚠️ Recorte Sombras/Luces (J)")
+        self.btn_toggle_clipping.setCheckable(True)
+        self.btn_toggle_clipping.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_clipping.setToolTip(
+            "Muestra en el lienzo los píxeles con recorte: Azul para negros empastados (RGB=0)\n"
+            "y Rojo para luces quemadas (RGB=255).\n"
+            "Atajo de teclado: J"
+        )
+        self.btn_toggle_clipping.toggled.connect(self.on_toolbar_clipping_toggled)
+        tb_layout.addWidget(self.btn_toggle_clipping)
+
+        # Separador vertical
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.VLine)
+        sep2.setFrameShadow(QFrame.Sunken)
+        sep2.setStyleSheet("color: #3b4252; margin: 4px 2px;")
+        tb_layout.addWidget(sep2)
+
+        # 4. Botón Zoom 1:1
+        self.btn_toggle_zoom = QPushButton("🔍 Zoom 100% (Clic Der.)")
+        self.btn_toggle_zoom.setCheckable(True)
+        self.btn_toggle_zoom.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_zoom.setToolTip(
+            "Alterna entre vista adaptada completa y ampliación 1:1 al píxel nativo del sensor.\n"
+            "También puedes hacer clic derecho directamente sobre el lienzo."
+        )
+        self.btn_toggle_zoom.toggled.connect(self.on_toolbar_zoom_toggled)
+        tb_layout.addWidget(self.btn_toggle_zoom)
+
+        # Espaciador elástico
+        tb_layout.addStretch()
+
+        # 5. Etiqueta informativa de resolución y estado
+        self.lbl_canvas_info = QLabel("Sin imagen cargada")
+        self.lbl_canvas_info.setStyleSheet("color: #88c0d0; font-size: 11px; font-weight: bold;")
+        tb_layout.addWidget(self.lbl_canvas_info)
+
+        return toolbar
 
     def _on_toggle_clipping_shortcut(self) -> None:
         """Alterna los indicadores de recorte con la tecla 'J' ignorando entradas de texto activas."""
@@ -661,14 +780,142 @@ class DeveloperTab(QWidget):
             return
         if hasattr(self, 'curve_widget'):
             self.curve_widget.toggle_both_clipping()
-            act = self.curve_widget.clip_shadows_active or self.curve_widget.clip_highlights_active
-            estado = "ACTIVADOS (Azul=Negros, Rojo=Blancos)" if act else "DESACTIVADOS"
-            self.log_message(f"[CANVAS] Indicadores de recorte (J): {estado}")
+
+    def _on_toggle_split_shortcut(self) -> None:
+        """Alterna el modo comparador Antes / Después con la tecla 'Y'."""
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            return
+        if hasattr(self, 'btn_split_view'):
+            self.btn_split_view.toggle()
+
+    def _on_toggle_split_orientation_shortcut(self) -> None:
+        """Alterna la orientación de la cortina con Shift+Y."""
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            return
+        if hasattr(self, 'btn_split_orientation') and self.canvas.split_view_enabled:
+            self.on_toggle_split_orientation()
+
+    def on_toggle_split_orientation(self) -> None:
+        """Alterna entre cortina vertical y horizontal."""
+        new_ori = self.canvas.toggle_split_orientation()
+        self._update_split_orientation_ui()
+        ori_nombre = "VERTICAL (Izquierda / Derecha)" if new_ori == "vertical" else "HORIZONTAL (Arriba / Abajo)"
+        self.log_message(f"[CANVAS] Orientación del comparador cambiada a: {ori_nombre}")
+        self._update_canvas_info_label()
+
+    def _update_split_orientation_ui(self) -> None:
+        """Actualiza el texto y estado del botón de orientación de la cortina."""
+        if not hasattr(self, 'btn_split_orientation'):
+            return
+        is_vert = (self.canvas.split_orientation == "vertical")
+        self.btn_split_orientation.setText("⇋ Vertical" if is_vert else "⥯ Horizontal")
+        self.btn_split_orientation.setEnabled(self.canvas.split_view_enabled)
+
+    def on_clipping_changed_sync(self, clip_s: bool, clip_h: bool) -> None:
+        """Sincroniza el lienzo y el botón de la barra superior cuando cambia el recorte."""
+        self.canvas.set_clipping_state(clip_s, clip_h)
+        if hasattr(self, 'btn_toggle_clipping'):
+            self.btn_toggle_clipping.blockSignals(True)
+            self.btn_toggle_clipping.setChecked(clip_s or clip_h)
+            self.btn_toggle_clipping.blockSignals(False)
+
+    def on_toolbar_clipping_toggled(self, checked: bool) -> None:
+        """Manejador al conmutar el botón de recorte en la barra superior."""
+        if hasattr(self, 'curve_widget'):
+            self.curve_widget.set_clipping_state(checked, checked)
+            estado = "ACTIVADOS (Azul=Negros, Rojo=Blancos)" if checked else "DESACTIVADOS"
+            self.log_message(f"[CANVAS] Indicadores de recorte: {estado}")
+
+    def on_split_view_toggled(self, checked: bool) -> None:
+        """Manejador al conmutar el modo comparador Antes / Después."""
+        if checked and (self.canvas.before_pixmap is None or self.canvas.before_pixmap.isNull()):
+            self._generate_before_reference()
+        self.canvas.set_split_view_enabled(checked)
+        self._update_split_orientation_ui()
+        if checked and self.is_zoomed_100:
+            self.update_stretch_preview()
+        estado = "ACTIVADO (Arrastra la línea divisoria para comparar)" if checked else "DESACTIVADO"
+        self.log_message(f"[CANVAS] Modo Comparador Antes / Después: {estado}")
+        self._update_canvas_info_label()
+
+    def on_set_before_clicked(self) -> None:
+        """Congela el revelado actual como nueva imagen de referencia 'Antes'."""
+        if self.canvas.base_pixmap and not self.canvas.base_pixmap.isNull():
+            self.snapshot_before_pixmap = self.canvas.base_pixmap.copy()
+            self.canvas.set_before_pixmap(self.snapshot_before_pixmap)
+            self.initial_bp = self.spin_bp.value()
+            self.initial_mtf = self.spin_mtf.value()
+            self.has_custom_snapshot = True
+            self.log_message("[CANVAS] Estado actual fijado como nueva referencia de 'Antes'.")
+            if not self.btn_split_view.isChecked():
+                self.btn_split_view.setChecked(True)
+        else:
+            self.log_message("[AVISO] No hay ninguna imagen cargada en el lienzo para fijar.")
+
+    def on_toolbar_zoom_toggled(self, checked: bool) -> None:
+        """Manejador al conmutar el botón de zoom en la barra superior."""
+        if self.is_zoomed_100 != checked:
+            self.is_zoomed_100 = checked
+            self.canvas.is_zoomed = checked
+            if checked:
+                self.zoom_rel_coords = (0.5, 0.5)
+                self.canvas.zoom_center_img = None
+            else:
+                self._generate_before_reference()
+            self.update_stretch_preview()
+            self._update_canvas_info_label()
+
+    def _generate_before_reference(self) -> None:
+        """Genera el QPixmap base de referencia 'Antes' a partir de la toma cruda original."""
+        if self.image_32bit is None:
+            self.canvas.set_before_pixmap(None)
+            return
+
+        if self.has_custom_snapshot and self.snapshot_before_pixmap is not None and not self.is_zoomed_100:
+            self.canvas.set_before_pixmap(self.snapshot_before_pixmap)
+            return
+
+        bp = self.initial_bp
+        mtf = self.initial_mtf
+
+        base_to_render, _ = self._compose_active_base(for_export=False)
+        if base_to_render is not None:
+            stretched_init = manual_stretch(base_to_render, black_point=bp, midtone=mtf)
+            disp = (np.clip(stretched_init, 0.0, 1.0) * 255.0).astype(np.uint8)
+            h, w = disp.shape[:2]
+            disp_c = np.ascontiguousarray(disp, dtype=np.uint8)
+            qimg = QImage(disp_c.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+            self.canvas.set_before_pixmap(QPixmap.fromImage(qimg))
+
+    def _update_canvas_info_label(self) -> None:
+        """Actualiza la etiqueta informativa de resolución y estado en la barra del lienzo."""
+        if not hasattr(self, 'lbl_canvas_info'):
+            return
+        if self.image_32bit is None:
+            self.lbl_canvas_info.setText("Sin imagen cargada")
+            return
+        h, w = self.image_32bit.shape[:2]
+        mp = (w * h) / 1e6
+        zoom_txt = "Zoom 100% (1:1)" if self.is_zoomed_100 else "Ajustado"
+        split_txt = ""
+        if self.canvas.split_view_enabled:
+            ori_txt = "Vert." if self.canvas.split_orientation == "vertical" else "Horiz."
+            split_txt = f" | ◫ Comparador ({ori_txt})"
+        self.lbl_canvas_info.setText(f"{w}x{h} px ({mp:.1f} MP) | {zoom_txt}{split_txt}")
 
     def keyPressEvent(self, event) -> None:
-        """Captura directa de la tecla 'J' como mecanismo redundante de alta fiabilidad."""
+        """Captura directa de teclas 'J', 'Y' y 'Shift+Y' como mecanismo redundante de alta fiabilidad."""
         if event.key() == Qt.Key_J:
             self._on_toggle_clipping_shortcut()
+            event.accept()
+            return
+        elif event.key() == Qt.Key_Y:
+            if event.modifiers() & Qt.ShiftModifier:
+                self._on_toggle_split_orientation_shortcut()
+            else:
+                self._on_toggle_split_shortcut()
             event.accept()
             return
         super().keyPressEvent(event)
@@ -676,6 +923,28 @@ class DeveloperTab(QWidget):
     def _apply_styles(self) -> None:
         """Aplica la hoja de estilos unificada consistente con el módulo de Startrails, Stacker y Ajustes."""
         self.setStyleSheet("""
+            #canvas_toolbar {
+                background-color: #14141e;
+                border-bottom: 1px solid #2d2d3a;
+            }
+            #canvas_toolbar QPushButton {
+                background-color: #1e1e2c;
+                border: 1px solid #3b4252;
+                border-radius: 4px;
+                padding: 4px 10px;
+                color: #eceff4;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            #canvas_toolbar QPushButton:hover {
+                background-color: #2e3440;
+                border-color: #88c0d0;
+            }
+            #canvas_toolbar QPushButton:checked {
+                background-color: #0d47a1;
+                color: #ffffff;
+                border-color: #00e5ff;
+            }
             QGroupBox {
                 font-weight: bold;
                 border: 1px solid #2d2d3a;
@@ -878,6 +1147,12 @@ class DeveloperTab(QWidget):
             self.image_32bit = np.clip(raw_img, 0.0, 1.0).astype(np.float32)
             self._generate_preview_proxy()
             self.apply_auto_mtf()
+            self.initial_bp = self.spin_bp.value()
+            self.initial_mtf = self.spin_mtf.value()
+            self.has_custom_snapshot = False
+            self.snapshot_before_pixmap = None
+            self._generate_before_reference()
+            self._update_canvas_info_label()
             self.log_message(f"Imagen en memoria ({self.image_32bit.shape[1]}x{self.image_32bit.shape[0]} px). Vista acelerada activa.")
         except Exception as e:
             self.log_message(f"[ERROR] No se pudo cargar: {e}")
@@ -1092,9 +1367,20 @@ class DeveloperTab(QWidget):
 
         if stretched is not None:
             self.canvas.load_image(base_to_render, display_stretched=stretched)
+
+            # Sincronización del comparador Antes / Después en modo Zoom 1:1
+            if self.is_zoomed_100 and self.canvas.split_view_enabled:
+                stretched_before = manual_stretch(base_to_render, black_point=self.initial_bp, midtone=self.initial_mtf)
+                disp_b = (np.clip(stretched_before, 0.0, 1.0) * 255.0).astype(np.uint8)
+                h_b, w_b = disp_b.shape[:2]
+                disp_bc = np.ascontiguousarray(disp_b, dtype=np.uint8)
+                qimg_b = QImage(disp_bc.data, w_b, h_b, 3 * w_b, QImage.Format_RGB888).copy()
+                self.canvas.set_before_pixmap(QPixmap.fromImage(qimg_b))
+
             # Solo actualizar histograma en vista general para no alterar la escala al hacer zoom 1:1
             if not self.is_zoomed_100:
                 self.curve_widget.set_histogram_from_image(stretched)
+            self._update_canvas_info_label()
 
     def run_starnet(self):
         if self.image_32bit is None:
@@ -1289,7 +1575,14 @@ class DeveloperTab(QWidget):
         self.is_zoomed_100 = is_zoomed
         if is_zoomed:
             self.zoom_rel_coords = (rel_x, rel_y)
+        else:
+            self._generate_before_reference()
+        if hasattr(self, 'btn_toggle_zoom'):
+            self.btn_toggle_zoom.blockSignals(True)
+            self.btn_toggle_zoom.setChecked(is_zoomed)
+            self.btn_toggle_zoom.blockSignals(False)
         self.update_stretch_preview()
+        self._update_canvas_info_label()
 
     def on_extract_background_clicked(self):
         if self.image_32bit is None:
@@ -1631,11 +1924,17 @@ class DeveloperTab(QWidget):
         self.current_mask = None
         self.active_filepath = None
 
-        self._set_starnet_tools_enabled(False)
+        self.has_custom_snapshot = False
+        self.snapshot_before_pixmap = None
+        self.initial_bp = 0.0
+        self.initial_mtf = 0.1
 
         if hasattr(self, 'canvas') and self.canvas is not None:
             self.canvas.orig_rgb = None
             self.canvas.base_pixmap = None
+            self.canvas.before_pixmap = None
+            self.canvas.split_view_enabled = False
+            self.canvas.split_orientation = "vertical"
             self.canvas.display_stretched = None
             if hasattr(self.canvas, 'scribble_pixmap') and self.canvas.scribble_pixmap is not None:
                 self.canvas.scribble_pixmap.fill(Qt.transparent)
@@ -1643,6 +1942,21 @@ class DeveloperTab(QWidget):
                 self.canvas.refined_overlay = None
             self.canvas.update()
 
+        if hasattr(self, 'btn_split_view'):
+            self.btn_split_view.blockSignals(True)
+            self.btn_split_view.setChecked(False)
+            self.btn_split_view.blockSignals(False)
+        self._update_split_orientation_ui()
+        if hasattr(self, 'btn_toggle_clipping'):
+            self.btn_toggle_clipping.blockSignals(True)
+            self.btn_toggle_clipping.setChecked(False)
+            self.btn_toggle_clipping.blockSignals(False)
+        if hasattr(self, 'btn_toggle_zoom'):
+            self.btn_toggle_zoom.blockSignals(True)
+            self.btn_toggle_zoom.setChecked(False)
+            self.btn_toggle_zoom.blockSignals(False)
+
+        self._update_canvas_info_label()
         self.txt_log.clear()
         gc.collect()
         

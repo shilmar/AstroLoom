@@ -34,6 +34,8 @@
 - **Extracción de Gradientes:** Motor dual integrado con GraXpert AI y ajuste polinómico cuadrático para corregir gradientes luminosos.
 - **Reducción de Ruido Adaptativa:** Múltiples métodos para el fondo (Filtro Bilateral, Filtro Guiado y Non-Local Means) respetando los límites de las estrellas.
 - **Balance de Color Fino y Tonalidad:** Curvas interactivas con histograma integrado en tiempo real, balance de temperatura/tinte calibrado ($\pm0.250$), control de vibranza y saturación diferencial cielo/suelo.
+- **Modo Comparador "Antes / Después" con Cortina Divisoria (Split-View):** Divisor deslizable interactivo en el lienzo para contrastar la toma original neutra con el revelado activo en tiempo real. Soporta orientación horizontal y vertical con atajos `Y` y `Shift + Y`, cursores dinámicos contextuales (`↔`, `↕`) y recentrado rápido al 50% con doble clic.
+- **Barra Superior de Herramientas del Canvas:** Acceso directo a funciones visuales críticas (aviso de Clipping `J`, divisor de vista `Y` y orientación de cortina).
 
 ### 5. Módulo Especializado de Eclipses (Solar / Lunar)
 - **Ingesta Automática de Bracketing y Metadatos:** Carga de series de exposición completa (RAW, TIFF, FITS) con extracción de tiempos de obturación reales, ISO y apertura, ordenando automáticamente las tomas.
@@ -74,6 +76,8 @@
   - Discriminación geométrica por elongación lineal (`cv2.minAreaRect`), reconectando destellos estroboscópicos de aviones y diferenciando satélites de estrellas en rotación.
   - Exclusión automática del suelo mediante máscara de horizonte para ignorar vegetación o ramas que se muevan con el viento.
   - Inpainting acelerado por caja envolvente local ($<0.15\text{ s}$ por toma) y sensibilidad ajustable (Baja, Media, Alta).
+- **Generador de Vídeo Time-Lapse (.mp4):** Exportación en streaming de vídeo de la circumpolar durante la acumulación mediante códec nativo `mp4v` (1080p, 4K y resolución original), cadencia configurable (24, 30, 60, 12 FPS), exportación opcional de fotogramas secuenciales JPG, estabilidad de suelo limpio anti-flicker y botón de reproducción directa.
+- **Realce y Preservación de Color Estelar (*Star Color Recovery & Boost*):** Algoritmo de recuperación espectral en núcleos quemados a blanco (mediante difusión cartesiana continua $(u, v)$) y saturación selectiva de trazas con protección total del fondo nocturno, junto con botón de retoque interactivo ultrarrápido (~0.4s) sobre la imagen ya calculada sin volver a apilar las tomas.
 - **Exportación Dual 16-bit / 32-bit y Enlace Directo:** Guardado en TIFF 16-bit (compatible con Photoshop y Lightroom sin mapeos de tono), TIFF 32-bit float, o transferencia instantánea al Revelador / Editor.
 
 ### 7. Configuración, Rendimiento y Vitrina de Resultados

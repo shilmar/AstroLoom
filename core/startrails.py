@@ -337,6 +337,145 @@ def compute_gap_bridge(
     return bridge_stars
 
 
+def compute_target_video_dims(w: int, h: int, res_mode: str) -> Tuple[int, int]:
+    """
+    Calcula dimensiones pares de vídeo preservando la relación de aspecto.
+    Garantiza que ambos ejes sean múltiplos de 2 para compatibilidad total con codificadores H.264/MPEG-4.
+    """
+    is_portrait = (h > w)
+    if res_mode == "1080p":
+        max_long = 1920
+        max_short = 1080
+    elif res_mode == "4k":
+        max_long = 3840
+        max_short = 2160
+    else:  # "original"
+        return (w // 2) * 2, (h // 2) * 2
+
+    if is_portrait:
+        max_w, max_h = max_short, max_long
+    else:
+        max_w, max_h = max_long, max_short
+
+    scale = min(1.0, min(float(max_w) / float(w), float(max_h) / float(h)))
+    tw = max(2, (int(round(w * scale)) // 2) * 2)
+    th = max(2, (int(round(h * scale)) // 2) * 2)
+    return tw, th
+
+
+def enhance_star_trails_color(
+    img_rgb: np.ndarray,
+    saturation_boost: float = 1.5,
+    core_recovery: float = 0.5,
+    sky_mask: Optional[np.ndarray] = None,
+    bg_protect: bool = True
+) -> np.ndarray:
+    """
+    Realza la saturación cromática de las trazas de estrellas y recupera el color
+    espectral en los núcleos sobreexpuestos o quemados (blancos) sin afectar al fondo del cielo.
+
+    :param img_rgb: Imagen RGB float32 [0.0, 1.0].
+    :param saturation_boost: Factor multiplicador de saturación estelar (1.0 = neutro, 1.2–2.5 = realce vivo).
+    :param core_recovery: Grado de recuperación de color en núcleos quemados (0.0 = neutro, 1.0 = máxima infusión).
+    :param sky_mask: Máscara opcional (1.0 = cielo, 0.0 = suelo). Si se proporciona, el suelo no se modifica.
+    :param bg_protect: Si es True, aísla el fondo oscuro para evitar amplificar ruido cromático.
+    :return: Imagen float32 RGB con colores estelares preservados y realzados.
+    """
+    if saturation_boost <= 1.0 and core_recovery <= 0.0:
+        return img_rgb
+
+    img_f32 = np.clip(img_rgb, 0.0, 1.0).astype(np.float32)
+    h, w = img_f32.shape[:2]
+
+    # 1. Separación de luminosidad y análisis de umbral de fondo estelar
+    lum = cv2.cvtColor(img_f32, cv2.COLOR_RGB2GRAY)
+    sample = lum[::8, ::8]
+    med_bg = float(np.median(sample))
+    mad_bg = float(1.4826 * np.median(np.abs(sample - med_bg)))
+    star_thresh = med_bg + max(mad_bg * 2.5, 0.025)
+
+    # 2. Máscara de peso estelar suave (0.0 en fondo, 1.0 en trazas de estrellas)
+    if bg_protect:
+        star_weight = np.clip((lum - star_thresh) / max(0.04, star_thresh), 0.0, 1.0)
+        star_weight = star_weight * star_weight * (3.0 - 2.0 * star_weight)  # Smoothstep cúbico
+    else:
+        star_weight = np.ones((h, w), dtype=np.float32)
+
+    # Si hay máscara de horizonte, asegurar que el peso sea 0 en el suelo
+    sm = None
+    if sky_mask is not None:
+        sm = sky_mask.astype(np.float32)
+        if sm.max() > 1.05:
+            sm /= 255.0
+        if sm.ndim == 3:
+            sm = sm[..., 0]
+        if sm.shape[:2] != (h, w):
+            sm = cv2.resize(sm, (w, h), interpolation=cv2.INTER_LINEAR)
+        star_weight *= sm
+
+    # 3. Conversión a espacio HSV
+    hsv = cv2.cvtColor(img_f32, cv2.COLOR_RGB2HSV)
+    H, S, V = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+
+    # 4. Recuperación de color en núcleos quemados (Core Color Recovery)
+    if core_recovery > 0.0:
+        core_mask = (V > 0.75) & (S < 0.35) & (star_weight > 0.15)
+        valid_star_color = (star_weight > 0.20) & (S > 0.15) & (V > star_thresh)
+
+        if np.any(core_mask) and np.any(valid_star_color):
+            rad_h = np.deg2rad(H)
+            u = S * np.cos(rad_h)
+            v = S * np.sin(rad_h)
+
+            k_size = max(11, int((min(h, w) // 100) | 1))
+            if k_size % 2 == 0:
+                k_size += 1
+
+            u_color_src = np.where(valid_star_color, u, 0.0).astype(np.float32)
+            v_color_src = np.where(valid_star_color, v, 0.0).astype(np.float32)
+            norm_src = valid_star_color.astype(np.float32)
+
+            sigma = float(k_size) / 2.5
+            u_diffused = cv2.GaussianBlur(u_color_src, (k_size, k_size), sigmaX=sigma)
+            v_diffused = cv2.GaussianBlur(v_color_src, (k_size, k_size), sigmaX=sigma)
+            norm_diffused = cv2.GaussianBlur(norm_src, (k_size, k_size), sigmaX=sigma)
+            norm_diffused = np.maximum(norm_diffused, 1e-5)
+
+            u_recovered = u_diffused / norm_diffused
+            v_recovered = v_diffused / norm_diffused
+
+            recovered_S = np.clip(np.sqrt(u_recovered**2 + v_recovered**2), 0.0, 1.0)
+            recovered_H = np.rad2deg(np.arctan2(v_recovered, u_recovered)) % 360.0
+
+            # Solo infundir si hay suficiente soporte de color vecino (norm_diffused > 0.05)
+            confidence = np.clip(norm_diffused * 2.0, 0.0, 1.0)
+            infuse_factor = np.clip(core_recovery * (core_mask.astype(np.float32)) * confidence, 0.0, 1.0)
+
+            H = np.where(infuse_factor > 0, (1.0 - infuse_factor) * H + infuse_factor * recovered_H, H)
+            target_core_S = np.clip(recovered_S * 1.25, 0.15, 0.75)
+            S = np.where(infuse_factor > 0, np.maximum(S, target_core_S * infuse_factor), S)
+
+    # 5. Amplificación de Saturación Estelar
+    if saturation_boost > 1.0:
+        boost_mult = 1.0 + (saturation_boost - 1.0) * star_weight
+        S = np.clip(S * boost_mult, 0.0, 1.0)
+
+    # 6. Reconstrucción RGB
+    hsv[..., 0] = H
+    hsv[..., 1] = S
+    hsv[..., 2] = V
+
+    enhanced_rgb = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+
+    if sm is not None:
+        sm3 = np.repeat(sm[..., np.newaxis], 3, axis=2)
+        out = (enhanced_rgb * sm3) + (img_f32 * (1.0 - sm3))
+    else:
+        out = enhanced_rgb
+
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
+
+
 def generate_startrail(
     files: List[str],
     mode: str = "lighten",
@@ -353,9 +492,11 @@ def generate_startrail(
     fill_gaps: bool = False,
     gap_fill_radius: int = 3,
     gap_fill_threshold_factor: float = 3.0,
+    timelapse_params: Optional[Dict[str, Any]] = None,
+    color_boost_params: Optional[Dict[str, Any]] = None,
     progress_callback: Optional[Callable[[int, str], None]] = None,
     abort_flag: Optional[Callable[[], bool]] = None
-) -> np.ndarray:
+) -> Tuple[np.ndarray, Optional[str]]:
     """
     Genera una imagen compuesta de trazas de estrellas (Startrails) con streaming eficiente de memoria.
 
@@ -432,175 +573,197 @@ def generate_startrail(
         k_size = max(3, int(gap_fill_radius * 2 + 1))
         gap_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
 
-    # 4. Acumulación progresiva streaming
+    # 4. Configuración opcional de Time-Lapse
+    timelapse_enabled = False
+    output_video_path = None
+    fps = 24.0
+    res_mode = "1080p"
+    save_frames = False
+    frames_dir = None
+
+    if timelapse_params and timelapse_params.get("enabled", False):
+        timelapse_enabled = True
+        output_video_path = timelapse_params.get("output_video_path")
+        if not output_video_path:
+            first_dir = os.path.dirname(files[0]) if files[0] else os.getcwd()
+            if not first_dir:
+                first_dir = os.getcwd()
+            output_video_path = os.path.join(first_dir, "timelapse_startrails.mp4")
+        fps = float(timelapse_params.get("fps", 24.0))
+        res_mode = str(timelapse_params.get("resolution", "1080p")).lower()
+        save_frames = bool(timelapse_params.get("save_frames", False))
+        frames_dir = timelapse_params.get("frames_dir")
+        if save_frames and not frames_dir:
+            frames_dir = os.path.splitext(output_video_path)[0] + "_frames"
+
+    # 5. Configuración opcional de Realce de Color Estelar
+    color_boost_enabled = False
+    sat_boost = 1.5
+    core_recovery = 0.5
+    if color_boost_params and color_boost_params.get("enabled", False):
+        color_boost_enabled = True
+        sat_boost = float(color_boost_params.get("saturation", 1.5))
+        core_recovery = float(color_boost_params.get("core_recovery", 0.5))
+
+    video_writer = None
+    actual_video_path = None
+    tw, th = None, None
+    ref_ground = None
+
+    if timelapse_enabled and use_clean_ground and mask_3c is not None:
+        try:
+            ref_ground = load_image_as_float32(files[ref_idx])
+            if master_dark is not None and master_dark.shape == ref_ground.shape:
+                ref_ground = np.maximum(0.0, ref_ground - master_dark)
+        except Exception as e:
+            print(f"[Startrails] Error al precargar referencia para suelo de timelapse: {e}")
+            ref_ground = None
+
+    def _write_timelapse_frame(idx: int):
+        nonlocal video_writer, tw, th, actual_video_path
+        if not timelapse_enabled or sky_acc is None:
+            return
+
+        if video_writer is None:
+            h_acc, w_acc = sky_acc.shape[:2]
+            tw, th = compute_target_video_dims(w_acc, h_acc, res_mode)
+            out_dir = os.path.dirname(os.path.abspath(output_video_path))
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
+            if save_frames and frames_dir:
+                os.makedirs(frames_dir, exist_ok=True)
+
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            video_writer = cv2.VideoWriter(output_video_path, fourcc, float(fps), (tw, th))
+            if not video_writer.isOpened():
+                print(f"[Startrails] Advertencia: No se pudo abrir VideoWriter para '{output_video_path}'")
+                video_writer = None
+                return
+            actual_video_path = output_video_path
+
+        if use_clean_ground and mask_3c is not None and ref_ground is not None:
+            gh, gw = sky_acc.shape[:2]
+            cur_mask = mask_3c
+            if cur_mask.shape[:2] != (gh, gw):
+                cur_mask = cv2.resize(cur_mask, (gw, gh), interpolation=cv2.INTER_LINEAR)
+                if cur_mask.ndim == 2:
+                    cur_mask = cur_mask[:, :, np.newaxis]
+            cur_ref = ref_ground
+            if cur_ref.shape[:2] != (gh, gw):
+                cur_ref = cv2.resize(cur_ref, (gw, gh), interpolation=cv2.INTER_LINEAR)
+            tl_frame = (sky_acc * cur_mask) + (cur_ref * (1.0 - cur_mask))
+        else:
+            tl_frame = sky_acc
+
+        if (tw, th) != (tl_frame.shape[1], tl_frame.shape[0]):
+            interp = cv2.INTER_AREA if (tw < tl_frame.shape[1] and th < tl_frame.shape[0]) else cv2.INTER_LINEAR
+            frame_resized = cv2.resize(tl_frame, (tw, th), interpolation=interp)
+        else:
+            frame_resized = tl_frame
+
+        if color_boost_enabled:
+            frame_resized = enhance_star_trails_color(
+                frame_resized,
+                saturation_boost=sat_boost,
+                core_recovery=core_recovery,
+                sky_mask=None,
+                bg_protect=True
+            )
+
+        bgr_u8 = (np.clip(frame_resized, 0.0, 1.0) * 255.0).astype(np.uint8)
+        bgr_u8 = cv2.cvtColor(bgr_u8, cv2.COLOR_RGB2BGR)
+
+        video_writer.write(bgr_u8)
+
+        if save_frames and frames_dir:
+            frame_path = os.path.join(frames_dir, f"frame_{idx:05d}.jpg")
+            cv2.imwrite(frame_path, bgr_u8, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+    # 6. Acumulación progresiva streaming
     sky_acc = None
     ground_sum = None
     ref_frame = None
 
-    if suppress_streaks:
-        # Búfer deslizante inteligente O(1) con 2 referencias simultáneas para cada fotograma
-        loaded_frames: Dict[int, np.ndarray] = {}
+    try:
+        if suppress_streaks:
+            # Búfer deslizante inteligente O(1) con 2 referencias simultáneas para cada fotograma
+            loaded_frames: Dict[int, np.ndarray] = {}
 
-        def get_frame(idx: int) -> np.ndarray:
-            if abort_flag and abort_flag():
-                raise InterruptedError("Procesamiento de trazas cancelado por el usuario.")
-            if idx not in loaded_frames:
-                img = load_image_as_float32(files[idx])
-                if master_dark is not None and master_dark.shape == img.shape:
-                    img = np.maximum(0.0, img - master_dark)
-                loaded_frames[idx] = img
-            return loaded_frames[idx]
+            def get_frame(idx: int) -> np.ndarray:
+                if abort_flag and abort_flag():
+                    raise InterruptedError("Procesamiento de trazas cancelado por el usuario.")
+                if idx not in loaded_frames:
+                    img = load_image_as_float32(files[idx])
+                    if master_dark is not None and master_dark.shape == img.shape:
+                        img = np.maximum(0.0, img - master_dark)
+                    loaded_frames[idx] = img
+                return loaded_frames[idx]
 
-        prev_clean: Optional[np.ndarray] = None
-        prev_weight: float = 1.0
-        prev_dilated_stars: Optional[np.ndarray] = None
+            prev_clean: Optional[np.ndarray] = None
+            prev_weight: float = 1.0
+            prev_dilated_stars: Optional[np.ndarray] = None
 
-        for i in range(n_files):
-            if abort_flag and abort_flag():
-                raise InterruptedError("Procesamiento de trazas cancelado por el usuario.")
-
-            fname = os.path.basename(files[i])
-            pct = int(10 + (i / n_files) * 80)
-
-            curr = get_frame(i)
-            h, w = curr.shape[:2]
-
-            # Ajustar dimensiones de la máscara una sola vez si difiere en resolución
-            if sky_mask_bool is not None and sky_mask_bool.shape[:2] != (h, w):
-                sm_res = cv2.resize(sky_mask_bool.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
-                sky_mask_bool = (sm_res > 0)
-
-            if i == 0 and n_files >= 3:
-                ref_A = get_frame(1)
-                ref_B = get_frame(2)
-            elif i == n_files - 1 and n_files >= 3:
-                ref_A = get_frame(n_files - 3)
-                ref_B = get_frame(n_files - 2)
-            elif n_files >= 2:
-                ref_A = get_frame(i - 1 if i > 0 else 1)
-                ref_B = get_frame(i + 1 if i < n_files - 1 else 0)
-            else:
-                ref_A = None
-                ref_B = None
-
-            # Detección y supresión de satélites / aviones
-            cleaned_img, num_streaks = clean_frame_streaks(
-                curr, ref_A, ref_B,
-                sky_mask=sky_mask_bool,
-                sensitivity=streak_sensitivity
-            )
-
-            # Liberar memoria de fotogramas pasados que ya no se utilizarán
-            keys_to_del = [k for k in list(loaded_frames.keys()) if k < i - 1]
-            for k in keys_to_del:
-                del loaded_frames[k]
-
-            if num_streaks > 0 and progress_callback:
-                progress_callback(pct, f"Toma ({i+1}/{n_files}): suprimidas {num_streaks} trazas de satélite/avión en {fname}")
-            elif progress_callback:
-                progress_callback(pct, f"Integrando toma ({i+1}/{n_files}): {fname}")
-
-            if i == ref_idx:
-                ref_frame = cleaned_img.copy()
-
-            curr_weight = comet_weights[i] if (mode == "comet" and comet_weights is not None) else 1.0
-            if mode == "comet" and comet_weights is not None:
-                frame_sky = cleaned_img * curr_weight
-            else:
-                frame_sky = cleaned_img
-
-            if sky_acc is None:
-                sky_acc = frame_sky.copy()
-            else:
-                if fill_gaps:
-                    curr_dilated_stars = extract_dilated_stars(
-                        cleaned_img,
-                        radius=gap_fill_radius,
-                        threshold_factor=gap_fill_threshold_factor,
-                        sky_mask_bool=sky_mask_bool,
-                        kernel=gap_kernel
-                    )
-                    if prev_dilated_stars is not None:
-                        bridge = np.minimum(prev_dilated_stars, curr_dilated_stars)
-                        bridge[bridge < 0.005] = 0.0
-                        if mode == "comet" and comet_weights is not None:
-                            w_bridge = 0.5 * (prev_weight + curr_weight)
-                            bridge = bridge * w_bridge
-                        np.maximum(sky_acc, bridge, out=sky_acc)
-                    prev_dilated_stars = curr_dilated_stars
-
-                np.maximum(sky_acc, frame_sky, out=sky_acc)
-
-            if fill_gaps and prev_dilated_stars is None:
-                prev_dilated_stars = extract_dilated_stars(
-                    cleaned_img,
-                    radius=gap_fill_radius,
-                    threshold_factor=gap_fill_threshold_factor,
-                    sky_mask_bool=sky_mask_bool,
-                    kernel=gap_kernel
-                )
-
-            prev_clean = cleaned_img
-            prev_weight = curr_weight
-
-            if use_clean_ground and mask_3c is not None and ground_mode == "average":
-                if ground_sum is None:
-                    ground_sum = cleaned_img.astype(np.float64)
-                else:
-                    ground_sum += cleaned_img
-
-        loaded_frames.clear()
-
-    else:
-        # Acumulación directa estándar con prefetching asíncrono y arrastre de estrellas dilatadas
-        prev_img: Optional[np.ndarray] = None
-        prev_weight: float = 1.0
-        prev_dilated_stars: Optional[np.ndarray] = None
-
-        prefetch_exec = ThreadPoolExecutor(max_workers=1)
-        try:
-            future_next = prefetch_exec.submit(load_image_as_float32, files[0])
-
-            for i, path in enumerate(files):
+            for i in range(n_files):
                 if abort_flag and abort_flag():
                     raise InterruptedError("Procesamiento de trazas cancelado por el usuario.")
 
                 fname = os.path.basename(files[i])
                 pct = int(10 + (i / n_files) * 80)
-                if progress_callback:
-                    progress_callback(pct, f"Integrando toma ({i+1}/{n_files}): {fname}")
 
-                img = future_next.result()
+                curr = get_frame(i)
+                h, w = curr.shape[:2]
 
-                # Lanzar en segundo plano la precarga de la siguiente toma
-                if i + 1 < n_files:
-                    future_next = prefetch_exec.submit(load_image_as_float32, files[i + 1])
-                else:
-                    future_next = None
-
-                if master_dark is not None and master_dark.shape == img.shape:
-                    img = np.maximum(0.0, img - master_dark)
-
-                h, w = img.shape[:2]
+                # Ajustar dimensiones de la máscara una sola vez si difiere en resolución
                 if sky_mask_bool is not None and sky_mask_bool.shape[:2] != (h, w):
                     sm_res = cv2.resize(sky_mask_bool.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
                     sky_mask_bool = (sm_res > 0)
 
+                if i == 0 and n_files >= 3:
+                    ref_A = get_frame(1)
+                    ref_B = get_frame(2)
+                elif i == n_files - 1 and n_files >= 3:
+                    ref_A = get_frame(n_files - 3)
+                    ref_B = get_frame(n_files - 2)
+                elif n_files >= 2:
+                    ref_A = get_frame(i - 1 if i > 0 else 1)
+                    ref_B = get_frame(i + 1 if i < n_files - 1 else 0)
+                else:
+                    ref_A = None
+                    ref_B = None
+
+                # Detección y supresión de satélites / aviones
+                cleaned_img, num_streaks = clean_frame_streaks(
+                    curr, ref_A, ref_B,
+                    sky_mask=sky_mask_bool,
+                    sensitivity=streak_sensitivity
+                )
+
+                # Liberar memoria de fotogramas pasados que ya no se utilizarán
+                keys_to_del = [k for k in list(loaded_frames.keys()) if k < i - 1]
+                for k in keys_to_del:
+                    del loaded_frames[k]
+
+                tl_tag = " [Time-Lapse]" if timelapse_enabled else ""
+                if num_streaks > 0 and progress_callback:
+                    progress_callback(pct, f"Toma ({i+1}/{n_files}): suprimidas {num_streaks} trazas de satélite/avión en {fname}{tl_tag}")
+                elif progress_callback:
+                    progress_callback(pct, f"Integrando toma ({i+1}/{n_files}): {fname}{tl_tag}")
+
                 if i == ref_idx:
-                    ref_frame = img.copy()
+                    ref_frame = cleaned_img.copy()
 
                 curr_weight = comet_weights[i] if (mode == "comet" and comet_weights is not None) else 1.0
                 if mode == "comet" and comet_weights is not None:
-                    frame_sky = img * curr_weight
+                    frame_sky = cleaned_img * curr_weight
                 else:
-                    frame_sky = img
+                    frame_sky = cleaned_img
 
                 if sky_acc is None:
                     sky_acc = frame_sky.copy()
                 else:
                     if fill_gaps:
                         curr_dilated_stars = extract_dilated_stars(
-                            img,
+                            cleaned_img,
                             radius=gap_fill_radius,
                             threshold_factor=gap_fill_threshold_factor,
                             sky_mask_bool=sky_mask_bool,
@@ -619,28 +782,137 @@ def generate_startrail(
 
                 if fill_gaps and prev_dilated_stars is None:
                     prev_dilated_stars = extract_dilated_stars(
-                        img,
+                        cleaned_img,
                         radius=gap_fill_radius,
                         threshold_factor=gap_fill_threshold_factor,
                         sky_mask_bool=sky_mask_bool,
                         kernel=gap_kernel
                     )
 
-                prev_img = img
+                prev_clean = cleaned_img
                 prev_weight = curr_weight
+
+                if timelapse_enabled:
+                    _write_timelapse_frame(i)
 
                 if use_clean_ground and mask_3c is not None and ground_mode == "average":
                     if ground_sum is None:
-                        ground_sum = img.astype(np.float64)
+                        ground_sum = cleaned_img.astype(np.float64)
                     else:
-                        ground_sum += img
-        finally:
-            prefetch_exec.shutdown(wait=False, cancel_futures=True)
+                        ground_sum += cleaned_img
+
+            loaded_frames.clear()
+
+        else:
+            # Acumulación directa estándar con prefetching asíncrono y arrastre de estrellas dilatadas
+            prev_img: Optional[np.ndarray] = None
+            prev_weight: float = 1.0
+            prev_dilated_stars: Optional[np.ndarray] = None
+
+            prefetch_exec = ThreadPoolExecutor(max_workers=1)
+            try:
+                future_next = prefetch_exec.submit(load_image_as_float32, files[0])
+
+                for i, path in enumerate(files):
+                    if abort_flag and abort_flag():
+                        raise InterruptedError("Procesamiento de trazas cancelado por el usuario.")
+
+                    fname = os.path.basename(files[i])
+                    pct = int(10 + (i / n_files) * 80)
+                    tl_tag = " [Time-Lapse]" if timelapse_enabled else ""
+                    if progress_callback:
+                        progress_callback(pct, f"Integrando toma ({i+1}/{n_files}): {fname}{tl_tag}")
+
+                    img = future_next.result()
+
+                    # Lanzar en segundo plano la precarga de la siguiente toma
+                    if i + 1 < n_files:
+                        future_next = prefetch_exec.submit(load_image_as_float32, files[i + 1])
+                    else:
+                        future_next = None
+
+                    if master_dark is not None and master_dark.shape == img.shape:
+                        img = np.maximum(0.0, img - master_dark)
+
+                    h, w = img.shape[:2]
+                    if sky_mask_bool is not None and sky_mask_bool.shape[:2] != (h, w):
+                        sm_res = cv2.resize(sky_mask_bool.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
+                        sky_mask_bool = (sm_res > 0)
+
+                    if i == ref_idx:
+                        ref_frame = img.copy()
+
+                    curr_weight = comet_weights[i] if (mode == "comet" and comet_weights is not None) else 1.0
+                    if mode == "comet" and comet_weights is not None:
+                        frame_sky = img * curr_weight
+                    else:
+                        frame_sky = img
+
+                    if sky_acc is None:
+                        sky_acc = frame_sky.copy()
+                    else:
+                        if fill_gaps:
+                            curr_dilated_stars = extract_dilated_stars(
+                                img,
+                                radius=gap_fill_radius,
+                                threshold_factor=gap_fill_threshold_factor,
+                                sky_mask_bool=sky_mask_bool,
+                                kernel=gap_kernel
+                            )
+                            if prev_dilated_stars is not None:
+                                bridge = np.minimum(prev_dilated_stars, curr_dilated_stars)
+                                bridge[bridge < 0.005] = 0.0
+                                if mode == "comet" and comet_weights is not None:
+                                    w_bridge = 0.5 * (prev_weight + curr_weight)
+                                    bridge = bridge * w_bridge
+                                np.maximum(sky_acc, bridge, out=sky_acc)
+                            prev_dilated_stars = curr_dilated_stars
+
+                        np.maximum(sky_acc, frame_sky, out=sky_acc)
+
+                    if fill_gaps and prev_dilated_stars is None:
+                        prev_dilated_stars = extract_dilated_stars(
+                            img,
+                            radius=gap_fill_radius,
+                            threshold_factor=gap_fill_threshold_factor,
+                            sky_mask_bool=sky_mask_bool,
+                            kernel=gap_kernel
+                        )
+
+                    prev_img = img
+                    prev_weight = curr_weight
+
+                    if timelapse_enabled:
+                        _write_timelapse_frame(i)
+
+                    if use_clean_ground and mask_3c is not None and ground_mode == "average":
+                        if ground_sum is None:
+                            ground_sum = img.astype(np.float64)
+                        else:
+                            ground_sum += img
+            finally:
+                prefetch_exec.shutdown(wait=False, cancel_futures=True)
+
+    finally:
+        if video_writer is not None:
+            video_writer.release()
 
     if sky_acc is None:
         raise RuntimeError("No se pudo acumular ninguna imagen válida.")
 
-    # 5. Fusión con suelo limpio o retorno directo
+    # 7. Realce y preservación de color estelar (Star Color Boost)
+    if color_boost_enabled:
+        if progress_callback:
+            progress_callback(93, "Realzando y preservando saturación de trazas estelares...")
+        sky_acc = enhance_star_trails_color(
+            sky_acc,
+            saturation_boost=sat_boost,
+            core_recovery=core_recovery,
+            sky_mask=sky_mask_bool,
+            bg_protect=True
+        )
+
+    # 8. Fusión con suelo limpio o retorno directo
     if use_clean_ground and mask_3c is not None:
         if progress_callback:
             progress_callback(92, "Fusionando cielo de trazas con suelo anti-ruido...")
@@ -670,7 +942,16 @@ def generate_startrail(
 
     final_img = np.clip(final_img, 0.0, 1.0).astype(np.float32)
 
-    if progress_callback:
-        progress_callback(100, f"Composición de trazas finalizada con éxito ({n_files} tomas).")
+    if actual_video_path and os.path.exists(actual_video_path):
+        if os.path.getsize(actual_video_path) == 0:
+            actual_video_path = None
+    else:
+        actual_video_path = None
 
-    return final_img
+    if progress_callback:
+        msg = f"Composición de trazas finalizada con éxito ({n_files} tomas)."
+        if actual_video_path:
+            msg += f" Vídeo time-lapse exportado: {os.path.basename(actual_video_path)}"
+        progress_callback(100, msg)
+
+    return final_img, actual_video_path

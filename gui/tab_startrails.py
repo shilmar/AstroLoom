@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.stacking import load_image_as_float32
-from core.startrails import generate_startrail
+from core.startrails import generate_startrail, enhance_star_trails_color
 from core.icc_manager import save_tiff_with_icc
 from gui.canvas import MaskCanvas
 
@@ -49,7 +49,7 @@ class StartrailWorker(QThread):
 
     def run(self):
         try:
-            result = generate_startrail(
+            result, video_path = generate_startrail(
                 files=self.params["files"],
                 mode=self.params.get("mode", "lighten"),
                 comet_params=self.params.get("comet_params"),
@@ -64,13 +64,15 @@ class StartrailWorker(QThread):
                 fill_gaps=self.params.get("fill_gaps", False),
                 gap_fill_radius=self.params.get("gap_fill_radius", 3),
                 gap_fill_threshold_factor=self.params.get("gap_fill_threshold_factor", 3.0),
+                timelapse_params=self.params.get("timelapse_params"),
+                color_boost_params=self.params.get("color_boost_params"),
                 progress_callback=self.progress.emit,
                 abort_flag=lambda: self._is_cancelled
             )
             if self._is_cancelled:
                 self.cancelled.emit()
                 return
-            self.finished.emit(result, "startrail_generation")
+            self.finished.emit((result, video_path), "startrail_generation")
         except InterruptedError:
             self.cancelled.emit()
         except Exception as e:
@@ -135,8 +137,11 @@ class StartrailsTab(QWidget):
         self.current_mask: Optional[np.ndarray] = None
         self.current_preview_img: Optional[np.ndarray] = None
         self.final_startrail_img: Optional[np.ndarray] = None
+        self.raw_startrail_img: Optional[np.ndarray] = None
         self.worker: Optional[StartrailWorker] = None
         self._mask_provider: Optional[Callable[[], Optional[np.ndarray]]] = None
+        self.timelapse_custom_path: Optional[str] = None
+        self.last_timelapse_path: Optional[str] = None
 
         self._setup_ui()
         self._apply_styles()
@@ -382,6 +387,83 @@ class StartrailsTab(QWidget):
         self.container_gaps.setVisible(False)
         modes_layout.addWidget(self.container_gaps)
 
+        # Realce y preservación de color estelar (Star Color Boost)
+        self.chk_star_color = QCheckBox("🌈 Realzar y preservar color estelar (Star Color Boost)")
+        self.chk_star_color.setStyleSheet("font-weight: bold; color: #ce93d8;")
+        self.chk_star_color.setToolTip(
+            "Preserva los colores espectrales naturales de las estrellas (azules, dorados, anaranjados y rojos)\n"
+            "evitando que las trazas queden blancas y recuperando el color en los núcleos sobreexpuestos."
+        )
+        self.chk_star_color.toggled.connect(self._on_star_color_toggled)
+        modes_layout.addWidget(self.chk_star_color)
+
+        self.container_star_color = QWidget()
+        color_layout = QVBoxLayout(self.container_star_color)
+        color_layout.setContentsMargins(16, 2, 4, 4)
+        color_layout.setSpacing(6)
+
+        # Saturación estelar
+        row_sat = QHBoxLayout()
+        row_sat.addWidget(QLabel("Saturación Estelar:"))
+        self.lbl_star_sat_val = QLabel("1.5x")
+        self.lbl_star_sat_val.setStyleSheet("color: #ce93d8; font-weight: bold;")
+        row_sat.addWidget(self.lbl_star_sat_val)
+        row_sat.addStretch()
+        color_layout.addLayout(row_sat)
+
+        self.slider_star_sat = QSlider(Qt.Horizontal)
+        self.slider_star_sat.setRange(100, 300)  # 1.0x a 3.0x
+        self.slider_star_sat.setValue(150)
+        self.slider_star_sat.valueChanged.connect(lambda v: self.lbl_star_sat_val.setText(f"{v/100.0:.1f}x"))
+        color_layout.addWidget(self.slider_star_sat)
+
+        # Recuperación de núcleos (Core Recovery)
+        row_core = QHBoxLayout()
+        row_core.addWidget(QLabel("Recuperación de Núcleos Quemados:"))
+        self.lbl_core_rec_val = QLabel("50%")
+        self.lbl_core_rec_val.setStyleSheet("color: #ffd54f; font-weight: bold;")
+        row_core.addWidget(self.lbl_core_rec_val)
+        row_core.addStretch()
+        color_layout.addLayout(row_core)
+
+        self.slider_core_rec = QSlider(Qt.Horizontal)
+        self.slider_core_rec.setRange(0, 100)  # 0% a 100%
+        self.slider_core_rec.setValue(50)
+        self.slider_core_rec.valueChanged.connect(lambda v: self.lbl_core_rec_val.setText(f"{v}%"))
+        color_layout.addWidget(self.slider_core_rec)
+
+        # Botón para reajuste rápido sin recalcular todo
+        self.btn_apply_color_live = QPushButton("✨ Aplicar a la Imagen Actual (Retoque Rápido)")
+        self.btn_apply_color_live.setStyleSheet("""
+            QPushButton {
+                font-size: 11px;
+                font-weight: bold;
+                background-color: #4a148c;
+                color: #e1bee7;
+                border: 1px solid #7b1fa2;
+                border-radius: 3px;
+                padding: 4px;
+            }
+            QPushButton:hover {
+                background-color: #6a1b9a;
+            }
+            QPushButton:disabled {
+                background-color: #212121;
+                color: #616161;
+                border-color: #333333;
+            }
+        """)
+        self.btn_apply_color_live.setToolTip(
+            "Aplica los ajustes de saturación y recuperación de núcleos a la circumpolar ya generada\n"
+            "en menos de un segundo, sin tener que volver a integrar todas las tomas."
+        )
+        self.btn_apply_color_live.setEnabled(False)
+        self.btn_apply_color_live.clicked.connect(self._on_apply_star_color_live_clicked)
+        color_layout.addWidget(self.btn_apply_color_live)
+
+        self.container_star_color.setVisible(False)
+        modes_layout.addWidget(self.container_star_color)
+
         left_layout.addWidget(grp_modes)
 
         # 3. GRUPO: FUSIÓN DE SUELO LIMPIO (ANTI-RUIDO)
@@ -452,8 +534,100 @@ class StartrailsTab(QWidget):
 
         left_layout.addWidget(grp_ground)
 
-        # 4. GRUPO: EXPORTACIÓN
-        grp_export = QGroupBox("4. Exportación y Flujo de Trabajo")
+        # 4. GRUPO: VÍDEO TIME-LAPSE
+        grp_timelapse = QGroupBox("4. Vídeo Time-Lapse de la Circumpolar (Opcional)")
+        tl_layout = QVBoxLayout(grp_timelapse)
+        tl_layout.setContentsMargins(10, 14, 10, 10)
+        tl_layout.setSpacing(8)
+
+        self.chk_enable_timelapse = QCheckBox("🎬 Generar Vídeo Time-Lapse (.mp4)")
+        self.chk_enable_timelapse.setStyleSheet("font-weight: bold; color: #80d8ff;")
+        self.chk_enable_timelapse.setToolTip(
+            "Crea un vídeo .mp4 mostrando el nacimiento y giro progresivo de las trazas de estrellas,\n"
+            "fotograma a fotograma a lo largo de toda la sesión."
+        )
+        self.chk_enable_timelapse.toggled.connect(self._on_timelapse_toggled)
+        tl_layout.addWidget(self.chk_enable_timelapse)
+
+        self.container_timelapse = QWidget()
+        tl_sub_layout = QVBoxLayout(self.container_timelapse)
+        tl_sub_layout.setContentsMargins(12, 4, 4, 4)
+        tl_sub_layout.setSpacing(8)
+
+        # FPS
+        row_fps = QHBoxLayout()
+        row_fps.addWidget(QLabel("Fotogramas por seg (FPS):"))
+        self.combo_tl_fps = QComboBox()
+        self.combo_tl_fps.addItem("24 FPS (Cinemático estándar)", 24)
+        self.combo_tl_fps.addItem("30 FPS (Fluido)", 30)
+        self.combo_tl_fps.addItem("60 FPS (Ultra fluido)", 60)
+        self.combo_tl_fps.addItem("12 FPS (Paso a paso lento)", 12)
+        self.combo_tl_fps.setCurrentIndex(0)
+        row_fps.addWidget(self.combo_tl_fps)
+        tl_sub_layout.addLayout(row_fps)
+
+        # Resolución
+        row_res = QHBoxLayout()
+        row_res.addWidget(QLabel("Resolución del Vídeo:"))
+        self.combo_tl_res = QComboBox()
+        self.combo_tl_res.addItem("Full HD 1080p (1920x1080 recomendado)", "1080p")
+        self.combo_tl_res.addItem("4K Ultra HD (3840x2160)", "4k")
+        self.combo_tl_res.addItem("Resolución Original del Sensor", "original")
+        self.combo_tl_res.setCurrentIndex(0)
+        row_res.addWidget(self.combo_tl_res)
+        tl_sub_layout.addLayout(row_res)
+
+        # Exportar fotogramas individuales
+        self.chk_tl_save_frames = QCheckBox("Exportar fotogramas secuenciales (.jpg)")
+        self.chk_tl_save_frames.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        self.chk_tl_save_frames.setToolTip(
+            "Guarda cada paso de la acumulación como una imagen JPG numerada en una subcarpeta,\n"
+            "útil para edición manual en Premiere, DaVinci Resolve o After Effects."
+        )
+        tl_sub_layout.addWidget(self.chk_tl_save_frames)
+
+        # Destino del vídeo
+        row_dest = QHBoxLayout()
+        self.lbl_tl_path = QLabel("Destino: Automático (junto a las tomas)")
+        self.lbl_tl_path.setStyleSheet("color: #90a4ae; font-size: 10px;")
+        self.lbl_tl_path.setWordWrap(True)
+        self.btn_tl_dest = QPushButton("📁 Cambiar Destino...")
+        self.btn_tl_dest.setStyleSheet("font-size: 11px; padding: 3px 6px;")
+        self.btn_tl_dest.clicked.connect(self._on_select_timelapse_dest_clicked)
+        row_dest.addWidget(self.lbl_tl_path, 1)
+        row_dest.addWidget(self.btn_tl_dest)
+        tl_sub_layout.addLayout(row_dest)
+
+        # Botón de reproducción de timelapse generado
+        self.btn_play_timelapse = QPushButton("▶️ Reproducir Vídeo Time-Lapse")
+        self.btn_play_timelapse.setStyleSheet("""
+            QPushButton {
+                font-weight: bold;
+                font-size: 12px;
+                background-color: #00838f;
+                color: white;
+                border-radius: 4px;
+                padding: 6px;
+            }
+            QPushButton:hover {
+                background-color: #0097a7;
+            }
+            QPushButton:disabled {
+                background-color: #37474f;
+                color: #78909c;
+            }
+        """)
+        self.btn_play_timelapse.setEnabled(False)
+        self.btn_play_timelapse.clicked.connect(self._on_play_timelapse_clicked)
+        tl_sub_layout.addWidget(self.btn_play_timelapse)
+
+        tl_layout.addWidget(self.container_timelapse)
+        self.container_timelapse.setVisible(False)
+
+        left_layout.addWidget(grp_timelapse)
+
+        # 5. GRUPO: EXPORTACIÓN
+        grp_export = QGroupBox("5. Exportación y Flujo de Trabajo")
         export_layout = QVBoxLayout(grp_export)
         export_layout.setContentsMargins(10, 14, 10, 10)
         export_layout.setSpacing(8)
@@ -490,8 +664,8 @@ class StartrailsTab(QWidget):
         roadmap_layout.addWidget(lbl_rm_title)
 
         lbl_rm_desc = QLabel(
-            "• Generación de secuencia acumulativa para vídeo Time-Lapse\n"
-            "• Realce y balance cromático de trazas estelares"
+            "• Integración con curvas tonales de contraste nocturno\n"
+            "• Modo timelapse con suavizado temporal anti-flicker"
         )
         lbl_rm_desc.setStyleSheet("color: #8c8c9e; font-size: 10px; line-height: 140%;")
         roadmap_layout.addWidget(lbl_rm_desc)
@@ -683,9 +857,16 @@ class StartrailsTab(QWidget):
         self.lbl_files_summary.setText("0 tomas cargadas")
         self.current_preview_img = None
         self.final_startrail_img = None
+        self.raw_startrail_img = None
         self.canvas.orig_rgb = None
         self.canvas.base_pixmap = None
         self.canvas.update()
+        self.timelapse_custom_path = None
+        self.last_timelapse_path = None
+        self.btn_play_timelapse.setEnabled(False)
+        self.btn_apply_color_live.setEnabled(False)
+        self.lbl_tl_path.setText("Destino: Automático (junto a las tomas)")
+        self.lbl_tl_path.setStyleSheet("color: #90a4ae; font-size: 10px;")
         self.log("Lista de tomas vaciada.")
 
     def _refresh_table(self) -> None:
@@ -883,6 +1064,24 @@ class StartrailsTab(QWidget):
                 return
             use_clean_ground = False
 
+        timelapse_params = None
+        if self.chk_enable_timelapse.isChecked():
+            timelapse_params = {
+                "enabled": True,
+                "output_video_path": self.timelapse_custom_path,
+                "fps": float(self.combo_tl_fps.currentData() or 24),
+                "resolution": self.combo_tl_res.currentData() or "1080p",
+                "save_frames": self.chk_tl_save_frames.isChecked()
+            }
+
+        color_boost_params = None
+        if self.chk_star_color.isChecked():
+            color_boost_params = {
+                "enabled": True,
+                "saturation": self.slider_star_sat.value() / 100.0,
+                "core_recovery": self.slider_core_rec.value() / 100.0
+            }
+
         params = {
             "files": self.files_list,
             "mode": mode,
@@ -897,9 +1096,12 @@ class StartrailsTab(QWidget):
             "streak_sensitivity": float(self.combo_streak_sens.currentData() or 0.5),
             "fill_gaps": self.chk_fill_gaps.isChecked(),
             "gap_fill_radius": self.slider_gap_radius.value(),
-            "gap_fill_threshold_factor": float(self.combo_gap_sens.currentData() or 3.0)
+            "gap_fill_threshold_factor": float(self.combo_gap_sens.currentData() or 3.0),
+            "timelapse_params": timelapse_params,
+            "color_boost_params": color_boost_params
         }
 
+        self.btn_play_timelapse.setEnabled(False)
         self._set_run_button_state("running")
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
@@ -917,21 +1119,93 @@ class StartrailsTab(QWidget):
         if pct % 10 == 0 or pct >= 90:
             self.log(msg)
 
-    def _on_worker_finished(self, result: np.ndarray, task_type: str) -> None:
+    def _on_worker_finished(self, data: Any, task_type: str) -> None:
         self._set_run_button_state("idle")
         self.progress_bar.setValue(100)
         self.progress_bar.setVisible(False)
 
+        if isinstance(data, (tuple, list)):
+            result, video_path = data[0], data[1]
+        else:
+            result, video_path = data, None
+
         self.final_startrail_img = result
+        self.raw_startrail_img = result.copy() if result is not None else None
+        self.btn_apply_color_live.setEnabled(self.raw_startrail_img is not None)
         self.canvas.load_image(result)
         self._update_canvas_mask_overlay()
         self.log("Trazas de estrellas compuestas y renderizadas en el visor.")
+
+        if video_path and os.path.exists(video_path):
+            self.last_timelapse_path = video_path
+            self.btn_play_timelapse.setEnabled(True)
+            size_mb = os.path.getsize(video_path) / (1024.0 * 1024.0)
+            self.log(f"🎬 Vídeo Time-Lapse generado con éxito ({size_mb:.2f} MB): {video_path}")
 
     def _on_worker_error(self, err_msg: str) -> None:
         self._set_run_button_state("idle")
         self.progress_bar.setVisible(False)
         self.log(f"ERROR: {err_msg}")
         QMessageBox.critical(self, "Error de Procesado", f"Ocurrió un error al generar las trazas:\n{err_msg}")
+
+    def _on_star_color_toggled(self, checked: bool) -> None:
+        """Muestra u oculta los controles de saturación y preservación cromática estelar."""
+        self.container_star_color.setVisible(checked)
+
+    def _on_apply_star_color_live_clicked(self) -> None:
+        """Aplica el realce cromático de forma ultrarrápida (0.4s) sobre la circumpolar ya generada."""
+        if self.raw_startrail_img is None:
+            return
+
+        sat = self.slider_star_sat.value() / 100.0
+        core_rec = self.slider_core_rec.value() / 100.0
+
+        self.log(f"Aplicando realce de color estelar (Sat: {sat:.1f}x, Recuperación: {int(core_rec*100)}%)...")
+        try:
+            enhanced = enhance_star_trails_color(
+                self.raw_startrail_img,
+                saturation_boost=sat if self.chk_star_color.isChecked() else 1.0,
+                core_recovery=core_rec if self.chk_star_color.isChecked() else 0.0,
+                sky_mask=self.current_mask if self.chk_clean_ground.isChecked() else None,
+                bg_protect=True
+            )
+            self.final_startrail_img = enhanced
+            self.canvas.load_image(enhanced)
+            self._update_canvas_mask_overlay()
+            self.log("Color estelar actualizado con éxito en el visor.")
+        except Exception as e:
+            self.log(f"Error al actualizar color estelar: {e}")
+            QMessageBox.critical(self, "Error de Color", f"No se pudo aplicar el realce de color:\n{e}")
+
+    def _on_timelapse_toggled(self, checked: bool) -> None:
+        """Muestra u oculta los ajustes del generador de timelapse."""
+        self.container_timelapse.setVisible(checked)
+
+    def _on_select_timelapse_dest_clicked(self) -> None:
+        """Permite al usuario elegir dónde guardar el vídeo Time-Lapse."""
+        default_dir = os.path.dirname(self.files_list[0]) if self.files_list else os.getcwd()
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Seleccionar Destino del Vídeo Time-Lapse",
+            os.path.join(default_dir, "timelapse_startrails.mp4"),
+            "Vídeo MP4 (*.mp4);;Todos (*.*)"
+        )
+        if path:
+            self.timelapse_custom_path = path
+            self.lbl_tl_path.setText(f"Destino: {os.path.basename(path)}")
+            self.lbl_tl_path.setStyleSheet("color: #81c784; font-size: 10px; font-weight: bold;")
+            self.lbl_tl_path.setToolTip(path)
+
+    def _on_play_timelapse_clicked(self) -> None:
+        """Abre el vídeo Time-Lapse con el reproductor predeterminado del sistema operativo."""
+        if self.last_timelapse_path and os.path.exists(self.last_timelapse_path):
+            try:
+                os.startfile(self.last_timelapse_path)
+            except Exception as e:
+                self.log(f"No se pudo reproducir el vídeo automáticamente: {e}")
+                QMessageBox.information(
+                    self, "Vídeo Generado",
+                    f"El vídeo está guardado en:\n{self.last_timelapse_path}"
+                )
 
     # -------------------------------------------------------------
     # EXPORTACIÓN
