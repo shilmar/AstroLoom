@@ -565,3 +565,54 @@ def realce_multiescala_ondiculas(
         return np.clip(reconstruida * m + imagen_rgb * (1.0 - m), 0.0, 1.0).astype(np.float32)
 
     return reconstruida.astype(np.float32)
+
+
+def apply_hue_vs_sat_curve(img_rgb: np.ndarray, lut_hue_sat: np.ndarray) -> np.ndarray:
+    """
+    Aplica una curva selectiva de saturación en función del tono (Hue vs Saturation).
+    - lut_hue_sat: array float32 de 256 elementos donde:
+      * 0.5 representa factor neutro (1.0x)
+      * < 0.5 reduce saturación hacia 0.0x
+      * > 0.5 amplifica saturación hasta 2.0x
+    """
+    if lut_hue_sat is None or len(lut_hue_sat) != 256:
+        return img_rgb
+    if np.all(np.abs(lut_hue_sat - 0.5) < 1e-3):
+        return img_rgb
+
+    clamped = np.clip(img_rgb, 0.0, 1.0).astype(np.float32)
+    hsv = cv2.cvtColor(clamped, cv2.COLOR_RGB2HSV)
+
+    # El canal H en OpenCV float32 está en grados [0.0, 360.0)
+    h_channel = hsv[..., 0]
+    h_idx = np.clip((h_channel / 360.0) * 255.0, 0, 255).astype(np.int32)
+
+    # Multiplicador: valor de LUT * 2.0 (0.5 -> 1.0x, 1.0 -> 2.0x, 0.0 -> 0.0x)
+    mult = lut_hue_sat[h_idx] * 2.0
+    hsv[..., 1] = np.clip(hsv[..., 1] * mult, 0.0, 1.0)
+
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+
+
+def apply_luma_vs_sat_curve(img_rgb: np.ndarray, lut_luma_sat: np.ndarray) -> np.ndarray:
+    """
+    Aplica una curva selectiva de saturación en función de la luminancia (Luma vs Saturation).
+    Permite desaturar sombras para eliminar ruido de crominancia o realzar nebulosas en tonos medios.
+    - lut_luma_sat: array float32 de 256 elementos donde 0.5 representa 1.0x (neutro).
+    """
+    if lut_luma_sat is None or len(lut_luma_sat) != 256:
+        return img_rgb
+    if np.all(np.abs(lut_luma_sat - 0.5) < 1e-3):
+        return img_rgb
+
+    clamped = np.clip(img_rgb, 0.0, 1.0).astype(np.float32)
+    hsv = cv2.cvtColor(clamped, cv2.COLOR_RGB2HSV)
+
+    # Luminancia perceptual BT.709
+    luma = 0.2126 * clamped[..., 0] + 0.7152 * clamped[..., 1] + 0.0722 * clamped[..., 2]
+    l_idx = np.clip(luma * 255.0, 0, 255).astype(np.int32)
+
+    mult = lut_luma_sat[l_idx] * 2.0
+    hsv[..., 1] = np.clip(hsv[..., 1] * mult, 0.0, 1.0)
+
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)

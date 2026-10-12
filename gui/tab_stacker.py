@@ -18,6 +18,7 @@ from core.project_manager import ProjectManager
 from core.masking import refine_mask_guided
 from core.stacking import load_image_as_float32
 from gui.canvas import MaskCanvas
+from gui.widgets.drop_widgets import DropListWidget
 from gui.worker import StackingWorker
 from core.gpu_backend import is_gpu_enabled
 from core.config_manager import load_config
@@ -95,9 +96,10 @@ class StackerTab(QWidget):
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
 
-        # 1. Lienzo Interactivo
+        # 1. Lienzo Interactivo con soporte de arrastrar y soltar
         self.canvas = MaskCanvas(self, enable_masking=True)
         self.canvas.brush_size_changed.connect(self.on_canvas_brush_changed)
+        self.canvas.files_dropped.connect(lambda paths: self.add_files_to_tab("Lights", paths))
 
         # 2. Panel lateral (Scrollable con Log y Ejecución Fijos Abajo)
         left_panel = QWidget()
@@ -163,21 +165,26 @@ class StackerTab(QWidget):
         self.tabs_files = QTabWidget()
         self.tabs_files.setMinimumHeight(160)
         
-        self.list_lights = QListWidget()
+        self.list_lights = DropListWidget()
         self.list_lights.itemDoubleClicked.connect(self.on_light_double_clicked)
+        self.list_lights.files_dropped.connect(lambda paths: self.add_files_to_tab("Lights", paths))
         self.tabs_files.addTab(self.list_lights, "⭐ Lights")
 
-        self.list_darks = QListWidget()
+        self.list_darks = DropListWidget()
+        self.list_darks.files_dropped.connect(lambda paths: self.add_files_to_tab("Darks", paths))
         self.tabs_files.addTab(self.list_darks, "🌑 Darks")
 
-        self.list_flats = QListWidget()
+        self.list_flats = DropListWidget()
+        self.list_flats.files_dropped.connect(lambda paths: self.add_files_to_tab("Flats", paths))
         self.tabs_files.addTab(self.list_flats, "💡 Flats")
 
-        self.list_bias = QListWidget()
+        self.list_bias = DropListWidget()
+        self.list_bias.files_dropped.connect(lambda paths: self.add_files_to_tab("Bias", paths))
         self.tabs_files.addTab(self.list_bias, "⚡ Bias")
 
-        self.list_ground = QListWidget()
+        self.list_ground = DropListWidget()
         self.list_ground.itemDoubleClicked.connect(self.on_ground_double_clicked)
+        self.list_ground.files_dropped.connect(lambda paths: self.add_files_to_tab("Suelo", paths))
         self.tabs_files.addTab(self.list_ground, "🏞️ Suelo")
         
         files_layout.addWidget(self.tabs_files)
@@ -657,42 +664,51 @@ class StackerTab(QWidget):
         if not paths: 
             return
 
-        if idx == 0:
+        self.add_files_to_tab(tab_name, paths)
+
+    def add_files_to_tab(self, tab_name: str, paths: list):
+        """Añade tomas a la pestaña indicada, deduplicando y actualizando vista previa si procede."""
+        if not paths:
+            return
+
+        if tab_name == "Lights":
             first_add = len(self.lights_list) == 0
-            for p in paths:
-                if p not in self.lights_list:
-                    self.lights_list.append(p)
+            new_paths = [p for p in paths if p not in self.lights_list]
+            self.lights_list.extend(new_paths)
             if first_add and self.lights_list:
                 self.load_frame_to_canvas(self.lights_list[0])
             self._refresh_list_view("Lights")
-            self.log_message(f"Añadidos {len(paths)} Lights. Total: {len(self.lights_list)}")
+            self.tabs_files.setCurrentIndex(0)
+            self.log_message(f"Añadidos {len(new_paths)} Lights (Total: {len(self.lights_list)})")
 
-        elif idx == 1:
-            for p in paths:
-                if p not in self.darks_list:
-                    self.darks_list.append(p)
+        elif tab_name == "Darks":
+            new_paths = [p for p in paths if p not in self.darks_list]
+            self.darks_list.extend(new_paths)
             self._refresh_list_view("Darks")
-            self.log_message(f"Añadidos {len(paths)} Darks. Total: {len(self.darks_list)}")
+            self.tabs_files.setCurrentIndex(1)
+            self.log_message(f"Añadidos {len(new_paths)} Darks (Total: {len(self.darks_list)})")
 
-        elif idx == 2:
-            for p in paths:
-                if p not in self.flats_list:
-                    self.flats_list.append(p)
+        elif tab_name == "Flats":
+            new_paths = [p for p in paths if p not in self.flats_list]
+            self.flats_list.extend(new_paths)
             self._refresh_list_view("Flats")
-            self.log_message(f"Añadidos {len(paths)} Flats. Total: {len(self.flats_list)}")
-        elif idx == 3:  # Bias
-            for p in paths:
-                if p not in self.bias_list:
-                    self.bias_list.append(p)
+            self.tabs_files.setCurrentIndex(2)
+            self.log_message(f"Añadidos {len(new_paths)} Flats (Total: {len(self.flats_list)})")
+
+        elif tab_name == "Bias":
+            new_paths = [p for p in paths if p not in self.bias_list]
+            self.bias_list.extend(new_paths)
             self._refresh_list_view("Bias")
-            self.log_message(f"Añadidos {len(paths)} Bias. Total: {len(self.bias_list)}")
+            self.tabs_files.setCurrentIndex(3)
+            self.log_message(f"Añadidos {len(new_paths)} Bias (Total: {len(self.bias_list)})")
+
         else:
-            for p in paths:
-                if p not in self.ground_list:
-                    self.ground_list.append(p)
+            new_paths = [p for p in paths if p not in self.ground_list]
+            self.ground_list.extend(new_paths)
             self._refresh_list_view("Suelo")
+            self.tabs_files.setCurrentIndex(4)
             self.combo_ground.setCurrentIndex(2)
-            self.log_message(f"Añadida(s) {len(paths)} toma(s) de Suelo. Modo suelo actualizado a 'Usar Toma de Pestaña Suelo'.")
+            self.log_message(f"Añadida(s) {len(new_paths)} toma(s) de Suelo. Modo suelo actualizado a 'Usar Toma de Pestaña Suelo'.")
 
     def clear_current_tab_files(self):
         idx = self.tabs_files.currentIndex()

@@ -9,6 +9,7 @@ import numpy as np
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QCursor, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QSizePolicy, QWidget
+from gui.widgets.drop_widgets import collect_image_files_from_mime
 
 
 class MaskCanvas(QWidget):
@@ -23,13 +24,20 @@ class MaskCanvas(QWidget):
     split_toggled = Signal(bool)
     split_position_changed = Signal(float)
     split_orientation_changed = Signal(str)
+    files_dropped = Signal(list)
+    color_sampled = Signal(float, float, float)  # (r, g, b) float32 [0.0, 1.0]
+    eyedropper_toggled = Signal(bool)
+    magnifier_toggled = Signal(bool)
 
     def __init__(self, parent: Optional[QWidget] = None, enable_masking: bool = True):
         super().__init__(parent)
         self.enable_masking = enable_masking
         self.setMouseTracking(True)
+        self.setAcceptDrops(True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
+        self._drag_hover: bool = False
+        self._hover_pos: Optional[QPoint] = None
         self.orig_rgb: Optional[np.ndarray] = None
         self.base_pixmap: Optional[QPixmap] = None
         self.scribble_pixmap: Optional[QPixmap] = None
@@ -60,6 +68,13 @@ class MaskCanvas(QWidget):
         self.split_orientation: str = "vertical"  # "vertical" u "horizontal"
         self.before_pixmap: Optional[QPixmap] = None
         self.is_dragging_split: bool = False
+
+        # Pipeta de Balance de Blancos (Eyedropper)
+        self.eyedropper_active: bool = False
+
+        # Lupa de Inspección Flotante (Floating Magnifier)
+        self.magnifier_active: bool = False
+        self.magnifier_zoom: float = 2.5
 
         if self.enable_masking:
             self.update_brush_cursor()
@@ -250,6 +265,42 @@ class MaskCanvas(QWidget):
         self.set_split_orientation(new_ori)
         return new_ori
 
+    def set_eyedropper_active(self, active: bool) -> None:
+        """Activa o desactiva la pipeta de balance de blancos interactiva."""
+        if self.eyedropper_active != active:
+            self.eyedropper_active = active
+            if active:
+                if self.magnifier_active:
+                    self.set_magnifier_active(False)
+                self.setCursor(Qt.CrossCursor)
+            else:
+                self._hover_pos = None
+                if not self.magnifier_active:
+                    if self.enable_masking:
+                        self.update_brush_cursor()
+                    else:
+                        self.setCursor(Qt.ArrowCursor)
+            self.eyedropper_toggled.emit(active)
+            self.update()
+
+    def set_magnifier_active(self, active: bool) -> None:
+        """Activa o desactiva la lupa de inspección flotante."""
+        if self.magnifier_active != active:
+            self.magnifier_active = active
+            if active:
+                if self.eyedropper_active:
+                    self.set_eyedropper_active(False)
+                self.setCursor(Qt.CrossCursor)
+            else:
+                self._hover_pos = None
+                if not self.eyedropper_active:
+                    if self.enable_masking:
+                        self.update_brush_cursor()
+                    else:
+                        self.setCursor(Qt.ArrowCursor)
+            self.magnifier_toggled.emit(active)
+            self.update()
+
     def _get_split_screen_coord(self) -> Optional[float]:
         """Calcula la coordenada en pantalla de la cortina (x para vertical, y para horizontal)."""
         if not self.split_view_enabled:
@@ -327,6 +378,24 @@ class MaskCanvas(QWidget):
 
         pos = event.position().toPoint()
 
+        # 0. Manejo de la Pipeta de Balance de Blancos (Eyedropper)
+        if self.eyedropper_active and event.button() == Qt.LeftButton:
+            ipt = self.widget_to_image_coords(pos)
+            if ipt and self.orig_rgb is not None:
+                h, w = self.orig_rgb.shape[:2]
+                ix = int(np.clip(ipt.x(), 0, w - 1))
+                iy = int(np.clip(ipt.y(), 0, h - 1))
+                x1 = max(0, ix - 2)
+                x2 = min(w, ix + 3)
+                y1 = max(0, iy - 2)
+                y2 = min(h, iy + 3)
+                patch = self.orig_rgb[y1:y2, x1:x2]
+                r, g, b = np.mean(patch, axis=(0, 1))[:3]
+                self.color_sampled.emit(float(r), float(g), float(b))
+                self.set_eyedropper_active(False)
+            event.accept()
+            return
+
         # 1. Comprobar interacción con la Cortina Divisoria (Split View)
         if self.split_view_enabled and event.button() == Qt.LeftButton:
             split_coord = self._get_split_screen_coord()
@@ -374,6 +443,14 @@ class MaskCanvas(QWidget):
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position().toPoint()
+
+        # 0. Seguimiento de posición para Pipeta o Lupa Flotante
+        if self.eyedropper_active or self.magnifier_active:
+            self._hover_pos = pos
+            self.update()
+            if self.eyedropper_active:
+                event.accept()
+                return
 
         # 1. Arrastre y hover sobre la cortina divisoria
         if self.split_view_enabled:
@@ -430,11 +507,28 @@ class MaskCanvas(QWidget):
             self.is_dragging_split = False
             event.accept()
             return
-        if not self.enable_masking:
-            return
         if event.button() == Qt.LeftButton:
             self.drawing = False
             self.last_img_pt = None
+
+    def leaveEvent(self, event) -> None:
+        if self._hover_pos is not None:
+            self._hover_pos = None
+            self.update()
+        super().leaveEvent(event)
+
+    def wheelEvent(self, event) -> None:
+        """Permite ajustar dinámicamente el factor de aumento de la lupa flotante con la rueda del ratón."""
+        if self.magnifier_active:
+            delta = event.angleDelta().y()
+            if delta > 0:
+                self.magnifier_zoom = min(8.0, round(self.magnifier_zoom + 0.5, 1))
+            elif delta < 0:
+                self.magnifier_zoom = max(1.5, round(self.magnifier_zoom - 0.5, 1))
+            self.update()
+            event.accept()
+            return
+        super().wheelEvent(event)
 
     def paint_on_scribble(self, p1: QPoint, p2: QPoint) -> None:
         """Dibuja un trazo o punto continuo sobre la capa de semillas de segmentación."""
@@ -462,6 +556,8 @@ class MaskCanvas(QWidget):
         if not self.base_pixmap or self.base_pixmap.isNull():
             painter.setPen(QColor(130, 130, 130))
             painter.drawText(self.rect(), Qt.AlignCenter, "Carga una toma o imagen para previsualizar aquí.")
+            if self._drag_hover:
+                self._draw_drag_feedback(painter)
             return
 
         target_rect, source_rect, _ = self.get_render_geometry()
@@ -626,6 +722,230 @@ class MaskCanvas(QWidget):
                 
             if self.enable_masking and self.show_scribbles and self.scribble_pixmap and not self.scribble_pixmap.isNull():
                 painter.drawPixmap(target_rect, self.scribble_pixmap, source_rect)
+
+        # Realimentación visual al arrastrar archivos sobre el visor
+        if self._drag_hover:
+            self._draw_drag_feedback(painter)
+
+        # Lupa de Inspección Flotante (Floating Magnifier)
+        if self.magnifier_active:
+            self._draw_magnifier(painter)
+
+        # Insignia interactiva de la Pipeta de Balance de Blancos
+        if self.eyedropper_active:
+            self._draw_eyedropper_badge(painter)
+
+    def _draw_magnifier(self, painter: QPainter) -> None:
+        """Renderiza una lupa circular flotante de alta precisión centrada en la posición del cursor."""
+        if not self._hover_pos or self.base_pixmap is None or self.base_pixmap.isNull():
+            return
+        target_rect, source_rect, fit_scale = self.get_render_geometry()
+        if not target_rect.contains(self._hover_pos):
+            return
+
+        ipt = self.widget_to_image_coords(self._hover_pos)
+        if not ipt:
+            return
+
+        pos = self._hover_pos
+        cx, cy = float(pos.x()), float(pos.y())
+        lens_r = 95.0
+        lens_diam = lens_r * 2.0
+        lens_rect = QRectF(cx - lens_r, cy - lens_r, lens_diam, lens_diam)
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+
+        # 1. Sombra exterior difusa para dar profundidad flotante
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(QColor(0, 0, 0, 110)))
+        painter.drawEllipse(lens_rect.adjusted(3, 4, 3, 4))
+
+        # 2. Recorte circular para el contenido magnificado
+        clip_path = QPainterPath()
+        clip_path.addEllipse(lens_rect)
+        painter.setClipPath(clip_path)
+
+        # 3. Dibujar contenido ampliado centrado
+        zoom = self.magnifier_zoom
+        eff_scale = fit_scale * zoom
+        if eff_scale > 0:
+            src_span = lens_diam / eff_scale
+            src_x = float(ipt.x()) - (src_span / 2.0)
+            src_y = float(ipt.y()) - (src_span / 2.0)
+            src_rect = QRectF(src_x, src_y, src_span, src_span)
+
+            painter.fillRect(lens_rect, QColor(14, 14, 18))
+            painter.drawPixmap(lens_rect, self.base_pixmap, src_rect)
+
+        # 4. Retícula / Punto de mira central de alta precisión
+        gap = 5.0
+        arm = 14.0
+        painter.setPen(QPen(QColor(0, 0, 0, 200), 2.5))
+        painter.drawLine(QPointF(cx - arm, cy), QPointF(cx - gap, cy))
+        painter.drawLine(QPointF(cx + gap, cy), QPointF(cx + arm, cy))
+        painter.drawLine(QPointF(cx, cy - arm), QPointF(cx, cy - gap))
+        painter.drawLine(QPointF(cx, cy + gap), QPointF(cx, cy + arm))
+
+        painter.setPen(QPen(QColor(128, 216, 255, 240), 1.2))
+        painter.drawLine(QPointF(cx - arm, cy), QPointF(cx - gap, cy))
+        painter.drawLine(QPointF(cx + gap, cy), QPointF(cx + arm, cy))
+        painter.drawLine(QPointF(cx, cy - arm), QPointF(cx, cy - gap))
+        painter.drawLine(QPointF(cx, cy + gap), QPointF(cx, cy + arm))
+
+        painter.restore()
+
+        # 5. Marco exterior metálico oscuro con aro cian de enfoque
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(24, 30, 42, 240), 5))
+        painter.drawEllipse(lens_rect)
+        painter.setPen(QPen(QColor("#80d8ff"), 2))
+        painter.drawEllipse(lens_rect.adjusted(2.5, 2.5, -2.5, -2.5))
+
+        # 6. Insignia de aumento en la parte inferior de la lente
+        badge_w, badge_h = 72.0, 18.0
+        badge_rect = QRectF(cx - badge_w / 2.0, cy + lens_r - badge_h - 4, badge_w, badge_h)
+        painter.setBrush(QBrush(QColor(16, 22, 32, 230)))
+        painter.setPen(QPen(QColor("#80d8ff"), 1))
+        painter.drawRoundedRect(badge_rect, 4.0, 4.0)
+        painter.setPen(QColor("#ffffff"))
+        bf = painter.font()
+        bf.setBold(True)
+        bf.setPointSize(8)
+        painter.setFont(bf)
+        painter.drawText(badge_rect, Qt.AlignCenter, f"{zoom:.1f}x LUPA")
+        painter.restore()
+
+    def _draw_eyedropper_badge(self, painter: QPainter) -> None:
+        """Dibuja la mirilla y la insignia de muestra interactiva bajo la pipeta."""
+        if not self._hover_pos or self.base_pixmap is None or self.base_pixmap.isNull():
+            return
+        target_rect, _, _ = self.get_render_geometry()
+        if not target_rect.contains(self._hover_pos):
+            return
+
+        ipt = self.widget_to_image_coords(self._hover_pos)
+        if not ipt:
+            return
+
+        pos = self._hover_pos
+        cx, cy = pos.x(), pos.y()
+
+        # Obtener color muestreado (u8 de display o float de orig)
+        r_u8, g_u8, b_u8 = 128, 128, 128
+        if self._cached_display_u8 is not None:
+            h, w = self._cached_display_u8.shape[:2]
+            ix = int(np.clip(ipt.x(), 0, w - 1))
+            iy = int(np.clip(ipt.y(), 0, h - 1))
+            pixel = self._cached_display_u8[iy, ix]
+            r_u8, g_u8, b_u8 = int(pixel[0]), int(pixel[1]), int(pixel[2])
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # 1. Mirilla de precisión en cruz con centro abierto
+        cr = 12
+        painter.setPen(QPen(QColor(0, 0, 0, 200), 2))
+        painter.drawLine(cx - cr, cy, cx + cr, cy)
+        painter.drawLine(cx, cy - cr, cx, cy + cr)
+        painter.drawEllipse(QPointF(cx, cy), 4, 4)
+
+        painter.setPen(QPen(QColor("#80d8ff"), 1))
+        painter.drawLine(cx - cr, cy, cx + cr, cy)
+        painter.drawLine(cx, cy - cr, cx, cy + cr)
+        painter.drawEllipse(QPointF(cx, cy), 4, 4)
+
+        # 2. Insignia flotante al lado del cursor
+        bx = cx + 18
+        by = cy - 44
+        bw, bh = 155, 46
+        if bx + bw > self.width() - 8:
+            bx = cx - bw - 18
+        if by < 8:
+            by = cy + 18
+
+        b_rect = QRectF(bx, by, bw, bh)
+        painter.setPen(QPen(QColor("#80d8ff"), 1.2))
+        painter.setBrush(QBrush(QColor(16, 22, 32, 235)))
+        painter.drawRoundedRect(b_rect, 6.0, 6.0)
+
+        # Cuadro de color de muestra
+        swatch_rect = QRectF(bx + 8, by + 9, 28, 28)
+        painter.setBrush(QBrush(QColor(r_u8, g_u8, b_u8)))
+        painter.setPen(QPen(QColor(255, 255, 255, 180), 1))
+        painter.drawRoundedRect(swatch_rect, 3.0, 3.0)
+
+        # Textos de valores RGB y ayuda
+        painter.setPen(QColor("#ffffff"))
+        f = painter.font()
+        f.setBold(True)
+        f.setPointSize(9)
+        painter.setFont(f)
+        painter.drawText(int(bx + 42), int(by + 21), f"R:{r_u8} G:{g_u8} B:{b_u8}")
+
+        painter.setPen(QColor("#80cbc4"))
+        f.setBold(False)
+        f.setPointSize(8)
+        painter.setFont(f)
+        painter.drawText(int(bx + 42), int(by + 36), "Clic: balancear WB")
+
+        painter.restore()
+
+    def _draw_drag_feedback(self, painter: QPainter) -> None:
+        """Dibuja un marco delimitador punteado y una insignia informativa durante el arrastre."""
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor("#80d8ff"), 2, Qt.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(QBrush(QColor(20, 35, 55, 130)))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(6, 6, -6, -6), 8.0, 8.0)
+
+        cw, ch = 270, 42
+        cx = (self.width() - cw) / 2
+        cy = (self.height() - ch) / 2
+        pill_rect = QRectF(cx, cy, cw, ch)
+        painter.setPen(QPen(QColor("#80d8ff"), 1.5))
+        painter.setBrush(QBrush(QColor(16, 26, 38, 235)))
+        painter.drawRoundedRect(pill_rect, 6.0, 6.0)
+        painter.setPen(QColor("#ffffff"))
+        f = painter.font()
+        f.setBold(True)
+        f.setPointSize(10)
+        painter.setFont(f)
+        painter.drawText(pill_rect, Qt.AlignCenter, "📥 Soltar archivo(s) para cargar")
+        painter.restore()
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self._drag_hover = True
+            self.update()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._drag_hover = False
+        self.update()
+        event.accept()
+
+    def dropEvent(self, event) -> None:
+        self._drag_hover = False
+        self.update()
+        paths = collect_image_files_from_mime(event.mimeData())
+        if paths:
+            self.files_dropped.emit(paths)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def get_scribbles_matrix(self) -> Optional[np.ndarray]:
         """

@@ -23,7 +23,8 @@ from PySide6.QtWidgets import (
     QComboBox, 
     QSpinBox,
     QScrollArea, 
-    QFrame
+    QFrame,
+    QButtonGroup
 )
 from PySide6.QtCore import Qt, QCoreApplication
 from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap
@@ -41,6 +42,8 @@ from core.stretch import (
     apply_clarity,
     apply_dehaze,
     apply_curve_lut,
+    apply_hue_vs_sat_curve,
+    apply_luma_vs_sat_curve,
     realce_multiescala_ondiculas
 )
 from gui.widgets.curve_widget import CurveWidget
@@ -112,10 +115,11 @@ class DeveloperTab(QWidget):
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
 
-        # 1. Visor interactivo
+        # 1. Visor interactivo con soporte Drag & Drop
         self.canvas = MaskCanvas(self, enable_masking=False)
         self.canvas.external_zoom_handler = True
         self.canvas.zoom_toggled.connect(self.on_canvas_zoom_toggled)
+        self.canvas.files_dropped.connect(self._on_canvas_files_dropped)
 
         # 2. Panel interno de controles
         left_panel = QWidget()
@@ -244,6 +248,49 @@ class DeveloperTab(QWidget):
         row_cnt.addWidget(self.slider_contrast, stretch=1)
         stretch_layout.addLayout(row_cnt)
 
+        # Selector de Modo de Curva (RGB / Hue vs Sat / Luma vs Sat)
+        row_curve_mode = QHBoxLayout()
+        row_curve_mode.setSpacing(4)
+
+        self.btn_curve_rgb = QPushButton("📈 Tonos (RGB)")
+        self.btn_curve_rgb.setCheckable(True)
+        self.btn_curve_rgb.setChecked(True)
+        self.btn_curve_rgb.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
+            "QPushButton:checked { background: #3b4252; color: #80d8ff; border: 1px solid #80d8ff; }"
+        )
+        self.btn_curve_rgb.setToolTip("Curva tonal RGB continua con histograma logarítmico y avisos de recorte.")
+        self.btn_curve_rgb.clicked.connect(lambda: self._set_curve_mode("rgb"))
+
+        self.btn_curve_hue = QPushButton("🌈 Tono vs Sat")
+        self.btn_curve_hue.setCheckable(True)
+        self.btn_curve_hue.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
+            "QPushButton:checked { background: #3b4252; color: #ffb74d; border: 1px solid #ffb74d; }"
+        )
+        self.btn_curve_hue.setToolTip("Curva selectiva de saturación en función del tono (Hue vs Sat).\nPermite saturar selectivamente H-alfa / nebulosas o neutralizar tonalidades no deseadas.")
+        self.btn_curve_hue.clicked.connect(lambda: self._set_curve_mode("hue_sat"))
+
+        self.btn_curve_luma = QPushButton("💡 Luma vs Sat")
+        self.btn_curve_luma.setCheckable(True)
+        self.btn_curve_luma.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
+            "QPushButton:checked { background: #3b4252; color: #00e676; border: 1px solid #00e676; }"
+        )
+        self.btn_curve_luma.setToolTip("Curva selectiva de saturación en función de la luminancia (Luma vs Sat).\nPermite desaturar sombras oscuras para eliminar ruido de crominancia del cielo.")
+        self.btn_curve_luma.clicked.connect(lambda: self._set_curve_mode("luma_sat"))
+
+        self.grp_curve_mode = QButtonGroup(self)
+        self.grp_curve_mode.setExclusive(True)
+        self.grp_curve_mode.addButton(self.btn_curve_rgb)
+        self.grp_curve_mode.addButton(self.btn_curve_hue)
+        self.grp_curve_mode.addButton(self.btn_curve_luma)
+
+        row_curve_mode.addWidget(self.btn_curve_rgb)
+        row_curve_mode.addWidget(self.btn_curve_hue)
+        row_curve_mode.addWidget(self.btn_curve_luma)
+        stretch_layout.addLayout(row_curve_mode)
+
         # Curva de Tono con Histograma
         self.curve_widget = CurveWidget()
         self.curve_widget.curveChanged.connect(self.update_stretch_preview)
@@ -251,10 +298,19 @@ class DeveloperTab(QWidget):
         stretch_layout.addWidget(self.curve_widget)
 
         row_crv_btn = QHBoxLayout()
-        self.btn_reset_curve = QPushButton("Resetear Curva")
-        self.btn_reset_curve.setStyleSheet("font-size: 11px; padding: 2px;")
-        self.btn_reset_curve.clicked.connect(self.curve_widget.reset_curve)
+        row_crv_btn.setSpacing(6)
+        self.btn_reset_curve = QPushButton("Resetear Curva Activa")
+        self.btn_reset_curve.setStyleSheet("font-size: 11px; padding: 3px;")
+        self.btn_reset_curve.setToolTip("Restablece únicamente la curva actualmente visible a su valor neutro.")
+        self.btn_reset_curve.clicked.connect(lambda: self.curve_widget.reset_curve())
+
+        self.btn_reset_all_curves = QPushButton("Resetear Todas")
+        self.btn_reset_all_curves.setStyleSheet("font-size: 11px; padding: 3px; color: #ffab91;")
+        self.btn_reset_all_curves.setToolTip("Restablece simultáneamente las tres curvas (Tonos, Tono vs Sat, Luma vs Sat).")
+        self.btn_reset_all_curves.clicked.connect(self.curve_widget.reset_all_curves)
+
         row_crv_btn.addWidget(self.btn_reset_curve)
+        row_crv_btn.addWidget(self.btn_reset_all_curves)
         stretch_layout.addLayout(row_crv_btn)
 
         left_layout.addWidget(grp_stretch)
@@ -303,9 +359,17 @@ class DeveloperTab(QWidget):
 
         wb_layout.addLayout(row_wb)
 
-        btn_reset_wb = QPushButton("Restablecer Balance")
+        row_wb_btn = QHBoxLayout()
+        self.btn_panel_pipette = QPushButton("🧪 Pipeta WB (W)")
+        self.btn_panel_pipette.setStyleSheet("font-weight: bold; color: #80d8ff;")
+        self.btn_panel_pipette.setToolTip("Activa la pipeta para calibrar el balance de blancos haciendo clic sobre un fondo neutro en la imagen")
+        self.btn_panel_pipette.clicked.connect(lambda: self.btn_pipette.toggle())
+        row_wb_btn.addWidget(self.btn_panel_pipette)
+
+        btn_reset_wb = QPushButton("Restablecer")
         btn_reset_wb.clicked.connect(self.reset_wb)
-        wb_layout.addWidget(btn_reset_wb)
+        row_wb_btn.addWidget(btn_reset_wb)
+        wb_layout.addLayout(row_wb_btn)
         left_layout.addWidget(grp_wb)
 
         # --- SECCIÓN 4: Color: Saturación e Intensidad ---
@@ -659,6 +723,11 @@ class DeveloperTab(QWidget):
         right_layout.addWidget(self.canvas_toolbar)
         right_layout.addWidget(self.canvas, 1)
 
+        # Sincronización bidireccional de Pipeta y Lupa con la barra de herramientas
+        self.canvas.eyedropper_toggled.connect(self.btn_pipette.setChecked)
+        self.canvas.magnifier_toggled.connect(self.btn_magnifier.setChecked)
+        self.canvas.color_sampled.connect(self._on_eyedropper_color_sampled)
+
         splitter.addWidget(right_container)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 10)
@@ -678,6 +747,16 @@ class DeveloperTab(QWidget):
         self.shortcut_split_orientation = QShortcut(QKeySequence("Shift+Y"), self)
         self.shortcut_split_orientation.setContext(Qt.WindowShortcut)
         self.shortcut_split_orientation.activated.connect(self._on_toggle_split_orientation_shortcut)
+
+        # Atajo global 'W' para la pipeta de balance de blancos
+        self.shortcut_pipette = QShortcut(QKeySequence(Qt.Key_W), self)
+        self.shortcut_pipette.setContext(Qt.WindowShortcut)
+        self.shortcut_pipette.activated.connect(self._on_toggle_pipette_shortcut)
+
+        # Atajo global 'Z' para la lupa de inspección flotante
+        self.shortcut_magnifier = QShortcut(QKeySequence(Qt.Key_Z), self)
+        self.shortcut_magnifier.setContext(Qt.WindowShortcut)
+        self.shortcut_magnifier.activated.connect(self._on_toggle_magnifier_shortcut)
 
         layout.addWidget(splitter)
 
@@ -763,6 +842,36 @@ class DeveloperTab(QWidget):
         self.btn_toggle_zoom.toggled.connect(self.on_toolbar_zoom_toggled)
         tb_layout.addWidget(self.btn_toggle_zoom)
 
+        # Separador vertical
+        sep3 = QFrame()
+        sep3.setFrameShape(QFrame.VLine)
+        sep3.setFrameShadow(QFrame.Sunken)
+        sep3.setStyleSheet("color: #3b4252; margin: 4px 2px;")
+        tb_layout.addWidget(sep3)
+
+        # 5. Pipeta de Balance de Blancos
+        self.btn_pipette = QPushButton("🧪 Pipeta WB (W)")
+        self.btn_pipette.setCheckable(True)
+        self.btn_pipette.setCursor(Qt.PointingHandCursor)
+        self.btn_pipette.setToolTip(
+            "Activa la pipeta para neutralizar el balance de blancos seleccionando un punto o fondo neutro en la imagen.\n"
+            "Atajo de teclado: W"
+        )
+        self.btn_pipette.toggled.connect(self.canvas.set_eyedropper_active)
+        tb_layout.addWidget(self.btn_pipette)
+
+        # 6. Lupa de Inspección Flotante
+        self.btn_magnifier = QPushButton("🔎 Lupa (Z)")
+        self.btn_magnifier.setCheckable(True)
+        self.btn_magnifier.setCursor(Qt.PointingHandCursor)
+        self.btn_magnifier.setToolTip(
+            "Activa la lupa de inspección flotante sobre el cursor para examinar enfoque, estrellas y ruido a nivel de píxel.\n"
+            "Puedes regular el aumento usando la rueda del ratón.\n"
+            "Atajo de teclado: Z"
+        )
+        self.btn_magnifier.toggled.connect(self.canvas.set_magnifier_active)
+        tb_layout.addWidget(self.btn_magnifier)
+
         # Espaciador elástico
         tb_layout.addStretch()
 
@@ -796,6 +905,61 @@ class DeveloperTab(QWidget):
             return
         if hasattr(self, 'btn_split_orientation') and self.canvas.split_view_enabled:
             self.on_toggle_split_orientation()
+
+    def _on_toggle_pipette_shortcut(self) -> None:
+        """Alterna la pipeta de balance de blancos con la tecla 'W'."""
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            return
+        if hasattr(self, 'btn_pipette'):
+            self.btn_pipette.toggle()
+
+    def _on_toggle_magnifier_shortcut(self) -> None:
+        """Alterna la lupa de inspección flotante con la tecla 'Z'."""
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            return
+        if hasattr(self, 'btn_magnifier'):
+            self.btn_magnifier.toggle()
+
+    def _on_eyedropper_color_sampled(self, r: float, g: float, b: float) -> None:
+        """Calcula analíticamente los factores de balance de blancos para neutralizar la muestra seleccionada."""
+        r = max(1e-5, float(r))
+        g = max(1e-5, float(g))
+        b = max(1e-5, float(b))
+
+        w_r = 1.0 / r
+        w_g = 1.0 / g
+        w_b = 1.0 / b
+        w_mean = (w_r + w_g + w_b) / 3.0
+
+        gain_r = w_r / w_mean
+        gain_g = w_g / w_mean
+        gain_b = w_b / w_mean
+
+        # Solución de apply_white_balance:
+        # gain_r - gain_b = temp
+        # tint = 2.0 * (1.0 - gain_g)
+        calc_temp = gain_r - gain_b
+        calc_tint = 2.0 * (1.0 - gain_g)
+
+        # Rango del slider (-250 a +250 con paso 0.001)
+        clamped_temp = float(np.clip(calc_temp, -0.250, 0.250))
+        clamped_tint = float(np.clip(calc_tint, -0.250, 0.250))
+
+        temp_int = int(round(clamped_temp * 1000.0))
+        tint_int = int(round(clamped_tint * 1000.0))
+
+        self.slider_temp.setValue(temp_int)
+        self.slider_tint.setValue(tint_int)
+
+        if hasattr(self, 'btn_pipette'):
+            self.btn_pipette.setChecked(False)
+
+        self.log_message(
+            f"[WB] Pipeta aplicada: Muestra RGB=({r:.3f}, {g:.3f}, {b:.3f}) ➜ "
+            f"Temp={self.temp_val:+.3f}, Tinte={self.tint_val:+.3f}"
+        )
 
     def on_toggle_split_orientation(self) -> None:
         """Alterna entre cortina vertical y horizontal."""
@@ -1132,7 +1296,7 @@ class DeveloperTab(QWidget):
         self.contrast_starless_val = 0.0
         self.lbl_contrast_starless.setText("0.00")        
         if hasattr(self, 'curve_widget'):
-            self.curve_widget.reset_curve()
+            self.curve_widget.reset_all_curves()
         self.slider_ond_est.setEnabled(False)
         self.slider_ond_bg.setEnabled(False)
         
@@ -1173,6 +1337,11 @@ class DeveloperTab(QWidget):
         )
         if p:
             self.load_image_direct(p)
+
+    def _on_canvas_files_dropped(self, paths: list):
+        """Carga automáticamente la primera imagen arrastrada sobre el lienzo."""
+        if paths:
+            self.load_image_direct(paths[0])
 
     def _compose_active_base(self, for_export: bool = False) -> tuple[np.ndarray, np.ndarray]:
         if for_export:
@@ -1328,13 +1497,29 @@ class DeveloperTab(QWidget):
         m_val = self.spin_mtf.value()
         stretched = manual_stretch(img, black_point=bp_val, midtone=m_val)
 
-        # 7. Curvas Tonales (LUT)
-        if not self.curve_widget.is_identity():
-            curved = apply_curve_lut(stretched, self.curve_widget.get_lut())
+        # 7. Curvas Tonales (LUT RGB)
+        if not self.curve_widget.is_identity("rgb"):
+            curved = apply_curve_lut(stretched, self.curve_widget.get_lut("rgb"))
             if precomputed_mask is not None:
                 stretched = (curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
             else:
                 stretched = curved
+
+        # 7b. Curva Selectiva Tono vs Saturación (Hue vs Sat)
+        if not self.curve_widget.is_identity("hue_sat"):
+            hsv_curved = apply_hue_vs_sat_curve(stretched, self.curve_widget.get_lut("hue_sat"))
+            if precomputed_mask is not None:
+                stretched = (hsv_curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+            else:
+                stretched = hsv_curved
+
+        # 7c. Curva Selectiva Luminancia vs Saturación (Luma vs Sat)
+        if not self.curve_widget.is_identity("luma_sat"):
+            luma_curved = apply_luma_vs_sat_curve(stretched, self.curve_widget.get_lut("luma_sat"))
+            if precomputed_mask is not None:
+                stretched = (luma_curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+            else:
+                stretched = luma_curved
 
         # 8. Contraste específico del Fondo (Starless)
         if abs(self.contrast_starless_val) > 1e-4:
@@ -1498,6 +1683,14 @@ class DeveloperTab(QWidget):
         self.slider_sat_gnd.blockSignals(False)
         self.slider_vibrance.blockSignals(False)
         self.update_stretch_preview()
+
+    def _set_curve_mode(self, mode: str) -> None:
+        """Cambia el modo activo de la curva y sincroniza los botones de selección."""
+        if hasattr(self, 'curve_widget'):
+            self.curve_widget.set_mode(mode)
+            self.btn_curve_rgb.setChecked(mode == "rgb")
+            self.btn_curve_hue.setChecked(mode == "hue_sat")
+            self.btn_curve_luma.setChecked(mode == "luma_sat")
 
     def on_contrast_changed(self, val: int):
         self.contrast_val = val / 100.0
@@ -1870,7 +2063,7 @@ class DeveloperTab(QWidget):
         self._set_starnet_tools_enabled(False)
 
         if hasattr(self, 'curve_widget'):
-            self.curve_widget.reset_curve()
+            self.curve_widget.reset_all_curves()
 
         self.slider_temp.setValue(0)
         self.lbl_temp_val.setText("0.000")

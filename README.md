@@ -34,8 +34,12 @@
 - **Extracción de Gradientes:** Motor dual integrado con GraXpert AI y ajuste polinómico cuadrático para corregir gradientes luminosos.
 - **Reducción de Ruido Adaptativa:** Múltiples métodos para el fondo (Filtro Bilateral, Filtro Guiado y Non-Local Means) respetando los límites de las estrellas.
 - **Balance de Color Fino y Tonalidad:** Curvas interactivas con histograma integrado en tiempo real, balance de temperatura/tinte calibrado ($\pm0.250$), control de vibranza y saturación diferencial cielo/suelo.
+- **Curvas Selectivas de Color (Hue vs Sat / Luma vs Sat):** Modelado independiente de curvas para saturación selectiva según tonalidad cromática (espectro arcoíris continuo con sincronización circular de extremos rojos) y según luminancia (desaturación suave de sombras oscuras para erradicar ruido de crominancia en el fondo).
+- **Pipeta de Balance de Blancos (Eyedropper):** Calibración cromática interactiva con botón en barra superior y atajo **`W`**, cursor de mira telescópica, tarjeta flotante RGB y cálculo analítico de ganancia inversa sobre ventana de muestreo $5\times 5$ px.
+- **Lupa de Inspección Flotante (Floating Magnifier):** Lente circular flotante con botón en barra superior y atajo **`Z`**, zoom dinámico ajustable con la rueda del ratón ($1.5\times$ a $8.0\times$) y retícula central para inspeccionar núcleos estelares, bordes y ruido sin perder la vista general ni conmutar el zoom 1:1.
 - **Modo Comparador "Antes / Después" con Cortina Divisoria (Split-View):** Divisor deslizable interactivo en el lienzo para contrastar la toma original neutra con el revelado activo en tiempo real. Soporta orientación horizontal y vertical con atajos `Y` y `Shift + Y`, cursores dinámicos contextuales (`↔`, `↕`) y recentrado rápido al 50% con doble clic.
-- **Barra Superior de Herramientas del Canvas:** Acceso directo a funciones visuales críticas (aviso de Clipping `J`, divisor de vista `Y` y orientación de cortina).
+- **Barra Superior de Herramientas del Canvas:** Acceso directo a funciones visuales críticas (aviso de Clipping `J`, divisor de vista `Y`, orientación de cortina, Pipeta WB `W` y Lupa flotante `Z`).
+- **Soporte de Arrastrar y Soltar (Drag & Drop) Universal:** Ingesta inmediata de archivos y carpetas completas en todas las listas de Apilador, Startrails y Eclipses, así como carga directa arrastrando imágenes sobre el lienzo del Revelador.
 
 ### 5. Módulo Especializado de Eclipses (Solar / Lunar)
 - **Ingesta Automática de Bracketing y Metadatos:** Carga de series de exposición completa (RAW, TIFF, FITS) con extracción de tiempos de obturación reales, ISO y apertura, ordenando automáticamente las tomas.
@@ -241,8 +245,17 @@ python run_app.py
 [x] Módulo dedicado de Trazas de Estrellas (Startrails) con streaming O(1), efecto cometa, suelo limpio y supresión automática de satélites/aviones.
 [x] Relleno continuo de saltos entre tomas (Gap Filling) en Startrails.
 [x] Exportación de perfiles de color ICC embebidos en TIFF (sRGB / AdobeRGB / ProPhoto).
-[ ] Generación y exportación de secuencia acumulativa de fotogramas para vídeo Time-Lapse.
-[ ] Módulo de composición panorámica para mosaicos nocturnos.
+[x] Generación y exportación de secuencia acumulativa de fotogramas para vídeo Time-Lapse.
+[x] Soporte universal de Arrastrar y Soltar (Drag & Drop) en listas de archivos y lienzos interactivos.
+[x] Pipeta de Balance de Blancos (Eyedropper) interactiva con neutralización analítica exacta.
+[x] Lupa de Inspección Flotante (Floating Magnifier) con zoom dinámico de rueda de ratón.
+[x] Curvas Selectivas de Color (Hue vs Sat y Luma vs Sat) con espectro arcoíris continuo.
+[ ] Módulo de composición panorámica para mosaicos nocturnos (Nightscape Panorama Stitcher).
+[ ] Modo automático de gestión de memoria RAM según carga del sistema (psutil).
+[ ] Composición y collage automático de fases de eclipse (secuencia temporal de totalidad y parcialidad).
+[ ] Deshacer / Rehacer (Undo / Redo) con historial de pasos en el Revelador.
+[ ] Anti-parpadeo (Deflicker) y morphing temporal entre fotogramas en Startrails / Time-Lapse.
+[ ] Miniaturas previas (Thumbnails) en las tablas de archivos y estimación de tiempo restante (ETA) en barra de progreso.
 ---
 
 ## Licencia

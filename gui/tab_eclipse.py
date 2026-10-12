@@ -44,6 +44,7 @@ from core.eclipse import (
 )
 from core.stacking import load_image_as_float32
 from core.icc_manager import save_tiff_with_icc
+from gui.widgets.drop_widgets import DropTableWidget, collect_image_files_from_mime
 
 
 class ToggleSwitch(QWidget):
@@ -184,12 +185,15 @@ class EclipseCanvas(QWidget):
     y selección interactiva del centro haciendo clic.
     """
     center_clicked = Signal(float, float)
+    files_dropped = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)
+        self.setAcceptDrops(True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
+        self._drag_hover: bool = False
         self.orig_f32: np.ndarray = None
         self.base_pixmap: QPixmap = None
 
@@ -253,6 +257,8 @@ class EclipseCanvas(QWidget):
         if self.base_pixmap is None:
             painter.setPen(QColor(150, 150, 160))
             painter.drawText(self.rect(), Qt.AlignCenter, "Carga una serie de bracketing para comenzar.")
+            if self._drag_hover:
+                self._draw_drag_feedback(painter)
             return
 
         # Dibujar imagen con zoom y pan
@@ -260,6 +266,10 @@ class EclipseCanvas(QWidget):
         ih = self.base_pixmap.height() * self.zoom_level
         target_rect = QRectF(self.pan_offset.x(), self.pan_offset.y(), iw, ih)
         painter.drawPixmap(target_rect.toRect(), self.base_pixmap)
+
+        # Realimentación visual al arrastrar archivos sobre el visor
+        if self._drag_hover:
+            self._draw_drag_feedback(painter)
 
         # Dibujar guía geométrica del limbo si está habilitada y es válida
         if self.show_guide and self.radius > 5:
@@ -339,6 +349,59 @@ class EclipseCanvas(QWidget):
         super().resizeEvent(event)
         if self.base_pixmap is not None and self.zoom_level == 1.0:
             self.reset_view()
+
+    def _draw_drag_feedback(self, painter: QPainter) -> None:
+        """Dibuja un marco delimitador punteado y una insignia informativa durante el arrastre."""
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor("#80d8ff"), 2, Qt.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(QBrush(QColor(20, 35, 55, 130)))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(6, 6, -6, -6), 8.0, 8.0)
+
+        cw, ch = 270, 42
+        cx = (self.width() - cw) / 2
+        cy = (self.height() - ch) / 2
+        pill_rect = QRectF(cx, cy, cw, ch)
+        painter.setPen(QPen(QColor("#80d8ff"), 1.5))
+        painter.setBrush(QBrush(QColor(16, 26, 38, 235)))
+        painter.drawRoundedRect(pill_rect, 6.0, 6.0)
+        painter.setPen(QColor("#ffffff"))
+        f = painter.font()
+        f.setBold(True)
+        f.setPointSize(10)
+        painter.setFont(f)
+        painter.drawText(pill_rect, Qt.AlignCenter, "📥 Soltar archivo(s) para cargar")
+        painter.restore()
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self._drag_hover = True
+            self.update()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._drag_hover = False
+        self.update()
+        event.accept()
+
+    def dropEvent(self, event) -> None:
+        self._drag_hover = False
+        self.update()
+        paths = collect_image_files_from_mime(event.mimeData())
+        if paths:
+            self.files_dropped.emit(paths)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
 
 class EclipseWorker(QThread):
@@ -562,7 +625,7 @@ class EclipseTab(QWidget):
         btn_row_files.addWidget(self.btn_clear_brack)
         brack_layout.addLayout(btn_row_files)
 
-        self.table_brack = QTableWidget(0, 7)
+        self.table_brack = DropTableWidget(0, 7)
         self.table_brack.setHorizontalHeaderLabels([
             "REF", "Archivo", "Exp", "ISO", "Centro (X,Y)", "ΔX,ΔY (px)", "Usar"
         ])
@@ -577,6 +640,7 @@ class EclipseTab(QWidget):
         self.table_brack.setMinimumHeight(160)
         self.table_brack.itemSelectionChanged.connect(self._on_table_selection_changed)
         self.table_brack.cellDoubleClicked.connect(self._on_table_cell_double_clicked)
+        self.table_brack.files_dropped.connect(self.add_bracketing_paths)
         brack_layout.addWidget(self.table_brack)
 
         btn_align_row = QHBoxLayout()
@@ -903,6 +967,7 @@ class EclipseTab(QWidget):
 
         self.canvas = EclipseCanvas(self)
         self.canvas.center_clicked.connect(self._on_center_picked)
+        self.canvas.files_dropped.connect(self.add_bracketing_paths)
         right_layout.addWidget(self.canvas)
 
         splitter.addWidget(right_container)
@@ -1088,13 +1153,17 @@ class EclipseTab(QWidget):
             self.grp_hdr.setTitle("4. Fusión HDR (Mertens Multiescala)")
             self.slider_asinh.setValue(0)
 
-    def _on_load_bracketing_clicked(self):
-        filters = "Imágenes Astrofotográficas (*.arw *.cr2 *.cr3 *.nef *.dng *.raw *.tif *.tiff *.fits *.fit *.jpg *.jpeg);;Todos (*.*)"
-        paths, _ = QFileDialog.getOpenFileNames(self, "Cargar Serie de Bracketing de Eclipse", "", filters)
+    def add_bracketing_paths(self, paths: list):
+        """Añade tomas a la serie de bracketing (Drag & Drop o diálogo) y detecta limbo de referencia."""
         if not paths:
             return
 
-        for p in paths:
+        existing_paths = {f["filepath"] for f in self.bracketing_files}
+        new_paths = [p for p in paths if p not in existing_paths]
+        if not new_paths:
+            return
+
+        for p in new_paths:
             info = extract_exposure_info(p)
             info["cx"] = None
             info["cy"] = None
@@ -1129,7 +1198,14 @@ class EclipseTab(QWidget):
 
         self._refresh_table()
         self.table_brack.selectRow(self.ref_file_idx)
-        self.log(f"Se cargaron {len(paths)} tomas de bracketing ordenadas por exposición.")
+        self.log(f"Se cargaron {len(new_paths)} tomas de bracketing (Total: {len(self.bracketing_files)}).")
+
+    def _on_load_bracketing_clicked(self):
+        filters = "Imágenes Astrofotográficas (*.arw *.cr2 *.cr3 *.nef *.dng *.raw *.tif *.tiff *.fits *.fit *.jpg *.jpeg);;Todos (*.*)"
+        paths, _ = QFileDialog.getOpenFileNames(self, "Cargar Serie de Bracketing de Eclipse", "", filters)
+        if not paths:
+            return
+        self.add_bracketing_paths(paths)
 
     def _on_clear_bracketing_clicked(self):
         self.bracketing_files.clear()

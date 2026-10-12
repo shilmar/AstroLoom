@@ -30,6 +30,7 @@ from core.stacking import load_image_as_float32
 from core.startrails import generate_startrail, enhance_star_trails_color
 from core.icc_manager import save_tiff_with_icc
 from gui.canvas import MaskCanvas
+from gui.widgets.drop_widgets import DropTableWidget
 
 
 class StartrailWorker(QThread):
@@ -202,7 +203,7 @@ class StartrailsTab(QWidget):
         btn_row_files.addWidget(self.btn_set_ref)
         files_layout.addLayout(btn_row_files)
 
-        self.table_files = QTableWidget(0, 3)
+        self.table_files = DropTableWidget(0, 3)
         self.table_files.setHorizontalHeaderLabels(["REF", "Archivo", "Ubicación"])
         self.table_files.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table_files.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -210,6 +211,7 @@ class StartrailsTab(QWidget):
         self.table_files.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table_files.setMinimumHeight(150)
         self.table_files.itemSelectionChanged.connect(self._on_table_selection_changed)
+        self.table_files.files_dropped.connect(self.add_series_files)
         files_layout.addWidget(self.table_files)
 
         self.lbl_files_summary = QLabel("0 tomas cargadas")
@@ -718,9 +720,10 @@ class StartrailsTab(QWidget):
         left_container_layout.addWidget(self.btn_run)
 
         # -------------------------------------------------------------
-        # PANEL DERECHO: Canvas Interactivo con Zoom 1:1
+        # PANEL DERECHO: Canvas Interactivo con Zoom 1:1 y Drag & Drop
         # -------------------------------------------------------------
         self.canvas = MaskCanvas(self, enable_masking=False)
+        self.canvas.files_dropped.connect(self.add_series_files)
 
         splitter.addWidget(left_container)
         splitter.addWidget(self.canvas)
@@ -825,6 +828,31 @@ class StartrailsTab(QWidget):
         if checked:
             self._update_mask_status_label()
 
+    def add_series_files(self, files: List[str]) -> None:
+        """Añade tomas a la serie temporal de circumpolares (Drag & Drop o diálogo)."""
+        if not files:
+            return
+        new_files = [f for f in files if f not in self.files_list]
+        if not new_files:
+            return
+        was_empty = (len(self.files_list) == 0)
+        self.files_list.extend(new_files)
+        self.files_list.sort()
+        if was_empty:
+            self.ref_idx = 0
+        self._refresh_table()
+        self.lbl_files_summary.setText(f"{len(self.files_list)} tomas cargadas")
+        self.log(f"Añadidas {len(new_files)} tomas para la serie de trazas (Total: {len(self.files_list)}).")
+
+        # Cargar la primera toma en el visor para previsualización inmediata si estaba vacío
+        if was_empty and self.files_list:
+            try:
+                img = load_image_as_float32(self.files_list[0])
+                self.current_preview_img = img
+                self.canvas.load_image(img)
+            except Exception as e:
+                self.log(f"Error al previsualizar primera toma: {e}")
+
     def _on_load_series_clicked(self) -> None:
         """Abre el diálogo de archivos para cargar la serie temporal de fotografías."""
         files, _ = QFileDialog.getOpenFileNames(
@@ -834,21 +862,7 @@ class StartrailsTab(QWidget):
         )
         if not files:
             return
-
-        self.files_list = sorted(files)
-        self.ref_idx = 0
-        self._refresh_table()
-        self.lbl_files_summary.setText(f"{len(self.files_list)} tomas cargadas")
-        self.log(f"Cargadas {len(self.files_list)} tomas para la serie de trazas.")
-
-        # Cargar la primera toma en el visor para previsualización inmediata
-        if self.files_list:
-            try:
-                img = load_image_as_float32(self.files_list[0])
-                self.current_preview_img = img
-                self.canvas.load_image(img)
-            except Exception as e:
-                self.log(f"Error al previsualizar primera toma: {e}")
+        self.add_series_files(files)
 
     def _on_clear_series_clicked(self) -> None:
         """Limpia la lista de archivos."""

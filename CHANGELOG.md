@@ -5,6 +5,39 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-10-12
+
+### Añadido
+* **Soporte Universal de Arrastrar y Soltar (Drag & Drop) en Toda la Aplicación:**
+  - Nuevos componentes especializados `DropListWidget` y `DropTableWidget` (`gui/widgets/drop_widgets.py`) con feedback visual interactivo (borde cian `#80d8ff`, resalte luminoso y cursores contextuales).
+  - Integrado de forma nativa en todas las listas y módulos de Apilator:
+    - **Apilador (Stacker):** listas de tomas Lights, Darks, Flats, Bias y Suelo dedicado.
+    - **Trazas de Estrellas (Startrails):** tabla de serie temporal de tomas y lista de Darks térmicos.
+    - **Eclipses (Solar / Lunar):** tabla de tomas de bracketing multiexposición.
+    - **Lienzo del Revelador (MaskCanvas):** arrastrar y soltar cualquier imagen directamente sobre el lienzo para abrirla y procesarla al instante, con overlay visual de zona de suelta.
+  - Soporte inteligente para carpetas completas: exploración recursiva automática de directorios soltados con deduplicación y filtrado por extensiones de astrofotografía compatibles (`.raw`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.dng`, `.fits`, `.fit`, `.tif`, `.tiff`, `.png`, `.jpg`, etc.).
+* **Pipeta de Balance de Blancos (Eyedropper) en el Revelador:**
+  - Nueva herramienta de calibración cromática interactiva accesible desde la barra superior del lienzo y en la Sección 3 de Balance de Blancos mediante el botón `[ 🧪 Pipeta WB (W) ]` y el atajo de teclado **`W`**.
+  - Cursor de mira telescópica de precisión en cruz (`CrossCursor`) con tarjeta flotante en tiempo real que muestra una muestra de color aumentada y los valores RGB normalizados bajo el cursor.
+  - Muestreo promediado en ventana $5\times 5$ píxeles para filtrar ruido residual de lectura, píxeles calientes o grano astronómico.
+  - Modelo matemático de neutralización analítica exacta: resuelve en forma cerrada los multiplicadores de ganancia inversa $w = 1 / [R, G, B]$ y la fórmula de balance de Apilator ($g_r = 1 + 0.5 T + 0.25 Tint$, $g_g = 1 - 0.5 Tint$, $g_b = 1 - 0.5 T + 0.25 Tint$), calculando con precisión milimétrica los incrementos $\Delta T = g_r - g_b$ y $\Delta Tint = 2(1 - g_g)$ para neutralizar cualquier área gris o fondo neutro seleccionado en un solo clic, sincronizando deslizadores e imagen en tiempo real.
+* **Lupa de Inspección Flotante (Floating Magnifier) en el Visor Interactivo:**
+  - Herramienta de magnificación local accesible con el botón `[ 🔎 Lupa (Z) ]` en la barra superior del lienzo y mediante el atajo de teclado **`Z`**.
+  - Lente circular flotante de radio 95 px que sigue suavemente el cursor del ratón con bisel metálico oscuro y anillo de enfoque cian.
+  - Zoom de aumento ajustable interactivamente con la rueda del ratón desde **$1.5\times$ hasta $8.0\times$** (con paso de $0.25\times$), mostrando un indicador dinámico de magnificación (`2.50×`) y retícula central de precisión en pelo de camello.
+  - Mapeo geométrico estricto del sensor a pantalla sin distorsión de coordenadas, permitiendo inspeccionar núcleos estelares, bordes de máscaras, ruido de fondo y textura de nebulosas sin perder la visión panorámica general ni alternar el zoom global 1:1.
+  - Conmutación con exclusión mutua inteligente frente a la Pipeta WB y compatibilidad con el modo comparador Antes / Después.
+* **Curvas Selectivas de Color (Hue vs Sat / Luma vs Sat) en el Revelador:**
+  - Nuevo selector de modo en la Sección 2 de Curvas con botones segmentados dedicados:
+    - **`[ 📈 Tonos (RGB) ]`**: curva tonal tradicional y estirado no lineal con histograma logarítmico y alertas de recorte de sombras y luces.
+    - **`[ 🌈 Tono vs Sat ]`**: curva selectiva de saturación en función del tono angular (Hue vs Saturation). Incorpora franja espectral arcoíris continua (0° a 360°), línea neutra central a $1.0\times$ ($Y = 0.5$) y sincronización circular de extremos de tono rojo ($x=0.0$ y $x=1.0$). Permite saturar selectivamente canales astronómicos clave (como emisión H-alfa de nebulosas o tonos cian de OIII) o neutralizar halos cromáticos residuales.
+    - **`[ 💡 Luma vs Sat ]`**: curva selectiva de saturación en función de la luminancia (Luma vs Saturation). Con franja de gradiente de escala de grises y visualización del histograma de brillo de fondo. Permite desaturar de forma suave y controlada las sombras más oscuras ($X \to 0$) erradicando el ruido de crominancia en el fondo del cielo sin desaturar nebulosas brillantes o estrellas.
+  - Botones independientes `[ Resetear Curva Activa ]` y `[ Resetear Todas ]`.
+  - Integración en el pipeline matemático lineal de exportación de alta precisión de 16 y 32 bits.
+
+### Modificado
+* **Actualización de Versión:** Incremento general a **v0.6.7** en la ventana principal (`gui/main_window.py`).
+
 ## [0.6.6] - 2026-10-12
 
 ### Añadido
