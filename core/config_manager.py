@@ -3,6 +3,9 @@ import json
 
 APP_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
+cpu_tot = os.cpu_count() or 4
+def_workers = max(2, cpu_tot - 2) if cpu_tot > 2 else cpu_tot
+
 DEFAULT_CONFIG = {
     # Rutas por defecto del espacio de trabajo
     "sessions_dir": os.path.join(APP_ROOT, "sesiones"),
@@ -14,7 +17,7 @@ DEFAULT_CONFIG = {
     "kappa": 2.2,
     "storage_strategy": "auto",
     "use_gpu": True,
-    "cpu_workers": 4,
+    "cpu_workers": def_workers,
     "lp_method": "standard",
     "lp_strength": 0.5,
     "starnet_exe": "",

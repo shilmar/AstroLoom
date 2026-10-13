@@ -268,12 +268,14 @@ class SettingsTab(QWidget):
         lbl_cpu = QLabel("Hilos simultáneos de CPU (Multi-Core):")
         row_cpu.addWidget(lbl_cpu)
         self.spin_cpu_workers = QSpinBox()
-        self.spin_cpu_workers.setRange(1, 4)
-        self.spin_cpu_workers.setValue(int(self.cfg.get("cpu_workers", 4)))
+        max_cpus = max(4, os.cpu_count() or 4)
+        def_cpus = max(2, max_cpus - 2) if max_cpus > 2 else max_cpus
+        self.spin_cpu_workers.setRange(1, max_cpus)
+        self.spin_cpu_workers.setValue(int(self.cfg.get("cpu_workers", def_cpus)))
         self.spin_cpu_workers.setFixedWidth(80)
         self.spin_cpu_workers.setToolTip(
-            "Número de hilos simultáneos para decodificación, alineación y apilado.\n"
-            "Optimizado a un máximo de 4 hilos para equilibrar I/O de disco y rendimiento térmico."
+            f"Número de hilos simultáneos para decodificación, cribado de calidad y apilado en paralelo.\n"
+            f"Tu equipo dispone de {max_cpus} núcleos lógicos. Se recomienda dejar 1-2 núcleos libres para el sistema operativo."
         )
         row_cpu.addWidget(self.spin_cpu_workers)
         row_cpu.addStretch()
@@ -388,7 +390,7 @@ class SettingsTab(QWidget):
         row_author_title.addWidget(lbl_work_title)
         row_author_title.addStretch()
 
-        lbl_engine_badge = QLabel("Apilator v0.6.3")
+        lbl_engine_badge = QLabel("Apilator v0.6.8")
         lbl_engine_badge.setStyleSheet("color: #80d8ff; font-size: 11px; font-weight: bold;")
         row_author_title.addWidget(lbl_engine_badge)
         author_layout.addLayout(row_author_title)

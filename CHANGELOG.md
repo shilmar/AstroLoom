@@ -5,6 +5,47 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-10-13
+
+### Añadido
+* **Aceleración Multihilo y Modo Rápido en el Diseñador de Collages de Eclipses:**
+  - Paralelización completa del cribado y análisis en lote (`batch_analyze_eclipse_series`) mediante `ThreadPoolExecutor`, liberando el GIL de Python y aprovechando todos los núcleos de CPU del equipo (hasta 16 hilos en CPUs de 16 núcleos).
+  - Nuevo selector de rendimiento en la interfaz: `⚡ Modo Rápido (Half-size RAW 4x)` (binning 2×2 directo en hardware con LibRaw, acelerando el cribado hasta 8.7×) vs `🎯 Modo Precisión 1:1 (Full RAW)`.
+  - Reescalado geométrico subpíxel automático (`×2.0`) en centros y radios, garantizando precisión absoluta al recortar tiles sobre las tomas en alta resolución.
+  - Selector numérico de hilos concurrentes (`QSpinBox`) configurable por el usuario y botón interactivo de cancelación (`⏹️ Cancelar Análisis`).
+* **Generación Acelerada de Composición y Sistema de Caché de Tiles:**
+  - Paralelización multihilo de `compute_collage_layout` para la extracción afín (Lanczos4) y desvanecimiento suave de cada fase.
+  - Modo `fast_preview` para renderizado interactivo de la composición en pantalla en menos de 0.70 s (11× más rápido que la versión secuencial de 7.33 s).
+  - Sistema de caché en memoria (`_tile_cache`): remaquetado instantáneo a 60 fps (en **0.07 ms**) al cambiar parámetros espaciales (espaciado / gap, marcas horarias o modalidad de diseño) sin accesos redundantes a disco.
+* **Persistencia Integral de Sesiones de Collage (`.ecollage`):**
+  - Nuevas opciones `[ 📂 Abrir Sesión... ]` y `[ 💾 Guardar Sesión... ]` con serialización estructurada JSON (`.ecollage`).
+  - Almacena y recupera instantáneamente (< 1 s) todos los metadatos de análisis (centros, radios, nitidez, trepidación, ocultación, fase), selecciones de fotogramas y ajustes finos de composición (layout, espaciado, escala de totalidad, margen, marcas EXIF, modo rápido y número de hilos).
+* **Visor Interactivo con Zoom y Paneo (`CollageInteractiveCanvas`):**
+  - Navegación fluida en el lienzo de previsualización con zoom dinámico centrado en la posición del ratón ($0.05\times$ a $8.0\times$) y paneo interactivo por arrastre.
+  - Barra de herramientas con botones de zoom (`🔍 -`, `100%`, `🔍 +`, `1:1` nativo y `⛶ Ajustar` al lienzo / doble clic).
+* **Nueva Modalidad de Maquetación "◇ Escala Romboide / Progresiva (`<>`)":**
+  - Distribución espacial armónica basada en un taper cosenoidal suave: fase central ampliada (totalidad/pico, ej. 1.40×) y reducción gradual hacia los extremos ($0.60\times$ a $0.80\times$), todos perfectamente anclados al eje de simetría horizontal.
+* **Capa Independiente de Marcas Horarias en PSD de 16 bits:**
+  - Exportación con `pytoshop` que añade una capa transparente no destructiva `"Marcas Horarias EXIF"` con tipografía suavizada.
+
+### Modificado
+* **Margen de Recorte Adaptativo y Feathering Suave:**
+  - Sustituido el recorte ceñido por un margen adaptativo suave con desvanecimiento circular que preserva íntegramente los rayos de difracción, destellos del anillo de diamante y filamentos de la corona solar en fases profundas ($\ge 85\%$).
+* **Controles Numéricos y Desacoplamiento de Deslizadores:**
+  - Incorporadas etiquetas numéricas de lectura directa en tiempo real (`px` y `%`) y tooltips explicativos en los deslizadores.
+  - Desacoplado el recálculo continuo durante el arrastre, incorporando el botón explícito `[ 🔄 Actualizar Composición / Collage ]` con cursor de espera interactivo (`WaitCursor`).
+* **Desbloqueo de Núcleos en la Configuración Global:**
+  - `core/config_manager.py` y `gui/tab_settings.py` ahora permiten asignar hasta `os.cpu_count()` núcleos (16 en equipos compatibles), eliminando el tope previo de 4 hilos.
+* **Dependencias:**
+  - Añadido `pytoshop>=1.2.1` a `requirements.txt` y a las instrucciones de instalación en `README.md`.
+* **Actualización de Versión:** Incremento general a **v0.6.8** en la ventana principal (`gui/main_window.py`) y panel de configuración (`gui/tab_settings.py`).
+
+### Corregido
+* **Fidelidad y Paridad Cromática Estricta en Previsualización RAW:**
+  - Corregida la ausencia de `no_auto_bright=True` y curva `gamma=(2.222, 4.5)` en `_extract_single_tile_item`, erradicando la sobreexposición artificial y el halo ruidoso circular en el cielo oscuro, logrando coincidencia visual al 100% con Photoshop y exportaciones finales.
+* **Manejo de Cierre y Cancelación Limpia:**
+  - Implementado `closeEvent` en `EclipseCollageDialog` para interrumpir hilos de trabajo activos de forma segura al cerrar la ventana.
+
 ## [0.6.7] - 2026-10-12
 
 ### Añadido

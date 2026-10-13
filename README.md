@@ -173,7 +173,7 @@ pip install -r requirements.txt
 
 O instalando manualmente los paquetes requeridos:
 ```cmd
-pip install numpy scipy opencv-python PySide6 tifffile rawpy matplotlib astropy imagecodecs psutil numba
+pip install numpy scipy opencv-python PySide6 tifffile rawpy matplotlib astropy imagecodecs psutil numba pytoshop
 ```
 
 ### 3. Aceleracion GPU (Opcional - NVIDIA CUDA)
@@ -252,13 +252,15 @@ python run_app.py
 [x] Curvas Selectivas de Color (Hue vs Sat y Luma vs Sat) con espectro arcoíris continuo.
 [x] Diseñador de secuencia y collage de eclipses con cribado de trepidación, cálculo de % de ocultación y exportación PSD nativo por capas (16-bit).
 [x] Indicador de progreso y estado visual explícito en la ingesta masiva de archivos ("Cargando ficheros..." -> "Carga finalizada") en el módulo de eclipses y collage.
-[ ] Navegación interactiva con Zoom y Paneo en el visor de previsualización del Diseñador de Collage.
+[x] Navegación interactiva con Zoom y Paneo en el visor de previsualización del Diseñador de Collage.
 [ ] Detección y recomendación automática de fenómenos singulares de contacto: Perlas de Baily y Anillo de Diamante (Diamond Ring).
-[ ] Margen y radio de recorte adaptativo / configurable para evitar cortar rayos solares, destellos del anillo de diamante y filamentos de la corona (o máscara de capa editable no destructiva en PSD).
-[ ] Nueva modalidad de maquetación: Cinta Horizontal con escala romboidal/progresiva (`<>`) con el centro prominente y extremos compactos.
-[ ] Indicadores numéricos de valor (etiquetas en tiempo real: px / %) y tooltips explicativos en los controles deslizantes de Espaciado y Escala de Totalidad.
-[ ] Capa dedicada de marcas horarias EXIF y textos en la exportación de archivos PSD de Photoshop.
-[ ] Aceleración multiproceso/multihilo en el cribado masivo del collage de eclipses con selector configurable de rendimiento (Velocidad half-size RAW vs Máxima resolución nativa).
+[x] Margen y radio de recorte adaptativo / configurable para evitar cortar rayos solares, destellos del anillo de diamante y filamentos de la corona (o máscara de capa editable no destructiva en PSD).
+[x] Nueva modalidad de maquetación: Cinta Horizontal con escala romboidal/progresiva (`<>`) con el centro prominente y extremos compactos.
+[x] Indicadores numéricos de valor (etiquetas en tiempo real: px / %) y tooltips explicativos en los controles deslizantes de Espaciado y Escala de Totalidad.
+[x] Capa dedicada de marcas horarias EXIF y textos en la exportación de archivos PSD de Photoshop.
+[x] Guardado y recuperación instantánea de sesiones de collage de eclipses (.ecollage) con metadatos de análisis, calidad y selección de fases persistente.
+[x] Aceleración multiproceso/multihilo en el cribado masivo del collage de eclipses con selector configurable de rendimiento (Velocidad half-size RAW vs Máxima resolución nativa).
+[ ] Aceleración multihilo (ThreadPoolExecutor) en la detección de limbo en lote y precarga HDR en la pestaña de Eclipses (manteniendo resolución nativa 1:1 estricta sin downscaling para máxima precisión subpíxel).
 [ ] Módulo de composición panorámica para mosaicos nocturnos (Nightscape Panorama Stitcher).
 [ ] Modo automático de gestión de memoria RAM según carga del sistema (psutil).
 [ ] Deshacer / Rehacer (Undo / Redo) con historial de pasos en el Revelador.

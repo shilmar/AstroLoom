@@ -12,8 +12,8 @@ from typing import List, Optional
 import cv2
 import numpy as np
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QImage, QPixmap, QColor, QFont
+from PySide6.QtCore import Qt, QThread, Signal, QPointF, QRectF
+from PySide6.QtGui import QImage, QPixmap, QColor, QFont, QPainter, QCursor
 from PySide6.QtWidgets import (
     QDialog,
     QWidget,
@@ -34,7 +34,9 @@ from PySide6.QtWidgets import (
     QSplitter,
     QScrollArea,
     QAbstractItemView,
-    QApplication
+    QApplication,
+    QSizePolicy,
+    QSpinBox
 )
 
 from core.eclipse_collage import (
@@ -44,13 +46,190 @@ from core.eclipse_collage import (
     compute_collage_layout,
     render_flat_collage,
     export_layered_psd,
+    save_eclipse_collage_session,
+    load_eclipse_collage_session,
     LAYOUT_HORIZONTAL,
+    LAYOUT_DIAMOND,
     LAYOUT_ARC,
     LAYOUT_GRID,
     HAS_PYTOSHOP
 )
+from core.config_manager import get_config_val
 from core.icc_manager import save_tiff_with_icc
 from gui.widgets.drop_widgets import DropTableWidget, collect_image_files_from_mime
+
+
+class CollageInteractiveCanvas(QWidget):
+    """
+    Lienzo interactivo acelerado para previsualizar secuencias y collages de eclipses.
+    Permite:
+      - Zoom dinámico con rueda de ratón centrado en la posición del puntero (0.05x a 8.0x).
+      - Paneo interactivo mediante arrastre con clic izquierdo o botón central.
+      - Botones directos de zoom in/out, 1:1 (tamaño real) y Ajustar al lienzo (Fit).
+      - Renderizado suave y centrado con fondo oscuro estelar.
+    """
+    zoom_changed = Signal(float)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setStyleSheet("background: #0f1015; border: 1px solid #262833; border-radius: 4px;")
+
+        self._pixmap: Optional[QPixmap] = None
+        self._zoom: float = 1.0
+        self._pan_offset: QPointF = QPointF(0, 0)
+        self._is_panning: bool = False
+        self._drag_start: QPointF = QPointF(0, 0)
+        self._fit_to_view: bool = True
+        self.placeholder_text: str = "Carga tomas del eclipse y pulsa 'Analizar' para diseñar el collage."
+
+    def set_image(self, flat_rgb: Optional[np.ndarray]):
+        if flat_rgb is None:
+            self._pixmap = None
+            self.update()
+            return
+
+        u8 = (np.clip(flat_rgb, 0.0, 1.0) * 255.0).astype(np.uint8)
+        h, w, c = u8.shape
+        bytes_per_line = 3 * w
+        qimg = QImage(u8.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        self._pixmap = QPixmap.fromImage(qimg)
+        if self._fit_to_view:
+            self.fit_view()
+        else:
+            self.update()
+
+    def set_placeholder(self, text: str):
+        self.placeholder_text = text
+        self._pixmap = None
+        self.update()
+
+    def fit_view(self):
+        self._fit_to_view = True
+        if self._pixmap is None or self._pixmap.isNull():
+            self._zoom = 1.0
+            self._pan_offset = QPointF(0, 0)
+            self.update()
+            self.zoom_changed.emit(self._zoom)
+            return
+
+        vw = max(50, self.width() - 30)
+        vh = max(50, self.height() - 30)
+        pw = self._pixmap.width()
+        ph = self._pixmap.height()
+
+        scale_w = vw / float(pw)
+        scale_h = vh / float(ph)
+        self._zoom = min(scale_w, scale_h, 1.5)
+        # Centrar en el área visible
+        rendered_w = pw * self._zoom
+        rendered_h = ph * self._zoom
+        self._pan_offset = QPointF((self.width() - rendered_w) / 2.0, (self.height() - rendered_h) / 2.0)
+        self.update()
+        self.zoom_changed.emit(self._zoom)
+
+    def set_zoom_100(self):
+        self._fit_to_view = False
+        self._zoom = 1.0
+        if self._pixmap:
+            cx = (self.width() - self._pixmap.width()) / 2.0
+            cy = (self.height() - self._pixmap.height()) / 2.0
+            self._pan_offset = QPointF(cx, cy)
+        self.update()
+        self.zoom_changed.emit(self._zoom)
+
+    def zoom_by(self, factor: float):
+        self._fit_to_view = False
+        center_pos = QPointF(self.width() / 2.0, self.height() / 2.0)
+        self._apply_zoom_at(factor, center_pos)
+
+    def _apply_zoom_at(self, factor: float, center_pos: QPointF):
+        old_zoom = self._zoom
+        new_zoom = max(0.05, min(10.0, self._zoom * factor))
+        if abs(new_zoom - old_zoom) < 1e-4:
+            return
+
+        self._pan_offset = center_pos - (center_pos - self._pan_offset) * (new_zoom / old_zoom)
+        self._zoom = new_zoom
+        self.update()
+        self.zoom_changed.emit(self._zoom)
+
+    def wheelEvent(self, event):
+        if self._pixmap is None or self._pixmap.isNull():
+            return
+        self._fit_to_view = False
+        delta = event.angleDelta().y()
+        factor = 1.15 if delta > 0 else (1.0 / 1.15)
+        self._apply_zoom_at(factor, event.position())
+        event.accept()
+
+    def mousePressEvent(self, event):
+        if event.button() in (Qt.LeftButton, Qt.MiddleButton):
+            self._is_panning = True
+            self._drag_start = event.position()
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._is_panning:
+            self._fit_to_view = False
+            delta = event.position() - self._drag_start
+            self._pan_offset += delta
+            self._drag_start = event.position()
+            self.update()
+            event.accept()
+        else:
+            if self._pixmap and not self._pixmap.isNull():
+                self.setCursor(Qt.OpenHandCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() in (Qt.LeftButton, Qt.MiddleButton):
+            self._is_panning = False
+            if self._pixmap and not self._pixmap.isNull():
+                self.setCursor(Qt.OpenHandCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.fit_view()
+            event.accept()
+        else:
+            super().mouseDoubleClickEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._fit_to_view:
+            self.fit_view()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+        painter.fillRect(self.rect(), QColor(14, 15, 20))
+
+        if self._pixmap is None or self._pixmap.isNull():
+            painter.setPen(QColor(120, 144, 156))
+            font = painter.font()
+            font.setPointSize(11)
+            painter.setFont(font)
+            painter.drawText(self.rect(), Qt.AlignCenter, self.placeholder_text)
+            return
+
+        pw = self._pixmap.width() * self._zoom
+        ph = self._pixmap.height() * self._zoom
+        target_rect = QRectF(self._pan_offset.x(), self._pan_offset.y(), pw, ph)
+        painter.drawPixmap(target_rect.toRect(), self._pixmap)
 
 
 class EclipseAnalysisWorker(QThread):
@@ -59,10 +238,18 @@ class EclipseAnalysisWorker(QThread):
     finished = Signal(list)
     error = Signal(str)
 
-    def __init__(self, filepaths: List[str], mode: str = "solar"):
+    def __init__(
+        self, 
+        filepaths: List[str], 
+        mode: str = "solar", 
+        max_workers: Optional[int] = None, 
+        fast_mode: bool = True
+    ):
         super().__init__()
         self.filepaths = filepaths
         self.mode = mode
+        self.max_workers = max_workers
+        self.fast_mode = fast_mode
         self._is_cancelled = False
 
     def cancel(self):
@@ -74,7 +261,14 @@ class EclipseAnalysisWorker(QThread):
                 if not self._is_cancelled:
                     self.progress.emit(curr, total, msg)
 
-            results = batch_analyze_eclipse_series(self.filepaths, mode=self.mode, callback_progress=cb)
+            results = batch_analyze_eclipse_series(
+                self.filepaths, 
+                mode=self.mode, 
+                max_workers=self.max_workers,
+                fast_mode=self.fast_mode,
+                callback_progress=cb,
+                is_cancelled_fn=lambda: self._is_cancelled
+            )
             if not self._is_cancelled:
                 self.finished.emit(results)
         except Exception as e:
@@ -96,6 +290,7 @@ class EclipseCollageDialog(QDialog):
         self.current_placements = []
         self.current_canvas_w = 1920
         self.current_canvas_h = 1080
+        self._tile_cache: Dict[Any, Tuple[np.ndarray, np.ndarray]] = {}
 
         self.worker: Optional[EclipseAnalysisWorker] = None
 
@@ -125,6 +320,21 @@ class EclipseCollageDialog(QDialog):
         box_files = QVBoxLayout(grp_files)
         box_files.setSpacing(6)
 
+        btn_row_sess = QHBoxLayout()
+        self.btn_load_session = QPushButton("📂 Abrir Sesión...")
+        self.btn_load_session.setStyleSheet("font-weight: bold; background: #2a1b4e; color: #d1c4e9; border: 1px solid #7e57c2;")
+        self.btn_load_session.setToolTip("Carga una sesión guardada (.ecollage) restaurando todo el análisis y selección instantáneamente")
+        self.btn_load_session.clicked.connect(self._on_load_session_clicked)
+
+        self.btn_save_session = QPushButton("💾 Guardar Sesión...")
+        self.btn_save_session.setStyleSheet("font-weight: bold; background: #2a1b4e; color: #d1c4e9; border: 1px solid #7e57c2;")
+        self.btn_save_session.setToolTip("Guarda la sesión actual con todos los cálculos de análisis, calidad y selección en un archivo .ecollage")
+        self.btn_save_session.clicked.connect(self._on_save_session_clicked)
+
+        btn_row_sess.addWidget(self.btn_load_session)
+        btn_row_sess.addWidget(self.btn_save_session)
+        box_files.addLayout(btn_row_sess)
+
         btn_row_f = QHBoxLayout()
         self.btn_load_files = QPushButton("📁 Cargar Fotos...")
         self.btn_load_files.setStyleSheet("font-weight: bold; color: #80d8ff;")
@@ -149,10 +359,41 @@ class EclipseCollageDialog(QDialog):
         self.table_files.files_dropped.connect(self._on_files_dropped)
         box_files.addWidget(self.table_files)
 
+        # Opciones de Rendimiento y Multihilo
+        row_perf = QHBoxLayout()
+        row_perf.setSpacing(6)
+        
+        self.combo_analysis_speed = QComboBox()
+        self.combo_analysis_speed.addItem("⚡ Modo Rápido (Half-size RAW 4x)", True)
+        self.combo_analysis_speed.addItem("🎯 Modo Precisión 1:1 (Full RAW)", False)
+        self.combo_analysis_speed.setToolTip(
+            "⚡ Modo Rápido: Procesa RAWs con binning 2x2 acelerando 4x a 8x el análisis sin perder precisión geométrica.\n"
+            "🎯 Modo Precisión: Procesa RAWs a resolución 1:1 nativa completa."
+        )
+        row_perf.addWidget(self.combo_analysis_speed, stretch=1)
+
+        lbl_threads = QLabel("Hilos:")
+        lbl_threads.setStyleSheet("color: #b0bec5;")
+        row_perf.addWidget(lbl_threads)
+
+        self.spin_analysis_workers = QSpinBox()
+        cpu_total = os.cpu_count() or 16
+        self.spin_analysis_workers.setRange(1, cpu_total)
+        configured_workers = int(get_config_val("cpu_workers", 4))
+        def_workers = max(configured_workers, max(2, cpu_total - 2))
+        self.spin_analysis_workers.setValue(min(def_workers, cpu_total))
+        self.spin_analysis_workers.setFixedWidth(55)
+        self.spin_analysis_workers.setToolTip(
+            f"Número de hilos de CPU concurrentes para el análisis en lote (Detectados: {cpu_total} núcleos lógicos)"
+        )
+        row_perf.addWidget(self.spin_analysis_workers)
+
+        box_files.addLayout(row_perf)
+
         self.btn_analyze = QPushButton("🔍 Analizar Calidad y % Ocultación en Lote")
         self.btn_analyze.setFixedHeight(34)
         self.btn_analyze.setStyleSheet("font-weight: bold; background: #263238; color: #80d8ff; border: 1px solid #80d8ff;")
-        self.btn_analyze.clicked.connect(self._start_analysis)
+        self.btn_analyze.clicked.connect(self._on_analyze_clicked)
         box_files.addWidget(self.btn_analyze)
 
         self.progress_bar = QProgressBar()
@@ -192,34 +433,65 @@ class EclipseCollageDialog(QDialog):
         row_mode = QHBoxLayout()
         row_mode.addWidget(QLabel("Modalidad:"))
         self.combo_layout_mode = QComboBox()
-        self.combo_layout_mode.addItems(["⇋ Cinta Horizontal (Timeline)", "⌒ Arco Celeste (Parábola)", "▦ Cuadrícula (Grid)"])
-        self.combo_layout_mode.currentIndexChanged.connect(self._update_preview)
+        self.combo_layout_mode.addItems([
+            "⇋ Cinta Horizontal (Timeline)",
+            "◇ Escala Romboide / Progresiva (<>)",
+            "⌒ Arco Celeste (Parábola)",
+            "▦ Cuadrícula (Grid)"
+        ])
         row_mode.addWidget(self.combo_layout_mode, stretch=1)
         box_layout.addLayout(row_mode)
 
-        # Controles finos
+        # Controles finos con indicadores numéricos
         row_sp = QHBoxLayout()
         row_sp.addWidget(QLabel("Espaciado:"))
         self.slider_gap = QSlider(Qt.Horizontal)
         self.slider_gap.setRange(10, 150)
         self.slider_gap.setValue(40)
-        self.slider_gap.valueChanged.connect(self._update_preview)
+        self.slider_gap.setToolTip("Separación horizontal en píxeles entre fotogramas consecutivos")
+        self.lbl_gap_val = QLabel("40 px")
+        self.lbl_gap_val.setStyleSheet("color: #80d8ff; font-weight: bold; min-width: 48px;")
+        self.slider_gap.valueChanged.connect(self._on_gap_changed)
         row_sp.addWidget(self.slider_gap)
+        row_sp.addWidget(self.lbl_gap_val)
         box_layout.addLayout(row_sp)
 
         row_sc = QHBoxLayout()
-        row_sc.addWidget(QLabel("Escala Totalidad:"))
+        row_sc.addWidget(QLabel("Escala Totalidad / Centro:"))
         self.slider_tot_scale = QSlider(Qt.Horizontal)
         self.slider_tot_scale.setRange(100, 200)
         self.slider_tot_scale.setValue(130)
-        self.slider_tot_scale.valueChanged.connect(self._update_preview)
+        self.slider_tot_scale.setToolTip("Factor de ampliación del fotograma central (totalidad o máximo) respecto a las fases parciales")
+        self.lbl_tot_scale_val = QLabel("1.30x (+30%)")
+        self.lbl_tot_scale_val.setStyleSheet("color: #ffd54f; font-weight: bold; min-width: 75px;")
+        self.slider_tot_scale.valueChanged.connect(self._on_tot_scale_changed)
         row_sc.addWidget(self.slider_tot_scale)
+        row_sc.addWidget(self.lbl_tot_scale_val)
         box_layout.addLayout(row_sc)
+
+        row_pad = QHBoxLayout()
+        row_pad.addWidget(QLabel("Margen / Corona:"))
+        self.slider_pad = QSlider(Qt.Horizontal)
+        self.slider_pad.setRange(120, 250)
+        self.slider_pad.setValue(160)
+        self.slider_pad.setToolTip("Margen y radio del recorte circular alrededor del Sol. Aumentar para preservar rayos de difracción del anillo de diamante, protuberancias y filamentos de la corona sin cortes abruptos")
+        self.lbl_pad_val = QLabel("1.60x")
+        self.lbl_pad_val.setStyleSheet("color: #ff8a80; font-weight: bold; min-width: 48px;")
+        self.slider_pad.valueChanged.connect(self._on_pad_changed)
+        row_pad.addWidget(self.slider_pad)
+        row_pad.addWidget(self.lbl_pad_val)
+        box_layout.addLayout(row_pad)
 
         self.chk_captions = QCheckBox("Mostrar marcas horarias EXIF bajo cada fase")
         self.chk_captions.setChecked(True)
-        self.chk_captions.toggled.connect(self._update_preview)
         box_layout.addWidget(self.chk_captions)
+
+        self.btn_apply_layout = QPushButton("🔄 Actualizar Composición / Collage")
+        self.btn_apply_layout.setFixedHeight(34)
+        self.btn_apply_layout.setStyleSheet("font-weight: bold; background: #1b5e20; color: #a5d6a7; border: 1px solid #81c784; border-radius: 3px;")
+        self.btn_apply_layout.setToolTip("Aplica los cambios de modalidad, espaciado, escala y margen generando la vista previa")
+        self.btn_apply_layout.clicked.connect(self._update_preview)
+        box_layout.addWidget(self.btn_apply_layout)
 
         left_layout.addWidget(grp_layout, stretch=2)
 
@@ -262,26 +534,151 @@ class EclipseCollageDialog(QDialog):
         header_row.addWidget(self.lbl_info)
         header_row.addStretch()
 
+        # Crear lienzo interactivo
+        self.canvas_preview = CollageInteractiveCanvas()
+        self.canvas_preview.zoom_changed.connect(self._on_zoom_changed)
+
+        # Botones de navegación interactiva y zoom
+        self.btn_zoom_out = QPushButton("🔍 -")
+        self.btn_zoom_out.setFixedWidth(34)
+        self.btn_zoom_out.setToolTip("Alejar zoom")
+        self.btn_zoom_out.clicked.connect(lambda: self.canvas_preview.zoom_by(1.0 / 1.25))
+
+        self.lbl_zoom_val = QLabel("100%")
+        self.lbl_zoom_val.setStyleSheet("color: #80d8ff; font-weight: bold; min-width: 48px;")
+        self.lbl_zoom_val.setAlignment(Qt.AlignCenter)
+
+        self.btn_zoom_in = QPushButton("🔍 +")
+        self.btn_zoom_in.setFixedWidth(34)
+        self.btn_zoom_in.setToolTip("Acercar zoom")
+        self.btn_zoom_in.clicked.connect(lambda: self.canvas_preview.zoom_by(1.25))
+
+        self.btn_zoom_100 = QPushButton("1:1")
+        self.btn_zoom_100.setFixedWidth(36)
+        self.btn_zoom_100.setToolTip("Ver a tamaño real 100%")
+        self.btn_zoom_100.clicked.connect(self.canvas_preview.set_zoom_100)
+
+        self.btn_zoom_fit = QPushButton("⛶ Ajustar")
+        self.btn_zoom_fit.setToolTip("Ajustar al tamaño de la ventana (o doble clic en el lienzo)")
+        self.btn_zoom_fit.clicked.connect(self.canvas_preview.fit_view)
+
+        header_row.addWidget(self.btn_zoom_out)
+        header_row.addWidget(self.lbl_zoom_val)
+        header_row.addWidget(self.btn_zoom_in)
+        header_row.addWidget(self.btn_zoom_100)
+        header_row.addWidget(self.btn_zoom_fit)
+
         self.btn_refresh = QPushButton("🔄 Actualizar")
         self.btn_refresh.clicked.connect(self._update_preview)
         header_row.addWidget(self.btn_refresh)
         right_layout.addLayout(header_row)
 
-        self.scroll_preview = QScrollArea()
-        self.scroll_preview.setStyleSheet("background: #121216; border: 1px solid #2a2a35;")
-        self.scroll_preview.setAlignment(Qt.AlignCenter)
-        self.lbl_preview = QLabel("Carga tomas del eclipse y pulsa 'Analizar' para diseñar el collage.")
-        self.lbl_preview.setStyleSheet("color: #78909c; font-size: 13px;")
-        self.lbl_preview.setAlignment(Qt.AlignCenter)
-        self.scroll_preview.setWidget(self.lbl_preview)
-        self.scroll_preview.setWidgetResizable(True)
-        right_layout.addWidget(self.scroll_preview, stretch=1)
+        right_layout.addWidget(self.canvas_preview, stretch=1)
 
         splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 6)
 
         main_layout.addWidget(splitter)
+
+    # -----------------------------------------------------------------
+    # Gestión de Sesiones de Collage (.ecollage)
+    # -----------------------------------------------------------------
+    def _on_save_session_clicked(self):
+        if not self.frames_meta:
+            QMessageBox.warning(self, "Aviso", "No hay fotos cargadas ni analizadas para guardar en la sesión.")
+            return
+
+        os.makedirs("sesiones", exist_ok=True)
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "Guardar Sesión de Collage de Eclipse",
+            "sesiones/mi_eclipse.ecollage",
+            "Sesión de Collage (*.ecollage);;JSON (*.json)"
+        )
+        if not filepath:
+            return
+
+        settings = {
+            "layout_mode_idx": self.combo_layout_mode.currentIndex(),
+            "gap_spacing": self.slider_gap.value(),
+            "totality_scale": self.slider_tot_scale.value(),
+            "crop_margin_factor": self.slider_pad.value(),
+            "draw_captions": self.chk_captions.isChecked(),
+            "target_count_idx": self.combo_target_count.currentIndex(),
+            "fast_mode_idx": self.combo_analysis_speed.currentIndex(),
+            "analysis_workers": self.spin_analysis_workers.value()
+        }
+
+        ok = save_eclipse_collage_session(filepath, self.frames_meta, settings, mode=self.eclipse_mode)
+        if ok:
+            QMessageBox.information(
+                self,
+                "Sesión Guardada",
+                f"Sesión guardada exitosamente con {len(self.frames_meta)} fotogramas analizados:\n{filepath}"
+            )
+        else:
+            QMessageBox.critical(self, "Error", "No se pudo guardar el archivo de sesión.")
+
+    def _on_load_session_clicked(self):
+        os.makedirs("sesiones", exist_ok=True)
+        filepath, _ = QFileDialog.getOpenFileName(
+            self,
+            "Abrir Sesión de Collage de Eclipse",
+            "sesiones",
+            "Sesión de Collage (*.ecollage *.json);;Todos (*.*)"
+        )
+        if not filepath:
+            return
+
+        try:
+            frames, settings, mode = load_eclipse_collage_session(filepath)
+            if not frames:
+                QMessageBox.warning(self, "Aviso", "El archivo de sesión no contiene fotogramas válidos.")
+                return
+
+            self.eclipse_mode = mode
+            self.frames_meta = frames
+            self._tile_cache.clear()
+
+            # Restaurar parámetros de maquetación si existen
+            if "layout_mode_idx" in settings:
+                self.combo_layout_mode.setCurrentIndex(int(settings["layout_mode_idx"]))
+            if "gap_spacing" in settings:
+                val = int(settings["gap_spacing"])
+                self.slider_gap.setValue(val)
+                self.lbl_gap_val.setText(f"{val} px")
+            if "totality_scale" in settings:
+                val = int(settings["totality_scale"])
+                self.slider_tot_scale.setValue(val)
+                val_f = val / 100.0
+                diff = val - 100
+                self.lbl_tot_scale_val.setText(f"{val_f:.2f}x ({'+' if diff >= 0 else ''}{diff}%)")
+            if "crop_margin_factor" in settings:
+                val = int(settings["crop_margin_factor"])
+                self.slider_pad.setValue(val)
+                self.lbl_pad_val.setText(f"{val / 100.0:.2f}x")
+            if "draw_captions" in settings:
+                self.chk_captions.setChecked(bool(settings["draw_captions"]))
+            if "target_count_idx" in settings:
+                self.combo_target_count.setCurrentIndex(int(settings["target_count_idx"]))
+            if "fast_mode_idx" in settings:
+                self.combo_analysis_speed.setCurrentIndex(int(settings["fast_mode_idx"]))
+            if "analysis_workers" in settings:
+                self.spin_analysis_workers.setValue(int(settings["analysis_workers"]))
+
+            self._populate_table()
+            self._update_preview()
+
+            num_rec = len([f for f in frames if f.is_recommended])
+            QMessageBox.information(
+                self,
+                "Sesión Cargada",
+                f"Sesión restaurada correctamente:\n{len(frames)} fotogramas cargados ({num_rec} seleccionados).\n"
+                f"No es necesario reanalizar los archivos."
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error al cargar sesión", f"No se pudo cargar la sesión:\n{e}")
 
     # -----------------------------------------------------------------
     # Gestión de Archivos y Tabla
@@ -341,10 +738,10 @@ class EclipseCollageDialog(QDialog):
         self.lbl_info.setText(f"Carga finalizada: {len(self.frames_meta)} tomas añadidas (pulsa 'Analizar').")
 
     def _on_clear_clicked(self):
+        self._tile_cache.clear()
         self.frames_meta.clear()
         self.table_files.setRowCount(0)
-        self.lbl_preview.setPixmap(QPixmap())
-        self.lbl_preview.setText("Carga tomas del eclipse y pulsa 'Analizar' para diseñar el collage.")
+        self.canvas_preview.set_image(None)
         self.lbl_info.setText("Vista Previa del Collage (0 fases seleccionadas)")
 
     def _populate_table(self):
@@ -401,6 +798,14 @@ class EclipseCollageDialog(QDialog):
     # -----------------------------------------------------------------
     # Análisis y Clasificación Automática
     # -----------------------------------------------------------------
+    def _on_analyze_clicked(self):
+        if hasattr(self, 'worker') and self.worker and self.worker.isRunning():
+            self.worker.cancel()
+            self.btn_analyze.setText("Cancelando...")
+            self.btn_analyze.setEnabled(False)
+            return
+        self._start_analysis()
+
     def _start_analysis(self):
         if not self.frames_meta:
             QMessageBox.information(self, "Aviso", "Añade fotos primero.")
@@ -409,9 +814,19 @@ class EclipseCollageDialog(QDialog):
         fps = [f.filepath for f in self.frames_meta]
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
-        self.btn_analyze.setEnabled(False)
+        self.btn_analyze.setText("⏹️ Cancelar Análisis")
+        self.btn_analyze.setStyleSheet("font-weight: bold; background: #b71c1c; color: #ffcdd2; border: 1px solid #e57373;")
+        self.btn_analyze.setEnabled(True)
 
-        self.worker = EclipseAnalysisWorker(fps, mode=self.eclipse_mode)
+        fast_mode = bool(self.combo_analysis_speed.currentData())
+        workers = self.spin_analysis_workers.value()
+
+        self.worker = EclipseAnalysisWorker(
+            fps, 
+            mode=self.eclipse_mode, 
+            max_workers=workers, 
+            fast_mode=fast_mode
+        )
         self.worker.progress.connect(self._on_worker_progress)
         self.worker.finished.connect(self._on_worker_finished)
         self.worker.error.connect(self._on_worker_error)
@@ -424,13 +839,19 @@ class EclipseCollageDialog(QDialog):
 
     def _on_worker_finished(self, results: List[EclipseFrameMetadata]):
         self.progress_bar.setVisible(False)
+        self.btn_analyze.setText("🔍 Analizar Calidad y % Ocultación en Lote")
+        self.btn_analyze.setStyleSheet("font-weight: bold; background: #263238; color: #80d8ff; border: 1px solid #80d8ff;")
         self.btn_analyze.setEnabled(True)
-        self.frames_meta = results
-        self._populate_table()
-        self._auto_select_recommended()
+        if results:
+            self._tile_cache.clear()
+            self.frames_meta = results
+            self._populate_table()
+            self._auto_select_recommended()
 
     def _on_worker_error(self, err: str):
         self.progress_bar.setVisible(False)
+        self.btn_analyze.setText("🔍 Analizar Calidad y % Ocultación en Lote")
+        self.btn_analyze.setStyleSheet("font-weight: bold; background: #263238; color: #80d8ff; border: 1px solid #80d8ff;")
         self.btn_analyze.setEnabled(True)
         QMessageBox.critical(self, "Error de Análisis", f"Ocurrió un error analizando el lote:\n{err}")
 
@@ -446,6 +867,35 @@ class EclipseCollageDialog(QDialog):
         self._update_preview()
 
     # -----------------------------------------------------------------
+    # Callbacks de Controles y Zoom
+    # -----------------------------------------------------------------
+    def _on_gap_changed(self, val: int):
+        self.lbl_gap_val.setText(f"{val} px")
+
+    def _on_tot_scale_changed(self, val: int):
+        val_f = val / 100.0
+        diff = val - 100
+        self.lbl_tot_scale_val.setText(f"{val_f:.2f}x ({'+' if diff >= 0 else ''}{diff}%)")
+
+    def _on_pad_changed(self, val: int):
+        val_f = val / 100.0
+        self.lbl_pad_val.setText(f"{val_f:.2f}x")
+
+    def _on_zoom_changed(self, zoom: float):
+        pct = int(round(zoom * 100))
+        self.lbl_zoom_val.setText(f"{pct}%")
+
+    def _get_current_layout_mode(self) -> str:
+        idx = self.combo_layout_mode.currentIndex()
+        if idx == 0:
+            return LAYOUT_HORIZONTAL
+        elif idx == 1:
+            return LAYOUT_DIAMOND
+        elif idx == 2:
+            return LAYOUT_ARC
+        return LAYOUT_GRID
+
+    # -----------------------------------------------------------------
     # Generación y Vista Previa del Collage
     # -----------------------------------------------------------------
     def _get_selected_frames(self) -> List[EclipseFrameMetadata]:
@@ -455,31 +905,30 @@ class EclipseCollageDialog(QDialog):
         selected = self._get_selected_frames()
         self.lbl_info.setText(f"Vista Previa del Collage ({len(selected)} fases seleccionadas)")
         if not selected:
-            self.lbl_preview.setPixmap(QPixmap())
-            self.lbl_preview.setText("Selecciona al menos una fase para previsualizar.")
+            self.canvas_preview.set_placeholder("Selecciona al menos una fase para previsualizar.")
             return
 
-        mode_idx = self.combo_layout_mode.currentIndex()
-        if mode_idx == 0:
-            layout_mode = LAYOUT_HORIZONTAL
-        elif mode_idx == 1:
-            layout_mode = LAYOUT_ARC
-        else:
-            layout_mode = LAYOUT_GRID
-
+        layout_mode = self._get_current_layout_mode()
         gap = self.slider_gap.value()
         tot_scale = self.slider_tot_scale.value() / 100.0
+        crop_factor = self.slider_pad.value() / 100.0
         draw_caps = self.chk_captions.isChecked()
 
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            # Para previsualización rápida usamos radio base de 90px
+            workers = self.spin_analysis_workers.value() if hasattr(self, 'spin_analysis_workers') else None
+            # Previsualización rápida multihilo con caché en memoria
             cw, ch, placements = compute_collage_layout(
                 selected,
                 layout_type=layout_mode,
                 canvas_width=1800,
                 target_disk_radius=90,
                 gap_spacing=gap,
-                totality_scale=tot_scale
+                totality_scale=tot_scale,
+                crop_margin_factor=crop_factor,
+                fast_preview=True,
+                max_workers=workers,
+                cached_tiles=self._tile_cache
             )
             self.current_placements = placements
             self.current_canvas_w = cw
@@ -487,23 +936,11 @@ class EclipseCollageDialog(QDialog):
 
             flat = render_flat_collage(cw, ch, placements, bg_color=(0.0, 0.0, 0.0), draw_captions=draw_caps)
             self.preview_image = flat
-
-            # Convertir a QPixmap para renderizado
-            u8 = (flat * 255.0).astype(np.uint8)
-            h, w, c = u8.shape
-            bytes_per_line = 3 * w
-            qimg = QImage(u8.data, w, h, bytes_per_line, QImage.Format_RGB888)
-            pix = QPixmap.fromImage(qimg)
-
-            # Escalar a la ventana del visor si excede el tamaño
-            viewport_w = max(400, self.scroll_preview.width() - 30)
-            viewport_h = max(300, self.scroll_preview.height() - 30)
-            scaled_pix = pix.scaled(viewport_w, viewport_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-
-            self.lbl_preview.setPixmap(scaled_pix)
-            self.lbl_preview.setText("")
+            self.canvas_preview.set_image(flat)
         except Exception as e:
-            self.lbl_preview.setText(f"Error generando vista previa: {e}")
+            self.canvas_preview.set_placeholder(f"Error generando vista previa: {e}")
+        finally:
+            QApplication.restoreOverrideCursor()
 
     # -----------------------------------------------------------------
     # Exportaciones
@@ -527,28 +964,33 @@ class EclipseCollageDialog(QDialog):
         if not filepath:
             return
 
-        mode_idx = self.combo_layout_mode.currentIndex()
-        layout_mode = LAYOUT_HORIZONTAL if mode_idx == 0 else (LAYOUT_ARC if mode_idx == 1 else LAYOUT_GRID)
+        layout_mode = self._get_current_layout_mode()
         gap = self.slider_gap.value()
         tot_scale = self.slider_tot_scale.value() / 100.0
+        crop_factor = self.slider_pad.value() / 100.0
+        draw_caps = self.chk_captions.isChecked()
+        workers = self.spin_analysis_workers.value() if hasattr(self, 'spin_analysis_workers') else None
 
-        # Para exportación a Photoshop usamos resolución nativa alta (radio 150px)
+        # Para exportación a Photoshop usamos resolución nativa alta (radio 150px) y multihilo completo
         cw, ch, placements = compute_collage_layout(
             selected,
             layout_type=layout_mode,
             canvas_width=3840,
             target_disk_radius=150,
             gap_spacing=gap,
-            totality_scale=tot_scale
+            totality_scale=tot_scale,
+            crop_margin_factor=crop_factor,
+            fast_preview=False,
+            max_workers=workers
         )
 
-        ok = export_layered_psd(filepath, cw, ch, placements, depth=16)
+        ok = export_layered_psd(filepath, cw, ch, placements, depth=16, include_captions=draw_caps)
         if ok:
             QMessageBox.information(
                 self, 
                 "Exportación Exitosa", 
                 f"Collage exportado en PSD por capas de 16-bit:\n{filepath}\n\n"
-                f"Lienzo: {cw} × {ch} px ({len(placements)} capas individuales)."
+                f"Lienzo: {cw} × {ch} px ({len(placements)} fases + capa marcas horarias)."
             )
         else:
             QMessageBox.critical(self, "Error", "No se pudo generar el archivo PSD.")
@@ -568,19 +1010,24 @@ class EclipseCollageDialog(QDialog):
         if not filepath:
             return
 
-        mode_idx = self.combo_layout_mode.currentIndex()
-        layout_mode = LAYOUT_HORIZONTAL if mode_idx == 0 else (LAYOUT_ARC if mode_idx == 1 else LAYOUT_GRID)
+        layout_mode = self._get_current_layout_mode()
         gap = self.slider_gap.value()
         tot_scale = self.slider_tot_scale.value() / 100.0
+        crop_factor = self.slider_pad.value() / 100.0
         draw_caps = self.chk_captions.isChecked()
+        workers = self.spin_analysis_workers.value() if hasattr(self, 'spin_analysis_workers') else None
 
+        # Exportación en imagen plana a resolución nativa alta y multihilo completo
         cw, ch, placements = compute_collage_layout(
             selected,
             layout_type=layout_mode,
             canvas_width=3840,
             target_disk_radius=150,
             gap_spacing=gap,
-            totality_scale=tot_scale
+            totality_scale=tot_scale,
+            crop_margin_factor=crop_factor,
+            fast_preview=False,
+            max_workers=workers
         )
 
         flat = render_flat_collage(cw, ch, placements, bg_color=(0.0, 0.0, 0.0), draw_captions=draw_caps)
@@ -598,3 +1045,9 @@ class EclipseCollageDialog(QDialog):
             "Guardado Exitoso",
             f"Imagen de collage guardada correctamente:\n{filepath}\n\nDimensiones: {cw} × {ch} px"
         )
+
+    def closeEvent(self, event):
+        if hasattr(self, 'worker') and self.worker and self.worker.isRunning():
+            self.worker.cancel()
+            self.worker.wait(1000)
+        super().closeEvent(event)
