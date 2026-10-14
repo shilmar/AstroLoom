@@ -1,6 +1,6 @@
-# Apilator
+# AstroLoom
 
-**Apilator** es una herramienta especializada de posprocesado, apilado y revelado para **astrofotografía de paisaje (nightscapes)**, **circumpolares / trazas de estrellas (startrails)** y **eclipses (solares y lunares)**. Permite desacoplar el movimiento del cielo respecto al horizonte terrestre, aplicar integración estadística Kappa-Sigma en coma flotante de 32 bits, componer circumpolares con efectos cometa y supresión automática de satélites, procesar series de bracketing de eclipses con alineación subpíxel de limbo y filtro NRGF continuo, y editar la imagen final en tiempo real con asistencia de redes neuronales (GraXpert y StarNet++ v2).
+**AstroLoom** (anteriormente *Apilator*) es una suite y estación de trabajo especializada de posprocesado, apilado, mosaicos panorámicos y revelado para **astrofotografía de paisaje (nightscapes)**, **mosaicos gigapíxel**, **circumpolares / trazas de estrellas (startrails)** y **eclipses (solares y lunares)**. Permite desacoplar el movimiento del cielo respecto al horizonte terrestre, aplicar integración estadística Kappa-Sigma en coma flotante de 32 bits, componer panorámicas multifila con corte óptimo de siluetas terrestres (Dual-Zone), componer circumpolares con efectos cometa y supresión automática de satélites, procesar series de bracketing de eclipses con alineación subpíxel de limbo y filtro NRGF continuo, y editar la imagen final en tiempo real con asistencia de redes neuronales (GraXpert y StarNet++ v2).
 
 ---
 
@@ -121,7 +121,7 @@
 
 ### 8. Configuración, Rendimiento y Vitrina de Resultados
 - **Interfaz Moderna y Homogénea:** Paneles laterales unificados con ancho mínimo de 420 px, máximo de 520 px y predeterminado de 520 px en todos los módulos, diseño visual armónico en tonos azulados oscuros (`#161622`) y controles compactados verticalmente (selectores en línea en Apilador y Revelador).
-- **Vitrina de Resultados Integrada (Showcase):** Panel visual en la pestaña de Configuración con visor responsivo antialias que exhibe astrofotografía real de paisaje procesada de principio a fin con Apilator, acreditación de autoría (*Fotografía y Procesado: Shilmar*) e inspección a resolución nativa.
+- **Vitrina de Resultados Integrada (Showcase):** Panel visual en la pestaña de Configuración con visor responsivo antialias que exhibe astrofotografía real de paisaje procesada de principio a fin con AstroLoom, acreditación de autoría (*Fotografía y Procesado: Shilmar*) e inspección a resolución nativa.
 - **Aceleración por GPU y JIT Dual:** Soporte automático para NVIDIA CUDA mediante CuPy, compilación JIT de CPU multinúcleo con Numba (kernels paralelos LLVM), y conmutación transparente a CPU estándar si no se dispone de librerías aceleradoras.
 - **Aceleración LibRaw Multihilo:** Desentrelazado Bayer paralelo con LibRaw/rawpy y paralelización de tomas maestras de calibración que acelera la integración entre un 20% y 25%.
 - **Estrategias de Memoria Configurables:** Modos automático (umbral del 70% de RAM disponible), memoria RAM intermedia de alta velocidad o volcado temporal a disco SSD para equipos con recursos limitados.
@@ -143,7 +143,7 @@
 ## Estructura del Proyecto
 
 ```text
-apilator/
+astroloom/
 ├── config.json              # Configuración persistente del usuario
 ├── run_app.py               # Punto de entrada de la aplicación
 ├── core/
@@ -200,8 +200,8 @@ apilator/
 
 ### 1. Clonar el repositorio
 ```cmd
-git clone https://github.com/shilmar/apilator.git
-cd apilator
+git clone https://github.com/shilmar/astroloom.git
+cd astroloom
 ```
 
 ### 2. Instalar dependencias

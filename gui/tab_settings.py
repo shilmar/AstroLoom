@@ -1,7 +1,7 @@
 # gui/tab_settings.py
 """
 gui/tab_settings.py - Pestaña de configuración de hardware, rutas de trabajo, herramientas externas y parámetros generales.
-Diseño moderno dividido en 2 columnas: panel de configuración técnica y panel visual de galería con resultados reales de Apilator.
+Diseño moderno dividido en 2 columnas: panel de configuración técnica y panel visual de galería con resultados reales de AstroLoom.
 """
 import os
 from typing import Optional
@@ -23,7 +23,7 @@ SHOWCASE_IMG_PATH = os.path.join(ASSETS_DIR, "showcase_milkyway.jpg")
 
 class ShowcaseViewer(QWidget):
     """
-    Visor interactivo y responsivo para mostrar la fotografía de demostración de Apilator.
+    Visor interactivo y responsivo para mostrar la fotografía de demostración de AstroLoom.
     Mantiene la relación de aspecto original (KeepAspectRatio), escala suavemente
     y aplica bordes redondeados con renderizado antialias.
     """
@@ -361,7 +361,7 @@ class SettingsTab(QWidget):
         lbl_gal_icon.setStyleSheet("font-size: 16px;")
         header_gallery.addWidget(lbl_gal_icon)
 
-        lbl_gal_title = QLabel("Galería de Resultados — Motor Apilator")
+        lbl_gal_title = QLabel("Galería de Resultados — Motor AstroLoom")
         lbl_gal_title.setStyleSheet("font-weight: bold; font-size: 13px; color: #90caf9;")
         header_gallery.addWidget(lbl_gal_title)
         header_gallery.addStretch()
@@ -390,7 +390,7 @@ class SettingsTab(QWidget):
         row_author_title.addWidget(lbl_work_title)
         row_author_title.addStretch()
 
-        self.lbl_engine_badge = QLabel("Apilator v0.8.0")
+        self.lbl_engine_badge = QLabel("AstroLoom v0.8.0")
         self.lbl_engine_badge.setStyleSheet("color: #80d8ff; font-size: 11px; font-weight: bold;")
         row_author_title.addWidget(self.lbl_engine_badge)
 

@@ -49,7 +49,7 @@ def _validate_and_resolve_dir(path: str | None, key: str) -> str:
     """
     default_sub = DEFAULT_SUBDIRS.get(key, "sesiones")
     fallback_app_root = os.path.abspath(os.path.join(APP_ROOT, default_sub))
-    fallback_home = os.path.abspath(os.path.join(os.path.expanduser("~"), "Apilator", default_sub))
+    fallback_home = os.path.abspath(os.path.join(os.path.expanduser("~"), "AstroLoom", default_sub))
 
     # 1. Si está vacía o no es cadena
     if not path or not isinstance(path, str) or not path.strip():
@@ -86,7 +86,7 @@ def _validate_and_resolve_dir(path: str | None, key: str) -> str:
     except (OSError, PermissionError, ValueError) as e:
         print(f"[ConfigManager] Aviso: Fallback APP_ROOT '{fallback_app_root}' no disponible: {e}")
 
-    # 5. Segundo Fallback: Carpeta en el directorio del usuario (~/Apilator/...)
+    # 5. Segundo Fallback: Carpeta en el directorio del usuario (~/AstroLoom/...)
     try:
         os.makedirs(fallback_home, exist_ok=True)
         return fallback_home

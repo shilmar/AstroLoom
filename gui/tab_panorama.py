@@ -982,7 +982,7 @@ class PanoramaTab(QWidget):
         )
 
         try:
-            temp_path = os.path.join(tempfile.gettempdir(), f"apilator_panorama_{int(time.time())}.tif")
+            temp_path = os.path.join(tempfile.gettempdir(), f"astroloom_panorama_{int(time.time())}.tif")
             save_tiff_with_icc(temp_path, img_to_export, compression='zlib', photometric='rgb')
             self.export_to_developer.emit(temp_path)
         except Exception as e:

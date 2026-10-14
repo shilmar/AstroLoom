@@ -714,7 +714,7 @@ class StartrailsTab(QWidget):
         main_layout.addWidget(splitter)
 
     def _apply_styles(self) -> None:
-        """Aplica estilos consistentes con el diseño de Apilator."""
+        """Aplica estilos consistentes con el diseño de AstroLoom."""
         self.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;

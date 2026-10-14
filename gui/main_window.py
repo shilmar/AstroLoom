@@ -1,7 +1,7 @@
 # gui/main_window.py
 """
-gui/main_window.py - Ventana principal contenedora de la aplicación Apilator.
-Coordina las pestañas principales (Apilador, Revelador y Ajustes) y sus señales.
+gui/main_window.py - Ventana principal contenedora de la aplicación AstroLoom.
+Coordina las pestañas principales (Apilador, Revelador, Eclipses, Startrails, Panorámicas y Ajustes).
 """
 from typing import Optional
 from PySide6.QtWidgets import QMainWindow, QTabWidget
@@ -16,9 +16,9 @@ from gui.tab_settings import SettingsTab
 
 
 class MainWindow(QMainWindow):
-    """Ventana principal de la interfaz gráfica de Apilator."""
+    """Ventana principal de la interfaz gráfica de AstroLoom."""
 
-    BASE_TITLE = "Apilator - Astrofotografía de Paisaje (v0.8.0)"
+    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.8.0)"
 
 
     def __init__(self):

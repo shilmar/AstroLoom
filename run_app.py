@@ -1,6 +1,6 @@
 # run_app.py
 """
-run_app.py - Punto de entrada principal para el inicio de Apilator.
+run_app.py - Punto de entrada principal para el inicio de AstroLoom.
 """
 import multiprocessing
 import os

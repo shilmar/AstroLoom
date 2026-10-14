@@ -1,6 +1,6 @@
 # Changelog
 
-Todas las novedades, mejoras y correcciones notables de **Apilator** se documentan en este archivo.
+Todas las novedades, mejoras y correcciones notables de **AstroLoom** (anteriormente *Apilator*) se documentan en este archivo.
 El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
@@ -8,6 +8,8 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 ## [0.8.0] - 2026-10-14
 
 ### Añadido
+* **Evolución y Renombrado Oficial a AstroLoom:**
+  - El proyecto evoluciona formalmente de *Apilator* a **AstroLoom** para reflejar su condición de suite completa y estación de trabajo integral de astrofotografía y paisaje nocturno (apilado con calibración rigurosa, revelador lineal no destructivo a 32-bit con IA, mosaicos panorámicos, circumpolares y secuencias de eclipses).
 * **Nuevo Módulo Dedicado de Composición Panorámica y Mosaicos Nocturnos (Nightscape Stitcher):**
   - Incorporada la nueva pestaña de primer nivel **"6. Panorámicas (Mosaicos)"** en la ventana principal (`gui/tab_panorama.py` y `core/panorama.py`).
   - Desplazamiento armónico de la pestaña de Configuración a posición 7 (*1. Apilador*, *2. Revelador*, *3. Eclipses HDR*, *4. Eclipses Collage*, *5. Trazas de Estrellas*, *6. Panorámicas*, *7. Configuración*).

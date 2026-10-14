@@ -19,7 +19,7 @@ class EclipseCollageDialog(QDialog):
 
     def __init__(self, parent=None, initial_filepaths: Optional[List[str]] = None, mode: str = "solar"):
         super().__init__(parent)
-        self.setWindowTitle("Diseñador de Secuencia y Collage de Eclipses - Apilator")
+        self.setWindowTitle("Diseñador de Secuencia y Collage de Eclipses - AstroLoom")
         self.setMinimumSize(1240, 780)
         self.resize(1380, 840)
 

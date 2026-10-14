@@ -11,7 +11,7 @@ from core.config_manager import load_config
 
 
 class ProjectManager:
-    """Administra la serialización y deserialización de sesiones de trabajo de Apilator."""
+    """Administra la serialización y deserialización de sesiones de trabajo de AstroLoom."""
 
     def __init__(self):
         self.reset()
