@@ -279,6 +279,7 @@ python run_app.py
 [x] Deshacer / Rehacer (Undo / Redo) paramétrico de 50 pasos en el Revelador con botones dedicados y atajos de teclado.
 [x] Conversión cromática matemática exacta (adaptación Bradford D65/D50 y aceleración LUT) en exportación con perfiles ICC (sRGB, Adobe RGB, ProPhoto RGB).
 [x] Auto-reparación y robustez en arranque ante directorios inexistentes con plantilla base config.default.json.
+[x] Diseñador de Secuencia y Collage de Eclipses integrado como Pestaña 4 nativa en la ventana principal con navegación integrada y enlace bidireccional.
 [ ] Anti-parpadeo (Deflicker) y morphing temporal entre fotogramas en Startrails / Time-Lapse.
 [ ] Miniaturas previas (Thumbnails) en las tablas de archivos y estimación de tiempo restante (ETA) en barra de progreso.
 ---
