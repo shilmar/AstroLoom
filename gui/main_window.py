@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QMainWindow, QTabWidget
 from gui.tab_stacker import StackerTab
 from gui.tab_developer import DeveloperTab
 from gui.tab_eclipse import EclipseTab
+from gui.tab_eclipse_collage import EclipseCollageTab
 from gui.tab_startrails import StartrailsTab
 from gui.tab_settings import SettingsTab
 
@@ -33,14 +34,16 @@ class MainWindow(QMainWindow):
         self.tab_stacker = StackerTab()
         self.tab_developer = DeveloperTab()
         self.tab_eclipse = EclipseTab()
+        self.tab_eclipse_collage = EclipseCollageTab()
         self.tab_startrails = StartrailsTab()
         self.tab_settings = SettingsTab()
 
         self.tab_widget.addTab(self.tab_stacker, "1. Apilador (Stacker)")
         self.tab_widget.addTab(self.tab_developer, "2. Revelador / Editor")
-        self.tab_widget.addTab(self.tab_eclipse, "3. Eclipses (Solar / Lunar)")
-        self.tab_widget.addTab(self.tab_startrails, "4. Trazas de Estrellas (Startrails)")
-        self.tab_widget.addTab(self.tab_settings, "5. Configuración / Ajustes")
+        self.tab_widget.addTab(self.tab_eclipse, "3. Eclipses (HDR)")
+        self.tab_widget.addTab(self.tab_eclipse_collage, "4. Eclipses (Collage)")
+        self.tab_widget.addTab(self.tab_startrails, "5. Trazas de Estrellas (Startrails)")
+        self.tab_widget.addTab(self.tab_settings, "6. Configuración / Ajustes")
 
         self.setCentralWidget(self.tab_widget)
 
@@ -53,13 +56,19 @@ class MainWindow(QMainWindow):
         # 3. Actualización dinámica del título según la sesión activa
         self.tab_stacker.session_title_changed.connect(self._update_window_title)
 
-        # 4. Transferencia de imagen desde el módulo de Eclipses al Revelador
+        # 4. Transferencia de imagen desde el módulo de Eclipses (HDR) al Revelador
         self.tab_eclipse.export_to_developer.connect(self._on_eclipse_exported)
 
-        # 5. Transferencia de imagen desde el módulo de Startrails al Revelador
+        # 5. Transferencia de serie desde Eclipses (HDR) al Diseñador de Collage
+        self.tab_eclipse.open_collage_requested.connect(self._on_open_collage_requested)
+
+        # 6. Transferencia de imagen desde el Collage de Eclipses al Revelador
+        self.tab_eclipse_collage.export_to_developer.connect(self._on_eclipse_exported)
+
+        # 7. Transferencia de imagen desde el módulo de Startrails al Revelador
         self.tab_startrails.export_to_developer.connect(self._on_startrail_exported)
 
-        # 6. Proveedor de máscara de horizonte del Apilador para Startrails
+        # 8. Proveedor de máscara de horizonte del Apilador para Startrails
         self.tab_startrails.set_stacker_mask_provider(
             lambda: getattr(self.tab_stacker, "computed_mask", None)
         )
@@ -82,11 +91,22 @@ class MainWindow(QMainWindow):
 
     def _on_eclipse_exported(self, output_path: str) -> None:
         """
-        Transfiere la imagen 32-bit generada en el módulo de Eclipses directamente
+        Transfiere la imagen generada en el módulo de Eclipses (HDR o Collage) directamente
         al Revelador / Editor y conmuta automáticamente a la pestaña 2.
         """
         self.tab_developer.load_image_direct(output_path, mask=None)
         self.tab_widget.setCurrentIndex(1)
+
+    def _on_open_collage_requested(self, filepaths: list, mode: str) -> None:
+        """
+        Carga las tomas en la pestaña 4 (Collage de Eclipses) y conmuta
+        automáticamente a ella.
+        """
+        if mode:
+            self.tab_eclipse_collage.set_mode(mode)
+        if filepaths:
+            self.tab_eclipse_collage.load_filepaths(filepaths)
+        self.tab_widget.setCurrentIndex(3)
 
     def _on_startrail_exported(self, output_path: str) -> None:
         """

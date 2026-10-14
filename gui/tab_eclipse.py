@@ -628,6 +628,7 @@ class EclipseWorker(QThread):
 class EclipseTab(QWidget):
     """Pestaña interactiva de Eclipses (Solar y Lunar)."""
     export_to_developer = Signal(str)
+    open_collage_requested = Signal(list, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -974,11 +975,11 @@ class EclipseTab(QWidget):
         self.btn_send_to_dev.clicked.connect(self._on_send_to_developer_clicked)
         export_layout.addWidget(self.btn_send_to_dev)
 
-        self.btn_open_collage = QPushButton("🎨 Diseñador de Secuencia y Collage...")
+        self.btn_open_collage = QPushButton("🎨 Ir a Pestaña 4: Collage de Eclipses ➡️")
         self.btn_open_collage.setFixedHeight(38)
         self.btn_open_collage.setCursor(Qt.PointingHandCursor)
         self.btn_open_collage.setStyleSheet("font-weight: bold; background: #2e1c4e; color: #e1bee7; border: 1px solid #ba68c8; padding: 6px;")
-        self.btn_open_collage.setToolTip("Abre el diseñador de collage para cribar calidad, seleccionar tomas simétricas y exportar a PSD por capas")
+        self.btn_open_collage.setToolTip("Cambia a la pestaña dedicada de Collage de Eclipses transfiriendo la serie de fotos")
         self.btn_open_collage.clicked.connect(self._on_open_collage_clicked)
         export_layout.addWidget(self.btn_open_collage)
 
@@ -1803,16 +1804,9 @@ class EclipseTab(QWidget):
         return "solar"
 
     def _on_open_collage_clicked(self):
-        """Abre la ventana interactiva del diseñador de secuencia y collage de eclipses."""
-        try:
-            from gui.dialog_eclipse_collage import EclipseCollageDialog
-            initial_fps = [item["filepath"] for item in self.bracketing_files] if hasattr(self, 'bracketing_files') and self.bracketing_files else []
-            dlg = EclipseCollageDialog(parent=self, initial_filepaths=initial_fps, mode=self.mode)
-            dlg.exec()
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            QMessageBox.critical(self, "Error al abrir collage", f"No se pudo abrir el diseñador de collage:\n{e}")
+        """Transfiere los archivos a la pestaña dedicada de Collage y cambia a ella."""
+        initial_fps = [item["filepath"] for item in self.bracketing_files] if hasattr(self, 'bracketing_files') and self.bracketing_files else []
+        self.open_collage_requested.emit(initial_fps, self.mode)
 
 
 

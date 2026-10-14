@@ -16,6 +16,11 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
   - Temporizador de desparasitado inteligente (*debounce* de 500 ms) para desplazamientos continuos de la rueda del ratón o teclas de flecha, evitando saturar la pila de historial.
   - Señal dedicada `curveCommitted` emitida al soltar nodos de control o restablecer curvas tonales.
   - Restauración atómica con bloqueo temporal de señales (`blockSignals(True)`) para prevenir disparos en cascada y actualizar la previsualización en una sola pasada.
+* **Pestaña Dedicada "4. Eclipses (Collage)" en la Ventana Principal:**
+  - Promoción del Diseñador de Secuencia y Collage de Eclipses a pestaña de primer nivel (`EclipseCollageTab` en `gui/tab_eclipse_collage.py`), separando con total claridad el flujo de trabajo de composición temporal del flujo de procesado HDR de corona/limbo.
+  - Reorganización armónica de la barra principal en 6 pestañas: *1. Apilador*, *2. Revelador*, *3. Eclipses (HDR)*, *4. Eclipses (Collage)*, *5. Trazas de Estrellas* y *6. Configuración*.
+  - Enlace bidireccional entre módulos: botón `[ 🎨 Ir a Pestaña 4: Collage de Eclipses ➡️ ]` en la pestaña de Eclipses HDR para transferir la serie de fotos en un clic, y botón `[ ➡️ Enviar Collage al Revelador / Editor ]` en la pestaña de Collage para continuar el ajuste tonal en el Revelador.
+  - Compatibilidad total hacia atrás mantenida en `gui/dialog_eclipse_collage.py`.
 * **Plantilla de Configuración Base Universal (`config.default.json`):**
   - Incorporado fichero base con rutas relativas limpias y seguras para primeras instalaciones o despliegues portables.
 

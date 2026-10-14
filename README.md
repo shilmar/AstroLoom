@@ -134,7 +134,8 @@ apilator/
     ├── canvas.py            # Visor interactivo QGraphicsView acelerado con zoom 1:1 y clipping
     ├── main_window.py       # Ventana principal y gestión de pestañas maestras
     ├── tab_developer.py     # Pestaña de revelado y composición de capas
-    ├── tab_eclipse.py       # Pestaña de procesado integral de eclipses solares y lunares
+    ├── tab_eclipse.py       # Pestaña de procesado integral de eclipses solares y lunares (HDR)
+    ├── tab_eclipse_collage.py # Pestaña dedicada de diseño de secuencias y collage de eclipses
     ├── tab_settings.py      # Pestaña de configuración de rutas, selector ICC y parámetros
     ├── tab_stacker.py       # Pestaña de apilado dual, calibración y máscaras
     ├── tab_startrails.py    # Pestaña de generación de trazas de estrellas (Startrails)
@@ -211,18 +212,27 @@ python run_app.py
 * Ajusta curvas, temperatura de color, tinte y saturación diferencial cielo/suelo.
 * Exporta el resultado final en formato TIFF 16-bit, TIFF 32-bit float o JPEG.
 
-### 3. Flujo de Procesado de Eclipses (Solar / Lunar)
-* Abre la pestaña **3. Eclipses (Solar / Lunar)**.
+### 3. Flujo de Fusión y Procesado de Eclipses (HDR)
+* Abre la pestaña **3. Eclipses (HDR)**.
 * Selecciona la modalidad deseada con el conmutador interactivo (**Solar** o **Lunar**).
 * Pulsa **Cargar Serie de Bracketing** para importar todas las exposiciones (RAW, TIFF o FITS). El sistema leerá automáticamente tiempos de obturación e ISO y ordenará las tomas de menor a mayor exposición.
 * Haz doble clic sobre una toma con buena definición del limbo para fijarla como referencia.
 * Pulsa **Detectar Limbo en Todo el Lote**: el sistema detectará el centro y radio físico en la referencia y optimizará el centro subpíxel (`< 0.1 px`) en cada fotograma del lote manteniendo el radio anclado.
 * Pulsa **Alinear y Fusionar Bracketing (HDR)** para generar el compuesto lineal de 32 bits con compresión Asinh.
 * Ajusta los parámetros del filtro **NRGF**: alcance de la corona (por defecto 3.5x), mezcla de filamentos (50%) y filtro tangencial para estirar y contrastar los filamentos coronales sin quemar las protuberancias.
-* Pulsa **Guardar TIFF 16-bit** para abrir directamente en Photoshop/Lightroom sin cuadros de diálogo de mapeo de tono, **Guardar TIFF 32-bit** para procesado HDR de alta fidelidad, o envíalo directamente al **Revelador / Editor**.
+* Pulsa **Guardar TIFF 16-bit** para abrir directamente en Photoshop/Lightroom sin cuadros de diálogo de mapeo de tono, **Guardar TIFF 32-bit** para procesado HDR de alta fidelidad, o envíalo directamente al **Revelador / Editor**. También puedes pulsar **Ir a Pestaña 4: Collage de Eclipses ➡️** para transferir la serie de fotos.
 
-### 4. Flujo de Creación de Trazas de Estrellas (Startrails)
-* Abre la pestaña **4. Trazas de Estrellas (Startrails)**.
+### 4. Flujo de Secuencia y Collage de Eclipses
+* Abre la pestaña **4. Eclipses (Collage)**.
+* Pulsa **📁 Cargar Fotos...** (o arrastra y suelta imágenes o carpetas) para importar la serie temporal del eclipse (C1 a C4).
+* Elige entre **⚡ Modo Rápido (Half-size RAW 4x)** para máxima velocidad de cribado o **🎯 Modo Precisión 1:1**, y pulsa **🔍 Analizar Calidad y % Ocultación en Lote**.
+* Selecciona el número deseado de fotogramas (ej. 9 fases) y pulsa **⚡ Auto-Seleccionar Mejores Tomas** para descartar automáticamente tomas movidas o trepidadas y elegir una progresión simétrica óptima.
+* Configura la **Modalidad de Maquetación**: *Cinta Horizontal*, *Escala Romboide (<>)*, *Arco Celeste* o *Cuadrícula*, ajustando el espaciado entre discos, la escala del centro/totalidad y el margen circular anti-recorte de corona.
+* Activa opcionalmente las marcas horarias EXIF y pulsa **🔄 Actualizar Composición / Collage** para previsualizar en tiempo real en el visor interactivo (con zoom dinámico de rueda y paneo).
+* Exporta el resultado en **PSD multicapa de 16 bits para Photoshop** (con capa independiente de textos EXIF), guarda en **TIFF/JPG**, guarda la sesión en **.ecollage**, o pulsa **➡️ Enviar Collage al Revelador / Editor**.
+
+### 5. Flujo de Creación de Trazas de Estrellas (Startrails)
+* Abre la pestaña **5. Trazas de Estrellas (Startrails)**.
 * Pulsa **📁 Cargar Serie...** y selecciona la secuencia temporal completa de tomas fijas (RAW, TIFF, FITS o JPG).
 * (Opcional) Pulsa **📌 Marcar REF** sobre la toma que servirá de encuadre o para el suelo de referencia.
 * (Opcional) Pulsa **Añadir Darks...** para sustraer el ruido térmico y píxeles calientes.
