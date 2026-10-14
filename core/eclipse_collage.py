@@ -116,10 +116,10 @@ def measure_limb_sharpness_and_shake(
 
     # 1. Recorte ajustado en torno al disco/creciente con margen de seguridad del 35%
     margin = radius * 1.35
-    x0 = int(max(0, cx - margin))
-    x1 = int(min(w, cx + margin))
-    y0 = int(max(0, cy - margin))
-    y1 = int(min(h, cy + margin))
+    x0 = int(np.clip(cx - margin, 0, w))
+    x1 = int(np.clip(cx + margin, 0, w))
+    y0 = int(np.clip(cy - margin, 0, h))
+    y1 = int(np.clip(cy + margin, 0, h))
 
     if (x1 - x0) < 15 or (y1 - y0) < 15:
         return 0.0, True
@@ -172,11 +172,14 @@ def calculate_solar_obscuration_pct(
         return 100.0
 
     h, w = gray_img.shape[:2]
-    # Recuadro envolvente del disco
-    x0 = int(max(0, cx - radius * 1.25))
-    x1 = int(min(w, cx + radius * 1.25))
-    y0 = int(max(0, cy - radius * 1.25))
-    y1 = int(min(h, cy + radius * 1.25))
+    # Recuadro envolvente del disco con recorte seguro
+    x0 = int(np.clip(cx - radius * 1.25, 0, w))
+    x1 = int(np.clip(cx + radius * 1.25, 0, w))
+    y0 = int(np.clip(cy - radius * 1.25, 0, h))
+    y1 = int(np.clip(cy + radius * 1.25, 0, h))
+
+    if x1 <= x0 or y1 <= y0:
+        return 100.0
 
     crop = gray_img[y0:y1, x0:x1]
     if crop.size == 0:
@@ -202,6 +205,185 @@ def calculate_solar_obscuration_pct(
     # Ratio de sol tapado por la Luna
     covered_ratio = max(0.0, min(1.0, 1.0 - (visible_pixels / max(1.0, theoretical_pixels))))
     return float(covered_ratio * 100.0)
+
+
+def classify_contact_phenomenon(
+    gray_img: np.ndarray, 
+    cx: float, 
+    cy: float, 
+    radius: float, 
+    is_ingress: bool, 
+    obscuration: float
+) -> str:
+    """
+    Analiza fotométricamente el perfil angular del limbo (360 grados) para identificar
+    con precisión fenómenos de contacto singulares:
+      - 💎 Anillo de Diamante (Diamond Ring) en C2 (ingreso) o C3 (egreso):
+        Un único destello fotosférico ultrabrillante y concentrado en un arco angular estrecho (<= 65°).
+      - 📿 Perlas de Baily (Baily's Beads) en C2 o C3:
+        Múltiples cuentas o perlas luminosas desconectadas a lo largo del relieve lunar en el limbo.
+      - TOTALIDAD / Máximo:
+        Ausencia de fotosfera brillante directa, presencia de corona o disco completamente oculto.
+      - Parcial C1-C2 / C3-C4:
+        Creciente continuo clásico.
+    """
+    h, w = gray_img.shape[:2]
+    c_suffix = "C2" if is_ingress else "C3"
+
+    if radius < 15 or cx < 0 or cx >= w or cy < 0 or cy >= h:
+        if obscuration >= 98.5:
+            return f"TOTALIDAD ({obscuration:.0f}%)"
+        return f"Entrada C1-C2 ({obscuration:.0f}%)" if is_ingress else f"Salida C3-C4 ({obscuration:.0f}%)"
+
+    # Muestreo radial anular en 360 rayos angulares alrededor del limbo
+    num_angles = 360
+    angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
+
+    # Barrido radial de 5 puntos en la corona del limbo [R-2.5, R+2.5]
+    r_offsets = np.linspace(-2.5, 2.5, 5)
+    sampled = []
+    for ro in r_offsets:
+        r = radius + ro
+        xs = np.clip(np.round(cx + r * np.cos(angles)).astype(int), 0, w - 1)
+        ys = np.clip(np.round(cy + r * np.sin(angles)).astype(int), 0, h - 1)
+        sampled.append(gray_img[ys, xs])
+
+    limb_profile = np.max(np.array(sampled), axis=0)
+    max_val = float(np.max(limb_profile))
+
+    # Si la fotosfera no está visible (brillo máximo bajo o totalidad plena sin destello)
+    if (obscuration >= 98.0 and max_val < 0.40) or (obscuration >= 99.5 and max_val < 0.60):
+        return f"TOTALIDAD ({obscuration:.0f}%)"
+    if obscuration < 90.0:
+        return f"Entrada C1-C2 ({obscuration:.0f}%)" if is_ingress else f"Salida C3-C4 ({obscuration:.0f}%)"
+
+    # Umbral fotométrico para aislar la fotosfera brillante
+    thresh = max(0.35, max_val * 0.50)
+    bright_mask = limb_profile > thresh
+    bright_count = int(np.sum(bright_mask))
+
+    if bright_count == 0:
+        return f"TOTALIDAD ({obscuration:.0f}%)"
+
+    # Encontrar componentes continuas de ángulos brillantes (con cierre circular 360°)
+    components = []
+    in_comp = False
+    comp_start = 0
+    for i in range(num_angles):
+        if bright_mask[i]:
+            if not in_comp:
+                in_comp = True
+                comp_start = i
+        else:
+            if in_comp:
+                in_comp = False
+                components.append((comp_start, i - 1))
+    if in_comp:
+        components.append((comp_start, num_angles - 1))
+
+    # Conectar componentes que cruzan el origen angular (0° y 359°)
+    if len(components) > 1 and components[0][0] == 0 and components[-1][1] == num_angles - 1:
+        merged = (components[-1][0], components[0][1])
+        components = components[1:-1] + [merged]
+
+    num_beads = len(components)
+
+    if num_beads == 1:
+        start, end = components[0]
+        span = (end - start + 1) if end >= start else (num_angles - start + end + 1)
+        # Anillo de Diamante: destello único y concentrado (span <= 65°), fotosfera muy intensa
+        if span <= 65 and (obscuration >= 95.0 or max_val > 0.85):
+            return f"💎 Anillo de Diamante ({c_suffix})"
+        elif span <= 80 and obscuration >= 93.0:
+            return f"📿 Perlas de Baily ({c_suffix})"
+    elif num_beads >= 2 and obscuration >= 91.0:
+        return f"📿 Perlas de Baily ({c_suffix})"
+
+    if obscuration >= 98.0:
+        return f"TOTALIDAD ({obscuration:.0f}%)"
+    elif is_ingress:
+        return f"Entrada C1-C2 ({obscuration:.0f}%)"
+    else:
+        return f"Salida C3-C4 ({obscuration:.0f}%)"
+
+
+def _refine_and_classify_frame(
+    meta: EclipseFrameMetadata,
+    median_radius: float,
+    is_ingress: bool,
+    mode: str = "solar",
+    fast_mode: bool = True,
+    expected_center: Optional[Tuple[float, float]] = None
+) -> EclipseFrameMetadata:
+    """
+    Segunda pasada de refinamiento geométrico y fotométrico:
+    Re-evalúa el centro con radio exacto (median_radius) y trayectoria temporal anclada (expected_center)
+    para anular desplazamientos en crescentes y anillo de diamante, y clasifica el fenómeno de contacto (Baily/Diamante).
+    """
+    scale_factor = 1.0
+    ext = os.path.splitext(meta.filepath)[1].lower()
+
+    try:
+        if ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw']:
+            import rawpy
+            with rawpy.imread(meta.filepath) as raw:
+                if fast_mode:
+                    rgb_u8 = raw.postprocess(
+                        half_size=True,
+                        use_camera_wb=True,
+                        no_auto_bright=True,
+                        output_bps=8
+                    )
+                    scale_factor = 2.0
+                else:
+                    rgb_u8 = raw.postprocess(
+                        half_size=False,
+                        use_camera_wb=True,
+                        no_auto_bright=True,
+                        output_bps=8
+                    )
+                    scale_factor = 1.0
+                gray = cv2.cvtColor(rgb_u8, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+        else:
+            img_bgr = cv2.imread(meta.filepath)
+            if img_bgr is None:
+                from core.stacking import load_image_as_float32
+                raw_f32 = load_image_as_float32(meta.filepath)
+                gray = cv2.cvtColor(raw_f32, cv2.COLOR_RGB2GRAY)
+            else:
+                gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+            scale_factor = 1.0
+
+        exp_r = (median_radius / scale_factor) if (median_radius and median_radius > 10) else None
+        exp_c = (expected_center[0] / scale_factor, expected_center[1] / scale_factor) if expected_center is not None else None
+        det_cx, det_cy, det_r = detect_eclipse_disk(gray, mode=mode, expected_radius=exp_r, expected_center=exp_c)
+
+        # Anclaje de seguridad: si el centro detectado salta más de 30 px respecto a la trayectoria temporal esperada,
+        # anclar directamente a expected_center
+        if expected_center is not None:
+            full_cx = det_cx * scale_factor
+            full_cy = det_cy * scale_factor
+            if np.hypot(full_cx - expected_center[0], full_cy - expected_center[1]) > 30.0:
+                det_cx = expected_center[0] / scale_factor
+                det_cy = expected_center[1] / scale_factor
+
+        sharpness, is_trep = measure_limb_sharpness_and_shake(gray, det_cx, det_cy, det_r)
+        obscuration = calculate_solar_obscuration_pct(gray, det_cx, det_cy, det_r)
+        phase = classify_contact_phenomenon(gray, det_cx, det_cy, det_r, is_ingress, obscuration)
+
+        meta.center_x = float(det_cx * scale_factor)
+        meta.center_y = float(det_cy * scale_factor)
+        meta.radius = float(median_radius)
+        meta.sharpness_score = sharpness
+        meta.is_trepidated = is_trep
+        meta.obscuration_pct = obscuration
+        meta.is_ingress = is_ingress
+        meta.phase_label = phase
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Error en refinamiento de {meta.filename}: {e}")
+
+    return meta
 
 
 def analyze_eclipse_frame(
@@ -316,6 +498,7 @@ def batch_analyze_eclipse_series(
     max_workers: Optional[int] = None,
     fast_mode: bool = True,
     callback_progress: Optional[Callable[[int, int, str], None]] = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
     is_cancelled_fn: Optional[Callable[[], bool]] = None
 ) -> List[EclipseFrameMetadata]:
     """
@@ -323,6 +506,7 @@ def batch_analyze_eclipse_series(
     Ordena cronológicamente por EXIF, identifica el punto de máxima totalidad
     y clasifica las fases de entrada (ingreso) y salida (egreso).
     """
+    callback_progress = callback_progress or progress_callback
     results: List[EclipseFrameMetadata] = []
     total = len(filepaths)
     if total == 0:
@@ -394,18 +578,95 @@ def batch_analyze_eclipse_series(
         max_m = max(results, key=lambda m: m.obscuration_pct)
         t_peak = max_m.timestamp
 
-    # 5. Clasificar entrada vs totalidad vs salida basado en la física temporal del eclipse
+    # 5. Clasificar preliminarmente entrada vs totalidad vs salida basado en la física temporal del eclipse
     for m in results:
         dt = m.timestamp - t_peak
+        is_in = (dt <= 0)
+        m.is_ingress = is_in
         if abs(dt) <= 25.0 or m.obscuration_pct >= 98.0:
-            m.is_ingress = True
             m.phase_label = f"TOTALIDAD ({m.obscuration_pct:.0f}%)"
         elif dt < 0:
-            m.is_ingress = True
             m.phase_label = f"Entrada C1-C2 ({m.obscuration_pct:.0f}%)"
         else:
-            m.is_ingress = False
             m.phase_label = f"Salida C3-C4 ({m.obscuration_pct:.0f}%)"
+
+    # 6. Construir anclas de trayectoria temporal para el centro (cx, cy vs timestamp)
+    anchors: List[Tuple[float, float, float]] = []  # (timestamp, cx, cy)
+    for m in results:
+        if m.center_x > 0 and m.center_y > 0 and m.radius > 20:
+            if m.obscuration_pct >= 95.0 or (t_peak > 0 and abs(m.timestamp - t_peak) <= 60.0):
+                anchors.append((m.timestamp, m.center_x, m.center_y))
+
+    if len(anchors) < 2:
+        for m in results:
+            if m.center_x > 0 and m.center_y > 0:
+                anchors.append((m.timestamp, m.center_x, m.center_y))
+
+    anchors.sort(key=lambda a: a[0])
+
+    def get_expected_center(ts: float, default_cx: float, default_cy: float) -> Tuple[float, float]:
+        if not anchors:
+            return default_cx, default_cy
+        before = [a for a in anchors if a[0] <= ts]
+        after = [a for a in anchors if a[0] >= ts]
+        if before and after:
+            a_b = before[-1]
+            a_a = after[0]
+            dt = a_a[0] - a_b[0]
+            if dt > 1e-4:
+                frac = (ts - a_b[0]) / dt
+                cx_exp = a_b[1] + frac * (a_a[1] - a_b[1])
+                cy_exp = a_b[2] + frac * (a_a[2] - a_b[2])
+                return float(cx_exp), float(cy_exp)
+            return float(a_b[1]), float(a_b[2])
+        elif before:
+            return float(before[-1][1]), float(before[-1][2])
+        elif after:
+            return float(after[0][1]), float(after[0][2])
+        return default_cx, default_cy
+
+    # 7. Segunda pasada (Pass 2): Refinamiento geométrico y fotométrico de precisión
+    # Re-evalúa con radio exacto median_radius fotogramas críticos (alta ocultación >= 80% o ventana temporal de contacto)
+    critical_indices = [
+        i for i, m in enumerate(results)
+        if m.obscuration_pct >= 80.0 or (t_peak > 0 and abs(m.timestamp - t_peak) <= 90.0)
+    ]
+
+    if critical_indices:
+        if max_workers == 1 or len(critical_indices) == 1:
+            for idx in critical_indices:
+                m = results[idx]
+                is_in = (m.timestamp <= t_peak)
+                exp_c = get_expected_center(m.timestamp, m.center_x, m.center_y)
+                results[idx] = _refine_and_classify_frame(
+                    m, 
+                    median_radius, 
+                    is_in, 
+                    mode=mode, 
+                    fast_mode=fast_mode, 
+                    expected_center=exp_c
+                )
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_idx = {
+                    executor.submit(
+                        _refine_and_classify_frame, 
+                        results[idx], 
+                        median_radius, 
+                        (results[idx].timestamp <= t_peak), 
+                        mode, 
+                        fast_mode,
+                        get_expected_center(results[idx].timestamp, results[idx].center_x, results[idx].center_y)
+                    ): idx
+                    for idx in critical_indices
+                }
+                for fut in as_completed(future_to_idx):
+                    idx = future_to_idx[fut]
+                    try:
+                        results[idx] = fut.result()
+                    except Exception:
+                        pass
 
     return results
 
@@ -416,11 +677,15 @@ def recommend_key_frames(
     min_sharpness: float = 50.0
 ) -> List[EclipseFrameMetadata]:
     """
-    Recomendador inteligente de fases:
-    1. Agrupa ráfagas de bracketing tomadas en el mismo instante (<= 3 segundos).
+    Recomendador inteligente de fases de eclipse:
+    1. Agrupa ráfagas continuas de bracketing (<= 1.5s de la misma categoría de fase).
     2. En cada ráfaga, selecciona el fotograma óptimo (mayor nitidez sin trepidación).
-    3. Distribuye simétricamente las fases objetivo: Entrada, Totalidad central y Salida.
-    4. Garantiza ordenación 100% cronológica sin saltos temporales ni fases duplicadas.
+    3. Ancla la Totalidad central.
+    4. Detecta y prioriza fenómenos de contacto singulares:
+       - 💎 Anillo de Diamante (C2 / C3)
+       - 📿 Perlas de Baily (C2 / C3)
+    5. Distribuye simétricamente las fases parciales de Entrada y Salida.
+    6. Garantiza ordenación 100% cronológica sin duplicados ni saltos.
     """
     if not frames:
         return []
@@ -434,11 +699,24 @@ def recommend_key_frames(
             f.is_recommended = True
         return frames
 
-    # 1. Agrupar en eventos / ráfagas temporales (<= 3.0 segundos)
+    def get_phase_category(label: str) -> str:
+        if "TOTALIDAD" in label:
+            return "totality"
+        if "Diamante" in label:
+            return "diamond"
+        if "Baily" in label:
+            return "baily"
+        return "partial"
+
+    # 1. Agrupar en eventos / ráfagas temporales (<= 1.5s y misma categoría)
     bursts: List[List[EclipseFrameMetadata]] = []
     current_burst = [frames[0]]
     for f in frames[1:]:
-        if abs(f.timestamp - current_burst[-1].timestamp) <= 3.0:
+        same_burst = (
+            abs(f.timestamp - current_burst[-1].timestamp) <= 1.5
+            and get_phase_category(f.phase_label) == get_phase_category(current_burst[-1].phase_label)
+        )
+        if same_burst:
             current_burst.append(f)
         else:
             bursts.append(current_burst)
@@ -451,80 +729,127 @@ def recommend_key_frames(
             score = m.sharpness_score
             if m.is_trepidated:
                 score -= 40.0
-            if 0.0003 <= m.exp_time <= 0.05:
-                score += 10.0
+            is_contact = ("Diamante" in m.phase_label or "Baily" in m.phase_label or "TOTALIDAD" in m.phase_label)
+            if is_contact:
+                # Para totalidad o fenómenos de contacto, priorizar tomas donde la corona y el limbo
+                # son visibles conjuntamente (0.003s a 0.05s) frente a subexposiciones extremas (<0.001s)
+                if 0.003 <= m.exp_time <= 0.05:
+                    score += 25.0
+                elif m.exp_time < 0.001:
+                    score -= 15.0
+            else:
+                if 0.0003 <= m.exp_time <= 0.05:
+                    score += 10.0
             return score
         return max(burst_list, key=burst_score)
 
     burst_reps = [pick_best_in_burst(b) for b in bursts]
 
-    # 3. Localizar el instante central de Totalidad
-    tot_reps = [m for m in burst_reps if "TOTALIDAD" in m.phase_label or m.obscuration_pct >= 95.0]
+    # 3. Localizar el fotograma central de Totalidad
+    tot_reps = [m for m in burst_reps if "TOTALIDAD" in m.phase_label or m.obscuration_pct >= 99.0]
     if tot_reps:
-        t_peak = float(np.median([m.timestamp for m in tot_reps]))
         tot_best = max(tot_reps, key=lambda m: (not m.is_trepidated, m.sharpness_score))
+        t_peak = tot_best.timestamp
     else:
         tot_best = max(burst_reps, key=lambda m: m.obscuration_pct)
         t_peak = tot_best.timestamp
 
-    # 4. Dividir las ráfagas en Entrada, Totalidad y Salida
-    ingress_reps = [m for m in burst_reps if m.timestamp < t_peak - 20.0 and m != tot_best]
-    egress_reps = [m for m in burst_reps if m.timestamp > t_peak + 20.0 and m != tot_best]
-
     selected: List[EclipseFrameMetadata] = [tot_best]
-    rem = num_targets - 1
+    used_fps = {tot_best.filepath}
+
+    def contact_score(m: EclipseFrameMetadata) -> float:
+        score = m.sharpness_score - (30.0 if m.is_trepidated else 0.0)
+        if 0.003 <= m.exp_time <= 0.05:
+            score += 15.0
+        return score
+
+    # 4. Localizar candidatos a fenómenos de contacto (C2 antes de t_peak, C3 después de t_peak)
+    c2_diamond = [m for m in burst_reps if "Diamante" in m.phase_label and m.timestamp < t_peak and m.filepath not in used_fps]
+    c2_baily = [m for m in burst_reps if "Baily" in m.phase_label and m.timestamp < t_peak and m.filepath not in used_fps]
+    c3_diamond = [m for m in burst_reps if "Diamante" in m.phase_label and m.timestamp > t_peak and m.filepath not in used_fps]
+    c3_baily = [m for m in burst_reps if "Baily" in m.phase_label and m.timestamp > t_peak and m.filepath not in used_fps]
+
+    contact_picks: List[EclipseFrameMetadata] = []
+    # Para collage de 5 o más tomas, incluir al menos 1 fenómeno de contacto a cada lado de la totalidad si existe
+    if num_targets >= 5:
+        if c2_diamond:
+            pick = max(c2_diamond, key=contact_score)
+            contact_picks.append(pick)
+            used_fps.add(pick.filepath)
+        elif c2_baily:
+            pick = max(c2_baily, key=contact_score)
+            contact_picks.append(pick)
+            used_fps.add(pick.filepath)
+
+        if c3_diamond:
+            pick = max(c3_diamond, key=contact_score)
+            contact_picks.append(pick)
+            used_fps.add(pick.filepath)
+        elif c3_baily:
+            pick = max(c3_baily, key=contact_score)
+            contact_picks.append(pick)
+            used_fps.add(pick.filepath)
+
+    # Para collages amplios (>= 9 tomas), añadir también el segundo fenómeno de contacto si está disponible
+    if num_targets >= 9:
+        for cand_list in (c2_baily, c3_baily, c2_diamond, c3_diamond):
+            avail = [m for m in cand_list if m.filepath not in used_fps]
+            if avail and len(selected) + len(contact_picks) < num_targets - 2:
+                pick = max(avail, key=contact_score)
+                contact_picks.append(pick)
+                used_fps.add(pick.filepath)
+
+    selected.extend(contact_picks)
+
+    # 5. Huecos restantes para fases parciales de Entrada y Salida
+    rem = num_targets - len(selected)
     flank_in = rem // 2
     flank_out = rem - flank_in
 
-    # Selección en Entrada: distribución equilibrada en tiempo / progresión de eclipse
+    ingress_reps = [m for m in burst_reps if m.timestamp < t_peak and m.filepath not in used_fps]
+    egress_reps = [m for m in burst_reps if m.timestamp > t_peak and m.filepath not in used_fps]
+
+    # Distribución homogénea en Entrada
     if ingress_reps and flank_in > 0:
-        target_obscs = np.linspace(15.0, 92.0, flank_in)
-        used_fps = {tot_best.filepath}
+        target_obscs = np.linspace(15.0, 90.0, flank_in)
         for tobsc in target_obscs:
-            best_m = None
-            best_cost = 999999.0
-            for m in ingress_reps:
-                if m.filepath in used_fps:
-                    continue
-                cost = abs(m.obscuration_pct - tobsc) * 2.0 - (m.sharpness_score * 0.4) + (35.0 if m.is_trepidated else 0.0)
-                if cost < best_cost:
-                    best_cost = cost
-                    best_m = m
-            if best_m is not None:
-                used_fps.add(best_m.filepath)
-                selected.append(best_m)
+            avail = [m for m in ingress_reps if m.filepath not in used_fps]
+            if not avail:
+                break
+            best_m = min(
+                avail, 
+                key=lambda m: abs(m.obscuration_pct - tobsc) * 2.0 - (m.sharpness_score * 0.4) + (35.0 if m.is_trepidated else 0.0)
+            )
+            used_fps.add(best_m.filepath)
+            selected.append(best_m)
 
-    # Selección en Salida: distribución equilibrada en tiempo / progresión de eclipse
+    # Distribución homogénea en Salida
     if egress_reps and flank_out > 0:
-        target_obscs = np.linspace(92.0, 15.0, flank_out)
-        used_fps = {s.filepath for s in selected}
+        target_obscs = np.linspace(90.0, 15.0, flank_out)
         for tobsc in target_obscs:
-            best_m = None
-            best_cost = 999999.0
-            for m in egress_reps:
-                if m.filepath in used_fps:
-                    continue
-                cost = abs(m.obscuration_pct - tobsc) * 2.0 - (m.sharpness_score * 0.4) + (35.0 if m.is_trepidated else 0.0)
-                if cost < best_cost:
-                    best_cost = cost
-                    best_m = m
-            if best_m is not None:
-                used_fps.add(best_m.filepath)
-                selected.append(best_m)
+            avail = [m for m in egress_reps if m.filepath not in used_fps]
+            if not avail:
+                break
+            best_m = min(
+                avail, 
+                key=lambda m: abs(m.obscuration_pct - tobsc) * 2.0 - (m.sharpness_score * 0.4) + (35.0 if m.is_trepidated else 0.0)
+            )
+            used_fps.add(best_m.filepath)
+            selected.append(best_m)
 
-    # Si faltan fotogramas para completar num_targets
+    # Rellenar si todavía faltan fotogramas para num_targets
     if len(selected) < num_targets:
-        selected_fps = {s.filepath for s in selected}
-        remaining_cands = [m for m in burst_reps if m.filepath not in selected_fps]
+        remaining_cands = [m for m in burst_reps if m.filepath not in used_fps]
         remaining_cands.sort(key=lambda m: (m.is_trepidated, -m.sharpness_score))
-        needed = num_targets - len(selected)
-        selected.extend(remaining_cands[:needed])
+        for m in remaining_cands[:num_targets - len(selected)]:
+            selected.append(m)
+            used_fps.add(m.filepath)
 
+    # 6. Ordenación 100% cronológica estricta
+    selected.sort(key=lambda m: (m.timestamp if m.timestamp > 0 else 0, m.filename))
     for m in selected:
         m.is_recommended = True
 
-    # Garantizar ordenación cronológica estricta de la selección
-    selected.sort(key=lambda m: (m.timestamp if m.timestamp > 0 else 0, m.filename))
     return selected
 
 
@@ -613,8 +938,7 @@ def _extract_single_tile_item(item):
     """Función auxiliar para extracción concurrente de tiles de eclipse."""
     idx, f, scale_mod, target_disk_radius, crop_margin_factor, fast_preview, cache_key = item
     eff_radius = int(target_disk_radius * scale_mod)
-    is_high_obscuration = (f.obscuration_pct >= 85.0)
-    m_factor = max(crop_margin_factor * 1.35, 2.10) if is_high_obscuration else crop_margin_factor
+    m_factor = crop_margin_factor
 
     ext = os.path.splitext(f.filepath)[1].lower()
     if fast_preview and ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw']:
@@ -702,7 +1026,7 @@ def compute_collage_layout(
             scales.append(sc)
     else:
         for f in selected_frames:
-            is_tot = (f.obscuration_pct >= 95.0)
+            is_tot = (f.obscuration_pct >= 95.0) or ("Diamante" in f.phase_label) or ("Baily" in f.phase_label) or ("TOTALIDAD" in f.phase_label)
             sc = totality_scale if is_tot else 1.0
             scales.append(sc)
 
@@ -713,9 +1037,9 @@ def compute_collage_layout(
     for idx, f in enumerate(selected_frames):
         scale_mod = scales[idx]
         eff_radius = int(target_disk_radius * scale_mod)
-        is_high_obscuration = (f.obscuration_pct >= 85.0)
-        m_factor = max(crop_margin_factor * 1.35, 2.10) if is_high_obscuration else crop_margin_factor
-        cache_key = (f.filepath, eff_radius, round(m_factor, 2), fast_preview)
+        m_factor = crop_margin_factor
+        cache_key = (f.filepath, eff_radius, round(m_factor, 2), round(f.center_x, 1), round(f.center_y, 1), fast_preview)
+
 
         if cached_tiles is not None and cache_key in cached_tiles:
             cached_rgb, cached_alpha = cached_tiles[cache_key]
@@ -890,16 +1214,38 @@ def render_flat_collage(
 
         canvas[t:b, l:r] = canvas[t:b, l:r] * (1.0 - alpha_crop) + tile_crop * alpha_crop
 
-        if draw_captions:
-            text = f"{p.frame_meta.time_str}"
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.45
-            thickness = 1
-            (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
-            tx = int(p.left + (p.width - tw) // 2)
-            ty = int(min(canvas_h - 15, p.top + p.height + 20))
-            if 0 <= tx < canvas_w and 0 <= ty < canvas_h:
-                cv2.putText(canvas, text, (tx, ty), font, font_scale, (0.75, 0.75, 0.75), thickness, cv2.LINE_AA)
+    if draw_captions and placements:
+        avg_h = float(np.mean([p.height for p in placements]))
+        centers_y = [p.top + p.height / 2.0 for p in placements]
+        is_single_row = (max(centers_y) - min(centers_y)) < (avg_h * 0.35)
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.45
+        thickness = 1
+
+        # Contraste adaptativo automático según luminancia del fondo
+        lum = 0.299 * bg_color[0] + 0.587 * bg_color[1] + 0.114 * bg_color[2]
+        cap_color = (0.15, 0.15, 0.15) if lum > 0.55 else (0.85, 0.85, 0.85)
+
+        if is_single_row:
+            # En composiciones horizontales (panorámica y romboidal), todas las marcas alinean a la misma base
+            baseline_y = min(canvas_h - 15, max(p.top + p.height for p in placements) + 22)
+            for p in placements:
+                text = f"{p.frame_meta.time_str}"
+                (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
+                tx = int(p.left + (p.width - tw) // 2)
+                ty = int(baseline_y)
+                if 0 <= tx < canvas_w and 0 <= ty < canvas_h:
+                    cv2.putText(canvas, text, (tx, ty), font, font_scale, cap_color, thickness, cv2.LINE_AA)
+        else:
+            # En arco o cuadrícula, alinear en relación a cada fase
+            for p in placements:
+                text = f"{p.frame_meta.time_str}"
+                (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
+                tx = int(p.left + (p.width - tw) // 2)
+                ty = int(min(canvas_h - 15, p.top + p.height + 20))
+                if 0 <= tx < canvas_w and 0 <= ty < canvas_h:
+                    cv2.putText(canvas, text, (tx, ty), font, font_scale, cap_color, thickness, cv2.LINE_AA)
 
     return np.clip(canvas, 0.0, 1.0).astype(np.float32)
 
@@ -909,7 +1255,7 @@ def export_layered_psd(
     canvas_w: int,
     canvas_h: int,
     placements: List[LayerPlacement],
-    bg_color: Tuple[int, int, int] = (0, 0, 0),
+    bg_color: Tuple[float, float, float] = (0.0, 0.0, 0.0),
     depth: int = 16,
     include_captions: bool = True
 ) -> bool:
@@ -929,7 +1275,7 @@ def export_layered_psd(
         bottom=canvas_h,
         left=0,
         right=canvas_w,
-        name="Fondo Negro",
+        name="Fondo Lienzo",
         opacity=255,
         blend_mode=psd_enums.BlendMode.normal
     )
@@ -941,16 +1287,23 @@ def export_layered_psd(
         max_v = 255
         dtype = np.uint8
 
-    # Canal sólido de fondo
-    bg_r = np.full((canvas_h, canvas_w), int(bg_color[0] * (max_v / 255.0)), dtype=dtype)
-    bg_g = np.full((canvas_h, canvas_w), int(bg_color[1] * (max_v / 255.0)), dtype=dtype)
-    bg_b = np.full((canvas_h, canvas_w), int(bg_color[2] * (max_v / 255.0)), dtype=dtype)
+    # Canal sólido de fondo (admite valores float [0.0, 1.0] o int [0, 255])
+    def _to_norm(c: float) -> float:
+        return (c / 255.0) if c > 1.0 else max(0.0, min(1.0, float(c)))
+    norm_r = _to_norm(bg_color[0])
+    norm_g = _to_norm(bg_color[1])
+    norm_b = _to_norm(bg_color[2])
+
+    bg_r = np.full((canvas_h, canvas_w), int(norm_r * max_v), dtype=dtype)
+    bg_g = np.full((canvas_h, canvas_w), int(norm_g * max_v), dtype=dtype)
+    bg_b = np.full((canvas_h, canvas_w), int(norm_b * max_v), dtype=dtype)
 
     bg_layer.channels = {
         0: psd_layers.ChannelImageData(image=bg_r, compression=psd_enums.Compression.raw),
         1: psd_layers.ChannelImageData(image=bg_g, compression=psd_enums.Compression.raw),
         2: psd_layers.ChannelImageData(image=bg_b, compression=psd_enums.Compression.raw)
     }
+
     psd.layer_and_mask_info.layer_info.layer_records.append(bg_layer)
 
     # 2. Capas de cada fase del eclipse
@@ -1021,13 +1374,28 @@ def export_layered_psd(
         font_scale = max(0.40, min(1.20, (canvas_w / 3840.0) * 0.70))
         thickness = max(1, int(round(font_scale * 1.8)))
 
-        for p in placements:
-            text = f"{p.frame_meta.time_str}"
-            (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
-            tx = int(p.left + (p.width - tw) // 2)
-            ty = int(min(canvas_h - 15, p.top + p.height + int(28 * (canvas_w / 3840.0))))
-            if 0 <= tx < canvas_w and 0 <= ty < canvas_h:
-                cv2.putText(text_mask, text, (tx, ty), font, font_scale, 255, thickness, cv2.LINE_AA)
+        avg_h = float(np.mean([p.height for p in placements]))
+        centers_y = [p.top + p.height / 2.0 for p in placements]
+        is_single_row = (max(centers_y) - min(centers_y)) < (avg_h * 0.35)
+        offset_y = int(28 * (canvas_w / 3840.0))
+
+        if is_single_row:
+            baseline_y = min(canvas_h - 15, max(p.top + p.height for p in placements) + offset_y)
+            for p in placements:
+                text = f"{p.frame_meta.time_str}"
+                (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
+                tx = int(p.left + (p.width - tw) // 2)
+                ty = int(baseline_y)
+                if 0 <= tx < canvas_w and 0 <= ty < canvas_h:
+                    cv2.putText(text_mask, text, (tx, ty), font, font_scale, 255, thickness, cv2.LINE_AA)
+        else:
+            for p in placements:
+                text = f"{p.frame_meta.time_str}"
+                (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
+                tx = int(p.left + (p.width - tw) // 2)
+                ty = int(min(canvas_h - 15, p.top + p.height + offset_y))
+                if 0 <= tx < canvas_w and 0 <= ty < canvas_h:
+                    cv2.putText(text_mask, text, (tx, ty), font, font_scale, 255, thickness, cv2.LINE_AA)
 
         rendered = text_mask > 0
         text_val = int(0.85 * max_v)

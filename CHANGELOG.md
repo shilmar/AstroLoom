@@ -5,7 +5,41 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-14
+
+### Añadido
+* **Detección Automática de Fenómenos de Contacto (Anillo de Diamante y Perlas de Baily):**
+  - Motor de análisis fotométrico angular de 360° en torno al limbo lunar (`classify_contact_phenomenon` en `core/eclipse_collage.py`).
+  - Discrimina automáticamente y clasifica:
+    - 💎 **Anillo de Diamante (Diamond Ring)** en C2 (ingreso) o C3 (egreso): destello fotosférico ultrabrillante concentrado en un arco angular estrecho ($\le 65^\circ$).
+    - 📿 **Perlas de Baily (Baily's Beads)** en C2 o C3: múltiples cuentas luminosas discontinuas que emergen a través de los valles del relieve lunar.
+    - **Totalidad plena** y **Fases parciales** con cálculo de porcentaje de ocultación.
+  - Nueva columna interactiva **"Fase Detectada"** en la tabla de cribado con tipografía cromática y badges destacados (celeste, oro, púrpura).
+* **Recomendación Inteligente de Contactos y Fases Clave:**
+  - Enriquecimiento del recomendador (`recommend_key_frames`) con slots dedicados y búsqueda prioritaria de los mejores fenómenos de contacto en C2 y C3.
+  - Ponderación fotométrica que prioriza exposiciones balanceadas donde la corona y el limbo son visibles conjuntamente (0.003s a 0.05s) frente a subexposiciones extremas, descartando tomas trepidadas.
+* **Selector Nativo de Color de Fondo de Lienzo en la GUI:**
+  - Nuevo control en la Sección 3 de maquetación (`gui/tab_eclipse_collage.py`) con selector de presets (*Negro Espacio*, *Rojo Realce*, *Gris Carbón*, *Blanco Editorial*) y botón para paleta personalizada (`QColorDialog`).
+  - Marcas horarias EXIF con cálculo de luminancia y contraste adaptativo automático (blanco sobre fondos oscuros, carbón sobre fondos claros).
+  - Integración completa del color en previsualización, exportación plana TIFF/JPG, capa de fondo en PSD de 16-bit para Photoshop y sesiones `.ecollage`.
+
+### Modificado
+* **Unificación Proporcional de Tiles y Medallones Circulares:**
+  - Eliminado el multiplicador oculto `* 1.45` en `crop_margin_factor`, garantizando que con `Escala Totalidad / Centro = 1.00x (+0%)` todos los medallones circulares mantengan un diámetro idéntico a lo largo de toda la línea de tiempo sin saltos visuales.
+  - Escalado armónico y predecible de las fases centrales cuando el usuario incrementa la escala de totalidad.
+* **Actualización de Versión:**
+  - Salto de versión a **v0.7.1** en la ventana principal (`gui/main_window.py`) y en la insignia de versión del panel de configuración (`gui/tab_settings.py`).
+* **Actualización de Hoja de Ruta (`README.md`):**
+  - Marcado como completado: `[x] Detección y recomendación automática de fenómenos singulares de contacto: Perlas de Baily y Anillo de Diamante (Diamond Ring)`.
+
+### Corregido
+* **Robustez de Centrado frente a Destellos Potentes:**
+  - Inmunidad de centrado subpíxel (`optimize_center_circular_flux` en `core/eclipse.py`) frente a resplandores potentes del anillo de diamante que desplazaban el centro hacia la fotosfera sobreexpuesta.
+  - Incorporación de anclaje a trayectoria temporal (`expected_center`) en la segunda pasada de refinamiento.
+  - Eliminación definitiva de excepciones por dimensiones negativas en recortes (`negative dimensions are not allowed`) en archivos RAW.
+
 ## [0.7.0] - 2026-10-14
+
 
 ### Añadido
 * **Pestaña Dedicada "4. Eclipses (Collage)" en la Ventana Principal:**

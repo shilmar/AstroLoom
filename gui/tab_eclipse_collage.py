@@ -37,8 +37,10 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QSizePolicy,
-    QSpinBox
+    QSpinBox,
+    QColorDialog
 )
+
 
 from core.eclipse_collage import (
     EclipseFrameMetadata,
@@ -283,6 +285,8 @@ class EclipseCollageTab(QWidget):
         self.current_canvas_w = 1920
         self.current_canvas_h = 1080
         self._tile_cache: Dict[Any, Tuple[np.ndarray, np.ndarray]] = {}
+        self.canvas_bg_color: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self.canvas_bg_hex: str = "#000000"
 
         self.worker: Optional[EclipseAnalysisWorker] = None
 
@@ -378,13 +382,14 @@ class EclipseCollageTab(QWidget):
 
         # Tabla interactiva con Drag & Drop
         self.table_files = DropTableWidget()
-        self.table_files.setColumnCount(5)
-        self.table_files.setHorizontalHeaderLabels(["[✓]", "Archivo", "Hora", "% Ocultación", "Nitidez / Estado"])
+        self.table_files.setColumnCount(6)
+        self.table_files.setHorizontalHeaderLabels(["[✓]", "Archivo", "Hora", "% Ocult.", "Fase Detectada", "Nitidez / Estado"])
         self.table_files.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table_files.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table_files.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.table_files.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.table_files.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.table_files.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.table_files.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table_files.setMinimumHeight(170)
         self.table_files.itemChanged.connect(self._on_table_item_changed)
@@ -513,7 +518,28 @@ class EclipseCollageTab(QWidget):
         row_pad.addWidget(self.lbl_pad_val)
         box_layout.addLayout(row_pad)
 
+        # Selector de color de fondo del lienzo
+        row_bg = QHBoxLayout()
+        row_bg.addWidget(QLabel("Color Fondo:"))
+        self.combo_bg_color = QComboBox()
+        self.combo_bg_color.addItem("🌑 Negro Espacio", "#000000")
+        self.combo_bg_color.addItem("🔴 Rojo Realce", "#8F2828")
+        self.combo_bg_color.addItem("🔘 Gris Carbón", "#1E1E1E")
+        self.combo_bg_color.addItem("⚪ Blanco Editorial", "#FFFFFF")
+        self.combo_bg_color.addItem("🎨 Personalizado...", "custom")
+        self.combo_bg_color.currentIndexChanged.connect(self._on_bg_color_changed)
+        row_bg.addWidget(self.combo_bg_color, stretch=1)
+
+        self.btn_bg_custom = QPushButton()
+        self.btn_bg_custom.setFixedSize(26, 24)
+        self.btn_bg_custom.setStyleSheet(f"background-color: {self.canvas_bg_hex}; border: 1px solid #78909c; border-radius: 3px;")
+        self.btn_bg_custom.setToolTip("Elegir color de fondo personalizado")
+        self.btn_bg_custom.clicked.connect(self._choose_custom_bg_color)
+        row_bg.addWidget(self.btn_bg_custom)
+        box_layout.addLayout(row_bg)
+
         self.chk_captions = QCheckBox("Mostrar marcas horarias EXIF bajo cada fase")
+
         self.chk_captions.setChecked(True)
         box_layout.addWidget(self.chk_captions)
 
@@ -650,6 +676,7 @@ class EclipseCollageTab(QWidget):
             "gap_spacing": self.slider_gap.value(),
             "totality_scale": self.slider_tot_scale.value(),
             "crop_margin_factor": self.slider_pad.value(),
+            "bg_hex": self.canvas_bg_hex,
             "draw_captions": self.chk_captions.isChecked(),
             "target_count_idx": self.combo_target_count.currentIndex(),
             "fast_mode_idx": self.combo_analysis_speed.currentIndex(),
@@ -705,8 +732,24 @@ class EclipseCollageTab(QWidget):
                 val = int(settings["crop_margin_factor"])
                 self.slider_pad.setValue(val)
                 self.lbl_pad_val.setText(f"{val / 100.0:.2f}x")
+            if "bg_hex" in settings:
+                hex_col = str(settings["bg_hex"])
+                self._set_bg_hex(hex_col)
+                found = False
+                for i in range(self.combo_bg_color.count() - 1):
+                    if str(self.combo_bg_color.itemData(i)).lower() == hex_col.lower():
+                        self.combo_bg_color.blockSignals(True)
+                        self.combo_bg_color.setCurrentIndex(i)
+                        self.combo_bg_color.blockSignals(False)
+                        found = True
+                        break
+                if not found:
+                    self.combo_bg_color.blockSignals(True)
+                    self.combo_bg_color.setCurrentIndex(4)
+                    self.combo_bg_color.blockSignals(False)
             if "draw_captions" in settings:
                 self.chk_captions.setChecked(bool(settings["draw_captions"]))
+
             if "target_count_idx" in settings:
                 self.combo_target_count.setCurrentIndex(int(settings["target_count_idx"]))
             if "fast_mode_idx" in settings:
@@ -814,6 +857,34 @@ class EclipseCollageTab(QWidget):
             obsc_item.setTextAlignment(Qt.AlignCenter)
             self.table_files.setItem(row, 3, obsc_item)
 
+            # Columna 4: Fase Detectada con estilizado cromático
+            phase_text = f.phase_label or "Pendiente"
+            phase_item = QTableWidgetItem(phase_text)
+            phase_item.setTextAlignment(Qt.AlignCenter)
+            if "Diamante" in phase_text:
+                phase_item.setForeground(QColor("#80d8ff"))
+                font = phase_item.font()
+                font.setBold(True)
+                phase_item.setFont(font)
+            elif "Baily" in phase_text:
+                phase_item.setForeground(QColor("#ffd54f"))
+                font = phase_item.font()
+                font.setBold(True)
+                phase_item.setFont(font)
+            elif "TOTALIDAD" in phase_text:
+                phase_item.setForeground(QColor("#b388ff"))
+                font = phase_item.font()
+                font.setBold(True)
+                phase_item.setFont(font)
+            elif "Entrada" in phase_text:
+                phase_item.setForeground(QColor("#90caf9"))
+            elif "Salida" in phase_text:
+                phase_item.setForeground(QColor("#a5d6a7"))
+            else:
+                phase_item.setForeground(QColor("#90a4ae"))
+            self.table_files.setItem(row, 4, phase_item)
+
+            # Columna 5: Nitidez / Estado
             if f.sharpness_score > 0:
                 if f.is_trepidated:
                     status_text = f"⚠️ {f.sharpness_score:.0f} (Movida)"
@@ -831,7 +902,7 @@ class EclipseCollageTab(QWidget):
             status_item = QTableWidgetItem(status_text)
             status_item.setForeground(color)
             status_item.setTextAlignment(Qt.AlignCenter)
-            self.table_files.setItem(row, 4, status_item)
+            self.table_files.setItem(row, 5, status_item)
 
         self.table_files.blockSignals(False)
 
@@ -928,6 +999,31 @@ class EclipseCollageTab(QWidget):
         val_f = val / 100.0
         self.lbl_pad_val.setText(f"{val_f:.2f}x")
 
+    def _on_bg_color_changed(self, idx: int):
+        val = self.combo_bg_color.currentData()
+        if val == "custom":
+            self._choose_custom_bg_color()
+        else:
+            self._set_bg_hex(val)
+            self._update_preview()
+
+    def _choose_custom_bg_color(self):
+        col = QColorDialog.getColor(QColor(self.canvas_bg_hex), self, "Seleccionar Color de Fondo del Lienzo")
+        if col.isValid():
+            hex_col = col.name()
+            self._set_bg_hex(hex_col)
+            self.combo_bg_color.blockSignals(True)
+            self.combo_bg_color.setCurrentIndex(4)
+            self.combo_bg_color.blockSignals(False)
+            self._update_preview()
+
+    def _set_bg_hex(self, hex_str: str):
+        self.canvas_bg_hex = hex_str
+        c = QColor(hex_str)
+        self.canvas_bg_color = (c.redF(), c.greenF(), c.blueF())
+        self.btn_bg_custom.setStyleSheet(f"background-color: {hex_str}; border: 1px solid #78909c; border-radius: 3px;")
+
+
     def _on_zoom_changed(self, zoom: float):
         pct = int(round(zoom * 100))
         self.lbl_zoom_val.setText(f"{pct}%")
@@ -980,7 +1076,7 @@ class EclipseCollageTab(QWidget):
             self.current_canvas_w = cw
             self.current_canvas_h = ch
 
-            flat = render_flat_collage(cw, ch, placements, bg_color=(0.0, 0.0, 0.0), draw_captions=draw_caps)
+            flat = render_flat_collage(cw, ch, placements, bg_color=self.canvas_bg_color, draw_captions=draw_caps)
             self.preview_image = flat
             self.canvas_preview.set_image(flat)
         except Exception as e:
@@ -1031,7 +1127,7 @@ class EclipseCollageTab(QWidget):
             max_workers=workers
         )
 
-        ok = export_layered_psd(filepath, cw, ch, placements, depth=16, include_captions=draw_caps)
+        ok = export_layered_psd(filepath, cw, ch, placements, bg_color=self.canvas_bg_color, depth=16, include_captions=draw_caps)
         if ok:
             QMessageBox.information(
                 self, 
@@ -1078,7 +1174,7 @@ class EclipseCollageTab(QWidget):
             max_workers=workers
         )
 
-        flat = render_flat_collage(cw, ch, placements, bg_color=(0.0, 0.0, 0.0), draw_captions=draw_caps)
+        flat = render_flat_collage(cw, ch, placements, bg_color=self.canvas_bg_color, draw_captions=draw_caps)
 
         ext = os.path.splitext(filepath)[1].lower()
         if ext in (".tif", ".tiff"):
@@ -1122,7 +1218,7 @@ class EclipseCollageTab(QWidget):
                 max_workers=workers
             )
 
-            flat = render_flat_collage(cw, ch, placements, bg_color=(0.0, 0.0, 0.0), draw_captions=draw_caps)
+            flat = render_flat_collage(cw, ch, placements, bg_color=self.canvas_bg_color, draw_captions=draw_caps)
 
             temp_dir = get_config_val("export_dir", tempfile.gettempdir())
             os.makedirs(temp_dir, exist_ok=True)

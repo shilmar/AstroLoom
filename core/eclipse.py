@@ -220,50 +220,154 @@ def optimize_center_circular_flux(
     init_cx: float,
     init_cy: float,
     radius: float,
-    mode: str = "solar"
+    mode: str = "solar",
+    max_search_dist: Optional[float] = None
 ) -> Tuple[float, float]:
     """
     Optimiza las coordenadas del centro (cx, cy) a precisión subpíxel milimétrica (< 0.1 px)
     con un radio fijado r = radius, maximizando el flujo del gradiente radial perpendicular al limbo.
     
-    Utiliza una estadística de mediana robusta sobre 360 rayos angulares, lo que confiere
-    inmunidad matemática total frente a protuberancias solares, cuentas de Baily o variaciones locales.
+    Para modo solar:
+      - Maximiza el gradiente radial exterior hacia la corona/fotosfera (percentil 75).
+      - Penaliza fuertemente cualquier contaminación luminosa dentro del disco lunar (r < R).
+      - Inmune a destellos potentes (anillo de diamante y perlas de Baily) que distorsionan medianas globales.
+      - Acotado rígidamente dentro de los límites de la imagen y ventana de búsqueda máxima.
     """
-    angles = np.linspace(0, 2 * np.pi, 360, endpoint=False)
+    h, w = gray.shape[:2]
+    angles = np.linspace(0, 2 * np.pi, 180, endpoint=False)
     cos_a = np.cos(angles)
     sin_a = np.sin(angles)
-    r_in = max(1.0, radius - 3.0)
-    r_out = radius + 3.0
+    r_in = max(1.0, radius - 2.5)
+    r_out = radius + 2.5
+    r_int = radius * 0.50
+
+    max_dev = float(max_search_dist) if (max_search_dist and max_search_dist > 0) else min(35.0, max(12.0, radius * 0.12))
 
     def loss(p):
         cx, cy = p[0], p[1]
+        dist_dev = np.hypot(cx - init_cx, cy - init_cy)
+        if dist_dev > max_dev or cx < 0 or cx >= w or cy < 0 or cy >= h:
+            return 1e6 + dist_dev * 1000.0
+
         xs_in = cx + r_in * cos_a
         ys_in = cy + r_in * sin_a
         xs_out = cx + r_out * cos_a
         ys_out = cy + r_out * sin_a
-        v_in = cv2.remap(gray, xs_in.astype(np.float32)[:, None], ys_in.astype(np.float32)[:, None], cv2.INTER_LINEAR).ravel()
-        v_out = cv2.remap(gray, xs_out.astype(np.float32)[:, None], ys_out.astype(np.float32)[:, None], cv2.INTER_LINEAR).ravel()
-        diff = (v_out - v_in) if mode == "solar" else (v_in - v_out)
-        return -float(np.median(diff))
+        v_in = cv2.remap(gray, xs_in.astype(np.float32)[:, None], ys_in.astype(np.float32)[:, None], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT).ravel()
+        v_out = cv2.remap(gray, xs_out.astype(np.float32)[:, None], ys_out.astype(np.float32)[:, None], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT).ravel()
+        
+        if mode == "solar":
+            diff = v_out - v_in
+            # En anillo de diamante o creciente, el gradiente relevante está en el 25% superior de ángulos
+            grad = float(np.percentile(diff, 75))
+            xs_int = cx + r_int * cos_a
+            ys_int = cy + r_int * sin_a
+            v_int = cv2.remap(gray, xs_int.astype(np.float32)[:, None], ys_int.astype(np.float32)[:, None], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT).ravel()
+            pen_in = float(np.mean(v_int))
+            eff_pen = min(pen_in * 0.5, max(0.0, grad * 0.4))
+            return -(grad - eff_pen)
+        else:
+            diff = v_in - v_out
+            return -float(np.percentile(diff, 60))
 
     best_c = (init_cx, init_cy)
     best_loss = loss(best_c)
-    for dx in range(-12, 13, 3):
-        for dy in range(-12, 13, 3):
+    search_range = int(min(max_dev, 24.0))
+    step = 2 if search_range <= 16 else 3
+    for dx in range(-search_range, search_range + 1, step):
+        for dy in range(-search_range, search_range + 1, step):
             c = (init_cx + dx, init_cy + dy)
             l = loss(c)
             if l < best_loss:
                 best_loss = l
                 best_c = c
 
-    res = minimize(loss, list(best_c), method="Nelder-Mead", options={"xatol": 0.05, "fatol": 1e-4, "maxiter": 60})
-    return float(res.x[0]), float(res.x[1])
+    res = minimize(loss, list(best_c), method="Nelder-Mead", options={"xatol": 0.05, "fatol": 1e-4, "maxiter": 50})
+    final_cx, final_cy = float(res.x[0]), float(res.x[1])
+    if np.hypot(final_cx - init_cx, final_cy - init_cy) > max_dev or final_cx < 0 or final_cx >= w or final_cy < 0 or final_cy >= h or loss((final_cx, final_cy)) > best_loss:
+        return float(best_c[0]), float(best_c[1])
+    return final_cx, final_cy
+
+
+def fit_circular_arc_convex_hull(
+    hull: np.ndarray, 
+    expected_radius: Optional[float] = None
+) -> Tuple[float, float, float]:
+    """
+    Ajusta un arco circular sobre el contorno exterior (convex hull) de un creciente solar,
+    anillo de diamante o perlas de Baily mediante el teorema analítico de cuerda-sagita.
+    
+    Evita la trampa de minEnclosingCircle que sitúa el centro en el punto medio de la cuerda de la hoz.
+    Calcula el centro astronómico real del disco solar/lunar que genera la curvatura con precisión subpíxel.
+    """
+    if len(hull) < 3:
+        (cx, cy), r = cv2.minEnclosingCircle(hull)
+        return float(cx), float(cy), float(expected_radius or r)
+
+    # 1. Encontrar los dos puntos más alejados del contorno (extremos de la cuerda)
+    diff = hull[:, np.newaxis, :] - hull[np.newaxis, :, :]
+    dists_sq = np.sum(diff ** 2, axis=-1)
+    max_idx = np.unravel_index(np.argmax(dists_sq), dists_sq.shape)
+    p0 = hull[max_idx[0]]
+    p1 = hull[max_idx[1]]
+
+    chord_dx = float(p1[0] - p0[0])
+    chord_dy = float(p1[1] - p0[1])
+    chord_len = float(np.hypot(chord_dx, chord_dy))
+    if chord_len < 2.0:
+        return float(p0[0]), float(p0[1]), float(expected_radius or 10.0)
+
+    mid = (p0 + p1) / 2.0
+    normal = np.array([-chord_dy, chord_dx], dtype=np.float32) / chord_len
+
+    # Sagita: distancia perpendicular máxima de los puntos del contorno a la cuerda
+    # Producto cruz 2D: |dx * (p0_y - y) - dy * (p0_x - x)| / chord_len
+    line_dists = np.abs(chord_dx * (p0[1] - hull[:, 1]) - chord_dy * (p0[0] - hull[:, 0])) / chord_len
+    h_sagitta = float(np.max(line_dists))
+
+    if expected_radius and expected_radius > (chord_len * 0.45):
+        R = float(expected_radius)
+    else:
+        # Teorema de la cuerda y la sagita: R = h/2 + c^2 / (8h)
+        if h_sagitta > 1.0:
+            R = (h_sagitta / 2.0) + (chord_len ** 2) / (8.0 * h_sagitta)
+        else:
+            R = max(chord_len * 0.70, 20.0)
+
+    # Distancia del punto medio de la cuerda al centro del círculo
+    if R >= chord_len * 0.5:
+        d_center = float(np.sqrt(max(0.0, R**2 - (chord_len / 2.0)**2)))
+    else:
+        d_center = 0.0
+
+    # Las dos soluciones geométricas perpendiculares a la cuerda
+    cand1 = mid + normal * d_center
+    cand2 = mid - normal * d_center
+
+    # Seleccionar la solución que minimiza la desviación con el contorno
+    loss1 = float(np.sum((np.hypot(hull[:, 0] - cand1[0], hull[:, 1] - cand1[1]) - R) ** 2))
+    loss2 = float(np.sum((np.hypot(hull[:, 0] - cand2[0], hull[:, 1] - cand2[1]) - R) ** 2))
+    best_c = cand1 if loss1 < loss2 else cand2
+
+    # Refinamiento Gauss-Newton rápido (5 iteraciones)
+    cx, cy = float(best_c[0]), float(best_c[1])
+    for _ in range(5):
+        dists = np.hypot(hull[:, 0] - cx, hull[:, 1] - cy)
+        err = dists - R
+        d_safe = np.maximum(dists, 1e-4)
+        dx = (hull[:, 0] - cx) / d_safe
+        dy = (hull[:, 1] - cy) / d_safe
+        cx += float(np.mean(err * dx)) * 0.5
+        cy += float(np.mean(err * dy)) * 0.5
+
+    return float(cx), float(cy), float(R)
 
 
 def detect_eclipse_disk(
     image: np.ndarray,
     mode: str = "solar",
-    expected_radius: Optional[float] = None
+    expected_radius: Optional[float] = None,
+    expected_center: Optional[Tuple[float, float]] = None
 ) -> Tuple[float, float, float]:
     """
     Detecta automáticamente las coordenadas del centro (cx, cy) y el radio (r)
@@ -272,8 +376,9 @@ def detect_eclipse_disk(
     1. Localización inicial topológica:
        - Solar: detección del disco lunar como hueco interior dentro del anillo de corona brillante.
        - Lunar: detección del contorno exterior de la Luna brillante.
-    2. Si expected_radius está disponible (p. ej. en lote o desde la toma de referencia):
+    2. Si expected_radius / expected_center están disponibles:
        - Ancla exactamente el radio físico de la Luna (invariable durante la totalidad).
+       - Ancla la búsqueda en torno al centro temporal esperado, evitando saltos en destellos de diamante.
        - Optimiza (cx, cy) con flujo de gradiente radial mediano, ignorando al 100% protuberancias.
     3. Si expected_radius es None:
        - Realiza escaneo radial subpíxel en dos pasadas con filtrado MAD de residuales.
@@ -291,46 +396,111 @@ def detect_eclipse_disk(
     small_w, small_h = max(1, int(w * scale)), max(1, int(h * scale))
     small_gray = cv2.resize(gray, (small_w, small_h), interpolation=cv2.INTER_AREA)
 
+    exp_c_s = (expected_center[0] * scale, expected_center[1] * scale) if expected_center is not None else None
+
     init_cx, init_cy, init_r = None, None, None
 
     if mode == "solar":
         best_hole = None
         max_val = float(small_gray.max())
-        if max_val > 0.08:
-            # En eclipse solar totalidad, la Luna es un hueco oscuro cerrado dentro de la corona brillante
-            th_hole = max(0.025, max_val * 0.15)
-            bright = (small_gray > th_hole).astype(np.uint8) * 255
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-            bright_closed = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, kernel)
-            contours, hierarchy = cv2.findContours(bright_closed, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
-            if hierarchy is not None:
-                max_area = 0
-                for i, h_info in enumerate(hierarchy[0]):
-                    if h_info[3] != -1:  # Hueco interior
-                        area = cv2.contourArea(contours[i])
-                        if area > 400 and area > max_area:
-                            max_area = area
-                            best_hole = contours[i]
 
-        if best_hole is not None:
-            (hcx, hcy), hr = cv2.minEnclosingCircle(best_hole)
+        # 1. Detección multiumbral del disco lunar (hueco oscuro cerrado dentro de la corona)
+        # Inmune a destellos potentes (anillo de diamante) donde max_val=1.0 pero la corona está a 0.015-0.080
+        hole_thresholds = [0.012, 0.018, 0.025, 0.038, 0.060, 0.090, 0.140]
+        kernel_hole = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+        best_hole_cand = None
+        best_hole_score = -1e9
+
+        for th_h in hole_thresholds:
+            bright = (small_gray > th_h).astype(np.uint8) * 255
+            bright_closed = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, kernel_hole)
+            cnts_h, hierarchy = cv2.findContours(bright_closed, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+            if hierarchy is None:
+                continue
+
+            for i, h_info in enumerate(hierarchy[0]):
+                if h_info[3] != -1:  # Hueco interior
+                    c_h = cnts_h[i]
+                    area_h = cv2.contourArea(c_h)
+                    if area_h < 100:
+                        continue
+                    (hcx_t, hcy_t), hr_t = cv2.minEnclosingCircle(c_h)
+                    perim_h = cv2.arcLength(c_h, True)
+                    circ_h = 4 * np.pi * area_h / (perim_h ** 2 + 1e-6)
+                    if circ_h < 0.45 or hr_t < 15:
+                        continue
+
+                    score_h = circ_h * 2.0
+                    if expected_radius:
+                        exp_r_s = expected_radius * scale
+                        r_err = abs(hr_t - exp_r_s) / max(1.0, exp_r_s)
+                        if r_err > 0.45:
+                            continue
+                        score_h += (1.0 - r_err) * 3.0
+
+                    if exp_c_s is not None:
+                        c_dist = np.hypot(hcx_t - exp_c_s[0], hcy_t - exp_c_s[1])
+                        if c_dist > max(25.0, (expected_radius * scale * 0.40) if expected_radius else 25.0):
+                            continue
+                        score_h += max(0.0, 1.0 - c_dist / 50.0) * 4.0
+
+                    if score_h > best_hole_score:
+                        best_hole_score = score_h
+                        best_hole_cand = (hcx_t, hcy_t, hr_t, c_h)
+
+        if best_hole_cand is not None:
+            hcx, hcy, hr, best_hole = best_hole_cand
             init_cx = float(hcx / scale)
             init_cy = float(hcy / scale)
             init_r = float(hr / scale)
         else:
-            # En fases parciales o anillo de diamante, el Sol es un creciente o disco brillante.
-            # Usamos un umbral del 45% del brillo máximo para aislar el disco solar de nubes y resplandor crepuscular.
+            # 2. En fases parciales o anillo de diamante sin corona cerrada:
             if max_val > 0.02:
-                thresh_val = max(0.015, max_val * 0.45)
+                thresh_val = max(0.015, max_val * 0.35)
                 bright_crescent = (small_gray > thresh_val).astype(np.uint8) * 255
                 cnts, _ = cv2.findContours(bright_crescent, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 if cnts:
                     c_best = max(cnts, key=cv2.contourArea)
-                    if cv2.contourArea(c_best) > 30:
-                        (hcx, hcy), hr = cv2.minEnclosingCircle(c_best)
-                        init_cx = float(hcx / scale)
-                        init_cy = float(hcy / scale)
-                        init_r = float(hr / scale)
+                    if cv2.contourArea(c_best) > 15:
+                        hull = cv2.convexHull(c_best, returnPoints=True)[:, 0, :].astype(np.float32)
+                        diff_pts = hull[:, np.newaxis, :] - hull[np.newaxis, :, :]
+                        chord_len_s = float(np.sqrt(np.max(np.sum(diff_pts ** 2, axis=-1))))
+                        exp_r_scaled = (expected_radius * scale) if (expected_radius and expected_radius > 10) else None
+                        ref_r_s = exp_r_scaled or chord_len_s
+
+                        # Si la cuerda es amplia (>= 0.60 * R), es un creciente real con arco exterior:
+                        if chord_len_s >= ref_r_s * 0.60:
+                            hcx, hcy, hr = fit_circular_arc_convex_hull(hull, expected_radius=exp_r_scaled)
+                            init_cx = float(hcx / scale)
+                            init_cy = float(hcy / scale)
+                            init_r = float(hr / scale)
+                        else:
+                            # Destello concentrado (anillo de diamante o perla puntual):
+                            if expected_center is not None and expected_radius:
+                                init_cx = float(expected_center[0])
+                                init_cy = float(expected_center[1])
+                                init_r = float(expected_radius)
+                            elif expected_radius and expected_radius > 10:
+                                flare_center = np.mean(hull, axis=0)
+                                best_cand_c = flare_center
+                                best_cand_val = 1e9
+                                for a_c in np.linspace(0, 2 * np.pi, 24, endpoint=False):
+                                    c_cand = flare_center + np.array([np.cos(a_c), np.sin(a_c)]) * (expected_radius * scale)
+                                    cx_i = int(c_cand[0])
+                                    cy_i = int(c_cand[1])
+                                    if 0 <= cx_i < small_w and 0 <= cy_i < small_h:
+                                        val_int = float(small_gray[cy_i, cx_i])
+                                        if val_int < best_cand_val:
+                                            best_cand_val = val_int
+                                            best_cand_c = c_cand
+                                init_cx = float(best_cand_c[0] / scale)
+                                init_cy = float(best_cand_c[1] / scale)
+                                init_r = float(expected_radius)
+                            else:
+                                hcx, hcy, hr = fit_circular_arc_convex_hull(hull, expected_radius=exp_r_scaled)
+                                init_cx = float(hcx / scale)
+                                init_cy = float(hcy / scale)
+                                init_r = float(hr / scale)
     else:
         # En eclipse lunar, la Luna es el objeto brillante circular.
         # Evitamos percentiles globales fijos (p80) que seleccionan nubes o resplandor difuso.
@@ -390,21 +560,28 @@ def detect_eclipse_disk(
                 init_r = float(hr / scale)
 
     if init_cx is None or init_r is None or init_r < 10:
-        # Fallback a centro de imagen si no se encuentra hueco/contorno
-        init_cx = w / 2.0
-        init_cy = h / 2.0
+        if expected_center is not None:
+            init_cx = float(expected_center[0])
+            init_cy = float(expected_center[1])
+        else:
+            init_cx = w / 2.0
+            init_cy = h / 2.0
         init_r = expected_radius if (expected_radius and expected_radius > 10) else min(w, h) * 0.18
 
     # Si expected_radius está disponible y es válido, optimizar centro anclando R
     if expected_radius is not None and expected_radius > 10:
-        if mode == "solar" and best_hole is None:
-            return float(init_cx), float(init_cy), float(expected_radius)
-        opt_cx, opt_cy = optimize_center_circular_flux(gray, init_cx, init_cy, expected_radius, mode=mode)
+        max_search = min(20.0, max(8.0, expected_radius * 0.08)) if expected_center is not None else None
+        opt_cx, opt_cy = optimize_center_circular_flux(gray, init_cx, init_cy, expected_radius, mode=mode, max_search_dist=max_search)
+        if expected_center is not None:
+            if np.hypot(opt_cx - expected_center[0], opt_cy - expected_center[1]) > 25.0:
+                opt_cx, opt_cy = expected_center
         return float(opt_cx), float(opt_cy), float(expected_radius)
 
     if mode == "solar" and best_hole is None:
-        # En fase parcial solar, el contorno envolvente es la mejor aproximación del disco/creciente.
-        # Evitamos el escaneo radial 360° que fallaría al no haber limbo en el lado oculto por la Luna.
+        # En fase parcial o contacto solar sin radio fijado previo, optimizamos con el radio estimado del arco
+        if init_r and init_r > 15:
+            opt_cx, opt_cy = optimize_center_circular_flux(gray, init_cx, init_cy, init_r, mode=mode)
+            return float(opt_cx), float(opt_cy), float(init_r)
         return float(init_cx), float(init_cy), float(init_r)
 
     # Detección completa de centro y radio (Totalidad solar o eclipse lunar)
