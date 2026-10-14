@@ -490,8 +490,8 @@ class PanoramaTab(QWidget):
         # Proyección cartográfica
         geo_layout.addWidget(QLabel("Proyección Cartográfica:"))
         self.combo_projection = QComboBox()
-        self.combo_projection.addItem("Cilíndrica (Panoramas Horizontales Amplios - Recomendado)", "cylindrical")
-        self.combo_projection.addItem("Esférica (Gran angular y 360°)", "spherical")
+        self.combo_projection.addItem("Esférica (Paisajes nocturnos, gran angular y Vía Láctea - Recomendado)", "spherical")
+        self.combo_projection.addItem("Cilíndrica (Panoramas horizontales estándar)", "cylindrical")
         self.combo_projection.addItem("Plana / Rectilínea (Mosaicos pequeños y teleobjetivo)", "plane")
         geo_layout.addWidget(self.combo_projection)
 
@@ -530,8 +530,8 @@ class PanoramaTab(QWidget):
         inliers_bar = QHBoxLayout()
         inliers_bar.addWidget(QLabel("Mínimo de Coincidencias:"))
         self.spin_min_inliers = QSpinBox()
-        self.spin_min_inliers.setRange(6, 100)
-        self.spin_min_inliers.setValue(15)
+        self.spin_min_inliers.setRange(4, 100)
+        self.spin_min_inliers.setValue(6)
         inliers_bar.addWidget(self.spin_min_inliers)
         fusion_layout.addLayout(inliers_bar)
 

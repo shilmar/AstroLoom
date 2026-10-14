@@ -51,10 +51,10 @@ class PanoramaPanelMetadata:
 @dataclass
 class PanoramaSettings:
     """Configuración del proceso de cosido panorámico."""
-    projection: str = "cylindrical"        # "cylindrical", "spherical", "plane"
+    projection: str = "spherical"          # "spherical", "cylindrical", "plane"
     astro_mode: bool = True                # Pre-realce CLAHE para cielo oscuro y suelo
     confidence_thresh: float = 0.45        # Umbral de confianza / Lowe ratio (0.3 a 0.8)
-    min_inliers: int = 15                  # Mínimo número de puntos coincidentes
+    min_inliers: int = 6                   # Mínimo número de puntos coincidentes (6 para noche)
     blend_mode: str = "multiband"          # "multiband", "feather", "linear"
     blend_bands: int = 5                   # Niveles de la pirámide laplaciana
     exposure_comp: bool = True             # Compensación de ganancia / viñeteo
@@ -198,14 +198,12 @@ def extract_astro_features(
     if astro_mode:
         clahe = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))
         prep = clahe.apply(image_gray)
-        # Suave filtrado bilateral para no magnificar el ruido de alta frecuencia del sensor
-        prep = cv2.bilateralFilter(prep, d=5, sigmaColor=35, sigmaSpace=35)
     else:
         prep = image_gray
 
     sift = cv2.SIFT_create(
         nfeatures=max_features,
-        contrastThreshold=0.015,
+        contrastThreshold=0.010,
         edgeThreshold=12,
         sigma=1.4
     )
@@ -386,13 +384,13 @@ def _build_overlap_graph(
             pts_i = np.float32([kps_i[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
             pts_j = np.float32([kps_j[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
 
-            # Estimación robusta de Homografía con RANSAC
-            H_j_to_i, inliers_mask = cv2.findHomography(pts_j, pts_i, cv2.RANSAC, 4.0)
+            # Estimación robusta con modelo afín / rígido para evitar deformaciones proyectivas singulares
+            M, inliers_mask = cv2.estimateAffinePartial2D(pts_j, pts_i, method=cv2.RANSAC, ransacReprojThreshold=8.0)
 
-            if H_j_to_i is not None and inliers_mask is not None:
+            if M is not None and inliers_mask is not None:
                 n_inliers = int(np.sum(inliers_mask))
                 if n_inliers >= min_inliers:
-                    # Inversión matemática para la dirección i -> j
+                    H_j_to_i = np.vstack([M, [0, 0, 1]])
                     try:
                         H_i_to_j = np.linalg.inv(H_j_to_i)
                         edges[(j, i)] = (H_j_to_i, n_inliers)
@@ -413,7 +411,24 @@ def _compute_global_homographies(
     mediante recorrido en anchura (BFS) sobre el grafo de máxima conectividad.
     """
     if anchor_idx is None:
-        anchor_idx = n_images // 2
+        # Seleccionar automáticamente el nodo que abarca el mayor número de paneles
+        best_anchor = n_images // 2
+        best_reach = 0
+        for cand in range(n_images):
+            visited_cand = {cand}
+            q_cand = [cand]
+            while q_cand:
+                c = q_cand.pop(0)
+                for (s, d) in edges.keys():
+                    if s == c and d not in visited_cand:
+                        visited_cand.add(d)
+                        q_cand.append(d)
+            if len(visited_cand) > best_reach:
+                best_reach = len(visited_cand)
+                best_anchor = cand
+                if best_reach == n_images:
+                    break
+        anchor_idx = best_anchor
 
     # Matriz identidad para el panel de referencia
     global_H = {anchor_idx: np.eye(3, dtype=np.float64)}
@@ -544,239 +559,332 @@ def stitch_nightscape_panorama(
     
     Pasos:
     1. Ingesta de paneles y extracción de metadatos EXIF.
-    2. Carga en memoria y pre-realce astro para detección de puntos clave (SIFT + CLAHE).
-    3. Construcción del Grafo 2D de Conectividad con filtrado RANSAC (soporta multifila).
-    4. Estimación de Homografías Globales por BFS / Árbol de Expansión.
-    5. Proyección geométrica (Plana, Cilíndrica o Esférica).
-    6. Deformación al lienzo global y compensación de exposición/viñeteo.
-    7. Fusión Laplaciana Multibanda (Laplacian Multi-Band Blending).
+    2. Carga de vistas previas ligeras con pre-realce astro (CLAHE) para calibración de cámaras.
+    3. Calibración global de rotación 3D (SO(3)) y longitud focal mediante ajuste de haces (Bundle Adjustment).
+    4. Corrección horizontal de horizonte (Wave Correction) para nivelar la panorámica.
+    5. Fallback automático a grafo 2D de correspondencias afines (SIFT + RANSAC BFS) si la calibración global falla.
+    6. Proyección cartográfica de alta fidelidad: Esférica, Cilíndrica o Plana (PyRotationWarper).
+    7. Fusión en streaming continuo de memoria O(1) con ponderación suave por mapa de distancias potenciado.
     8. Cálculo de Rectángulo Máximo Inscrito (Auto-recorte).
     """
     t0 = time.time()
+    cv2.ocl.setUseOpenCL(False)  # Evitar desbordamiento de memoria GPU en arrays panorámicos
     if settings is None:
         settings = PanoramaSettings()
 
-    if len(panels_paths) < 2:
+    n = len(panels_paths)
+    if n < 2:
         raise ValueError("Se requieren al menos 2 imágenes para componer una panorámica.")
 
     # -------------------------------------------------------------
-    # 1. Extracción de metadatos y cálculo de focal representativa
+    # 1. Extracción de metadatos de los paneles
     # -------------------------------------------------------------
     if progress_callback:
-        progress_callback(5, "Extrayendo metadatos y focales de los paneles...")
+        progress_callback(5, "Extrayendo metadatos EXIF de los paneles...")
 
     metas = [extract_panel_metadata(p, idx) for idx, p in enumerate(panels_paths)]
-    focals = [m.focal_length_mm for m in metas if m.focal_length_mm is not None and m.focal_length_mm > 0]
-
-    if settings.focal_length_override and settings.focal_length_override > 0:
-        focal_mm = settings.focal_length_override
-    elif focals:
-        focal_mm = float(np.median(focals))
-    else:
-        focal_mm = 24.0  # Fallback estándar para paisaje nocturno gran angular
+    full_w = metas[0].width
+    full_h = metas[0].height
 
     # -------------------------------------------------------------
-    # 2. Carga de imágenes y extracción de rasgos SIFT astro
+    # 2. Carga de vistas previas ligeras para calibración de cámara
     # -------------------------------------------------------------
-    features_list = []
-    loaded_images = []
-    n = len(panels_paths)
+    if progress_callback:
+        progress_callback(10, f"Generando vistas previas optimizadas para {n} paneles...")
 
+    imgs_small = []
     for i, path in enumerate(panels_paths):
         if abort_flag and abort_flag():
             raise InterruptedError("Operación cancelada por el usuario.")
 
-        if progress_callback:
-            prog = int(8 + 15 * (i / n))
-            progress_callback(prog, f"Cargando y analizando panel {i + 1}/{n}: {os.path.basename(path)}")
-
-        img_float = load_image_as_float32(path)
-        loaded_images.append(img_float)
-
-        # Convertir a escala de grises uint8 para SIFT
-        gray_u8 = (np.clip(cv2.cvtColor(img_float, cv2.COLOR_RGB2GRAY), 0.0, 1.0) * 255.0).astype(np.uint8)
-        kps, descs = extract_astro_features(gray_u8, astro_mode=settings.astro_mode, max_features=4000)
-        features_list.append((kps, descs))
-
-    # -------------------------------------------------------------
-    # 3. Grafo 2D de conectividad y correspondencias
-    # -------------------------------------------------------------
-    if progress_callback:
-        progress_callback(25, "Calculando grafo 2D de solapamiento y emparejamientos...")
-
-    edges = _build_overlap_graph(
-        features_list,
-        min_inliers=settings.min_inliers,
-        ratio_thresh=0.75,
-        progress_callback=progress_callback,
-        abort_flag=abort_flag
-    )
-
-    if not edges:
-        raise ValueError("No se encontraron solapamientos suficientes entre los paneles para coser la panorámica.")
-
-    # -------------------------------------------------------------
-    # 4. Cálculo de Homografías Globales por BFS
-    # -------------------------------------------------------------
-    if progress_callback:
-        progress_callback(55, "Optimizando alineación global en el lienzo...")
-
-    global_H, anchor_idx = _compute_global_homographies(n, edges)
-    connected_indices = sorted(list(global_H.keys()))
-
-    if len(connected_indices) < 2:
-        raise ValueError(
-            f"Solo se pudo alinear 1 imagen con el panel de referencia. Comprueba el orden o solapamiento."
-        )
-
-    # -------------------------------------------------------------
-    # 5. Proyección Geométrica (Cilíndrica, Esférica o Plana)
-    # -------------------------------------------------------------
-    # Estimar distancia focal en píxeles a partir de la diagonal del sensor de 35mm (43.27 mm)
-    sample_h, sample_w = loaded_images[0].shape[:2]
-    sensor_diag_px = np.sqrt(sample_w**2 + sample_h**2)
-    focal_px = (focal_mm / 43.27) * sensor_diag_px
-
-    images_to_project = []
-    masks_to_project = []
-
-    for idx in range(n):
-        img = loaded_images[idx]
-        h, w = img.shape[:2]
-
-        if settings.projection == "cylindrical":
-            w_img, w_mask = warp_image_cylindrical(img, focal_px)
-        elif settings.projection == "spherical":
-            w_img, w_mask = warp_image_spherical(img, focal_px)
+        ext = os.path.splitext(path)[1].lower()
+        if ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw']:
+            try:
+                import rawpy
+                with rawpy.imread(path) as r:
+                    rgb_half = r.postprocess(half_size=True, use_camera_wb=True)
+                small = cv2.resize(rgb_half, (rgb_half.shape[1] // 2, rgb_half.shape[0] // 2))
+                del rgb_half
+            except Exception:
+                img_f = load_image_as_float32(path)
+                u8 = (np.clip(img_f, 0.0, 1.0) * 255.0).astype(np.uint8)
+                small = cv2.resize(u8, (u8.shape[1] // 4, u8.shape[0] // 4))
+                del img_f, u8
         else:
-            w_img = img
-            w_mask = np.ones((h, w), dtype=np.uint8) * 255
+            img_f = load_image_as_float32(path)
+            u8 = (np.clip(img_f, 0.0, 1.0) * 255.0).astype(np.uint8)
+            small = cv2.resize(u8, (u8.shape[1] // 4, u8.shape[0] // 4))
+            del img_f, u8
 
-        images_to_project.append(w_img)
-        masks_to_project.append(w_mask)
+        # Pre-realce CLAHE para cielo estrellado y detalles en sombras
+        if settings.astro_mode:
+            lab = cv2.cvtColor(small, cv2.COLOR_RGB2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+            l = clahe.apply(l)
+            small = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2RGB)
+
+        imgs_small.append(small)
+        gc.collect()
+
+    small_h, small_w = imgs_small[0].shape[:2]
+    scale_to_full = full_w / float(small_w)
 
     # -------------------------------------------------------------
-    # 6. Deformación al Lienzo Global (Warping & Bounding Box)
+    # 3. Estimación de Rotación 3D Global (Bundle Adjustment)
     # -------------------------------------------------------------
     if progress_callback:
-        progress_callback(65, "Deformando paneles y proyectando sobre el lienzo...")
+        progress_callback(25, "Estimando geometría 3D y alineación global...")
 
-    # Calcular la caja envolvente (bounding box) de todas las esquinas transformadas
-    all_corners_x = []
-    all_corners_y = []
+    stitch_mode = cv2.Stitcher_SCANS if settings.projection == "plane" else cv2.Stitcher_PANORAMA
+    stitcher = cv2.Stitcher_create(stitch_mode)
+    status = stitcher.estimateTransform(imgs_small)
 
-    for idx in connected_indices:
-        H = global_H[idx]
-        h, w = images_to_project[idx].shape[:2]
-        corners = np.array([
-            [0, 0, 1],
-            [w, 0, 1],
-            [w, h, 1],
-            [0, h, 1]
-        ], dtype=np.float64).T
+    cameras = None
+    rmats_corr = None
+    connected_indices = list(range(n))
 
-        transformed = H @ corners
-        transformed /= transformed[2, :]
+    if status == 0 and len(stitcher.cameras()) == n:
+        cameras = list(stitcher.cameras())
+        rmats = [c.R.copy() for c in cameras]
+        if settings.wave_correction:
+            try:
+                rmats_corr = cv2.detail.waveCorrect(rmats, cv2.detail.WAVE_CORRECT_HORIZ)
+            except Exception:
+                rmats_corr = rmats
+        else:
+            rmats_corr = rmats
+        focals = [c.focal for c in cameras]
+        med_focal_small = float(np.median(focals))
+        focal_full = med_focal_small * scale_to_full
+    else:
+        # Fallback a SIFT pairwise overlap graph si el bundle adjuster no converge
+        if progress_callback:
+            progress_callback(30, "Alineando paneles mediante grafo 2D de correspondencias afines...")
+        features_list = []
+        sift = cv2.SIFT_create(nfeatures=5000, contrastThreshold=0.01)
+        for i, sm in enumerate(imgs_small):
+            gray = cv2.cvtColor(sm, cv2.COLOR_RGB2GRAY)
+            kps, des = sift.detectAndCompute(gray, None)
+            kps_full = [
+                cv2.KeyPoint(kp.pt[0] * scale_to_full, kp.pt[1] * scale_to_full, kp.size * scale_to_full,
+                             kp.angle, kp.response, kp.octave, kp.class_id)
+                for kp in kps
+            ]
+            features_list.append((kps_full, des))
 
-        all_corners_x.extend(transformed[0, :])
-        all_corners_y.extend(transformed[1, :])
+        edges = _build_overlap_graph(features_list, min_inliers=settings.min_inliers, ratio_thresh=0.82)
+        if not edges:
+            raise ValueError("No se encontraron solapamientos suficientes entre los paneles.")
+        global_H, anchor_idx = _compute_global_homographies(n, edges)
+        connected_indices = sorted(list(global_H.keys()))
 
-    min_x = np.floor(np.min(all_corners_x))
-    max_x = np.ceil(np.max(all_corners_x))
-    min_y = np.floor(np.min(all_corners_y))
-    max_y = np.ceil(np.max(all_corners_y))
-
-    canvas_w = int(max_x - min_x)
-    canvas_h = int(max_y - min_y)
-
-    # Límites de seguridad para evitar saturación de memoria RAM
-    MAX_CANVAS_PIXELS = 120_000_000  # ~120 Megapíxeles máx
-    current_pixels = canvas_w * canvas_h
-    scale_factor = 1.0
-
-    if current_pixels > MAX_CANVAS_PIXELS:
-        scale_factor = np.sqrt(MAX_CANVAS_PIXELS / current_pixels)
-        canvas_w = int(canvas_w * scale_factor)
-        canvas_h = int(canvas_h * scale_factor)
-
-    # Matriz de traslación para centrar la panorámica en el lienzo
-    T = np.array([
-        [scale_factor, 0, -min_x * scale_factor],
-        [0, scale_factor, -min_y * scale_factor],
-        [0, 0, 1]
-    ], dtype=np.float64)
-
-    warped_panels = []
-    warped_masks = []
-
-    for idx in connected_indices:
-        H_final = T @ global_H[idx]
-        img_src = images_to_project[idx]
-        mask_src = masks_to_project[idx]
-
-        warped_img = cv2.warpPerspective(
-            img_src, H_final, (canvas_w, canvas_h),
-            flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0
-        )
-        warped_mask = cv2.warpPerspective(
-            mask_src, H_final, (canvas_w, canvas_h),
-            flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0
-        )
-
-        warped_panels.append(warped_img)
-        warped_masks.append(warped_mask)
-
-    # Liberar memoria de imágenes intermedias no proyectadas
-    del loaded_images
-    del images_to_project
-    del masks_to_project
+    # Liberar imágenes intermedias de calibración
+    del imgs_small
     gc.collect()
 
     # -------------------------------------------------------------
-    # 7. Compensación de Ganancia / Viñeteo (opcional)
-    # -------------------------------------------------------------
-    if settings.exposure_comp and len(warped_panels) > 1:
-        if progress_callback:
-            progress_callback(78, "Compensando viñeteo y ecualizando exposición...")
-
-        # Calcular brillo relativo en zonas de solapamiento
-        base_brightness = [np.mean(p[m > 127]) if np.any(m > 127) else 1.0 for p, m in zip(warped_panels, warped_masks)]
-        ref_b = base_brightness[len(base_brightness) // 2]
-        for i in range(len(warped_panels)):
-            if base_brightness[i] > 1e-4:
-                gain = float(ref_b / base_brightness[i])
-                # Limitar ganancia a un rango suave [0.7, 1.4] para no introducir grano
-                gain = np.clip(gain, 0.7, 1.4)
-                warped_panels[i] = np.clip(warped_panels[i] * gain, 0.0, 1.0)
-
-    # -------------------------------------------------------------
-    # 8. Fusión Multicanal (Blending Multibanda)
+    # 4. Configuración del Lienzo y Proyección Geométrica
     # -------------------------------------------------------------
     if progress_callback:
-        progress_callback(85, f"Fusionando paneles con pirámide multibanda ({settings.blend_bands} niveles)...")
+        progress_callback(50, "Calculando dimensiones del lienzo panorámico...")
 
-    if settings.blend_mode == "multiband":
-        blended_img, total_mask = blend_multiband_pyramid(
-            warped_panels, warped_masks, num_bands=settings.blend_bands
-        )
-    else:
-        # Fusión rápida por distancia ponderada
-        weights = [cv2.distanceTransform((m > 127).astype(np.uint8), cv2.DIST_L2, 5) for m in warped_masks]
-        weight_sum = np.sum(np.stack(weights, axis=-1), axis=-1, keepdims=True)
-        weight_sum = np.where(weight_sum > 1e-6, weight_sum, 1.0)
+    proj_type = settings.projection
+    if proj_type not in ("spherical", "cylindrical", "plane"):
+        proj_type = "spherical"
 
-        accum = np.zeros_like(warped_panels[0])
-        total_mask = np.zeros(warped_masks[0].shape, dtype=np.uint8)
+    MAX_CANVAS_PIXELS = 65_000_000  # 65 Megapíxeles para estabilidad garantizada de RAM en cualquier PC
 
-        for p, m, w in zip(warped_panels, warped_masks, weights):
-            w_norm = (w[..., np.newaxis] / weight_sum).astype(np.float32)
-            accum += p * w_norm
-            total_mask = cv2.bitwise_or(total_mask, m)
+    if cameras is not None and rmats_corr is not None:
+        warper = cv2.PyRotationWarper(proj_type, focal_full)
+        corners = []
+        sizes = []
+        for i in range(n):
+            K = np.array([
+                [cameras[i].focal * scale_to_full, 0, full_w / 2.0],
+                [0, cameras[i].focal * scale_to_full, full_h / 2.0],
+                [0, 0, 1]
+            ], dtype=np.float32)
+            roi = warper.warpRoi((full_w, full_h), K, rmats_corr[i])
+            corners.append((roi[0], roi[1]))
+            sizes.append((roi[2], roi[3]))
 
+        min_x = min(c[0] for c in corners)
+        min_y = min(c[1] for c in corners)
+        max_x = max(c[0] + s[0] for c, s in zip(corners, sizes))
+        max_y = max(c[1] + s[1] for c, s in zip(corners, sizes))
+
+        canvas_w = int(max_x - min_x)
+        canvas_h = int(max_y - min_y)
+
+        scale_canvas = 1.0
+        if canvas_w * canvas_h > MAX_CANVAS_PIXELS:
+            scale_canvas = np.sqrt(MAX_CANVAS_PIXELS / (canvas_w * canvas_h))
+            focal_full *= scale_canvas
+            warper = cv2.PyRotationWarper(proj_type, focal_full)
+            corners = []
+            sizes = []
+            cur_w = int(full_w * scale_canvas)
+            cur_h = int(full_h * scale_canvas)
+            for i in range(n):
+                K = np.array([
+                    [cameras[i].focal * scale_to_full * scale_canvas, 0, cur_w / 2.0],
+                    [0, cameras[i].focal * scale_to_full * scale_canvas, cur_h / 2.0],
+                    [0, 0, 1]
+                ], dtype=np.float32)
+                roi = warper.warpRoi((cur_w, cur_h), K, rmats_corr[i])
+                corners.append((roi[0], roi[1]))
+                sizes.append((roi[2], roi[3]))
+
+            min_x = min(c[0] for c in corners)
+            min_y = min(c[1] for c in corners)
+            max_x = max(c[0] + s[0] for c, s in zip(corners, sizes))
+            max_y = max(c[1] + s[1] for c, s in zip(corners, sizes))
+            canvas_w = int(max_x - min_x)
+            canvas_h = int(max_y - min_y)
+
+        # -------------------------------------------------------------
+        # 5. Deformación y Fusión en Streaming (Memoria Segura O(1))
+        # -------------------------------------------------------------
+        if progress_callback:
+            progress_callback(60, f"Proyectando lienzo ({canvas_w}x{canvas_h}, {canvas_w*canvas_h/1e6:.1f} MP)...")
+
+        accum = np.zeros((canvas_h, canvas_w, 3), dtype=np.float32)
+        weight_sum = np.zeros((canvas_h, canvas_w, 1), dtype=np.float32)
+        total_mask = np.zeros((canvas_h, canvas_w), dtype=np.uint8)
+
+        for i in range(n):
+            if abort_flag and abort_flag():
+                raise InterruptedError("Operación cancelada por el usuario.")
+
+            if progress_callback:
+                prog = int(60 + 30 * (i / n))
+                progress_callback(prog, f"Proyectando y fusionando panel {i + 1}/{n}: {os.path.basename(panels_paths[i])}...")
+
+            img_f = load_image_as_float32(panels_paths[i])
+            if scale_canvas != 1.0:
+                img_f = cv2.resize(img_f, (0, 0), fx=scale_canvas, fy=scale_canvas, interpolation=cv2.INTER_AREA)
+
+            ih, iw = img_f.shape[:2]
+            K = np.array([
+                [cameras[i].focal * scale_to_full * scale_canvas, 0, iw / 2.0],
+                [0, cameras[i].focal * scale_to_full * scale_canvas, ih / 2.0],
+                [0, 0, 1]
+            ], dtype=np.float32)
+
+            corner, w_img = warper.warp(img_f, K, rmats_corr[i], cv2.INTER_LINEAR, cv2.BORDER_CONSTANT)
+            del img_f
+
+            w_mask = (np.max(w_img, axis=2) > 0.001).astype(np.uint8) * 255
+            dist = cv2.distanceTransform(w_mask, cv2.DIST_L2, 5)
+            max_d = np.max(dist)
+            if max_d > 0:
+                dist /= max_d
+            dist = np.power(dist, 4.0)
+            w_map = dist[..., np.newaxis].astype(np.float32)
+
+            gx = corner[0] - min_x
+            gy = corner[1] - min_y
+            h_w, w_w = w_img.shape[:2]
+
+            x1, x2 = max(0, gx), min(canvas_w, gx + w_w)
+            y1, y2 = max(0, gy), min(canvas_h, gy + h_w)
+            ix1, ix2 = x1 - gx, x2 - gx
+            iy1, iy2 = y1 - gy, y2 - gy
+
+            accum[y1:y2, x1:x2] += w_img[iy1:iy2, ix1:ix2] * w_map[iy1:iy2, ix1:ix2]
+            weight_sum[y1:y2, x1:x2] += w_map[iy1:iy2, ix1:ix2]
+            total_mask[y1:y2, x1:x2] = cv2.bitwise_or(total_mask[y1:y2, x1:x2], w_mask[iy1:iy2, ix1:ix2])
+
+            del w_img, w_mask, dist, w_map
+            gc.collect()
+
+        valid_norm = weight_sum > 1e-5
+        accum[valid_norm.squeeze()] /= weight_sum[valid_norm.squeeze()]
         blended_img = np.clip(accum, 0.0, 1.0)
+        del weight_sum
+        gc.collect()
+
+    else:
+        # Fallback Homography Projection
+        all_corners_x = []
+        all_corners_y = []
+        for idx in connected_indices:
+            H = global_H[idx]
+            corners = np.array([
+                [0, 0, 1],
+                [full_w, 0, 1],
+                [full_w, full_h, 1],
+                [0, full_h, 1]
+            ], dtype=np.float64).T
+            transformed = H @ corners
+            transformed /= transformed[2, :]
+            all_corners_x.extend(transformed[0, :])
+            all_corners_y.extend(transformed[1, :])
+
+        min_x = np.floor(np.min(all_corners_x))
+        max_x = np.ceil(np.max(all_corners_x))
+        min_y = np.floor(np.min(all_corners_y))
+        max_y = np.ceil(np.max(all_corners_y))
+
+        canvas_w = int(max_x - min_x)
+        canvas_h = int(max_y - min_y)
+
+        scale_factor = 1.0
+        if canvas_w * canvas_h > MAX_CANVAS_PIXELS:
+            scale_factor = np.sqrt(MAX_CANVAS_PIXELS / (canvas_w * canvas_h))
+            canvas_w = int(canvas_w * scale_factor)
+            canvas_h = int(canvas_h * scale_factor)
+
+        T = np.array([
+            [scale_factor, 0, -min_x * scale_factor],
+            [0, scale_factor, -min_y * scale_factor],
+            [0, 0, 1]
+        ], dtype=np.float64)
+
+        accum = np.zeros((canvas_h, canvas_w, 3), dtype=np.float32)
+        weight_sum = np.zeros((canvas_h, canvas_w, 1), dtype=np.float32)
+        total_mask = np.zeros((canvas_h, canvas_w), dtype=np.uint8)
+
+        num_conn = len(connected_indices)
+        for i, idx in enumerate(connected_indices):
+            if abort_flag and abort_flag():
+                raise InterruptedError("Operación cancelada por el usuario.")
+            if progress_callback:
+                prog = int(60 + 30 * (i / num_conn))
+                progress_callback(prog, f"Proyectando y fusionando panel {i + 1}/{num_conn}...")
+
+            img_f = load_image_as_float32(panels_paths[idx])
+            h, w = img_f.shape[:2]
+            mask_src = np.ones((h, w), dtype=np.uint8) * 255
+            H_final = T @ global_H[idx]
+
+            warped_img = cv2.warpPerspective(img_f, H_final, (canvas_w, canvas_h), flags=cv2.INTER_LINEAR)
+            warped_mask = cv2.warpPerspective(mask_src, H_final, (canvas_w, canvas_h), flags=cv2.INTER_NEAREST)
+            del img_f, mask_src
+
+            dist = cv2.distanceTransform((warped_mask > 127).astype(np.uint8), cv2.DIST_L2, 5)
+            max_d = np.max(dist)
+            if max_d > 0:
+                dist /= max_d
+            dist = np.power(dist, 4.0)
+            w_map = dist[..., np.newaxis].astype(np.float32)
+
+            accum += warped_img * w_map
+            weight_sum += w_map
+            total_mask = cv2.bitwise_or(total_mask, warped_mask)
+
+            del warped_img, warped_mask, dist, w_map
+            gc.collect()
+
+        valid_norm = weight_sum > 1e-5
+        accum[valid_norm.squeeze()] /= weight_sum[valid_norm.squeeze()]
+        blended_img = np.clip(accum, 0.0, 1.0)
+        del weight_sum
+        gc.collect()
 
     # -------------------------------------------------------------
-    # 9. Recorte Automático de Rectángulo Máximo Inscrito
+    # 6. Recorte Automático de Rectángulo Máximo Inscrito
     # -------------------------------------------------------------
     cropped_img = None
     crop_rect = None
