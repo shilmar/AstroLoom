@@ -184,10 +184,27 @@ def load_image_as_float32(filepath: str, color_space: str = None) -> np.ndarray:
             data = np.stack([data] * 3, axis=-1)
         d_max = float(data.max())
         if d_max <= 1.05 and float(data.min()) >= 0.0:
-            return np.clip(data, 0.0, 1.0)
-        max_val = 65535.0 if d_max > 255.0 else 255.0
-        data /= max_val
-        return np.clip(data, 0.0, 1.0)
+            res = np.clip(data, 0.0, 1.0)
+        else:
+            max_val = 65535.0 if d_max > 255.0 else 255.0
+            data /= max_val
+            res = np.clip(data, 0.0, 1.0)
+
+        # Si se solicita un espacio de color destino y el TIFF tiene perfil ICC incrustado, convertir
+        if color_space is not None:
+            from core.icc_manager import (
+                extract_icc_profile,
+                identify_colorspace_from_icc,
+                convert_colorspace,
+                normalize_colorspace_name
+            )
+            embedded_icc = extract_icc_profile(filepath)
+            if embedded_icc:
+                src_cs = identify_colorspace_from_icc(embedded_icc)
+                target_cs = normalize_colorspace_name(color_space)
+                if src_cs != target_cs:
+                    res = convert_colorspace(res, src_space=src_cs, dst_space=target_cs)
+        return res
 
     else:
         bgr = cv2.imread(filepath, cv2.IMREAD_COLOR)

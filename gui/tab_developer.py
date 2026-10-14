@@ -4,6 +4,7 @@ import gc
 import cv2
 import numpy as np
 import tifffile
+from typing import Optional, Dict, Any, List
 from PySide6.QtWidgets import (
     QApplication,
     QWidget, 
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QButtonGroup
 )
-from PySide6.QtCore import Qt, QCoreApplication
+from PySide6.QtCore import Qt, QCoreApplication, QTimer
 from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap
 from core.stacking import load_image_as_float32
 from core.stretch import (
@@ -105,8 +106,20 @@ class DeveloperTab(QWidget):
         self.has_custom_snapshot: bool = False
         self.snapshot_before_pixmap: Optional[QPixmap] = None
 
+        # Historial de Deshacer / Rehacer (Undo / Redo)
+        self.MAX_UNDO_STEPS = 50
+        self.undo_stack: list[dict] = []
+        self.redo_stack: list[dict] = []
+        self._last_committed_state: Optional[dict] = None
+        self._is_undoing_or_redoing: bool = False
+        self._undo_debounce_timer = QTimer(self)
+        self._undo_debounce_timer.setSingleShot(True)
+        self._undo_debounce_timer.setInterval(500)
+        self._undo_debounce_timer.timeout.connect(self._commit_action)
+
         self._setup_ui()
         self._apply_styles()
+        self._connect_undo_triggers()
         
     def _setup_ui(self):
         layout = QHBoxLayout(self)
@@ -758,6 +771,20 @@ class DeveloperTab(QWidget):
         self.shortcut_magnifier.setContext(Qt.WindowShortcut)
         self.shortcut_magnifier.activated.connect(self._on_toggle_magnifier_shortcut)
 
+        # Atajo global 'Ctrl+Z' para Deshacer
+        self.shortcut_undo = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self.shortcut_undo.setContext(Qt.WindowShortcut)
+        self.shortcut_undo.activated.connect(self.undo)
+
+        # Atajos globales 'Ctrl+Y' y 'Ctrl+Shift+Z' para Rehacer
+        self.shortcut_redo1 = QShortcut(QKeySequence("Ctrl+Y"), self)
+        self.shortcut_redo1.setContext(Qt.WindowShortcut)
+        self.shortcut_redo1.activated.connect(self.redo)
+
+        self.shortcut_redo2 = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
+        self.shortcut_redo2.setContext(Qt.WindowShortcut)
+        self.shortcut_redo2.activated.connect(self.redo)
+
         layout.addWidget(splitter)
 
     def _create_canvas_toolbar(self) -> QWidget:
@@ -769,6 +796,29 @@ class DeveloperTab(QWidget):
         tb_layout = QHBoxLayout(toolbar)
         tb_layout.setContentsMargins(8, 3, 8, 3)
         tb_layout.setSpacing(8)
+
+        # 0a. Botón Deshacer (Undo)
+        self.btn_undo = QPushButton("↺ Deshacer")
+        self.btn_undo.setCursor(Qt.PointingHandCursor)
+        self.btn_undo.setEnabled(False)
+        self.btn_undo.setToolTip("Deshace el último ajuste de revelado (Atajo: Ctrl+Z)")
+        self.btn_undo.clicked.connect(self.undo)
+        tb_layout.addWidget(self.btn_undo)
+
+        # 0b. Botón Rehacer (Redo)
+        self.btn_redo = QPushButton("↻ Rehacer")
+        self.btn_redo.setCursor(Qt.PointingHandCursor)
+        self.btn_redo.setEnabled(False)
+        self.btn_redo.setToolTip("Rehace el ajuste deshecho (Atajo: Ctrl+Y o Ctrl+Shift+Z)")
+        self.btn_redo.clicked.connect(self.redo)
+        tb_layout.addWidget(self.btn_redo)
+
+        # Separador vertical de historial
+        sep_undo = QFrame()
+        sep_undo.setFrameShape(QFrame.VLine)
+        sep_undo.setFrameShadow(QFrame.Sunken)
+        sep_undo.setStyleSheet("color: #3b4252; margin: 4px 2px;")
+        tb_layout.addWidget(sep_undo)
 
         # 1. Botón Comparador Antes / Después
         self.btn_split_view = QPushButton("◫ Antes / Después (Y)")
@@ -1109,6 +1159,11 @@ class DeveloperTab(QWidget):
                 color: #ffffff;
                 border-color: #00e5ff;
             }
+            #canvas_toolbar QPushButton:disabled {
+                background-color: #161620;
+                color: #4c566a;
+                border-color: #2e3440;
+            }
             QGroupBox {
                 font-weight: bold;
                 border: 1px solid #2d2d3a;
@@ -1301,7 +1356,7 @@ class DeveloperTab(QWidget):
         self.slider_ond_bg.setEnabled(False)
         
         try:
-            raw_img = load_image_as_float32(filepath)
+            raw_img = load_image_as_float32(filepath, color_space="srgb")
             
             # Saneamiento preventivo de NaNs e infinitos
             if np.isnan(raw_img).any() or np.isinf(raw_img).any():
@@ -1317,6 +1372,13 @@ class DeveloperTab(QWidget):
             self.snapshot_before_pixmap = None
             self._generate_before_reference()
             self._update_canvas_info_label()
+
+            # Inicializar historial de Deshacer / Rehacer limpio para la nueva imagen
+            self.undo_stack.clear()
+            self.redo_stack.clear()
+            self._last_committed_state = self._capture_state()
+            self._update_undo_redo_buttons()
+
             self.log_message(f"Imagen en memoria ({self.image_32bit.shape[1]}x{self.image_32bit.shape[0]} px). Vista acelerada activa.")
         except Exception as e:
             self.log_message(f"[ERROR] No se pudo cargar: {e}")
@@ -1566,6 +1628,10 @@ class DeveloperTab(QWidget):
             if not self.is_zoomed_100:
                 self.curve_widget.set_histogram_from_image(stretched)
             self._update_canvas_info_label()
+
+            # Reiniciar temporizador de consolidación de historial (captura scroll de ratón y flechas)
+            if not self._is_undoing_or_redoing and hasattr(self, '_undo_debounce_timer'):
+                self._undo_debounce_timer.start(500)
 
     def run_starnet(self):
         if self.image_32bit is None:
@@ -1982,17 +2048,23 @@ class DeveloperTab(QWidget):
                 desc = "JPEG 8-bit"
             elif "32-bit" in selected_filter:
                 out32 = np.ascontiguousarray(np.clip(processed, 0.0, 1.0), dtype=np.float32)
-                save_tiff_with_icc(p, out32, compression='zlib', photometric='rgb')
+                save_tiff_with_icc(p, out32, compression='zlib', photometric='rgb', source_color_space='srgb')
                 desc = "TIFF 32-bit float (ICC)"
             else:
                 u16 = np.ascontiguousarray((np.clip(processed, 0.0, 1.0) * 65535.0), dtype=np.uint16)
-                save_tiff_with_icc(p, u16, compression='zlib', photometric='rgb')
+                save_tiff_with_icc(p, u16, compression='zlib', photometric='rgb', source_color_space='srgb')
                 desc = "TIFF 16-bit (ICC)"
 
-            self.log_message(f"Imagen guardada en: {os.path.basename(p)} ({desc})")
+            from core.config_manager import get_config_val
+            from core.icc_manager import normalize_colorspace_name
+            target_cs = normalize_colorspace_name(get_config_val("icc_profile", "srgb"))
+            icc_labels = {"srgb": "sRGB", "adobe": "Adobe RGB (1998)", "prophoto": "ProPhoto RGB"}
+            icc_desc_str = icc_labels.get(target_cs, "sRGB")
+
+            self.log_message(f"Imagen guardada en: {os.path.basename(p)} ({desc} [{icc_desc_str}])")
             QMessageBox.information(
                 self, "Exportación",
-                f"Guardada con éxito en resolución completa:\n{p}\n\nFormato: {desc} ({w_full}x{h_full} px)"
+                f"Guardada con éxito en resolución completa:\n{p}\n\nFormato: {desc} ({w_full}x{h_full} px)\nPerfil ICC: {icc_desc_str}"
             )
         except Exception as e:
             self.log_message(f"[ERROR EXPORT] Fallo al escribir el archivo: {e}")
@@ -2100,6 +2172,9 @@ class DeveloperTab(QWidget):
 
         for w in widgets_to_block:
             w.blockSignals(False)
+
+        if hasattr(self, '_commit_action'):
+            self._commit_action()
             
     def clear_session(self):
         """Descarga por completo la sesión del revelador y fuerza recolección de memoria."""
@@ -2121,6 +2196,12 @@ class DeveloperTab(QWidget):
         self.snapshot_before_pixmap = None
         self.initial_bp = 0.0
         self.initial_mtf = 0.1
+
+        if hasattr(self, 'undo_stack'):
+            self.undo_stack.clear()
+            self.redo_stack.clear()
+            self._last_committed_state = None
+            self._update_undo_redo_buttons()
 
         if hasattr(self, 'canvas') and self.canvas is not None:
             self.canvas.orig_rgb = None
@@ -2172,3 +2253,257 @@ class DeveloperTab(QWidget):
         for ctrl in controls:
             if ctrl is not None:
                 ctrl.setEnabled(enabled)
+
+    # -------------------------------------------------------------
+    # GESTOR DE HISTORIAL DE DESHACER / REHACER (UNDO / REDO)
+    # -------------------------------------------------------------
+    def _connect_undo_triggers(self):
+        """Conecta los eventos de finalización de interacción para registrar acciones en el historial."""
+        all_sliders = [
+            self.slider_lp, self.slider_stars, self.slider_contrast_starless,
+            self.slider_clarity, self.slider_dehaze, self.slider_ond_est,
+            self.slider_ond_bg, self.slider_denoise, 
+            self.slider_temp, self.slider_tint, self.slider_sat_sky,
+            self.slider_sat_gnd, self.slider_vibrance, self.slider_contrast,
+            self.slider_bp, self.slider_mtf,
+            self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp,
+        ]
+        for s in all_sliders:
+            s.sliderReleased.connect(self._commit_action)
+
+        self.spin_bp.editingFinished.connect(self._commit_action)
+        self.spin_mtf.editingFinished.connect(self._commit_action)
+        self.combo_layer.activated.connect(lambda _: self._commit_action())
+
+        if hasattr(self, 'curve_widget'):
+            self.curve_widget.curveCommitted.connect(self._commit_action)
+
+    def _capture_state(self) -> dict:
+        """Captura una instantánea paramétrica ligera (~1 KB) de todos los ajustes del revelador."""
+        return {
+            "lp_val": self.slider_lp.value(),
+            "layer_idx": self.combo_layer.currentIndex(),
+            "stars_val": self.slider_stars.value(),
+            "contrast_starless_val": self.slider_contrast_starless.value(),
+            "clarity_val": self.slider_clarity.value(),
+            "dehaze_val": self.slider_dehaze.value(),
+            "ond_est_val": self.slider_ond_est.value(),
+            "ond_bg_val": self.slider_ond_bg.value(),
+            "denoise_val": self.slider_denoise.value(),
+            "temp_val": self.slider_temp.value(),
+            "tint_val": self.slider_tint.value(),
+            "sat_sky_val": self.slider_sat_sky.value(),
+            "sat_gnd_val": self.slider_sat_gnd.value(),
+            "vibrance_val": self.slider_vibrance.value(),
+            "contrast_val": self.slider_contrast.value(),
+            "bp_val": float(self.spin_bp.value()),
+            "mtf_val": float(self.spin_mtf.value()),
+            "gnd_ev_val": self.slider_gnd_ev.value(),
+            "gnd_sh_val": self.slider_gnd_sh.value(),
+            "gnd_bp_val": self.slider_gnd_bp.value(),
+            "curves": self.curve_widget.get_state() if hasattr(self, 'curve_widget') else None,
+        }
+
+    def _state_different(self, s1: Optional[dict], s2: Optional[dict]) -> bool:
+        """Comprueba si dos instantáneas paramétricas presentan diferencias efectivas."""
+        if s1 is None or s2 is None:
+            return True
+        for k, v1 in s1.items():
+            v2 = s2.get(k)
+            if k == "curves":
+                if v1 != v2:
+                    return True
+            elif isinstance(v1, float):
+                if abs(v1 - (v2 or 0.0)) > 1e-5:
+                    return True
+            elif v1 != v2:
+                return True
+        return False
+
+    def _commit_action(self):
+        """Registra el cambio actual en la pila de deshacer si difiere del último estado consolidado."""
+        if self._is_undoing_or_redoing or self._last_committed_state is None:
+            return
+        current = self._capture_state()
+        if self._state_different(self._last_committed_state, current):
+            self.undo_stack.append(self._last_committed_state)
+            if len(self.undo_stack) > self.MAX_UNDO_STEPS:
+                self.undo_stack.pop(0)
+            self.redo_stack.clear()
+            self._last_committed_state = current
+            self._update_undo_redo_buttons()
+
+    def undo(self):
+        """Deshace el último ajuste paramétrico realizado (Ctrl+Z)."""
+        if not self.undo_stack or self._is_undoing_or_redoing:
+            return
+        self._is_undoing_or_redoing = True
+        try:
+            current = self._capture_state()
+            self.redo_stack.append(current)
+            target = self.undo_stack.pop()
+            self._restore_state(target)
+            self._last_committed_state = target
+            self.log_message(f"↺ Deshacer aplicado ({len(self.undo_stack)} pasos restantes)")
+        finally:
+            self._is_undoing_or_redoing = False
+            self._update_undo_redo_buttons()
+
+    def redo(self):
+        """Rehace el ajuste paramétrico previamente deshecho (Ctrl+Y / Ctrl+Shift+Z)."""
+        if not self.redo_stack or self._is_undoing_or_redoing:
+            return
+        self._is_undoing_or_redoing = True
+        try:
+            current = self._capture_state()
+            self.undo_stack.append(current)
+            target = self.redo_stack.pop()
+            self._restore_state(target)
+            self._last_committed_state = target
+            self.log_message(f"↻ Rehacer aplicado ({len(self.redo_stack)} pasos por rehacer)")
+        finally:
+            self._is_undoing_or_redoing = False
+            self._update_undo_redo_buttons()
+
+    def _restore_state(self, state: dict) -> None:
+        """Restaura todos los controles al estado paramétrico especificado y recalcula la vista."""
+        if not state:
+            return
+
+        widgets_to_block = [
+            self.slider_lp, self.slider_stars, self.slider_contrast_starless,
+            self.slider_clarity, self.slider_dehaze, self.slider_ond_est,
+            self.slider_ond_bg, self.slider_denoise, 
+            self.slider_temp, self.slider_tint, self.slider_sat_sky,
+            self.slider_sat_gnd, self.slider_vibrance, self.slider_contrast,
+            self.combo_layer, self.spin_bp, self.slider_bp,
+            self.spin_mtf, self.slider_mtf,
+            self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp,
+        ]
+        for w in widgets_to_block:
+            w.blockSignals(True)
+
+        if "lp_val" in state:
+            self.slider_lp.setValue(state["lp_val"])
+            self.lp_reduction = state["lp_val"] / 100.0
+            self.lbl_lp.setText(f"{state['lp_val']}%")
+
+        if "layer_idx" in state:
+            self.combo_layer.setCurrentIndex(state["layer_idx"])
+            self.view_layer_mode = state["layer_idx"]
+
+        if "stars_val" in state:
+            self.slider_stars.setValue(state["stars_val"])
+            self.star_intensity = state["stars_val"] / 100.0
+            self.lbl_stars.setText(f"{state['stars_val']}%")
+
+        if "contrast_starless_val" in state:
+            self.slider_contrast_starless.setValue(state["contrast_starless_val"])
+            self.contrast_starless_val = state["contrast_starless_val"] / 100.0
+            self.lbl_contrast_starless.setText(f"{self.contrast_starless_val:+.2f}")
+
+        if "clarity_val" in state:
+            self.slider_clarity.setValue(state["clarity_val"])
+            self.clarity_starless_val = state["clarity_val"] / 100.0
+            self.lbl_clarity.setText(f"{self.clarity_starless_val:+.2f}")
+
+        if "dehaze_val" in state:
+            self.slider_dehaze.setValue(state["dehaze_val"])
+            self.dehaze_starless_val = state["dehaze_val"] / 100.0
+            self.lbl_dehaze.setText(f"{self.dehaze_starless_val:+.2f}")
+
+        if "ond_est_val" in state:
+            self.slider_ond_est.setValue(state["ond_est_val"])
+            self.multiescala_estructura = state["ond_est_val"] / 100.0
+            self.lbl_ond_est.setText(f"{self.multiescala_estructura:+.2f}")
+
+        if "ond_bg_val" in state:
+            self.slider_ond_bg.setValue(state["ond_bg_val"])
+            self.multiescala_fondo = state["ond_bg_val"] / 100.0
+            self.lbl_ond_bg.setText(f"{state['ond_bg_val']}%")
+
+        if "denoise_val" in state:
+            self.slider_denoise.setValue(state["denoise_val"])
+            self.denoise_strength = state["denoise_val"] / 100.0
+            self.lbl_denoise.setText(f"{state['denoise_val']}%")
+
+        if "temp_val" in state:
+            self.slider_temp.setValue(state["temp_val"])
+            self.temp_val = state["temp_val"] / 1000.0
+            self.lbl_temp_val.setText(f"{self.temp_val:+.3f}")
+
+        if "tint_val" in state:
+            self.slider_tint.setValue(state["tint_val"])
+            self.tint_val = state["tint_val"] / 1000.0
+            self.lbl_tint_val.setText(f"{self.tint_val:+.3f}")
+
+        if "sat_sky_val" in state:
+            self.slider_sat_sky.setValue(state["sat_sky_val"])
+            self.sat_sky_val = state["sat_sky_val"] / 100.0
+            self.lbl_sat_sky.setText(f"{self.sat_sky_val:.2f}x")
+
+        if "sat_gnd_val" in state:
+            self.slider_sat_gnd.setValue(state["sat_gnd_val"])
+            self.sat_gnd_val = state["sat_gnd_val"] / 100.0
+            self.lbl_sat_gnd.setText(f"{self.sat_gnd_val:.2f}x")
+
+        if "vibrance_val" in state:
+            self.slider_vibrance.setValue(state["vibrance_val"])
+            self.vibrance_val = state["vibrance_val"] / 100.0
+            self.lbl_vibrance.setText(f"{self.vibrance_val:+.2f}")
+
+        if "contrast_val" in state:
+            self.slider_contrast.setValue(state["contrast_val"])
+            self.contrast_val = state["contrast_val"] / 100.0
+            self.lbl_contrast.setText(f"{self.contrast_val:+.2f}")
+
+        if "bp_val" in state:
+            self.spin_bp.setValue(state["bp_val"])
+            self.slider_bp.setValue(int(np.clip((state["bp_val"] / 0.20) * 2000.0, 0, 2000)))
+
+        if "mtf_val" in state:
+            self.spin_mtf.setValue(state["mtf_val"])
+            self.slider_mtf.setValue(int(np.clip((state["mtf_val"] / 0.50) * 2000.0, 1, 2000)))
+
+        if "gnd_ev_val" in state:
+            self.slider_gnd_ev.setValue(state["gnd_ev_val"])
+            self.gnd_ev_val = state["gnd_ev_val"] / 100.0
+            self.lbl_gnd_ev.setText(f"{self.gnd_ev_val:+.2f} EV")
+
+        if "gnd_sh_val" in state:
+            self.slider_gnd_sh.setValue(state["gnd_sh_val"])
+            self.gnd_shadows_val = state["gnd_sh_val"] / 100.0
+            self.lbl_gnd_sh.setText(f"{state['gnd_sh_val']}%")
+
+        if "gnd_bp_val" in state:
+            self.slider_gnd_bp.setValue(state["gnd_bp_val"])
+            self.gnd_bp_val = state["gnd_bp_val"] / 1000.0
+            self.lbl_gnd_bp.setText(f"{self.gnd_bp_val:+.3f}")
+
+        for w in widgets_to_block:
+            w.blockSignals(False)
+
+        if "curves" in state and state["curves"] is not None and hasattr(self, 'curve_widget'):
+            self.curve_widget.blockSignals(True)
+            self.curve_widget.set_state(state["curves"])
+            self.curve_widget.blockSignals(False)
+
+        self.update_stretch_preview()
+
+    def _update_undo_redo_buttons(self):
+        """Actualiza la disponibilidad visual y tooltips de los botones Deshacer y Rehacer."""
+        has_undo = len(self.undo_stack) > 0
+        has_redo = len(self.redo_stack) > 0
+        if hasattr(self, 'btn_undo'):
+            self.btn_undo.setEnabled(has_undo)
+            if has_undo:
+                self.btn_undo.setToolTip(f"Deshacer último ajuste (Ctrl+Z) — {len(self.undo_stack)} pasos en historial")
+            else:
+                self.btn_undo.setToolTip("Deshacer (Ctrl+Z) — Sin acciones para deshacer")
+
+        if hasattr(self, 'btn_redo'):
+            self.btn_redo.setEnabled(has_redo)
+            if has_redo:
+                self.btn_redo.setToolTip(f"Rehacer ajuste (Ctrl+Y / Ctrl+Shift+Z) — {len(self.redo_stack)} pasos disponibles")
+            else:
+                self.btn_redo.setToolTip("Rehacer (Ctrl+Y) — Sin acciones para rehacer")

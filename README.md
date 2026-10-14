@@ -38,7 +38,8 @@
 - **Pipeta de Balance de Blancos (Eyedropper):** Calibración cromática interactiva con botón en barra superior y atajo **`W`**, cursor de mira telescópica, tarjeta flotante RGB y cálculo analítico de ganancia inversa sobre ventana de muestreo $5\times 5$ px.
 - **Lupa de Inspección Flotante (Floating Magnifier):** Lente circular flotante con botón en barra superior y atajo **`Z`**, zoom dinámico ajustable con la rueda del ratón ($1.5\times$ a $8.0\times$) y retícula central para inspeccionar núcleos estelares, bordes y ruido sin perder la vista general ni conmutar el zoom 1:1.
 - **Modo Comparador "Antes / Después" con Cortina Divisoria (Split-View):** Divisor deslizable interactivo en el lienzo para contrastar la toma original neutra con el revelado activo en tiempo real. Soporta orientación horizontal y vertical con atajos `Y` y `Shift + Y`, cursores dinámicos contextuales (`↔`, `↕`) y recentrado rápido al 50% con doble clic.
-- **Barra Superior de Herramientas del Canvas:** Acceso directo a funciones visuales críticas (aviso de Clipping `J`, divisor de vista `Y`, orientación de cortina, Pipeta WB `W` y Lupa flotante `Z`).
+- **Barra Superior de Herramientas del Canvas:** Acceso directo a funciones visuales críticas (aviso de Clipping `J`, divisor de vista `Y`, orientación de cortina, Pipeta WB `W` y Lupa flotante `Z`, junto con botones de Deshacer `↺` y Rehacer `↻`).
+- **Historial No Destructivo Deshacer / Rehacer (Undo / Redo):** Sistema paramétrico ligero de hasta 50 pasos con consumo mínimo de memoria (< 50 KB en total), atajos globales de teclado (`Ctrl+Z`, `Ctrl+Y`, `Ctrl+Shift+Z`), botones dedicados en la barra superior (`↺ Deshacer`, `↻ Rehacer`), desparasitado inteligente (*debounce* de 500 ms) para rueda de ratón y registro instantáneo de modificaciones sobre los 19 deslizadores, controles de recorte/MTF, capas y nodos de curvas tonales.
 - **Soporte de Arrastrar y Soltar (Drag & Drop) Universal:** Ingesta inmediata de archivos y carpetas completas en todas las listas de Apilador, Startrails y Eclipses, así como carga directa arrastrando imágenes sobre el lienzo del Revelador.
 
 ### 5. Módulo Especializado de Eclipses (Solar / Lunar)
@@ -92,9 +93,11 @@
 - **Estrategias de Memoria Configurables:** Modos automático (umbral del 70% de RAM disponible), memoria RAM intermedia de alta velocidad o volcado temporal a disco SSD para equipos con recursos limitados.
 - **Detección Automática de Binarios:** Localización y validación dinámica de ejecutables externos de StarNet++ CLI y GraXpert con indicadores en tiempo real de disponibilidad.
 - **Indicadores de Recorte (Clipping) Estilo Lightroom:** Alertas visuales interactivas en las esquinas del histograma para sombras empastadas (azul) y luces quemadas (rojo), superposición vectorial acelerada en el lienzo (< 3 ms) y atajo global de teclado **`J`**.
+- **Auto-reparación de Directorios y Configuración Base:** Verificación automática en el arranque de rutas de trabajo con fallback seguro a directorios locales válidos (`config.default.json`), garantizando portabilidad y eliminando errores de carpetas inexistentes o unidades de disco no disponibles.
 
 ### 8. Fidelidad Cromática y Perfiles de Color ICC
 - **Incrustación de Metadatos ICC en TIFF (Tag 34675):** Soporte nativo para incrustar perfiles de color en la cabecera `InterColorProfile` de los archivos TIFF exportados en todos los módulos (Apilador, Revelador, Startrails y Eclipses), garantizando que las imágenes conserven su gama tonal y saturación de forma idéntica en Adobe Photoshop, Adobe Lightroom, Capture One o navegadores web.
+- **Conversión Cromática Rigurosa y Acelerada:** Transformación matemática exacta entre los espacios sRGB, Adobe RGB y ProPhoto RGB mediante matrices de adaptación cromática Bradford CIE D65/D50, linearización y re-gamma con aceleración por tablas de búsqueda (LUT), asegurando que el perfil incrustado coincida con la distribución espectral de los píxeles sin desaturación ni virados indeseados.
 - **Espacios de Color Estándar Suministrados:**
   - **sRGB:** Perfil estándar universal para publicación en internet y pantallas convencionales.
   - **Adobe RGB (1998):** Gama amplia recomendada para impresión fotográfica y pantallas de artes gráficas.
@@ -260,10 +263,12 @@ python run_app.py
 [x] Capa dedicada de marcas horarias EXIF y textos en la exportación de archivos PSD de Photoshop.
 [x] Guardado y recuperación instantánea de sesiones de collage de eclipses (.ecollage) con metadatos de análisis, calidad y selección de fases persistente.
 [x] Aceleración multiproceso/multihilo en el cribado masivo del collage de eclipses con selector configurable de rendimiento (Velocidad half-size RAW vs Máxima resolución nativa).
-[ ] Aceleración multihilo (ThreadPoolExecutor) en la detección de limbo en lote y precarga HDR en la pestaña de Eclipses (manteniendo resolución nativa 1:1 estricta sin downscaling para máxima precisión subpíxel).
+[x] Aceleración multihilo (ThreadPoolExecutor) en la detección de limbo en lote y precarga HDR en la pestaña de Eclipses (manteniendo resolución nativa 1:1 estricta sin downscaling para máxima precisión subpíxel).
 [ ] Módulo de composición panorámica para mosaicos nocturnos (Nightscape Panorama Stitcher).
 [ ] Modo automático de gestión de memoria RAM según carga del sistema (psutil).
-[ ] Deshacer / Rehacer (Undo / Redo) con historial de pasos en el Revelador.
+[x] Deshacer / Rehacer (Undo / Redo) paramétrico de 50 pasos en el Revelador con botones dedicados y atajos de teclado.
+[x] Conversión cromática matemática exacta (adaptación Bradford D65/D50 y aceleración LUT) en exportación con perfiles ICC (sRGB, Adobe RGB, ProPhoto RGB).
+[x] Auto-reparación y robustez en arranque ante directorios inexistentes con plantilla base config.default.json.
 [ ] Anti-parpadeo (Deflicker) y morphing temporal entre fotogramas en Startrails / Time-Lapse.
 [ ] Miniaturas previas (Thumbnails) en las tablas de archivos y estimación de tiempo restante (ETA) en barra de progreso.
 ---

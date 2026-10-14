@@ -35,6 +35,7 @@ class CurveWidget(QWidget):
       - 'luma_sat': curva selectiva de saturación en función de la luminancia.
     """
     curveChanged = Signal()
+    curveCommitted = Signal()
     clippingChanged = Signal(bool, bool)  # (clip_shadows, clip_highlights)
 
     def __init__(self, parent: Optional[QWidget] = None):
@@ -158,6 +159,7 @@ class CurveWidget(QWidget):
         self._modes_data[target_mode]["selected_idx"] = None
         self.update()
         self.curveChanged.emit()
+        self.curveCommitted.emit()
 
     def reset_all_curves(self) -> None:
         """Restablece simultáneamente las 3 curvas (RGB, Hue vs Sat, Luma vs Sat)."""
@@ -173,6 +175,29 @@ class CurveWidget(QWidget):
         self._modes_data[MODE_LUMA_SAT]["lut"] = np.full(LUT_RESOLUTION, 0.5, dtype=np.float32)
         self._modes_data[MODE_LUMA_SAT]["selected_idx"] = None
 
+        self.update()
+        self.curveChanged.emit()
+        self.curveCommitted.emit()
+
+    def get_state(self) -> dict:
+        """Devuelve un clon serializable de los puntos de control de todas las curvas."""
+        return {
+            m: [tuple(p) for p in self._modes_data[m]["points"]]
+            for m in self._modes_data
+        }
+
+    def set_state(self, state: dict) -> None:
+        """Restaura los puntos de control y recalcula las LUTs de todas las curvas."""
+        if not state or not isinstance(state, dict):
+            return
+        cur_mode = self._mode
+        for m, pts in state.items():
+            if m in self._modes_data:
+                self._modes_data[m]["points"] = [tuple(p) for p in pts]
+                self._modes_data[m]["selected_idx"] = None
+                self._mode = m
+                self._update_lut()
+        self._mode = cur_mode
         self.update()
         self.curveChanged.emit()
 
@@ -622,6 +647,7 @@ class CurveWidget(QWidget):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
             self.dragging = False
+            self.curveCommitted.emit()
 
     def leaveEvent(self, event) -> None:
         self.setCursor(Qt.ArrowCursor)

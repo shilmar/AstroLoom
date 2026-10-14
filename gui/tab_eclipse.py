@@ -44,6 +44,8 @@ from core.eclipse import (
 )
 from core.stacking import load_image_as_float32
 from core.icc_manager import save_tiff_with_icc
+from core.config_manager import get_config_val
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from gui.widgets.drop_widgets import DropTableWidget, collect_image_files_from_mime
 
 
@@ -425,7 +427,7 @@ class EclipseWorker(QThread):
                 total = len(files)
                 detections = [None] * total
 
-                self.progress.emit(5, "Iniciando detección subpíxel de limbo en lote...")
+                self.progress.emit(5, "Iniciando detección subpíxel de limbo (1:1 nativo)...")
 
                 # 1. Detectar primero la toma de referencia para anclar el radio físico esperado
                 ref_img = load_image_as_float32(files[ref_idx])
@@ -433,17 +435,47 @@ class EclipseWorker(QThread):
                 detections[ref_idx] = (ref_cx, ref_cy, ref_r)
                 expected_r = ref_r if ref_r > 10 else None
 
-                # 2. Detectar el resto de tomas usando expected_r
-                for idx, path in enumerate(files):
-                    if idx == ref_idx:
-                        continue
-                    self.progress.emit(
-                        int(10 + (idx / total) * 85),
-                        f"Escaneando limbo ({idx+1}/{total}): {os.path.basename(path)}"
-                    )
-                    img = load_image_as_float32(path)
-                    cx, cy, r = detect_eclipse_disk(img, mode=mode, expected_radius=expected_r)
-                    detections[idx] = (cx, cy, r)
+                # 2. Detectar el resto de tomas usando expected_r en paralelo a resolución 1:1 nativa
+                items_to_detect = [(idx, path) for idx, path in enumerate(files) if idx != ref_idx]
+
+                if items_to_detect:
+                    try:
+                        cpu_workers = int(get_config_val("cpu_workers", max(2, (os.cpu_count() or 4) - 2)))
+                    except Exception:
+                        cpu_workers = max(2, (os.cpu_count() or 4) - 2)
+                    eff_workers = max(1, min(cpu_workers, os.cpu_count() or 16, len(items_to_detect)))
+
+                    def _detect_task(item):
+                        idx, path = item
+                        img = load_image_as_float32(path)
+                        cx, cy, r = detect_eclipse_disk(img, mode=mode, expected_radius=expected_r)
+                        return idx, (cx, cy, r), os.path.basename(path)
+
+                    completed = 1  # La referencia ya está procesada
+                    if eff_workers == 1 or len(items_to_detect) == 1:
+                        for item in items_to_detect:
+                            if self.isInterruptionRequested():
+                                break
+                            idx, det, bname = _detect_task(item)
+                            detections[idx] = det
+                            completed += 1
+                            pct = int(10 + (completed / total) * 85)
+                            self.progress.emit(pct, f"Escaneando limbo ({completed}/{total}): {bname}")
+                    else:
+                        with ThreadPoolExecutor(max_workers=eff_workers) as executor:
+                            future_to_item = {executor.submit(_detect_task, item): item for item in items_to_detect}
+                            for future in as_completed(future_to_item):
+                                if self.isInterruptionRequested():
+                                    try:
+                                        executor.shutdown(wait=False, cancel_futures=True)
+                                    except Exception:
+                                        executor.shutdown(wait=False)
+                                    break
+                                idx, det, bname = future.result()
+                                detections[idx] = det
+                                completed += 1
+                                pct = int(10 + (completed / total) * 85)
+                                self.progress.emit(pct, f"Escaneando limbo ({completed}/{total}): {bname}")
 
                 self.progress.emit(100, "Detección subpíxel completada para todas las tomas.")
                 self.finished.emit(detections, "batch_detect")
@@ -459,31 +491,66 @@ class EclipseWorker(QThread):
                 mode = self.params.get("mode", "solar")
 
                 total = len(files)
-                loaded_images = []
-                self.progress.emit(5, "Iniciando carga de tomas de bracketing...")
+                loaded_images = [None] * total
+                final_centers = [None] * total
+                self.progress.emit(5, "Iniciando carga paralela de tomas de bracketing (1:1 nativo)...")
 
-                final_centers = []
                 expected_r = None
+                if centers is not None:
+                    valid_rs = [c[2] for c in centers if c is not None and len(c) > 2 and c[2] > 10]
+                    if valid_rs:
+                        expected_r = float(np.median(valid_rs))
 
-                for idx, path in enumerate(files):
-                    self.progress.emit(
-                        int(5 + (idx / total) * 40),
-                        f"Cargando ({idx+1}/{total}): {os.path.basename(path)}"
-                    )
+                try:
+                    cpu_workers = int(get_config_val("cpu_workers", max(2, (os.cpu_count() or 4) - 2)))
+                except Exception:
+                    cpu_workers = max(2, (os.cpu_count() or 4) - 2)
+                eff_workers = max(1, min(cpu_workers, os.cpu_count() or 16, total))
+
+                def _load_and_detect_one(idx_path):
+                    idx, path = idx_path
                     img = load_image_as_float32(path)
-                    loaded_images.append(img)
-
                     if centers is not None and idx < len(centers) and centers[idx] is not None and centers[idx][2] > 5:
-                        final_centers.append(centers[idx])
-                        if expected_r is None and centers[idx][2] > 10:
-                            expected_r = centers[idx][2]
+                        c = centers[idx]
                     else:
                         cx, cy, r = detect_eclipse_disk(img, mode=mode, expected_radius=expected_r)
-                        if expected_r is None and r > 10:
-                            expected_r = r
-                        final_centers.append((cx, cy, r))
+                        c = (cx, cy, r)
+                    return idx, img, c, os.path.basename(path)
 
-                if auto_align and len(final_centers) == len(loaded_images):
+                completed = 0
+                items = list(enumerate(files))
+                if eff_workers == 1 or total == 1:
+                    for item in items:
+                        if self.isInterruptionRequested():
+                            break
+                        idx, img, c, bname = _load_and_detect_one(item)
+                        loaded_images[idx] = img
+                        final_centers[idx] = c
+                        completed += 1
+                        self.progress.emit(
+                            int(5 + (completed / total) * 40),
+                            f"Cargando ({completed}/{total}): {bname}"
+                        )
+                else:
+                    with ThreadPoolExecutor(max_workers=eff_workers) as executor:
+                        future_to_item = {executor.submit(_load_and_detect_one, item): item for item in items}
+                        for future in as_completed(future_to_item):
+                            if self.isInterruptionRequested():
+                                try:
+                                    executor.shutdown(wait=False, cancel_futures=True)
+                                except Exception:
+                                    executor.shutdown(wait=False)
+                                break
+                            idx, img, c, bname = future.result()
+                            loaded_images[idx] = img
+                            final_centers[idx] = c
+                            completed += 1
+                            self.progress.emit(
+                                int(5 + (completed / total) * 40),
+                                f"Cargando ({completed}/{total}): {bname}"
+                            )
+
+                if auto_align and len(final_centers) == len(loaded_images) and all(img is not None for img in loaded_images):
                     self.progress.emit(50, "Alineando tomas por centro de limbo (interpolación Lanczos4)...")
                     center_pts = [(c[0], c[1]) for c in final_centers]
                     aligned_images, shifts = align_eclipse_bracketing(
@@ -492,8 +559,8 @@ class EclipseWorker(QThread):
                         ref_idx=ref_idx
                     )
                 else:
-                    aligned_images = loaded_images
-                    shifts = [(0.0, 0.0)] * len(loaded_images)
+                    aligned_images = [img for img in loaded_images if img is not None]
+                    shifts = [(0.0, 0.0)] * len(aligned_images)
 
                 progress_msg = "Calculando ponderaciones y fusionando flujo fotométrico HDR..." if mode == "solar" else "Fusionando tomas con exposición multiescala (Mertens HDR)..."
                 self.progress.emit(75, progress_msg)

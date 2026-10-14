@@ -5,6 +5,35 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-10-14
+
+### Añadido
+* **Historial No Destructivo Deshacer / Rehacer (Undo / Redo) en el Revelador:**
+  - Sistema de captura paramétrica ultraligero con capacidad de hasta **50 pasos** (`MAX_UNDO_STEPS = 50`).
+  - Almacena diccionarios con el estado numérico exacto de los 19 deslizadores, spinboxes de punto negro y MTF, capa activa y nodos de control de las curvas tonales (`CurveWidget`), consumiendo menos de 1 KB por paso (< 50 KB en total para los 50 pasos frente a decenas de GB si se duplicasen las matrices de imagen).
+  - Nuevos botones dedicados en la barra superior de herramientas del lienzo: `[ ↺ Deshacer ]` y `[ ↻ Rehacer ]`, con gestión dinámica de activación/desactivación visual (`:disabled`) acorde al tema oscuro.
+  - Atajos de teclado universales: **`Ctrl + Z`** para deshacer, y **`Ctrl + Y`** o **`Ctrl + Shift + Z`** para rehacer.
+  - Temporizador de desparasitado inteligente (*debounce* de 500 ms) para desplazamientos continuos de la rueda del ratón o teclas de flecha, evitando saturar la pila de historial.
+  - Señal dedicada `curveCommitted` emitida al soltar nodos de control o restablecer curvas tonales.
+  - Restauración atómica con bloqueo temporal de señales (`blockSignals(True)`) para prevenir disparos en cascada y actualizar la previsualización en una sola pasada.
+* **Plantilla de Configuración Base Universal (`config.default.json`):**
+  - Incorporado fichero base con rutas relativas limpias y seguras para primeras instalaciones o despliegues portables.
+
+### Modificado
+* **Conversión Cromática Rigurosa en Exportación TIFF con Perfiles ICC:**
+  - Implementado motor de transformación de coordenadas de color (`convert_colorspace`) con adaptación cromática lineal von Kries / Bradford (CIE D65 a CIE D50) para sRGB, Adobe RGB (1998) y ProPhoto RGB (ROMM RGB).
+  - Linearización exacta y re-gamma para cada espacio de color estándar, acelerado mediante tablas de consulta (LUT) vectorizadas de 16 y 8 bits.
+  - Integrado en `save_tiff_with_icc` tanto en el Revelador como en el Apilador, garantizando que los datos de píxeles coincidan exactamente con el perfil ICC embebido (Tag 34675), eliminando la desaturación o virajes tonales al abrir las imágenes en Photoshop, Lightroom o visores calibrados.
+* **Actualización de Versión:**
+  - Incremento general a **v0.6.9** en la ventana principal (`gui/main_window.py`) y en la insignia de versión del panel de configuración (`gui/tab_settings.py`).
+
+### Corregido
+* **Arranque Robusto y Auto-reparación de Rutas de Espacio de Trabajo:**
+  - Prevenido fallo crítico en el arranque (`FileNotFoundError: [WinError 3] El sistema no puede encontrar la ruta especificada`) al cargar configuraciones con rutas o unidades de disco no existentes en el equipo local.
+  - Implementada función de validación y resolución automática (`_validate_and_resolve_dir`) con respaldo transparente hacia rutas locales válidas del usuario (`APP_ROOT` y `~/Apilator`).
+* **Depuración Visual en el Módulo de Trazas de Estrellas (Startrails):**
+  - Retirada la tarjeta de funciones en desarrollo de la interfaz de usuario en `gui/tab_startrails.py` para mantener un diseño limpio, profesional y consistente con el resto de módulos.
+
 ## [0.6.8] - 2026-10-13
 
 ### Añadido

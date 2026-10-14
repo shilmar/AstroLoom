@@ -574,7 +574,8 @@ class StackingWorker(QThread):
                 final_composite,
                 icc_bytes=icc_bytes_to_embed,
                 compression='zlib',
-                photometric='rgb'
+                photometric='rgb',
+                convert_color=False
             )
             del final_composite
 

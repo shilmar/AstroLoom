@@ -653,26 +653,6 @@ class StartrailsTab(QWidget):
         export_layout.addWidget(self.btn_send_to_dev)
 
         left_layout.addWidget(grp_export)
-
-        # TARJETA INFORMATIVA DE HOJA DE RUTA (ROADMAP PENDIENTE)
-        card_roadmap = QWidget()
-        card_roadmap.setObjectName("card_roadmap")
-        roadmap_layout = QVBoxLayout(card_roadmap)
-        roadmap_layout.setContentsMargins(10, 8, 10, 8)
-        roadmap_layout.setSpacing(4)
-
-        lbl_rm_title = QLabel("💡 Próximas funciones en desarrollo:")
-        lbl_rm_title.setStyleSheet("color: #b388ff; font-size: 11px; font-weight: bold;")
-        roadmap_layout.addWidget(lbl_rm_title)
-
-        lbl_rm_desc = QLabel(
-            "• Integración con curvas tonales de contraste nocturno\n"
-            "• Modo timelapse con suavizado temporal anti-flicker"
-        )
-        lbl_rm_desc.setStyleSheet("color: #8c8c9e; font-size: 10px; line-height: 140%;")
-        roadmap_layout.addWidget(lbl_rm_desc)
-
-        left_layout.addWidget(card_roadmap)
         left_layout.addStretch()
 
         scroll_area.setWidget(panel_content)
@@ -793,11 +773,6 @@ class StartrailsTab(QWidget):
                 border-radius: 4px;
                 padding: 4px 6px;
                 color: #f0f0f0;
-            }
-            QWidget#card_roadmap {
-                background-color: #14141e;
-                border: 1px dashed #3d3d52;
-                border-radius: 6px;
             }
         """)
 
