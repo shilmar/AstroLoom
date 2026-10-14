@@ -298,43 +298,43 @@ python run_app.py
 * Pulsa **💾 Guardar Panorámica (TIFF 16/32-bit)** para archivar, o pulsa **➡️ Enviar Panorámica al Revelador / Editor** para aplicar curvas tonales, reducción de ruido o realce de gas y nebulosas.
 
 ## Hoja de Ruta
-[x] Apilado diferencial cielo/suelo con alineación estelar por homografía.
-[x] Rechazo estadístico Kappa-Sigma (MAD) libre de trazas de satélites y aviones.
-[x] Pipeline completo de calibración con Darks, Flats y Bias.
-[x] Conservación íntegra de resolución nativa mediante BORDER_REFLECT.
-[x] Gestión de proyectos y sesiones en disco (.mwstack).
-[x] Segmentación asistida GrabCut y zoom nativo 1:1.
-[x] Descomposición y realce multiescala mediante ondículas À Trous.
-[x] Integración de StarNet++ v2 y GraXpert AI.
-[x] Rutina específica de apilado y alineación para eclipses solares y lunares (Módulo Eclipses con NRGF continuo y detección subpíxel).
-[x] Módulo dedicado de Trazas de Estrellas (Startrails) con streaming O(1), efecto cometa, suelo limpio y supresión automática de satélites/aviones.
-[x] Relleno continuo de saltos entre tomas (Gap Filling) en Startrails.
-[x] Exportación de perfiles de color ICC embebidos en TIFF (sRGB / AdobeRGB / ProPhoto).
-[x] Generación y exportación de secuencia acumulativa de fotogramas para vídeo Time-Lapse.
-[x] Soporte universal de Arrastrar y Soltar (Drag & Drop) en listas de archivos y lienzos interactivos.
-[x] Pipeta de Balance de Blancos (Eyedropper) interactiva con neutralización analítica exacta.
-[x] Lupa de Inspección Flotante (Floating Magnifier) con zoom dinámico de rueda de ratón.
-[x] Curvas Selectivas de Color (Hue vs Sat y Luma vs Sat) con espectro arcoíris continuo.
-[x] Diseñador de secuencia y collage de eclipses con cribado de trepidación, cálculo de % de ocultación y exportación PSD nativo por capas (16-bit).
-[x] Indicador de progreso y estado visual explícito en la ingesta masiva de archivos ("Cargando ficheros..." -> "Carga finalizada") en el módulo de eclipses y collage.
-[x] Navegación interactiva con Zoom y Paneo en el visor de previsualización del Diseñador de Collage.
-[x] Detección y recomendación automática de fenómenos singulares de contacto: Perlas de Baily y Anillo de Diamante (Diamond Ring).
-[x] Margen y radio de recorte adaptativo / configurable para evitar cortar rayos solares, destellos del anillo de diamante y filamentos de la corona (o máscara de capa editable no destructiva en PSD).
-[x] Nueva modalidad de maquetación: Cinta Horizontal con escala romboidal/progresiva (`<>`) con el centro prominente y extremos compactos.
-[x] Indicadores numéricos de valor (etiquetas en tiempo real: px / %) y tooltips explicativos en los controles deslizantes de Espaciado y Escala de Totalidad.
-[x] Capa dedicada de marcas horarias EXIF y textos en la exportación de archivos PSD de Photoshop.
-[x] Guardado y recuperación instantánea de sesiones de collage de eclipses (.ecollage) con metadatos de análisis, calidad y selección de fases persistente.
-[x] Aceleración multiproceso/multihilo en el cribado masivo del collage de eclipses con selector configurable de rendimiento (Velocidad half-size RAW vs Máxima resolución nativa).
-[x] Aceleración multihilo (ThreadPoolExecutor) en la detección de limbo en lote y precarga HDR en la pestaña de Eclipses (manteniendo resolución nativa 1:1 estricta sin downscaling para máxima precisión subpíxel).
-[x] Módulo de composición panorámica para mosaicos nocturnos (Nightscape Panorama Stitcher).
-[ ] Modo automático de gestión de memoria RAM según carga del sistema (psutil).
-[x] Deshacer / Rehacer (Undo / Redo) paramétrico de 50 pasos en el Revelador con botones dedicados y atajos de teclado.
-[x] Conversión cromática matemática exacta (adaptación Bradford D65/D50 y aceleración LUT) en exportación con perfiles ICC (sRGB, Adobe RGB, ProPhoto RGB).
-[x] Auto-reparación y robustez en arranque ante directorios inexistentes con plantilla base config.default.json.
-[ ] Anti-parpadeo (Deflicker) y morphing temporal entre fotogramas en Startrails / Time-Lapse.
-[ ] Herramienta interactiva de Recorte (Crop) en el Revelador / Editor con encuadre libre y proporciones fijas (1:1, 16:9, 4:3, etc.), nivelación y guías de composición.
-[ ] Ampliación y revisión del rango de ajuste de Balance de Blancos (Temperatura y Tinte) en el Revelador (el rango actual de ±0.250 resulta insuficiente para tomas con dominantes extremas, airglow intenso o calibraciones nocturnas).
-[ ] Miniaturas previas (Thumbnails) en las tablas de archivos y estimación de tiempo restante (ETA) en barra de progreso.
+* [x] Apilado diferencial cielo/suelo con alineación estelar por homografía.
+* [x] Rechazo estadístico Kappa-Sigma (MAD) libre de trazas de satélites y aviones.
+* [x] Pipeline completo de calibración con Darks, Flats y Bias.
+* [x] Conservación íntegra de resolución nativa mediante BORDER_REFLECT.
+* [x] Gestión de proyectos y sesiones en disco (.mwstack).
+* [x] Segmentación asistida GrabCut y zoom nativo 1:1.
+* [x] Descomposición y realce multiescala mediante ondículas À Trous.
+* [x] Integración de StarNet++ v2 y GraXpert AI.
+* [x] Rutina específica de apilado y alineación para eclipses solares y lunares (Módulo Eclipses con NRGF continuo y detección subpíxel).
+* [x] Módulo dedicado de Trazas de Estrellas (Startrails) con streaming O(1), efecto cometa, suelo limpio y supresión automática de satélites/aviones.
+* [x] Relleno continuo de saltos entre tomas (Gap Filling) en Startrails.
+* [x] Exportación de perfiles de color ICC embebidos en TIFF (sRGB / AdobeRGB / ProPhoto).
+* [x] Generación y exportación de secuencia acumulativa de fotogramas para vídeo Time-Lapse.
+* [x] Soporte universal de Arrastrar y Soltar (Drag & Drop) en listas de archivos y lienzos interactivos.
+* [x] Pipeta de Balance de Blancos (Eyedropper) interactiva con neutralización analítica exacta.
+* [x] Lupa de Inspección Flotante (Floating Magnifier) con zoom dinámico de rueda de ratón.
+* [x] Curvas Selectivas de Color (Hue vs Sat y Luma vs Sat) con espectro arcoíris continuo.
+* [x] Diseñador de secuencia y collage de eclipses con cribado de trepidación, cálculo de % de ocultación y exportación PSD nativo por capas (16-bit).
+* [x] Indicador de progreso y estado visual explícito en la ingesta masiva de archivos ("Cargando ficheros..." -> "Carga finalizada") en el módulo de eclipses y collage.
+* [x] Navegación interactiva con Zoom y Paneo en el visor de previsualización del Diseñador de Collage.
+* [x] Detección y recomendación automática de fenómenos singulares de contacto: Perlas de Baily y Anillo de Diamante (Diamond Ring).
+* [x] Margen y radio de recorte adaptativo / configurable para evitar cortar rayos solares, destellos del anillo de diamante y filamentos de la corona (o máscara de capa editable no destructiva en PSD).
+* [x] Nueva modalidad de maquetación: Cinta Horizontal con escala romboidal/progresiva (`<>`) con el centro prominente y extremos compactos.
+* [x] Indicadores numéricos de valor (etiquetas en tiempo real: px / %) y tooltips explicativos en los controles deslizantes de Espaciado y Escala de Totalidad.
+* [x] Capa dedicada de marcas horarias EXIF y textos en la exportación de archivos PSD de Photoshop.
+* [x] Guardado y recuperación instantánea de sesiones de collage de eclipses (.ecollage) con metadatos de análisis, calidad y selección de fases persistente.
+* [x] Aceleración multiproceso/multihilo en el cribado masivo del collage de eclipses con selector configurable de rendimiento (Velocidad half-size RAW vs Máxima resolución nativa).
+* [x] Aceleración multihilo (ThreadPoolExecutor) en la detección de limbo en lote y precarga HDR en la pestaña de Eclipses (manteniendo resolución nativa 1:1 estricta sin downscaling para máxima precisión subpíxel).
+* [x] Módulo de composición panorámica para mosaicos nocturnos (Nightscape Panorama Stitcher).
+* [ ] Modo automático de gestión de memoria RAM según carga del sistema (psutil).
+* [x] Deshacer / Rehacer (Undo / Redo) paramétrico de 50 pasos en el Revelador con botones dedicados y atajos de teclado.
+* [x] Conversión cromática matemática exacta (adaptación Bradford D65/D50 y aceleración LUT) en exportación con perfiles ICC (sRGB, Adobe RGB, ProPhoto RGB).
+* [x] Auto-reparación y robustez en arranque ante directorios inexistentes con plantilla base config.default.json.
+* [ ] Anti-parpadeo (Deflicker) y morphing temporal entre fotogramas en Startrails / Time-Lapse.
+* [ ] Herramienta interactiva de Recorte (Crop) en el Revelador / Editor con encuadre libre y proporciones fijas (1:1, 16:9, 4:3, etc.), nivelación y guías de composición.
+* [ ] Ampliación y revisión del rango de ajuste de Balance de Blancos (Temperatura y Tinte) en el Revelador (el rango actual de ±0.250 resulta insuficiente para tomas con dominantes extremas, airglow intenso o calibraciones nocturnas).
+* [ ] Miniaturas previas (Thumbnails) en las tablas de archivos y estimación de tiempo restante (ETA) en barra de progreso.
 ---
 
 ## Licencia
