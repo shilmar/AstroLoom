@@ -11,13 +11,14 @@ from gui.tab_developer import DeveloperTab
 from gui.tab_eclipse import EclipseTab
 from gui.tab_eclipse_collage import EclipseCollageTab
 from gui.tab_startrails import StartrailsTab
+from gui.tab_panorama import PanoramaTab
 from gui.tab_settings import SettingsTab
 
 
 class MainWindow(QMainWindow):
     """Ventana principal de la interfaz gráfica de Apilator."""
 
-    BASE_TITLE = "Apilator - Astrofotografía de Paisaje (v0.7.1)"
+    BASE_TITLE = "Apilator - Astrofotografía de Paisaje (v0.8.0)"
 
 
     def __init__(self):
@@ -37,6 +38,7 @@ class MainWindow(QMainWindow):
         self.tab_eclipse = EclipseTab()
         self.tab_eclipse_collage = EclipseCollageTab()
         self.tab_startrails = StartrailsTab()
+        self.tab_panorama = PanoramaTab()
         self.tab_settings = SettingsTab()
 
         self.tab_widget.addTab(self.tab_stacker, "1. Apilador (Stacker)")
@@ -44,7 +46,8 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.tab_eclipse, "3. Eclipses (HDR)")
         self.tab_widget.addTab(self.tab_eclipse_collage, "4. Eclipses (Collage)")
         self.tab_widget.addTab(self.tab_startrails, "5. Trazas de Estrellas (Startrails)")
-        self.tab_widget.addTab(self.tab_settings, "6. Configuración / Ajustes")
+        self.tab_widget.addTab(self.tab_panorama, "6. Panorámicas (Mosaicos)")
+        self.tab_widget.addTab(self.tab_settings, "7. Configuración / Ajustes")
 
         self.setCentralWidget(self.tab_widget)
 
@@ -73,6 +76,9 @@ class MainWindow(QMainWindow):
         self.tab_startrails.set_stacker_mask_provider(
             lambda: getattr(self.tab_stacker, "computed_mask", None)
         )
+
+        # 9. Transferencia de imagen desde el módulo de Panorámicas al Revelador
+        self.tab_panorama.export_to_developer.connect(self._on_panorama_exported)
 
     def _update_window_title(self, session_name: str) -> None:
         """Actualiza el texto de la barra de título con el archivo de proyecto activo."""
@@ -116,4 +122,12 @@ class MainWindow(QMainWindow):
         """
         final_mask = getattr(self.tab_startrails, "current_mask", None)
         self.tab_developer.load_image_direct(output_path, mask=final_mask)
+        self.tab_widget.setCurrentIndex(1)
+
+    def _on_panorama_exported(self, output_path: str) -> None:
+        """
+        Transfiere la imagen generada en el módulo de Panorámicas directamente
+        al Revelador / Editor y conmuta automáticamente a la pestaña 2.
+        """
+        self.tab_developer.load_image_direct(output_path, mask=None)
         self.tab_widget.setCurrentIndex(1)

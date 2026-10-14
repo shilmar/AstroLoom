@@ -5,6 +5,32 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-14
+
+### Añadido
+* **Nuevo Módulo Dedicado de Composición Panorámica y Mosaicos Nocturnos (Nightscape Stitcher):**
+  - Incorporada la nueva pestaña de primer nivel **"6. Panorámicas (Mosaicos)"** en la ventana principal (`gui/tab_panorama.py` y `core/panorama.py`).
+  - Desplazamiento armónico de la pestaña de Configuración a posición 7 (*1. Apilador*, *2. Revelador*, *3. Eclipses HDR*, *4. Eclipses Collage*, *5. Trazas de Estrellas*, *6. Panorámicas*, *7. Configuración*).
+* **Soporte Nativo Multifila (Multi-Row 2D):**
+  - **Modo Automático 2D por Grafo de Conectividad:** Descubrimiento autónomo de solapamientos 2D tanto horizontales como verticales mediante emparejamiento bidireccional SIFT y estimación robusta de homografías RANSAC.
+  - **Asistente de Cuadrícula Regular $M \times N$:** Soporte opcional para definir filas y columnas con asignación de teselas para secuencias guiadas con rótula graduada.
+* **Algoritmos Avanzados Especializados para Paisaje Nocturno:**
+  - **Pre-realce Astro:** Aplicación de CLAHE y ecualización adaptativa sobre una copia en escala de grises para detectar miles de puntos clave fiables en terrenos en sombra profunda y estrellas débiles.
+  - **Proyecciones Cartográficas:** Cilíndrica (para grandes panoramas horizontales), Esférica (para coberturas de 360° y gran angular) y Plana / Rectilínea (para mosaicos con teleobjetivo).
+  - **Compensación de Viñeteo y Ganancia:** Ecualización fotométrica automática entre paneles adyacentes para erradicar diferencias de iluminación.
+  - **Fusión Multibanda Laplaciana (Laplacian Multi-Band Blending):** Pirámide multiescala configurable (2 a 7 niveles) con mapas de distancia ponderada, asegurando transiciones continuas sin saltos en el cielo nocturno y preservando estrellas puntuales nítidas.
+  - **Auto-Recorte de Bordes Irregulares:** Algoritmo $O(H \times W)$ de Rectángulo Máximo Inscrito para eliminar al 100% los bordes negros irregulares.
+* **Lienzo Interactivo de Alta Precisión y Exportación Completa:**
+  - Lienzo acelerado con zoom dinámico suave centrado en cursor, paneo por arrastre, botón 100% y conmutador `[ ✂️ Ver Recorte ]`.
+  - Exportación en TIFF de 16-bit y 32-bit float con perfiles ICC incrustados y botón directo `[ ➡️ Enviar Panorámica al Revelador / Editor ]`.
+  - Guardado y carga de sesiones de proyecto panorámicas (`.panosess`).
+
+### Modificado
+* **Actualización de Versión:**
+  - Salto de versión a **v0.8.0** en `gui/main_window.py` y en la tarjeta de versión de `gui/tab_settings.py`.
+* **Hoja de Ruta (`README.md`):**
+  - Marcado como completado: `[x] Módulo de composición panorámica para mosaicos nocturnos (Nightscape Panorama Stitcher)`.
+
 ## [0.7.1] - 2026-10-14
 
 ### Añadido

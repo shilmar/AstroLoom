@@ -85,7 +85,30 @@
 - **Realce y Preservación de Color Estelar (*Star Color Recovery & Boost*):** Algoritmo de recuperación espectral en núcleos quemados a blanco (mediante difusión cartesiana continua $(u, v)$) y saturación selectiva de trazas con protección total del fondo nocturno, junto con botón de retoque interactivo ultrarrápido (~0.4s) sobre la imagen ya calculada sin volver a apilar las tomas.
 - **Exportación Dual 16-bit / 32-bit y Enlace Directo:** Guardado en TIFF 16-bit (compatible con Photoshop y Lightroom sin mapeos de tono), TIFF 32-bit float, o transferencia instantánea al Revelador / Editor.
 
-### 7. Configuración, Rendimiento y Vitrina de Resultados
+### 7. Módulo de Composición Panorámica y Mosaicos Nocturnos (Nightscape Stitcher)
+- **Ingesta Interactiva de Paneles con Drag & Drop:** Tabla responsiva con lectura de metadatos EXIF (distancia focal equivalente en 35mm, marcas temporales de captura, ISO y tiempo de exposición) en segundo plano para RAW, TIFF y JPG.
+- **Soporte Nativo Multifila (Multi-Row 2D):**
+  - *Modo Automático 2D:* Construcción de grafo 2D de conectividad y correspondencias que descubre de forma autónoma solapamientos tanto horizontales como verticales sin requerir intervención manual.
+  - *Asistente de Cuadrícula Regular $M \times N$:* Configuración paramétrica de filas y columnas para mosaicos y panorámicas guiadas tomadas con rótulas panorámicas o cabezales micrométricos.
+- **Detección y Rasgos Mejorados para Astrofotografía (Astro-Enhanced SIFT):**
+  - Pre-realce adaptativo con CLAHE y estirado suave sobre sombras profundas ejecutado en una copia en memoria, extrayendo miles de puntos clave fiables tanto en siluetas terrestres en penumbra como en asterismos y estrellas débiles.
+  - Estimación robusta de homografías mediante RANSAC con filtrado estricto de inliers e inversión analítica.
+- **Proyecciones Cartográficas Avanzadas:**
+  - *Cilíndrica (Cylindrical):* Proyección estándar de alta fidelidad para barridos horizontales amplios de paisaje nocturno.
+  - *Esférica (Spherical):* Mapeo angular equi-rectangular para panoramas de gran cobertura angular y mosaicos 360°.
+  - *Plana (Rectilinear / Plane):* Perspectiva clásica rectilínea ideal para mosaicos estelares con teleobjetivo y campos reducidos.
+- **Fusión Multibanda Laplaciana (Laplacian Multi-Band Blending):**
+  - Fusión piramidal multiescala (2 a 7 niveles configurables) que separa las bajas frecuencias (degradados del cielo, luminosidad de fondo) de las altas frecuencias (estrellas puntuales nítidas y perfiles del terreno), eliminando por completo saltos de brillo y costuras visibles.
+  - Compensación automática de ganancia y viñeteo óptico entre tomas adyacentes.
+  - Corrección de onda y nivelación horizontal de horizonte.
+- **Auto-Recorte de Bordes Irregulares (Zero-Border Maximum Inscribed Rectangle):**
+  - Algoritmo $O(H \times W)$ basado en histogramas acumulativos que calcula el rectángulo de área máxima completamente inscrito dentro de la máscara del cosido.
+  - Conmutador dinámico en la barra superior para alternar instantáneamente entre la vista completa y la vista recortada limpia.
+- **Lienzo Acelerado de Ultra-Alta Resolución:** Visor interactivo con zoom suave mediante rueda de ratón centrado en el cursor, paneo por arrastre, botón 1:1, ajuste a ventana y reporte dinámico de resolución en megapíxeles.
+- **Exportación Dual 16/32-bit y Enlace Directo:** Guardado en TIFF de 16-bit / 32-bit float con perfiles de color ICC embebidos y botón para enviar la panorámica directamente al Revelador / Editor.
+- **Persistencia de Sesión (.panosess):** Guardado y carga de sesiones panorámicas completas con todas las teselas y configuraciones.
+
+### 8. Configuración, Rendimiento y Vitrina de Resultados
 - **Interfaz Moderna y Homogénea:** Paneles laterales unificados con ancho mínimo de 420 px, máximo de 520 px y predeterminado de 520 px en todos los módulos, diseño visual armónico en tonos azulados oscuros (`#161622`) y controles compactados verticalmente (selectores en línea en Apilador y Revelador).
 - **Vitrina de Resultados Integrada (Showcase):** Panel visual en la pestaña de Configuración con visor responsivo antialias que exhibe astrofotografía real de paisaje procesada de principio a fin con Apilator, acreditación de autoría (*Fotografía y Procesado: Shilmar*) e inspección a resolución nativa.
 - **Aceleración por GPU y JIT Dual:** Soporte automático para NVIDIA CUDA mediante CuPy, compilación JIT de CPU multinúcleo con Numba (kernels paralelos LLVM), y conmutación transparente a CPU estándar si no se dispone de librerías aceleradoras.
@@ -95,7 +118,7 @@
 - **Indicadores de Recorte (Clipping) Estilo Lightroom:** Alertas visuales interactivas en las esquinas del histograma para sombras empastadas (azul) y luces quemadas (rojo), superposición vectorial acelerada en el lienzo (< 3 ms) y atajo global de teclado **`J`**.
 - **Auto-reparación de Directorios y Configuración Base:** Verificación automática en el arranque de rutas de trabajo con fallback seguro a directorios locales válidos (`config.default.json`), garantizando portabilidad y eliminando errores de carpetas inexistentes o unidades de disco no disponibles.
 
-### 8. Fidelidad Cromática y Perfiles de Color ICC
+### 9. Fidelidad Cromática y Perfiles de Color ICC
 - **Incrustación de Metadatos ICC en TIFF (Tag 34675):** Soporte nativo para incrustar perfiles de color en la cabecera `InterColorProfile` de los archivos TIFF exportados en todos los módulos (Apilador, Revelador, Startrails y Eclipses), garantizando que las imágenes conserven su gama tonal y saturación de forma idéntica en Adobe Photoshop, Adobe Lightroom, Capture One o navegadores web.
 - **Conversión Cromática Rigurosa y Acelerada:** Transformación matemática exacta entre los espacios sRGB, Adobe RGB y ProPhoto RGB mediante matrices de adaptación cromática Bradford CIE D65/D50, linearización y re-gamma con aceleración por tablas de búsqueda (LUT), asegurando que el perfil incrustado coincida con la distribución espectral de los píxeles sin desaturación ni virados indeseados.
 - **Espacios de Color Estándar Suministrados:**
@@ -245,6 +268,24 @@ python run_app.py
 * Pulsa **⚡ Generar Trazas de Estrellas (Startrails)**.
 * Guarda el resultado en **TIFF 16-bit** (para edición directa en Photoshop/Lightroom) o **TIFF 32-bit**, o pulsa **➡️ Enviar al Revelador / Editor** para seguir procesando curvas, color y contraste.
 
+### 6. Flujo de Composición Panorámica y Mosaicos Nocturnos
+* Abre la pestaña **6. Panorámicas (Mosaicos)**.
+* Pulsa **➕ Añadir Tomas** (o arrastra y suelta imágenes o carpetas sobre la tabla o sobre el lienzo interactivo).
+* El sistema leerá automáticamente en segundo plano la focal equivalente en 35mm, las marcas horarias de captura y las dimensiones de cada tesela.
+* (Opcional) Pulsa **🕒 Ordenar por Hora** para alinear el orden cronológico del barrido fotográfico.
+* Selecciona el **Modo de Disposición**:
+  - **Auto 2D (Grafo de Conectividad - Recomendado):** Detección automática tanto de secuencias de 1 fila como de cuadrículas multifila complejas.
+  - **Matriz Regular M x N:** Asistente guiado para fijar el número exacto de filas y columnas si realizaste la sesión con rótula panorámica graduada.
+* Selecciona la **Proyección Cartográfica**: *Cilíndrica* (para panorámicas terrestres amplias), *Esférica* (para 360° y gran angular) o *Plana* (para mosaicos con teleobjetivo).
+* Ajusta los parámetros astronómicos:
+  - Mantén activo **Pre-realce Astro** para maximizar la correlación de estrellas y textura del suelo oscuro.
+  - Ajusta el umbral de coincidencias y los niveles de pirámide laplaciana (por defecto 5 niveles).
+  - Activa **Compensación de Viñeteo** y **Corrección de Onda / Nivelación de Horizonte**.
+  - Mantén marcado **✂️ Auto-Recorte de Bordes** para obtener un encuadre rectangular perfecto sin marcos negros.
+* Pulsa **🧩 Coser Panorámica**. El hilo de fondo calculará el grafo, proyectará el lienzo, ecualizará el viñeteo y fusionará las bandas.
+* En el lienzo interactivo, inspecciona a fondo con zoom de rueda centrado en el cursor y botón 100%, o pulsa **✂️ Ver Recorte** para conmutar entre el lienzo irregular completo y el recorte limpio.
+* Pulsa **💾 Guardar Panorámica (TIFF 16/32-bit)** para archivar, o pulsa **➡️ Enviar Panorámica al Revelador / Editor** para aplicar curvas tonales, reducción de ruido o realce de gas y nebulosas.
+
 ## Hoja de Ruta
 [x] Apilado diferencial cielo/suelo con alineación estelar por homografía.
 [x] Rechazo estadístico Kappa-Sigma (MAD) libre de trazas de satélites y aviones.
@@ -268,14 +309,13 @@ python run_app.py
 [x] Navegación interactiva con Zoom y Paneo en el visor de previsualización del Diseñador de Collage.
 [x] Detección y recomendación automática de fenómenos singulares de contacto: Perlas de Baily y Anillo de Diamante (Diamond Ring).
 [x] Margen y radio de recorte adaptativo / configurable para evitar cortar rayos solares, destellos del anillo de diamante y filamentos de la corona (o máscara de capa editable no destructiva en PSD).
-
 [x] Nueva modalidad de maquetación: Cinta Horizontal con escala romboidal/progresiva (`<>`) con el centro prominente y extremos compactos.
 [x] Indicadores numéricos de valor (etiquetas en tiempo real: px / %) y tooltips explicativos en los controles deslizantes de Espaciado y Escala de Totalidad.
 [x] Capa dedicada de marcas horarias EXIF y textos en la exportación de archivos PSD de Photoshop.
 [x] Guardado y recuperación instantánea de sesiones de collage de eclipses (.ecollage) con metadatos de análisis, calidad y selección de fases persistente.
 [x] Aceleración multiproceso/multihilo en el cribado masivo del collage de eclipses con selector configurable de rendimiento (Velocidad half-size RAW vs Máxima resolución nativa).
 [x] Aceleración multihilo (ThreadPoolExecutor) en la detección de limbo en lote y precarga HDR en la pestaña de Eclipses (manteniendo resolución nativa 1:1 estricta sin downscaling para máxima precisión subpíxel).
-[ ] Módulo de composición panorámica para mosaicos nocturnos (Nightscape Panorama Stitcher).
+[x] Módulo de composición panorámica para mosaicos nocturnos (Nightscape Panorama Stitcher).
 [ ] Modo automático de gestión de memoria RAM según carga del sistema (psutil).
 [x] Deshacer / Rehacer (Undo / Redo) paramétrico de 50 pasos en el Revelador con botones dedicados y atajos de teclado.
 [x] Conversión cromática matemática exacta (adaptación Bradford D65/D50 y aceleración LUT) en exportación con perfiles ICC (sRGB, Adobe RGB, ProPhoto RGB).
