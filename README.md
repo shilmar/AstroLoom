@@ -93,17 +93,28 @@
 - **Detección y Rasgos Mejorados para Astrofotografía (Astro-Enhanced SIFT):**
   - Pre-realce adaptativo con CLAHE y estirado suave sobre sombras profundas ejecutado en una copia en memoria, extrayendo miles de puntos clave fiables tanto en siluetas terrestres en penumbra como en asterismos y estrellas débiles.
   - Estimación robusta de homografías mediante RANSAC con filtrado estricto de inliers e inversión analítica.
+- **Alineación Robusta del Eje de Trípode Normalizada:**
+  - Estimación global del vector normal promedio al plano de barrido rotacional de las cámaras para alinearlo con el eje vertical $Y$ del warper esférico/cilíndrico.
+  - Neutraliza por completo singularidades polares, deformaciones en arco y ondulaciones (*scalloping*) en barridos verticales (formato retrato / portrait) y centra automáticamente el panel medio en el meridiano cero.
 - **Proyecciones Cartográficas Avanzadas:**
   - *Cilíndrica (Cylindrical):* Proyección estándar de alta fidelidad para barridos horizontales amplios de paisaje nocturno.
   - *Esférica (Spherical):* Mapeo angular equi-rectangular para panoramas de gran cobertura angular y mosaicos 360°.
   - *Plana (Rectilinear / Plane):* Perspectiva clásica rectilínea ideal para mosaicos estelares con teleobjetivo y campos reducidos.
+- **Fusión Híbrida Dual-Zone Tree-Aware Blending (Cielo Continuo + Suelo Óptimo DpSeamFinder):**
+  - Erradicación del 100% de árboles fantasma (*ghost trees*) y sombras residuales en el terreno causados por el paralaje inevitable entre elementos terrestres cercanos (20-50m) y estrellas en el infinito ($d=\infty$) en rótulas no nodales.
+  - El cielo se integra con un mapa continuo de distancia cuártica ($dist^4$) para transiciones continuas sin saltos de brillo ni bandas en estrellas y gradientes de airglow.
+  - La silueta del suelo (árboles, relieve y horizonte detectados morfológicamente por conectividad a la base) se cose mediante corte de costura óptima (`cv2.detail_DpSeamFinder` o proximidad al centro como fallback), conservando ramas y copas nítidas sin dobles siluetas ni promedios traslúcidos.
+  - Transición suave (*feathering*) entre ambas zonas con dilatación y desenfoque gaussiano.
 - **Fusión Multibanda Laplaciana (Laplacian Multi-Band Blending):**
-  - Fusión piramidal multiescala (2 a 7 niveles configurables) que separa las bajas frecuencias (degradados del cielo, luminosidad de fondo) de las altas frecuencias (estrellas puntuales nítidas y perfiles del terreno), eliminando por completo saltos de brillo y costuras visibles.
-  - Compensación automática de ganancia y viñeteo óptico entre tomas adyacentes.
-  - Corrección de onda y nivelación horizontal de horizonte.
-- **Auto-Recorte de Bordes Irregulares (Zero-Border Maximum Inscribed Rectangle):**
+  - Fusión piramidal multiescala (2 a 7 niveles configurables) que separa las bajas frecuencias (degradados del cielo, luminosidad de fondo) de las altas frecuencias (estrellas puntuales nítidas y perfiles del terreno), eliminando saltos de brillo y costuras visibles.
+  - Compensación fotométrica automática de ganancia y viñeteo radial óptico cuadrático entre tomas adyacentes.
+  - Corrección de onda (*wave correction*) y nivelación horizontal de horizonte.
+- **Fusión en Streaming $O(1)$ con Warper 3D:**
+  - Procesamiento panel a panel de bajo consumo de memoria RAM ($O(1)$) con recolección periódica de basura (`gc.collect()`), posibilitando componer panorámicas gigapíxel de ultra-alta resolución sin agotar la memoria.
+- **Auto-Recorte de Bordes Irregulares con Margen de Seguridad (Zero-Border Maximum Inscribed Rectangle):**
   - Algoritmo $O(H \times W)$ basado en histogramas acumulativos que calcula el rectángulo de área máxima completamente inscrito dentro de la máscara del cosido.
-  - Conmutador dinámico en la barra superior para alternar instantáneamente entre la vista completa y la vista recortada limpia.
+  - Margen de erosión morfológica perimetral que neutraliza peldaños y muescas de proyección esférica, garantizando un recorte 100% limpio y libre de bordes negros.
+  - Conmutador dinámico `[ ✂️ Ver Recorte ]` en la barra superior para alternar instantáneamente entre la vista completa y la vista recortada.
 - **Lienzo Acelerado de Ultra-Alta Resolución:** Visor interactivo con zoom suave mediante rueda de ratón centrado en el cursor, paneo por arrastre, botón 1:1, ajuste a ventana y reporte dinámico de resolución en megapíxeles.
 - **Exportación Dual 16/32-bit y Enlace Directo:** Guardado en TIFF de 16-bit / 32-bit float con perfiles de color ICC embebidos y botón para enviar la panorámica directamente al Revelador / Editor.
 - **Persistencia de Sesión (.panosess):** Guardado y carga de sesiones panorámicas completas con todas las teselas y configuraciones.
@@ -320,8 +331,9 @@ python run_app.py
 [x] Deshacer / Rehacer (Undo / Redo) paramétrico de 50 pasos en el Revelador con botones dedicados y atajos de teclado.
 [x] Conversión cromática matemática exacta (adaptación Bradford D65/D50 y aceleración LUT) en exportación con perfiles ICC (sRGB, Adobe RGB, ProPhoto RGB).
 [x] Auto-reparación y robustez en arranque ante directorios inexistentes con plantilla base config.default.json.
-[x] Diseñador de Secuencia y Collage de Eclipses integrado como Pestaña 4 nativa en la ventana principal con navegación integrada y enlace bidireccional.
 [ ] Anti-parpadeo (Deflicker) y morphing temporal entre fotogramas en Startrails / Time-Lapse.
+[ ] Herramienta interactiva de Recorte (Crop) en el Revelador / Editor con encuadre libre y proporciones fijas (1:1, 16:9, 4:3, etc.), nivelación y guías de composición.
+[ ] Ampliación y revisión del rango de ajuste de Balance de Blancos (Temperatura y Tinte) en el Revelador (el rango actual de ±0.250 resulta insuficiente para tomas con dominantes extremas, airglow intenso o calibraciones nocturnas).
 [ ] Miniaturas previas (Thumbnails) en las tablas de archivos y estimación de tiempo restante (ETA) en barra de progreso.
 ---
 

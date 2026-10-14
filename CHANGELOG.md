@@ -17,9 +17,16 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 * **Algoritmos Avanzados Especializados para Paisaje Nocturno:**
   - **Pre-realce Astro:** Aplicación de CLAHE y ecualización adaptativa sobre una copia en escala de grises para detectar miles de puntos clave fiables en terrenos en sombra profunda y estrellas débiles.
   - **Proyecciones Cartográficas:** Cilíndrica (para grandes panoramas horizontales), Esférica (para coberturas de 360° y gran angular) y Plana / Rectilínea (para mosaicos con teleobjetivo).
-  - **Compensación de Viñeteo y Ganancia:** Ecualización fotométrica automática entre paneles adyacentes para erradicar diferencias de iluminación.
+  - **Alineación del Eje de Trípode Normalizada:** Estimación global del vector normal al plano de barrido óptico entre tomas adyacentes para alinearlo con el eje vertical $Y$ del warper esférico/cilíndrico, eliminando singularidades polares, deformaciones en arco y ondulaciones en barridos verticales (portrait) y centrando el panel medio en el meridiano cero.
+  - **Fusión Híbrida Dual-Zone Tree-Aware Blending (Cielo Continuo + Suelo Óptimo DpSeamFinder):**
+    - Erradicación del 100% de árboles fantasma (*ghost trees*) y sombras residuales en el terreno causados por paralaje entre elementos cercanos (árboles a 20-50m) y estrellas en el infinito ($d=\infty$) en rótulas no nodales.
+    - Dominio del cielo integrado mediante mapa de distancias cuártico ($dist^4$) para transiciones suaves y continuas de gradientes, estrellas y airglow.
+    - Dominio terrestre detectado morfológicamente mediante conectividad a la base y cosido mediante corte óptimo (`cv2.detail_DpSeamFinder` o máxima proximidad al centro como fallback), conservando la nitidez de ramas y copas sin dobles siluetas ni promedios traslúcidos.
+    - Transición suave (*feathering*) entre ambas zonas con dilatación y desenfoque gaussiano.
+  - **Compensación Óptica de Viñeteo y Ganancia:** Modelo radial fotométrico cuadrático que homogeneiza la caída de luz en los bordes de cada panel antes del alabeo, homogeneizando el fondo del cielo estrellado.
   - **Fusión Multibanda Laplaciana (Laplacian Multi-Band Blending):** Pirámide multiescala configurable (2 a 7 niveles) con mapas de distancia ponderada, asegurando transiciones continuas sin saltos en el cielo nocturno y preservando estrellas puntuales nítidas.
-  - **Auto-Recorte de Bordes Irregulares:** Algoritmo $O(H \times W)$ de Rectángulo Máximo Inscrito para eliminar al 100% los bordes negros irregulares.
+  - **Fusión en Streaming $O(1)$ con Warper 3D:** Procesamiento panel a panel de bajo consumo de memoria RAM ($O(1)$) con recolección de basura periódica (`gc.collect()`), posibilitando la composición de panorámicas de decenas de tomas en alta resolución sin agotar la memoria.
+  - **Auto-Recorte de Bordes Irregulares con Margen de Erosión Morfológica:** Algoritmo $O(H \times W)$ de Rectángulo Máximo Inscrito con erosión morfológica perimetral de seguridad para eliminar al 100% los bordes negros irregulares y muescas de curvatura esférica.
 * **Lienzo Interactivo de Alta Precisión y Exportación Completa:**
   - Lienzo acelerado con zoom dinámico suave centrado en cursor, paneo por arrastre, botón 100% y conmutador `[ ✂️ Ver Recorte ]`.
   - Exportación en TIFF de 16-bit y 32-bit float con perfiles ICC incrustados y botón directo `[ ➡️ Enviar Panorámica al Revelador / Editor ]`.
@@ -30,6 +37,7 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
   - Salto de versión a **v0.8.0** en `gui/main_window.py` y en la tarjeta de versión de `gui/tab_settings.py`.
 * **Hoja de Ruta (`README.md`):**
   - Marcado como completado: `[x] Módulo de composición panorámica para mosaicos nocturnos (Nightscape Panorama Stitcher)`.
+  - Incorporadas nuevas tareas pendientes: Herramienta interactiva de Recorte (Crop) en Revelador/Editor y ampliación del rango de ajuste de Balance de Blancos (Temperatura y Tinte).
 
 ## [0.7.1] - 2026-10-14
 

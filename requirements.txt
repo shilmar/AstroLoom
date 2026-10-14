@@ -19,5 +19,3 @@ psutil>=5.9.0
 
 # Exportación PSD nativo por capas
 pytoshop>=1.2.1
-
-

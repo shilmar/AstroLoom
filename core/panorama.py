@@ -646,17 +646,58 @@ def stitch_nightscape_panorama(
 
     if status == 0 and len(stitcher.cameras()) == n:
         cameras = list(stitcher.cameras())
-        rmats = [c.R.copy() for c in cameras]
-        if settings.wave_correction:
-            try:
-                rmats_corr = cv2.detail.waveCorrect(rmats, cv2.detail.WAVE_CORRECT_HORIZ)
-            except Exception:
-                rmats_corr = rmats
-        else:
-            rmats_corr = rmats
-        focals = [c.focal for c in cameras]
-        med_focal_small = float(np.median(focals))
-        focal_full = med_focal_small * scale_to_full
+        scale_work_to_full = full_w / (cameras[0].ppx * 2.0)
+        focal_full = float(np.median([c.focal * scale_work_to_full for c in cameras]))
+
+        # Alineación global del eje de rotación del trípode:
+        # Detecta el vector normal del barrido rotacional de las cámaras para alinearlo
+        # exactamente con el eje vertical (Y) del warper esférico/cilíndrico, evitando
+        # singularidades polares y deformaciones en arcos en panorámicas en vertical (portrait).
+        try:
+            axes = []
+            for i in range(len(cameras) - 1):
+                opt_curr = cameras[i].R.T @ np.array([0, 0, 1], dtype=np.float64)
+                opt_next = cameras[i+1].R.T @ np.array([0, 0, 1], dtype=np.float64)
+                axis_w = np.cross(opt_curr, opt_next)
+                norm_ax = np.linalg.norm(axis_w)
+                if norm_ax > 1e-4:
+                    axes.append(axis_w / norm_ax)
+            if axes:
+                tripod_axis = np.median(axes, axis=0)
+                tripod_axis /= np.linalg.norm(tripod_axis)
+                target_up = np.array([0, -1, 0], dtype=np.float64)
+                if np.dot(tripod_axis, target_up) < 0:
+                    target_up = -target_up
+                v_rot = np.cross(tripod_axis, target_up)
+                cos_a = np.dot(tripod_axis, target_up)
+                sin_a = np.linalg.norm(v_rot)
+                if sin_a > 1e-4:
+                    k = v_rot / sin_a
+                    K_mat = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+                    R_align = np.eye(3) + sin_a * K_mat + (1.0 - cos_a) * (K_mat @ K_mat)
+                else:
+                    R_align = np.eye(3)
+                R_new = [c.R @ R_align.T for c in cameras]
+
+                # Centrar el panel central en el meridiano cero (yaw = 0)
+                mid_idx = n // 2
+                opt_mid = R_new[mid_idx].T @ np.array([0, 0, 1], dtype=np.float64)
+                yaw_mid = np.arctan2(opt_mid[0], opt_mid[2])
+                R_yaw_center = np.array([
+                    [np.cos(-yaw_mid), 0, np.sin(-yaw_mid)],
+                    [0, 1, 0],
+                    [-np.sin(-yaw_mid), 0, np.cos(-yaw_mid)]
+                ], dtype=np.float64)
+                rmats_corr = [r @ R_yaw_center.T for r in R_new]
+            else:
+                rmats_corr = [c.R.copy() for c in cameras]
+        except Exception:
+            rmats_corr = [c.R.copy() for c in cameras]
+            if settings.wave_correction:
+                try:
+                    rmats_corr = cv2.detail.waveCorrect(rmats_corr, cv2.detail.WAVE_CORRECT_HORIZ)
+                except Exception:
+                    pass
     else:
         # Fallback a SIFT pairwise overlap graph si el bundle adjuster no converge
         if progress_callback:
@@ -701,11 +742,11 @@ def stitch_nightscape_panorama(
         sizes = []
         for i in range(n):
             K = np.array([
-                [cameras[i].focal * scale_to_full, 0, full_w / 2.0],
-                [0, cameras[i].focal * scale_to_full, full_h / 2.0],
+                [focal_full, 0, full_w / 2.0],
+                [0, focal_full, full_h / 2.0],
                 [0, 0, 1]
             ], dtype=np.float32)
-            roi = warper.warpRoi((full_w, full_h), K, rmats_corr[i])
+            roi = warper.warpRoi((full_w, full_h), K, rmats_corr[i].astype(np.float32))
             corners.append((roi[0], roi[1]))
             sizes.append((roi[2], roi[3]))
 
@@ -728,11 +769,11 @@ def stitch_nightscape_panorama(
             cur_h = int(full_h * scale_canvas)
             for i in range(n):
                 K = np.array([
-                    [cameras[i].focal * scale_to_full * scale_canvas, 0, cur_w / 2.0],
-                    [0, cameras[i].focal * scale_to_full * scale_canvas, cur_h / 2.0],
+                    [focal_full, 0, cur_w / 2.0],
+                    [0, focal_full, cur_h / 2.0],
                     [0, 0, 1]
                 ], dtype=np.float32)
-                roi = warper.warpRoi((cur_w, cur_h), K, rmats_corr[i])
+                roi = warper.warpRoi((cur_w, cur_h), K, rmats_corr[i].astype(np.float32))
                 corners.append((roi[0], roi[1]))
                 sizes.append((roi[2], roi[3]))
 
@@ -744,13 +785,48 @@ def stitch_nightscape_panorama(
             canvas_h = int(max_y - min_y)
 
         # -------------------------------------------------------------
-        # 5. Deformación y Fusión en Streaming (Memoria Segura O(1))
+        # 5. Cálculo de Costura Óptima (DpSeamFinder) y Fusión Dual-Zone
         # -------------------------------------------------------------
+        # Para evitar cortes rectos en copas de árboles y eliminar el paralaje fantasma,
+        # calculamos la costura óptima de mínima discrepancia a resolución de trabajo (1-2s).
+        seam_masks_updated = None
+        try:
+            seam_scale = 0.25
+            seam_w, seam_h = int(full_w * seam_scale), int(full_h * seam_scale)
+            scale_work_to_seam = full_w / (cameras[0].ppx * 2.0)
+            seam_focal = float(np.median([c.focal * scale_work_to_seam * seam_scale for c in cameras]))
+            warper_seam = cv2.PyRotationWarper(proj_type, seam_focal)
+            K_seam = np.array([
+                [seam_focal, 0, seam_w / 2.0],
+                [0, seam_focal, seam_h / 2.0],
+                [0, 0, 1]
+            ], dtype=np.float32)
+
+            seam_imgs = []
+            seam_corners = []
+            seam_masks = []
+            for i in range(n):
+                img_s = cv2.resize(work_imgs[i], (seam_w, seam_h)).astype(np.float32) / 255.0
+                corner_s, w_img_s = warper_seam.warp(img_s, K_seam, rmats_corr[i].astype(np.float32), cv2.INTER_LINEAR, cv2.BORDER_CONSTANT)
+                w_m_s = (np.max(w_img_s, axis=2) > 0.001).astype(np.uint8) * 255
+                seam_imgs.append(w_img_s)
+                seam_corners.append(corner_s)
+                seam_masks.append(w_m_s)
+
+            finder = cv2.detail_DpSeamFinder('COLOR')
+            raw_masks = finder.find(seam_imgs, seam_corners, seam_masks)
+            seam_masks_updated = [m.get() if hasattr(m, 'get') else m for m in raw_masks]
+        except Exception:
+            seam_masks_updated = None
+
         if progress_callback:
             progress_callback(60, f"Proyectando lienzo ({canvas_w}x{canvas_h}, {canvas_w*canvas_h/1e6:.1f} MP)...")
 
-        accum = np.zeros((canvas_h, canvas_w, 3), dtype=np.float32)
+        accum_sky = np.zeros((canvas_h, canvas_w, 3), dtype=np.float32)
         weight_sum = np.zeros((canvas_h, canvas_w, 1), dtype=np.float32)
+        accum_ground = np.zeros((canvas_h, canvas_w, 3), dtype=np.float32)
+        best_ground_dist = np.zeros((canvas_h, canvas_w), dtype=np.float32) if seam_masks_updated is None else None
+        total_ground_mask = np.zeros((canvas_h, canvas_w), dtype=np.uint8)
         total_mask = np.zeros((canvas_h, canvas_w), dtype=np.uint8)
 
         for i in range(n):
@@ -766,22 +842,50 @@ def stitch_nightscape_panorama(
                 img_f = cv2.resize(img_f, (0, 0), fx=scale_canvas, fy=scale_canvas, interpolation=cv2.INTER_AREA)
 
             ih, iw = img_f.shape[:2]
+
+            # Compensación suave de caída óptica / viñeteo para homogeneizar el cielo estrellado
+            if settings.exposure_comp:
+                Y_g, X_g = np.ogrid[:ih, :iw]
+                cx_img, cy_img = iw / 2.0, ih / 2.0
+                r_sq = ((X_g - cx_img)**2 + (Y_g - cy_img)**2) / float(cx_img**2 + cy_img**2)
+                vignette_corr = (1.0 + 0.28 * r_sq).astype(np.float32)[..., np.newaxis]
+                img_f = np.clip(img_f * vignette_corr, 0.0, 1.0)
+
+            panel_mask = np.ones((ih, iw), dtype=np.uint8) * 255
+
+            # Detección morfológica de siluetas terrestres conectadas a la base (árboles, terreno, horizonte)
+            # para aplicar costura estricta (winner-take-all) y erradicar por completo los árboles fantasma
+            local_ground = np.zeros((ih, iw), dtype=np.uint8)
+            y_ground_start = int(0.60 * ih)
+            if ih > 50 and iw > 50:
+                gray_u = (cv2.cvtColor(img_f, cv2.COLOR_RGB2GRAY) * 255).astype(np.uint8)
+                lower_gray = gray_u[y_ground_start:, :]
+                try:
+                    ret_th, otsu = cv2.threshold(lower_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(otsu, connectivity=8)
+                    bottom_labels = set(labels[-1, :])
+                    bottom_labels.discard(0)
+                    if bottom_labels:
+                        conn_ground = np.isin(labels, list(bottom_labels)).astype(np.uint8) * 255
+                        local_ground[y_ground_start:, :] = conn_ground
+                except Exception:
+                    pass
+
             K = np.array([
-                [cameras[i].focal * scale_to_full * scale_canvas, 0, iw / 2.0],
-                [0, cameras[i].focal * scale_to_full * scale_canvas, ih / 2.0],
+                [focal_full, 0, iw / 2.0],
+                [0, focal_full, ih / 2.0],
                 [0, 0, 1]
             ], dtype=np.float32)
 
-            corner, w_img = warper.warp(img_f, K, rmats_corr[i], cv2.INTER_LINEAR, cv2.BORDER_CONSTANT)
-            del img_f
+            corner, w_img = warper.warp(img_f, K, rmats_corr[i].astype(np.float32), cv2.INTER_LINEAR, cv2.BORDER_CONSTANT)
+            corner_m, w_mask = warper.warp(panel_mask, K, rmats_corr[i].astype(np.float32), cv2.INTER_NEAREST, cv2.BORDER_CONSTANT)
+            corner_g, w_ground = warper.warp(local_ground, K, rmats_corr[i].astype(np.float32), cv2.INTER_NEAREST, cv2.BORDER_CONSTANT)
+            del img_f, local_ground
 
-            w_mask = (np.max(w_img, axis=2) > 0.001).astype(np.uint8) * 255
             dist = cv2.distanceTransform(w_mask, cv2.DIST_L2, 5)
-            max_d = np.max(dist)
-            if max_d > 0:
-                dist /= max_d
-            dist = np.power(dist, 4.0)
-            w_map = dist[..., np.newaxis].astype(np.float32)
+            max_d = float(np.max(dist))
+            norm_dist = (dist / max_d) if max_d > 0 else dist
+            w_map = np.power(norm_dist, 4.0)[..., np.newaxis].astype(np.float32)
 
             gx = corner[0] - min_x
             gy = corner[1] - min_y
@@ -792,17 +896,57 @@ def stitch_nightscape_panorama(
             ix1, ix2 = x1 - gx, x2 - gx
             iy1, iy2 = y1 - gy, y2 - gy
 
-            accum[y1:y2, x1:x2] += w_img[iy1:iy2, ix1:ix2] * w_map[iy1:iy2, ix1:ix2]
+            # 1) Acumulador de cielo: fusión continua y homogénea de estrellas y gradientes
+            accum_sky[y1:y2, x1:x2] += w_img[iy1:iy2, ix1:ix2] * w_map[iy1:iy2, ix1:ix2]
             weight_sum[y1:y2, x1:x2] += w_map[iy1:iy2, ix1:ix2]
+
+            # 2) Acumulador de suelo / siluetas: costura óptima DpSeamFinder (anti-fantasmas)
+            if seam_masks_updated is not None:
+                m_seam = cv2.resize(seam_masks_updated[i], (w_w, h_w), interpolation=cv2.INTER_NEAREST)
+                sub_seam = (m_seam[iy1:iy2, ix1:ix2] > 127)
+                sub_ground = accum_ground[y1:y2, x1:x2]
+                sub_wimg = w_img[iy1:iy2, ix1:ix2]
+                sub_ground[sub_seam] = sub_wimg[sub_seam]
+                accum_ground[y1:y2, x1:x2] = sub_ground
+            else:
+                sub_best_d = best_ground_dist[y1:y2, x1:x2]
+                sub_norm_d = norm_dist[iy1:iy2, ix1:ix2]
+                better = sub_norm_d > sub_best_d
+                sub_ground = accum_ground[y1:y2, x1:x2]
+                sub_wimg = w_img[iy1:iy2, ix1:ix2]
+                sub_ground[better] = sub_wimg[better]
+                accum_ground[y1:y2, x1:x2] = sub_ground
+                sub_best_d[better] = sub_norm_d[better]
+                best_ground_dist[y1:y2, x1:x2] = sub_best_d
+
+            total_ground_mask[y1:y2, x1:x2] = cv2.bitwise_or(total_ground_mask[y1:y2, x1:x2], w_ground[iy1:iy2, ix1:ix2])
             total_mask[y1:y2, x1:x2] = cv2.bitwise_or(total_mask[y1:y2, x1:x2], w_mask[iy1:iy2, ix1:ix2])
 
-            del w_img, w_mask, dist, w_map
+            del w_img, w_mask, w_ground, dist, norm_dist, w_map
             gc.collect()
 
-        valid_norm = weight_sum > 1e-5
-        accum[valid_norm.squeeze()] /= weight_sum[valid_norm.squeeze()]
-        blended_img = np.clip(accum, 0.0, 1.0)
-        del weight_sum
+        valid_sky = weight_sum > 1e-5
+        accum_sky[valid_sky.squeeze()] /= weight_sum[valid_sky.squeeze()]
+
+        # Fusión armoniosa entre el cielo suavemente fundido y la silueta nítida del suelo
+        if np.count_nonzero(total_ground_mask) > 100:
+            ksize = max(15, int(min(canvas_w, canvas_h) * 0.005))
+            if ksize % 2 == 0:
+                ksize += 1
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
+            ground_dilated = cv2.dilate(total_ground_mask, kernel)
+            alpha_ground = cv2.GaussianBlur(ground_dilated.astype(np.float32) / 255.0, (ksize, ksize), 0)[..., np.newaxis]
+            blended_img = (1.0 - alpha_ground) * accum_sky + alpha_ground * accum_ground
+            del accum_ground, total_ground_mask, ground_dilated, alpha_ground
+        else:
+            blended_img = accum_sky
+            del accum_ground, total_ground_mask
+
+        if best_ground_dist is not None:
+            del best_ground_dist
+
+        blended_img = np.clip(blended_img, 0.0, 1.0)
+        del accum_sky, weight_sum
         gc.collect()
 
     else:
@@ -893,7 +1037,17 @@ def stitch_nightscape_panorama(
         if progress_callback:
             progress_callback(95, "Calculando rectángulo máximo inscrito (auto-recorte)...")
 
-        rx, ry, rw, rh = find_maximum_inscribed_rectangle(total_mask)
+        # Erosión morfológica de seguridad para eliminar muescas de proyección esférica y peldaños
+        ksize = max(15, int(min(canvas_w, canvas_h) * 0.004))
+        if ksize % 2 == 0:
+            ksize += 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (ksize, ksize))
+        eroded_mask = cv2.erode(total_mask, kernel)
+
+        # Fallback a total_mask si la máscara erosionada resultara excesivamente reducida
+        mask_for_crop = eroded_mask if np.count_nonzero(eroded_mask) > 1000 else total_mask
+
+        rx, ry, rw, rh = find_maximum_inscribed_rectangle(mask_for_crop)
         crop_rect = (rx, ry, rw, rh)
         cropped_img = blended_img[ry:ry+rh, rx:rx+rw].copy()
 
