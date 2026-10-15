@@ -46,6 +46,19 @@ class MaskLayersWidget(QWidget):
     ground_reset_requested = Signal()            # reset tono suelo
     ground_slider_released = Signal()            # commit de deshacer tras soltar deslizador de suelo
 
+    # Sincronización contextual de Estrellas
+    stars_intensity_changed = Signal(int)        # (val 0 a 200) sincronizar slider_stars
+    stars_reset_requested = Signal()             # restablecer estrellas a 100%
+
+    # Sincronización contextual de Fondo Nebular (Starless)
+    starless_clarity_changed = Signal(int)       # (val -200 a 200)
+    starless_dehaze_changed = Signal(int)        # (val -200 a 200)
+    starless_ond_est_changed = Signal(int)       # (val -100 a 100)
+    starless_ond_bg_changed = Signal(int)        # (val 0 a 100)
+    starless_contrast_changed = Signal(int)      # (val -100 a 100)
+    starless_denoise_changed = Signal(int)       # (val 0 a 100)
+    starless_reset_requested = Signal()          # restablecer ajustes de fondo
+
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.layers: List[MaskLayer] = []
@@ -685,6 +698,165 @@ class MaskLayersWidget(QWidget):
 
         props_layout.addWidget(self.grp_gnd_special)
 
+        # 8. Controles Especiales de Capa de Estrellas (Visibles SOLO en Capa de Estrellas)
+        self.grp_stars_special = QGroupBox("Ajustes Especiales de Estrellas")
+        stars_spec_layout = QVBoxLayout(self.grp_stars_special)
+        stars_spec_layout.setContentsMargins(8, 12, 8, 8)
+        stars_spec_layout.setSpacing(6)
+
+        lbl_stars_notice = QLabel("Ajuste de densidad y presencia estelar separada.")
+        lbl_stars_notice.setStyleSheet("color: #80d8ff; font-size: 11px; font-style: italic;")
+        stars_spec_layout.addWidget(lbl_stars_notice)
+
+        row_stars_slider = QHBoxLayout()
+        row_stars_slider.addWidget(self._make_resettable_label(QLabel("Intensidad Estrellas:"), lambda: self.slider_stars_special.setValue(100), "100%"))
+        self.lbl_stars_special = QLabel("100%")
+        self.lbl_stars_special.setStyleSheet("color: #ffd54f; font-weight: bold;")
+        row_stars_slider.addWidget(self.lbl_stars_special)
+        row_stars_slider.addSpacing(6)
+        self.slider_stars_special = QSlider(Qt.Horizontal)
+        self.slider_stars_special.setRange(0, 200)
+        self.slider_stars_special.setValue(100)
+        self.slider_stars_special.valueChanged.connect(self._on_stars_special_changed)
+        self.slider_stars_special.sliderReleased.connect(self.ground_slider_released.emit)
+        row_stars_slider.addWidget(self.slider_stars_special, stretch=1)
+        stars_spec_layout.addLayout(row_stars_slider)
+
+        self.btn_reset_stars_special = QPushButton("↺ Restablecer Estrellas (100%)")
+        self.btn_reset_stars_special.setCursor(Qt.PointingHandCursor)
+        self.btn_reset_stars_special.clicked.connect(self.stars_reset_requested.emit)
+        stars_spec_layout.addWidget(self.btn_reset_stars_special)
+
+        props_layout.addWidget(self.grp_stars_special)
+
+        # 9. Controles Especiales de Fondo Nebular (Visibles SOLO en Fondo Nebular Starless)
+        self.grp_starless_special = QGroupBox("Ajustes Especiales de Fondo Nebular")
+        sl_layout = QVBoxLayout(self.grp_starless_special)
+        sl_layout.setContentsMargins(8, 12, 8, 8)
+        sl_layout.setSpacing(6)
+
+        lbl_sl_notice = QLabel("Ajustes avanzados para resaltar estructuras nebulares y contraste galáctico.")
+        lbl_sl_notice.setStyleSheet("color: #ce93d8; font-size: 11px; font-style: italic;")
+        sl_layout.addWidget(lbl_sl_notice)
+
+        # Par 1: Claridad Fondo y Borrar Neblina
+        row_sl_p1 = QHBoxLayout()
+        row_sl_p1.setSpacing(10)
+
+        col_cl = QVBoxLayout()
+        col_cl.setSpacing(2)
+        row_cl_lbl = QHBoxLayout()
+        row_cl_lbl.addWidget(self._make_resettable_label(QLabel("Claridad Fondo:"), lambda: self.slider_sl_clarity.setValue(0), "0.00"))
+        self.lbl_sl_clarity = QLabel("0.00")
+        self.lbl_sl_clarity.setStyleSheet("color: #80d8ff; font-weight: bold;")
+        row_cl_lbl.addWidget(self.lbl_sl_clarity)
+        col_cl.addLayout(row_cl_lbl)
+        self.slider_sl_clarity = QSlider(Qt.Horizontal)
+        self.slider_sl_clarity.setRange(-200, 200)
+        self.slider_sl_clarity.setValue(0)
+        self.slider_sl_clarity.valueChanged.connect(self._on_sl_clarity_changed)
+        self.slider_sl_clarity.sliderReleased.connect(self.ground_slider_released.emit)
+        col_cl.addWidget(self.slider_sl_clarity)
+        row_sl_p1.addLayout(col_cl)
+
+        col_dh = QVBoxLayout()
+        col_dh.setSpacing(2)
+        row_dh_lbl = QHBoxLayout()
+        row_dh_lbl.addWidget(self._make_resettable_label(QLabel("Borrar Neblina:"), lambda: self.slider_sl_dehaze.setValue(0), "0.00"))
+        self.lbl_sl_dehaze = QLabel("0.00")
+        self.lbl_sl_dehaze.setStyleSheet("color: #80d8ff; font-weight: bold;")
+        row_dh_lbl.addWidget(self.lbl_sl_dehaze)
+        col_dh.addLayout(row_dh_lbl)
+        self.slider_sl_dehaze = QSlider(Qt.Horizontal)
+        self.slider_sl_dehaze.setRange(-200, 200)
+        self.slider_sl_dehaze.setValue(0)
+        self.slider_sl_dehaze.valueChanged.connect(self._on_sl_dehaze_changed)
+        self.slider_sl_dehaze.sliderReleased.connect(self.ground_slider_released.emit)
+        col_dh.addWidget(self.slider_sl_dehaze)
+        row_sl_p1.addLayout(col_dh)
+        sl_layout.addLayout(row_sl_p1)
+
+        # Par 2: Estructura Ondículas y Atenuar Fondo
+        row_sl_p2 = QHBoxLayout()
+        row_sl_p2.setSpacing(10)
+
+        col_ond = QVBoxLayout()
+        col_ond.setSpacing(2)
+        row_ond_lbl = QHBoxLayout()
+        row_ond_lbl.addWidget(self._make_resettable_label(QLabel("Estructura:"), lambda: self.slider_sl_ond_est.setValue(0), "0.00"))
+        self.lbl_sl_ond_est = QLabel("0.00")
+        self.lbl_sl_ond_est.setStyleSheet("color: #b388ff; font-weight: bold;")
+        row_ond_lbl.addWidget(self.lbl_sl_ond_est)
+        col_ond.addLayout(row_ond_lbl)
+        self.slider_sl_ond_est = QSlider(Qt.Horizontal)
+        self.slider_sl_ond_est.setRange(-100, 100)
+        self.slider_sl_ond_est.setValue(0)
+        self.slider_sl_ond_est.valueChanged.connect(self._on_sl_ond_est_changed)
+        self.slider_sl_ond_est.sliderReleased.connect(self.ground_slider_released.emit)
+        col_ond.addWidget(self.slider_sl_ond_est)
+        row_sl_p2.addLayout(col_ond)
+
+        col_bg = QVBoxLayout()
+        col_bg.setSpacing(2)
+        row_bg_lbl = QHBoxLayout()
+        row_bg_lbl.addWidget(self._make_resettable_label(QLabel("Atenuar Fondo:"), lambda: self.slider_sl_ond_bg.setValue(0), "0%"))
+        self.lbl_sl_ond_bg = QLabel("0%")
+        self.lbl_sl_ond_bg.setStyleSheet("color: #b388ff; font-weight: bold;")
+        row_bg_lbl.addWidget(self.lbl_sl_ond_bg)
+        col_bg.addLayout(row_bg_lbl)
+        self.slider_sl_ond_bg = QSlider(Qt.Horizontal)
+        self.slider_sl_ond_bg.setRange(0, 100)
+        self.slider_sl_ond_bg.setValue(0)
+        self.slider_sl_ond_bg.valueChanged.connect(self._on_sl_ond_bg_changed)
+        self.slider_sl_ond_bg.sliderReleased.connect(self.ground_slider_released.emit)
+        col_bg.addWidget(self.slider_sl_ond_bg)
+        row_sl_p2.addLayout(col_bg)
+        sl_layout.addLayout(row_sl_p2)
+
+        # Par 3: Contraste Fondo y Reducción Ruido
+        row_sl_p3 = QHBoxLayout()
+        row_sl_p3.setSpacing(10)
+
+        col_cs = QVBoxLayout()
+        col_cs.setSpacing(2)
+        row_cs_lbl = QHBoxLayout()
+        row_cs_lbl.addWidget(self._make_resettable_label(QLabel("Contraste Fondo:"), lambda: self.slider_sl_contrast.setValue(0), "0.00"))
+        self.lbl_sl_contrast = QLabel("0.00")
+        self.lbl_sl_contrast.setStyleSheet("color: #a5d6a7; font-weight: bold;")
+        row_cs_lbl.addWidget(self.lbl_sl_contrast)
+        col_cs.addLayout(row_cs_lbl)
+        self.slider_sl_contrast = QSlider(Qt.Horizontal)
+        self.slider_sl_contrast.setRange(-100, 100)
+        self.slider_sl_contrast.setValue(0)
+        self.slider_sl_contrast.valueChanged.connect(self._on_sl_contrast_changed)
+        self.slider_sl_contrast.sliderReleased.connect(self.ground_slider_released.emit)
+        col_cs.addWidget(self.slider_sl_contrast)
+        row_sl_p3.addLayout(col_cs)
+
+        col_dn = QVBoxLayout()
+        col_dn.setSpacing(2)
+        row_dn_lbl = QHBoxLayout()
+        row_dn_lbl.addWidget(self._make_resettable_label(QLabel("Reducción Ruido:"), lambda: self.slider_sl_denoise.setValue(0), "0%"))
+        self.lbl_sl_denoise = QLabel("0%")
+        self.lbl_sl_denoise.setStyleSheet("color: #a5d6a7; font-weight: bold;")
+        row_dn_lbl.addWidget(self.lbl_sl_denoise)
+        col_dn.addLayout(row_dn_lbl)
+        self.slider_sl_denoise = QSlider(Qt.Horizontal)
+        self.slider_sl_denoise.setRange(0, 100)
+        self.slider_sl_denoise.setValue(0)
+        self.slider_sl_denoise.valueChanged.connect(self._on_sl_denoise_changed)
+        self.slider_sl_denoise.sliderReleased.connect(self.ground_slider_released.emit)
+        col_dn.addWidget(self.slider_sl_denoise)
+        row_sl_p3.addLayout(col_dn)
+        sl_layout.addLayout(row_sl_p3)
+
+        self.btn_reset_sl_special = QPushButton("↺ Restablecer Ajustes de Fondo")
+        self.btn_reset_sl_special.setCursor(Qt.PointingHandCursor)
+        self.btn_reset_sl_special.clicked.connect(self.starless_reset_requested.emit)
+        sl_layout.addWidget(self.btn_reset_sl_special)
+
+        props_layout.addWidget(self.grp_starless_special)
+
         main_layout.addWidget(self.container_layer_props)
 
         # Estado inicial vacío
@@ -1077,6 +1249,8 @@ class MaskLayersWidget(QWidget):
         has_sel = layer is not None
         is_sys = layer.is_system_layer if layer else False
         is_ground = (layer is not None and layer.mask_type in (MASK_TYPE_IMAGE_GROUND, MASK_TYPE_GROUND))
+        is_stars = (layer is not None and layer.mask_type == MASK_TYPE_IMAGE_STARS)
+        is_starless = (layer is not None and layer.mask_type == MASK_TYPE_IMAGE_STARLESS)
 
         self.container_layer_props.setVisible(has_sel)
         self.btn_move_up.setEnabled(has_sel)
@@ -1086,6 +1260,10 @@ class MaskLayersWidget(QWidget):
 
         if hasattr(self, 'grp_gnd_special'):
             self.grp_gnd_special.setVisible(is_ground)
+        if hasattr(self, 'grp_stars_special'):
+            self.grp_stars_special.setVisible(is_stars)
+        if hasattr(self, 'grp_starless_special'):
+            self.grp_starless_special.setVisible(is_starless)
 
         if not layer:
             self.brush_tool_toggled.emit(False, None)
@@ -1473,6 +1651,76 @@ class MaskLayersWidget(QWidget):
         if hasattr(self, 'slider_gnd_special_bp'):
             self.slider_gnd_special_bp.setValue(bp_val)
             self.lbl_gnd_special_bp.setText(f"{bp_val / 1000.0:+.3f}")
+        self._updating_ui = False
+
+    # Controles Especiales de Estrellas
+    def _on_stars_special_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_stars_special.setText(f"{val}%")
+        self.stars_intensity_changed.emit(val)
+
+    def set_stars_special_value(self, val: int) -> None:
+        """Sincroniza el control especial de intensidad de estrellas desde tab_developer."""
+        self._updating_ui = True
+        if hasattr(self, 'slider_stars_special'):
+            self.slider_stars_special.setValue(val)
+            self.lbl_stars_special.setText(f"{val}%")
+        self._updating_ui = False
+
+    # Controles Especiales de Fondo Nebular (Starless)
+    def _on_sl_clarity_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_clarity.setText(f"{val / 100.0:+.2f}")
+        self.starless_clarity_changed.emit(val)
+
+    def _on_sl_dehaze_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_dehaze.setText(f"{val / 100.0:+.2f}")
+        self.starless_dehaze_changed.emit(val)
+
+    def _on_sl_ond_est_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_ond_est.setText(f"{val / 100.0:+.2f}")
+        self.starless_ond_est_changed.emit(val)
+
+    def _on_sl_ond_bg_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_ond_bg.setText(f"{val}%")
+        self.starless_ond_bg_changed.emit(val)
+
+    def _on_sl_contrast_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_contrast.setText(f"{val / 100.0:+.2f}")
+        self.starless_contrast_changed.emit(val)
+
+    def _on_sl_denoise_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_denoise.setText(f"{val}%")
+        self.starless_denoise_changed.emit(val)
+
+    def set_starless_tone_values(
+        self, clarity: int, dehaze: int, ond_est: int, ond_bg: int, contrast: int, denoise: int
+    ) -> None:
+        """Sincroniza los controles especiales de fondo nebular desde tab_developer."""
+        self._updating_ui = True
+        if hasattr(self, 'slider_sl_clarity'):
+            self.slider_sl_clarity.setValue(clarity)
+            self.lbl_sl_clarity.setText(f"{clarity / 100.0:+.2f}")
+        if hasattr(self, 'slider_sl_dehaze'):
+            self.slider_sl_dehaze.setValue(dehaze)
+            self.lbl_sl_dehaze.setText(f"{dehaze / 100.0:+.2f}")
+        if hasattr(self, 'slider_sl_ond_est'):
+            self.slider_sl_ond_est.setValue(ond_est)
+            self.lbl_sl_ond_est.setText(f"{ond_est / 100.0:+.2f}")
+        if hasattr(self, 'slider_sl_ond_bg'):
+            self.slider_sl_ond_bg.setValue(ond_bg)
+            self.lbl_sl_ond_bg.setText(f"{ond_bg}%")
+        if hasattr(self, 'slider_sl_contrast'):
+            self.slider_sl_contrast.setValue(contrast)
+            self.lbl_sl_contrast.setText(f"{contrast / 100.0:+.2f}")
+        if hasattr(self, 'slider_sl_denoise'):
+            self.slider_sl_denoise.setValue(denoise)
+            self.lbl_sl_denoise.setText(f"{denoise}%")
         self._updating_ui = False
 
     # Previsualización interactiva de la máscara en el lienzo

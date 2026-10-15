@@ -908,6 +908,27 @@ class DeveloperTab(QWidget):
             self.slider_gnd_bp.value()
         )
 
+        # Sincronización contextual de Estrellas y Fondo Nebular (Starless)
+        self.mask_layers_widget.stars_intensity_changed.connect(self._on_mask_widget_stars_intensity)
+        self.mask_layers_widget.stars_reset_requested.connect(self.reset_stars_intensity)
+        self.mask_layers_widget.starless_clarity_changed.connect(self._on_mask_widget_sl_clarity)
+        self.mask_layers_widget.starless_dehaze_changed.connect(self._on_mask_widget_sl_dehaze)
+        self.mask_layers_widget.starless_ond_est_changed.connect(self._on_mask_widget_sl_ond_est)
+        self.mask_layers_widget.starless_ond_bg_changed.connect(self._on_mask_widget_sl_ond_bg)
+        self.mask_layers_widget.starless_contrast_changed.connect(self._on_mask_widget_sl_contrast)
+        self.mask_layers_widget.starless_denoise_changed.connect(self._on_mask_widget_sl_denoise)
+        self.mask_layers_widget.starless_reset_requested.connect(self.reset_starless_adjustments)
+
+        self.mask_layers_widget.set_stars_special_value(self.slider_stars.value())
+        self.mask_layers_widget.set_starless_tone_values(
+            self.slider_clarity.value(),
+            self.slider_dehaze.value(),
+            self.slider_ond_est.value(),
+            self.slider_ond_bg.value(),
+            self.slider_contrast_starless.value(),
+            self.slider_denoise.value()
+        )
+
         def _update_masks_badge():
             count = len(self.mask_layers_widget.layers)
             if count > 0:
@@ -2819,6 +2840,22 @@ class DeveloperTab(QWidget):
         self.lbl_stars.setText(f"{val}%")
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_starnet_stars_opacity(self.star_intensity)
+            self.mask_layers_widget.set_stars_special_value(val)
+        self.update_stretch_preview()
+
+    def _on_mask_widget_stars_intensity(self, val: int):
+        if hasattr(self, 'slider_stars') and self.slider_stars.value() != val:
+            self.slider_stars.setValue(val)
+
+    def reset_stars_intensity(self):
+        if hasattr(self, 'slider_stars'):
+            self.slider_stars.setValue(100)
+        self.star_intensity = 1.0
+        if hasattr(self, 'lbl_stars'):
+            self.lbl_stars.setText("100%")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_stars_special_value(100)
+            self.mask_layers_widget.set_starnet_stars_opacity(1.0)
         self.update_stretch_preview()
 
     def on_layer_mode_changed(self, idx: int):
@@ -3091,31 +3128,125 @@ class DeveloperTab(QWidget):
     def on_contrast_starless_changed(self, val: int):
         self.contrast_starless_val = val / 100.0
         self.lbl_contrast_starless.setText(f"{self.contrast_starless_val:+.2f}")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_starless_tone_values(
+                self.slider_clarity.value(), self.slider_dehaze.value(),
+                self.slider_ond_est.value(), self.slider_ond_bg.value(),
+                val, self.slider_denoise.value()
+            )
         self.update_stretch_preview()
         
     def on_clarity_changed(self, val: int):
         self.clarity_starless_val = val / 100.0
         self.lbl_clarity.setText(f"{self.clarity_starless_val:+.2f}")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_starless_tone_values(
+                val, self.slider_dehaze.value(),
+                self.slider_ond_est.value(), self.slider_ond_bg.value(),
+                self.slider_contrast_starless.value(), self.slider_denoise.value()
+            )
         self.update_stretch_preview()
 
     def on_dehaze_changed(self, val: int):
         self.dehaze_starless_val = val / 100.0
         self.lbl_dehaze.setText(f"{self.dehaze_starless_val:+.2f}")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_starless_tone_values(
+                self.slider_clarity.value(), val,
+                self.slider_ond_est.value(), self.slider_ond_bg.value(),
+                self.slider_contrast_starless.value(), self.slider_denoise.value()
+            )
         self.update_stretch_preview()
 
     def on_denoise_changed(self, val: int):
         self.denoise_strength = val / 100.0
         self.lbl_denoise.setText(f"{val}%")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_starless_tone_values(
+                self.slider_clarity.value(), self.slider_dehaze.value(),
+                self.slider_ond_est.value(), self.slider_ond_bg.value(),
+                self.slider_contrast_starless.value(), val
+            )
         self.update_stretch_preview()
         
     def on_ond_estructura_changed(self, val: int):
         self.multiescala_estructura = val / 100.0
         self.lbl_ond_est.setText(f"{self.multiescala_estructura:+.2f}")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_starless_tone_values(
+                self.slider_clarity.value(), self.slider_dehaze.value(),
+                val, self.slider_ond_bg.value(),
+                self.slider_contrast_starless.value(), self.slider_denoise.value()
+            )
         self.update_stretch_preview()
 
     def on_ond_fondo_changed(self, val: int):
         self.multiescala_fondo = val / 100.0
         self.lbl_ond_bg.setText(f"{val}%")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_starless_tone_values(
+                self.slider_clarity.value(), self.slider_dehaze.value(),
+                self.slider_ond_est.value(), val,
+                self.slider_contrast_starless.value(), self.slider_denoise.value()
+            )
+        self.update_stretch_preview()
+
+    def _on_mask_widget_sl_clarity(self, val: int):
+        if self.slider_clarity.value() != val:
+            self.slider_clarity.setValue(val)
+
+    def _on_mask_widget_sl_dehaze(self, val: int):
+        if self.slider_dehaze.value() != val:
+            self.slider_dehaze.setValue(val)
+
+    def _on_mask_widget_sl_ond_est(self, val: int):
+        if self.slider_ond_est.value() != val:
+            self.slider_ond_est.setValue(val)
+
+    def _on_mask_widget_sl_ond_bg(self, val: int):
+        if self.slider_ond_bg.value() != val:
+            self.slider_ond_bg.setValue(val)
+
+    def _on_mask_widget_sl_contrast(self, val: int):
+        if self.slider_contrast_starless.value() != val:
+            self.slider_contrast_starless.setValue(val)
+
+    def _on_mask_widget_sl_denoise(self, val: int):
+        if self.slider_denoise.value() != val:
+            self.slider_denoise.setValue(val)
+
+    def reset_starless_adjustments(self):
+        widgets = [
+            self.slider_clarity, self.slider_dehaze, self.slider_ond_est,
+            self.slider_ond_bg, self.slider_contrast_starless, self.slider_denoise
+        ]
+        for w in widgets:
+            w.blockSignals(True)
+        self.slider_clarity.setValue(0)
+        self.slider_dehaze.setValue(0)
+        self.slider_ond_est.setValue(0)
+        self.slider_ond_bg.setValue(0)
+        self.slider_contrast_starless.setValue(0)
+        self.slider_denoise.setValue(0)
+        for w in widgets:
+            w.blockSignals(False)
+
+        self.clarity_starless_val = 0.0
+        self.dehaze_starless_val = 0.0
+        self.multiescala_estructura = 0.0
+        self.multiescala_fondo = 0.0
+        self.contrast_starless_val = 0.0
+        self.denoise_strength = 0.0
+
+        self.lbl_clarity.setText("0.00")
+        self.lbl_dehaze.setText("0.00")
+        self.lbl_ond_est.setText("0.00")
+        self.lbl_ond_bg.setText("0%")
+        self.lbl_contrast_starless.setText("0.00")
+        self.lbl_denoise.setText("0%")
+
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_starless_tone_values(0, 0, 0, 0, 0, 0)
         self.update_stretch_preview()
     
     def _on_mask_widget_gnd_ev(self, val: int):
@@ -3386,6 +3517,8 @@ class DeveloperTab(QWidget):
         self.lbl_gnd_bp.setText("0.000")
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_ground_tone_values(0, 0, 0)
+            self.mask_layers_widget.set_stars_special_value(100)
+            self.mask_layers_widget.set_starless_tone_values(0, 0, 0, 0, 0, 0)
 
         self.spin_bp.setValue(0.0)
         self.slider_bp.setValue(0)
@@ -3826,6 +3959,15 @@ class DeveloperTab(QWidget):
                 self.slider_gnd_ev.value(),
                 self.slider_gnd_sh.value(),
                 self.slider_gnd_bp.value()
+            )
+            self.mask_layers_widget.set_stars_special_value(self.slider_stars.value())
+            self.mask_layers_widget.set_starless_tone_values(
+                self.slider_clarity.value(),
+                self.slider_dehaze.value(),
+                self.slider_ond_est.value(),
+                self.slider_ond_bg.value(),
+                self.slider_contrast_starless.value(),
+                self.slider_denoise.value()
             )
 
         if "curves" in state and state["curves"] is not None and hasattr(self, 'curve_widget'):
