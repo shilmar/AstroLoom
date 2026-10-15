@@ -14,6 +14,8 @@
 
 ### 2. Apilado Diferencial Cielo / Suelo
 - **Alineación Estelar Robusta:** Detección de estrellas y emparejamiento homográfico/afín de precisión subpíxel sobre datos lineales de 32 bits.
+- **Cribado Inteligente de Tomas y Calidad Estelar (Frame Culling):** Análisis multihilo de calidad óptica (FWHM, excentricidad y densidad estelar) con calibración específica para gran angular (discriminación entre centro óptico y coma periférica), selector de tolerancia y auto-descarte de tomas defectuosas.
+- **Tratamiento Anti-Ghosting de Árboles en Horizonte (Min-Horizon):** Erradicación de árboles fantasma y estelas traslúcidas mediante proyección percentil inferior en una banda de seguridad perimetral dilatada sobre el contorno del horizonte.
 - **Integración Kappa-Sigma Pura:** Eliminación drástica y limpia de trazas de satélites, estelas de aviones y artefactos transitorios mediante rechazo por desviación absoluta respecto a la mediana (MAD) sin elevar el ruido de fondo.
 - **Conservación Íntegra del Sensor (Sin Auto-Crop):** Relleno periférico reflectivo (`BORDER_REFLECT`) que neutraliza los marcos y escalones oscuros provocados por la rotación del campo estelar, conservando el 100% de la resolución nativa original.
 - **Motor Optimizado por Bloques:** Procesamiento segmentado en franjas (200 filas) que previene desbordamientos de memoria RAM (`MemoryError`) y cuellos de botella de transferencia GPU en lotes pesados.
@@ -22,6 +24,7 @@
 - **Antipolución Lumínica:** Algoritmos selectivos de atenuación de gradientes de fondo (Sustracción de Domo, Rechazo Asimétrico Min-Sigma y Normalización Local).
 
 ### 3. Segmentación y Máscaras Interactivas
+- **Detección Automática de Suelo con IA Ligera (1-Click Sky/Ground):** Segmentación semántica de horizonte instantánea mediante red neuronal convolucional profunda U²-Net en ONNX Runtime con refinado subpíxel por Filtro Guiado (Guided Filter), asistente interactivo de descarga y fallback matemático continuo.
 - **GrabCut Guiado Multiescala:** Delineación asistida del horizonte y perfiles complejos (árboles, relieve montañoso, estructuras).
 - **Edición Continua no Destructiva:** Permite refinar la máscara, seguir corrigiendo con trazos de pincel en tiempo real y recalcular sin reiniciar el trabajo.
 - **Control Paramétrico Fino:** Ajuste del radio de difusión/suavizado gaussiano del borde (feathering) e iteraciones del modelo.

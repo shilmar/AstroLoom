@@ -129,6 +129,10 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 ---
 
 ## ✅ Tareas Recientemente Completadas
+- **Detección Automática de Suelo con IA Ligera (v0.8.3 - P8):** Inferencia local U²-Net en ONNX Runtime con refinado subpíxel por Filtro Guiado (Guided Filter), descarga asistida interactiva y fallback algorítmico continuo sin conexión.
+- **Tratamiento Anti-Ghosting de Árboles en Horizonte (v0.8.3 - P3):** Algoritmo Min-Horizon de proyección percentil inferior sobre zona de seguridad dilatada perimetral que elimina ramas transparentes en el apilado dual.
+- **Cribado Previo Inteligente de Tomas y Calidad Estelar (v0.8.3 - P4):** Inspección óptica multihilo de FWHM, excentricidad y densidad estelar con calibración estratificada para grandes angulares, semáforo visual de puntuación y auto-descarte de tomas movidas o nubladas.
+- **Corrección de Alineación 1:1 en Zoom del Revelador (v0.8.3):** Eliminación de desplazamiento relativo y restos estelares en el suelo al activar el zoom al 100% mediante sincronización de `crop_rect` en el pipeline de composición por capas.
 - **Gestor de Capas y Máscaras de Ajuste Local (v0.8.2):** Integración de capas especiales de imagen (Fondo Base, Fondo Starless, Estrellas, Suelo), orden natural de pila (bottom-up), controles contextuales dedicados por tipo de capa, tematización cromática, memoria de herramientas, ojo de visibilidad y botón de carga de máscaras desde apilado/archivo.
 - **Internacionalización i18n Multilingüe en Tiempo Real (v0.8.2):** Arquitectura JSON modular (`locales/es.json`, `locales/en.json`) con gestor `core/i18n.py` y selector de idioma en barra de estado.
 - **Acordeón Plegable Inteligente en el Revelador (v0.8.2):** Rediseño modular estilo Lightroom con 9 secciones colapsables y prioridad a StarNet++ AI.

@@ -5,6 +5,41 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-10-16
+
+### Añadido
+* **Detección Automática de Suelo y Horizonte con IA Ligera (1-Click Sky/Ground) [P8]:**
+  - **Inferencia Local con Red Neuronal Profunda (`core/ai_horizon.py`):** Integración del modelo U²-Net en ONNX Runtime (`skyseg.onnx`) para segmentación semántica automática de cielo y suelo en menos de 1 segundo en CPU.
+  - **Refinado Subpíxel mediante Filtro Guiado (Guided Filter):** Algoritmo de acoplamiento de bordes de alta fidelidad que proyecta la máscara probabilística sobre la luminancia nativa de la toma, preservando ramas finas, hojas, postes, antenas y contornos de rocas sin halos ni transiciones duras.
+  - **Descarga Asistida e Interactiva con Diálogo Modal:** Si el modelo `.onnx` no está presente en la carpeta `models/`, la aplicación ofrece descargarlo automáticamente desde Hugging Face con barra de progreso porcentual y lectura en MB (`X.X / 167.8 MB`), asegurando descargas atómicas libres de archivos corruptos (`.tmp`).
+  - **Motor de Resiliencia / Fallback Algorítmico Matemático:** Fallback instantáneo (0.01 s) basado en supresión morfológica estelar y gradiente vertical Otsu adaptativo, garantizando funcionalidad completa incluso sin conexión a internet en el campo.
+  - **Integración UI en Apilador y Revelador:**
+    - Botón destacado en Sección 5 del Apilador: `[ 🧠 Auto-Detectar Suelo (IA 1-Click) ]`.
+    - Opción integrada en la barra horizontal del Revelador: `Cargar Máscara... -> 🧠 Auto-Detectar Suelo con IA (1-Click)`.
+    - Totalmente compatible con retoque manual por pinceles (`[ ✏️ Refinar con Trazos ]`).
+* **Tratamiento Anti-Ghosting de Árboles en Horizonte (Min-Horizon Boundary) [P3]:**
+  - **Erradicación de Árboles Fantasma (`core/stacking.py`):** Algoritmo de proyección percentil inferior circunscrito exclusivamente a una banda de seguridad perimetral dilatada alrededor del contorno de la máscara de suelo.
+  - Evita la fuga de estrellas en rotación a través de las ramas y el follaje estático durante el apilado dual (cielo móvil + suelo fijo).
+  - **Controles Paramétricos en el Apilador:** Casilla activable con radio de frontera configurable (`spin_ag_radius`, 5 a 50 px) y selector de sensibilidad de follaje (*Conservadora*, *Equilibrada*, *Agresiva*).
+* **Cribado Previo Inteligente de Tomas y Calidad Estelar (Frame Culling) [P4]:**
+  - **Inspección Óptica Automatizada en Paralelo (`core/frame_culling.py`):** Análisis previo multihilo que mide FWHM (nitidez de foco), excentricidad estelar (alargamiento por viento o deriva) y censo de estrellas (paso de nubes o niebla).
+  - **Calibración Estratificada para Grandes Angulares:** Discriminación matemática entre el centro óptico (eje principal de la lente) y la periferia/esquinas (afectadas naturalmente por aberración de coma y astigmatismo), evitando descartes falsos en focales de 14mm-24mm.
+  - **Perfiles de Tolerancia Adaptativos:** Selector en la barra de herramientas con modos *Gran Angular (Tolerante)*, *Equilibrado (Recomendado)* y *Exigente (Foco Crítico)*.
+  - **Badges de Puntuación Visual en Vivo:** Puntuación porcentual alineada en columna para cada archivo (`🟢 96%`, `🟡 82%`, `🔴 32% Movida` / `🔴 15% Nubes`) con ficha técnica en tooltip y botón de auto-descarte instantáneo (`⚡ Auto-Descartar`).
+
+### Corregido
+* **Alineación 1:1 de Capas y Corrección de Residuo Estelar en Zoom del Revelador:**
+  - Corrección de distorsión y desplazamiento relativo en la capa de estrellas y suelo al activar el zoom al 100% en `gui/tab_developer.py` mediante recorte síncrono de coordenadas normalizadas (`crop_rect`) en `core/mask_layers.py`.
+* **Ergonomía de la Barra de Herramientas de Cribado en el Apilador:**
+  - Reorganización en dos filas compactas y balanceadas que erradica el scrollbar horizontal forzado en el panel izquierdo.
+* **Restauración de Visibilidad y Alineación de Puntuaciones de Tomas:**
+  - Corrección de visibilidad de `lbl_quality` en `FileListRow.set_quality_result()` y alineación directa tras el checkbox para un listado limpio y legible.
+
+### Modificado
+* **Salto de Versión:**
+  - Actualización a **v0.8.3** en `gui/main_window.py`, `gui/tab_settings.py`, `locales/es.json` y `locales/en.json`.
+  - Inclusión de dependencia `onnxruntime>=1.16.0` en `requirements.txt`.
+
 ## [0.8.2] - 2026-10-15
 
 ### Añadido
