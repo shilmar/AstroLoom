@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QTabWidget, QListWidget, QListWidgetItem, QProgressBar,
     QMessageBox, QGroupBox, QRadioButton, QSlider, QDoubleSpinBox,
     QComboBox, QSplitter, QTextEdit, QSizePolicy, QCheckBox, QSpinBox,
-    QScrollArea
+    QScrollArea, QProgressDialog
 )
 from PySide6.QtCore import Qt, Signal, QCoreApplication
 from PySide6.QtGui import QTextCursor, QCursor
@@ -19,7 +19,7 @@ from core.masking import refine_mask_guided
 from core.stacking import load_image_as_float32
 from gui.canvas import MaskCanvas
 from gui.widgets.drop_widgets import DropListWidget
-from gui.worker import StackingWorker, QualityCullingWorker, AIHorizonWorker
+from gui.worker import StackingWorker, QualityCullingWorker, AIHorizonWorker, ModelDownloadWorker
 from core.gpu_backend import is_gpu_enabled
 from core.config_manager import load_config
 from gui.theme import STYLE_RUN_IDLE, STYLE_RUN_ACTIVE, STYLE_RUN_CANCELLING
@@ -935,9 +935,73 @@ class StackerTab(QWidget):
             QMessageBox.warning(self, "Aviso", "No se pudo cargar la imagen de referencia para el análisis.")
             return
 
+        from core.ai_horizon import is_ai_model_available
+        if not is_ai_model_available():
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Modelo de IA no encontrado")
+            msg.setText(
+                "El modelo de IA para detección semántica precisa de suelo (skyseg.onnx, ~167 MB) no se encuentra en la carpeta 'models/'.\n\n"
+                "¿Deseas descargarlo ahora automáticamente o prefieres usar el método algorítmico rápido?"
+            )
+            btn_download = msg.addButton("📥 Descargar IA (~167 MB)", QMessageBox.AcceptRole)
+            btn_algo = msg.addButton("⚡ Usar Algorítmico", QMessageBox.ActionRole)
+            btn_cancel = msg.addButton("Cancelar", QMessageBox.RejectRole)
+            msg.setDefaultButton(btn_download)
+            msg.exec()
+
+            clicked = msg.clickedButton()
+            if clicked == btn_download:
+                self._start_model_download_stacker()
+                return
+            elif clicked == btn_algo:
+                self._run_horizon_worker(force_algorithmic=True)
+                return
+            else:
+                return
+
+        self._run_horizon_worker(force_algorithmic=False)
+
+    def _start_model_download_stacker(self):
+        """Descarga asistida del modelo ONNX con diálogo de progreso."""
+        progress = QProgressDialog("Conectando con el servidor de modelos...", "Cancelar", 0, 100, self)
+        progress.setWindowTitle("Descarga de Modelo IA (AstroLoom)")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.setAutoClose(True)
+
+        self.download_worker = ModelDownloadWorker(parent=self)
+
+        def on_prog(pct, d_mb, t_mb):
+            progress.setValue(pct)
+            progress.setLabelText(f"Descargando modelo de IA (skyseg.onnx)...\n{d_mb:.1f} MB de {t_mb:.1f} MB ({pct}%)")
+
+        def on_finished(path):
+            progress.close()
+            self.log_message(f"✓ [IA HORIZONTE] Modelo descargado e instalado en: {os.path.basename(path)}")
+            self._run_horizon_worker(force_algorithmic=False)
+
+        def on_error(err):
+            progress.close()
+            self.log_message(f"[ERROR DESCARGA] {err}")
+            QMessageBox.warning(self, "Error en Descarga", f"No se pudo descargar el modelo:\n{err}\n\nSe usará el método algorítmico.")
+            self._run_horizon_worker(force_algorithmic=True)
+
+        def on_cancel():
+            self.download_worker.cancel()
+            self.log_message("[IA HORIZONTE] Descarga cancelada por el usuario.")
+
+        self.download_worker.progress_changed.connect(on_prog)
+        self.download_worker.finished_success.connect(on_finished)
+        self.download_worker.error_occurred.connect(on_error)
+        progress.canceled.connect(on_cancel)
+
+        self.download_worker.start()
+
+    def _run_horizon_worker(self, force_algorithmic: bool = False):
         self.btn_auto_ai_mask.setEnabled(False)
         self.btn_auto_ai_mask.setText("⏳ Detectando suelo...")
-        self.log_message("[IA HORIZONTE] Ejecutando segmentación semántica de cielo y suelo...")
+        self.log_message("[IA HORIZONTE] Ejecutando segmentación de cielo y suelo...")
         self.setCursor(Qt.WaitCursor)
 
         feather = self.spin_feather.value()

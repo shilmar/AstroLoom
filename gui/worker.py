@@ -13,6 +13,7 @@ import numpy as np
 import tifffile
 import multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from typing import Optional, List, Dict, Tuple
 
 from PySide6.QtCore import QThread, Signal
 
@@ -745,4 +746,41 @@ class AIHorizonWorker(QThread):
             )
             self.finished_success.emit(mask, method)
         except Exception as e:
-            self.error_occurred.emit(str(e))
+            self.error_occurred.emit(str(e))
+
+
+class ModelDownloadWorker(QThread):
+    """Hilo secundario para descargar modelos pesados de IA en segundo plano con reporte de progreso."""
+    progress_changed = Signal(int, float, float)  # (pct, descargado_mb, total_mb)
+    finished_success = Signal(str)               # target_path
+    error_occurred = Signal(str)
+    cancelled = Signal()
+
+    def __init__(self, target_path: Optional[str] = None, parent=None):
+        super().__init__(parent)
+        self.target_path = target_path
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
+
+    def run(self):
+        try:
+            from core.ai_horizon import download_ai_model
+            res_path = download_ai_model(
+                target_path=self.target_path,
+                progress_callback=lambda pct, d_mb, t_mb: self.progress_changed.emit(pct, d_mb, t_mb),
+                cancel_check=lambda: self._is_cancelled
+            )
+            if not self._is_cancelled:
+                self.finished_success.emit(res_path)
+            else:
+                self.cancelled.emit()
+        except InterruptedError:
+            self.cancelled.emit()
+        except Exception as e:
+            if not self._is_cancelled:
+                self.error_occurred.emit(str(e))
+            else:
+                self.cancelled.emit()
+

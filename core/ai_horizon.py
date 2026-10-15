@@ -52,6 +52,77 @@ def is_ai_model_available() -> bool:
     return path is not None and os.path.isfile(path)
 
 
+DEFAULT_MODEL_URL = "https://huggingface.co/JianyuanWang/skyseg/resolve/main/skyseg.onnx"
+DEFAULT_MODEL_FILENAME = "skyseg.onnx"
+
+
+def download_ai_model(
+    target_path: Optional[str] = None,
+    progress_callback=None,
+    cancel_check=None
+) -> str:
+    """
+    Descarga el modelo ONNX desde Hugging Face con reporte de progreso en bloques.
+    Escribe en un archivo temporal (.tmp) y renombra atómicamente al terminar.
+    
+    Parámetros:
+        target_path: Ruta destino opcional (por defecto models/skyseg.onnx).
+        progress_callback: fn(porcentaje: int, descargado_mb: float, total_mb: float).
+        cancel_check: fn() -> bool, True para abortar.
+        
+    Retorna:
+        str: Ruta absoluta del modelo descargado.
+    """
+    import urllib.request
+
+    if not target_path:
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        models_dir = os.path.join(root, "models")
+        os.makedirs(models_dir, exist_ok=True)
+        target_path = os.path.join(models_dir, DEFAULT_MODEL_FILENAME)
+    else:
+        os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
+
+    temp_path = target_path + ".tmp"
+    url = DEFAULT_MODEL_URL
+
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "AstroLoom/1.0 SkySegmentationDownloader"}
+    )
+
+    with urllib.request.urlopen(req, timeout=30) as response:
+        total_size = int(response.headers.get("Content-Length", 0))
+        total_mb = total_size / (1024 * 1024) if total_size > 0 else 167.8
+        chunk_size = 256 * 1024  # 256 KB
+        downloaded = 0
+
+        with open(temp_path, "wb") as f:
+            while True:
+                if cancel_check and cancel_check():
+                    f.close()
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                    raise InterruptedError("Descarga cancelada por el usuario.")
+
+                chunk = response.read(chunk_size)
+                if not chunk:
+                    break
+                f.write(chunk)
+                downloaded += len(chunk)
+                downloaded_mb = downloaded / (1024 * 1024)
+                pct = int((downloaded / total_size) * 100) if total_size > 0 else 0
+
+                if progress_callback:
+                    progress_callback(pct, downloaded_mb, total_mb)
+
+    if os.path.exists(target_path):
+        os.remove(target_path)
+    os.rename(temp_path, target_path)
+    return target_path
+
+
+
 def fast_guided_filter(
     guide_gray: np.ndarray, 
     src_mask: np.ndarray, 

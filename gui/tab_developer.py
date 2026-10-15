@@ -28,7 +28,8 @@ from PySide6.QtWidgets import (
     QFrame,
     QButtonGroup,
     QSizePolicy,
-    QMenu
+    QMenu,
+    QProgressDialog
 )
 from PySide6.QtCore import Qt, QCoreApplication, QTimer
 from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap, QColor, QFont, QCursor
@@ -2097,12 +2098,78 @@ class DeveloperTab(QWidget):
         """Calcula la máscara de suelo/cielo con IA ligera directamente desde el visor del revelador."""
         if self.image_32bit is None:
             return
+
+        from core.ai_horizon import is_ai_model_available
+        if not is_ai_model_available():
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Modelo de IA no encontrado")
+            msg.setText(
+                "El modelo de IA para detección semántica precisa de suelo (skyseg.onnx, ~167 MB) no se encuentra en la carpeta 'models/'.\n\n"
+                "¿Deseas descargarlo ahora automáticamente o prefieres usar el método algorítmico rápido?"
+            )
+            btn_download = msg.addButton("📥 Descargar IA (~167 MB)", QMessageBox.AcceptRole)
+            btn_algo = msg.addButton("⚡ Usar Algorítmico", QMessageBox.ActionRole)
+            btn_cancel = msg.addButton("Cancelar", QMessageBox.RejectRole)
+            msg.setDefaultButton(btn_download)
+            msg.exec()
+
+            clicked = msg.clickedButton()
+            if clicked == btn_download:
+                self._start_model_download_developer()
+                return
+            elif clicked == btn_algo:
+                self._run_horizon_developer(force_algorithmic=True)
+                return
+            else:
+                return
+
+        self._run_horizon_developer(force_algorithmic=False)
+
+    def _start_model_download_developer(self):
+        """Descarga asistida del modelo ONNX con diálogo de progreso para el revelador."""
+        progress = QProgressDialog("Conectando con el servidor de modelos...", "Cancelar", 0, 100, self)
+        progress.setWindowTitle("Descarga de Modelo IA (AstroLoom)")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.setAutoClose(True)
+
+        from gui.worker import ModelDownloadWorker
+        self.download_worker = ModelDownloadWorker(parent=self)
+
+        def on_prog(pct, d_mb, t_mb):
+            progress.setValue(pct)
+            progress.setLabelText(f"Descargando modelo de IA (skyseg.onnx)...\n{d_mb:.1f} MB de {t_mb:.1f} MB ({pct}%)")
+
+        def on_finished(path):
+            progress.close()
+            self.log_message(f"✓ [IA HORIZONTE] Modelo descargado e instalado en: {os.path.basename(path)}")
+            self._run_horizon_developer(force_algorithmic=False)
+
+        def on_error(err):
+            progress.close()
+            self.log_message(f"[ERROR DESCARGA] {err}")
+            QMessageBox.warning(self, "Error en Descarga", f"No se pudo descargar el modelo:\n{err}\n\nSe usará el método algorítmico.")
+            self._run_horizon_developer(force_algorithmic=True)
+
+        def on_cancel():
+            self.download_worker.cancel()
+            self.log_message("[IA HORIZONTE] Descarga cancelada por el usuario.")
+
+        self.download_worker.progress_changed.connect(on_prog)
+        self.download_worker.finished_success.connect(on_finished)
+        self.download_worker.error_occurred.connect(on_error)
+        progress.canceled.connect(on_cancel)
+
+        self.download_worker.start()
+
+    def _run_horizon_developer(self, force_algorithmic: bool = False):
         self.setCursor(Qt.WaitCursor)
-        self.log_message("[IA HORIZONTE] Ejecutando detección automática de cielo/suelo...")
+        self.log_message("[IA HORIZONTE] Ejecutando detección de cielo/suelo...")
         QCoreApplication.processEvents()
         try:
             from core.ai_horizon import auto_detect_sky_mask
-            mask, method = auto_detect_sky_mask(self.image_32bit)
+            mask, method = auto_detect_sky_mask(self.image_32bit, force_algorithmic=force_algorithmic)
             self._apply_loaded_mask(mask, source_desc=f"Auto-Detección {method}")
         except Exception as e:
             self.log_message(f"[ERROR IA HORIZONTE] Falló la detección: {e}")
