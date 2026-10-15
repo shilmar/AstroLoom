@@ -5,7 +5,31 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
-## [0.8.1] - 2026-10-15
+### Añadido
+* **Sistema de Diseño Global "Cosmic Dark Pro" y Unificación Visual Integral:**
+  - Creación del subsistema centralizado de diseño en [`gui/theme.py`](file:///D:/software/AstroLoom/gui/theme.py) con paleta de colores coherente y contrastada para astrofotografía:
+    - Fondos escalonados: Fondo ventana (`#0b0d14`), Paneles laterales (`#12141e`), Tarjetas y Grupos (`#171a26`), Controles de entrada (`#0d0f17`), Consola de logs (`#08090f`).
+    - Bordes refinados con estados interactivos: Base (`#232738`), Hover (`#3a415a`), Foco (`#00bcd4`), Activo (`#00e5ff`).
+    - Jerarquía tipográfica consistente y legible (`#eceff4` primario, `#90a4ae` secundario, `#546e7a` atenuado).
+    - Botones de acción unificados con retroalimentación visual táctil:
+      - `STYLE_RUN_IDLE`: Botón de ejecución en verde esmeralda cósmico.
+      - `STYLE_RUN_ACTIVE`: Botón de ejecución activo / cancelación en rojo carmesí.
+      - `STYLE_RUN_CANCELLING`: Estado transitorio de parada segura en gris pizarra.
+      - `STYLE_TRANSFER_BTN`: Botón de transferencia intermodular ("Enviar al Revelador") en cian/petróleo.
+  - Unificación visual y eliminación de estilos fragmentados en los 7 módulos del sistema:
+    - **1. Apilador (Stacker):** Botones de apilado estandarizados, consola de log y barras de progreso integradas en el tema.
+    - **2. Revelador / Editor:** Barra de herramientas de recorte, botones de exportación y visores estandarizados.
+    - **3. Eclipses (HDR):** Estilos limpios sin sobreescrituras CSS individuales en fusiones HDR y transferencia a revelado.
+    - **4. Eclipses (Collage):** Eliminados estilos de colores dispares en groupboxes, interfaz integrada y uniforme.
+    - **5. Trazas de Estrellas (Startrails):** Controles de simulación y generación enlazados al sistema de diseño unificado.
+    - **6. Panorámicas (Mosaicos):** Tabla de teselas, cosido y controles de proyección alineados con la estética general.
+    - **7. Configuración / Ajustes:** Reestructuración de márgenes y espaciados de las 5 secciones de ajustes para evitar cortes verticales.
+  - Navegación superior moderna (`QTabBar`) con resaltado de pestaña activa mediante barra inferior cian brillante (`#00e5ff`) y transiciones hover.
+* **Barra de Estado Interactiva y Monitor de Hardware en Tiempo Real:**
+  - Indicador permanente del motor y versión activa (`⚡ AstroLoom Engine v0.8.1`).
+  - Monitor dinámico de memoria RAM del sistema con lectura porcentual y en gigabytes (`🧠 RAM: XX% (XX.X / XX.X GB)`) actualizado cada 2.5 segundos mediante `psutil`.
+  - Alerta cromática automática en rojo carmesí cuando la memoria disponible supera el 85% de saturación para prevenir cuelgues por Out-Of-Memory en apilados o mosaicos gigantescos.
+
 
 ### Añadido
 * **Herramienta Interactiva de Recorte y Nivelación de Horizonte (Crop & Leveling Tool):**

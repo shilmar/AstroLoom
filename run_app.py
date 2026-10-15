@@ -25,6 +25,9 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
+    from gui.theme import apply_theme
+    apply_theme(app)
+
     win = MainWindow()
     win.show()
     sys.exit(app.exec())

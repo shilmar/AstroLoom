@@ -4,8 +4,10 @@ gui/main_window.py - Ventana principal contenedora de la aplicación AstroLoom.
 Coordina las pestañas principales (Apilador, Revelador, Eclipses, Startrails, Panorámicas y Ajustes).
 """
 from typing import Optional
-from PySide6.QtWidgets import QMainWindow, QTabWidget
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QMainWindow, QTabWidget, QStatusBar, QLabel, QWidget, QHBoxLayout
 
+from gui.theme import apply_theme, STYLE_STATUS_PILL
 from gui.tab_stacker import StackerTab
 from gui.tab_developer import DeveloperTab
 from gui.tab_eclipse import EclipseTab
@@ -26,7 +28,63 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(self.BASE_TITLE)
         self.resize(1360, 880)
 
+        # Aplicar el sistema de diseño global
+        apply_theme(self)
+
         self._setup_ui()
+        self._setup_status_bar()
+
+    def _setup_status_bar(self) -> None:
+        """Configura la barra de estado moderna con monitor de memoria RAM y motor de procesado."""
+        status_bar = self.statusBar()
+        status_bar.setSizeGripEnabled(False)
+
+        # Mensaje de estado contextual
+        self.lbl_status = QLabel("Listo para procesar")
+        status_bar.addWidget(self.lbl_status, 1)
+
+        # Píldora del Motor AstroLoom
+        self.lbl_engine_badge = QLabel("⚡ AstroLoom Engine v0.8.1")
+        self.lbl_engine_badge.setStyleSheet(STYLE_STATUS_PILL)
+        status_bar.addPermanentWidget(self.lbl_engine_badge)
+
+        # Píldora de Monitor de Memoria RAM en tiempo real
+        self.lbl_ram_monitor = QLabel("🧠 RAM: --")
+        self.lbl_ram_monitor.setStyleSheet(
+            "background-color: #141724; border: 1px solid #232738; border-radius: 4px; padding: 2px 8px; color: #ffd54f; font-weight: bold; font-size: 10px;"
+        )
+        status_bar.addPermanentWidget(self.lbl_ram_monitor)
+
+        # Temporizador para actualizar métricas de hardware cada 2.5 segundos
+        self._timer_ram = QTimer(self)
+        self._timer_ram.timeout.connect(self._update_system_stats)
+        self._timer_ram.start(2500)
+        self._update_system_stats()
+
+    def _update_system_stats(self) -> None:
+        """Actualiza el consumo de memoria RAM física del sistema."""
+        try:
+            import psutil
+            vm = psutil.virtual_memory()
+            pct = vm.percent
+            used_gb = vm.used / (1024 ** 3)
+            total_gb = vm.total / (1024 ** 3)
+            self.lbl_ram_monitor.setText(f"🧠 RAM: {pct:.0f}% ({used_gb:.1f} / {total_gb:.1f} GB)")
+            if pct > 85:
+                self.lbl_ram_monitor.setStyleSheet(
+                    "background-color: #381a1a; border: 1px solid #c62828; border-radius: 4px; padding: 2px 8px; color: #ff8a80; font-weight: bold; font-size: 10px;"
+                )
+            else:
+                self.lbl_ram_monitor.setStyleSheet(
+                    "background-color: #141724; border: 1px solid #232738; border-radius: 4px; padding: 2px 8px; color: #ffd54f; font-weight: bold; font-size: 10px;"
+                )
+        except Exception:
+            self.lbl_ram_monitor.setText("🧠 RAM: N/D")
+
+    def set_status(self, text: str) -> None:
+        """Actualiza el mensaje principal de la barra de estado."""
+        self.lbl_status.setText(text)
+
 
     def _setup_ui(self) -> None:
         """Inicializa las pestañas de navegación y enlaza las señales entre módulos."""

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QComboBox, QScrollArea, QSplitter, QSizePolicy, QFrame
 )
 from core.config_manager import load_config, save_config
+from gui.theme import STYLE_RUN_IDLE, BG_CARD, BG_INPUT, BORDER_BASE
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 SHOWCASE_IMG_PATH = os.path.join(ASSETS_DIR, "showcase_milkyway.jpg")
@@ -98,8 +99,8 @@ class SettingsTab(QWidget):
 
         left_content = QWidget()
         left_layout = QVBoxLayout(left_content)
-        left_layout.setContentsMargins(6, 6, 12, 6)
-        left_layout.setSpacing(14)
+        left_layout.setContentsMargins(6, 6, 12, 16)
+        left_layout.setSpacing(8)
 
         # Encabezado del módulo
         header_box = QWidget()
@@ -121,8 +122,8 @@ class SettingsTab(QWidget):
         # -------------------------------------------------------------
         grp_dirs = QGroupBox("1. Directorios de Trabajo del Proyecto")
         dirs_layout = QVBoxLayout(grp_dirs)
-        dirs_layout.setContentsMargins(12, 14, 12, 12)
-        dirs_layout.setSpacing(8)
+        dirs_layout.setContentsMargins(10, 10, 10, 8)
+        dirs_layout.setSpacing(6)
 
         # Sesiones
         lbl_sess = QLabel("📁 Carpeta de Sesiones (.mwstack y máscaras):")
@@ -170,8 +171,8 @@ class SettingsTab(QWidget):
         # -------------------------------------------------------------
         grp_paths = QGroupBox("2. Herramientas Externas (AI)")
         paths_layout = QVBoxLayout(grp_paths)
-        paths_layout.setContentsMargins(12, 14, 12, 12)
-        paths_layout.setSpacing(8)
+        paths_layout.setContentsMargins(10, 10, 10, 8)
+        paths_layout.setSpacing(6)
 
         lbl_sn = QLabel("✨ Ruta al ejecutable de StarNet++ (starnet2.exe / starnet++.exe):")
         paths_layout.addWidget(lbl_sn)
@@ -198,8 +199,8 @@ class SettingsTab(QWidget):
         # -------------------------------------------------------------
         grp_defaults = QGroupBox("3. Parámetros de Procesado por Defecto")
         def_layout = QVBoxLayout(grp_defaults)
-        def_layout.setContentsMargins(12, 14, 12, 12)
-        def_layout.setSpacing(10)
+        def_layout.setContentsMargins(10, 10, 10, 8)
+        def_layout.setSpacing(6)
 
         # Factor Kappa
         row_k = QHBoxLayout()
@@ -260,8 +261,8 @@ class SettingsTab(QWidget):
         # -------------------------------------------------------------
         grp_perf = QGroupBox("4. Rendimiento de Hardware y Memoria")
         layout_perf = QVBoxLayout(grp_perf)
-        layout_perf.setContentsMargins(12, 14, 12, 12)
-        layout_perf.setSpacing(10)
+        layout_perf.setContentsMargins(10, 10, 10, 8)
+        layout_perf.setSpacing(6)
 
         # Hilos concurrentes de CPU
         row_cpu = QHBoxLayout()
@@ -332,6 +333,7 @@ class SettingsTab(QWidget):
         btn_save.setObjectName("btn_save")
         btn_save.setFixedHeight(42)
         btn_save.setCursor(Qt.PointingHandCursor)
+        btn_save.setStyleSheet(STYLE_RUN_IDLE)
         btn_save.clicked.connect(self.save_settings)
         left_layout.addWidget(btn_save)
 
@@ -440,101 +442,29 @@ class SettingsTab(QWidget):
         root_layout.addWidget(splitter)
 
     def _apply_styles(self) -> None:
-        """Aplica la hoja de estilos unificada consistente con el resto de módulos."""
-        self.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid #2d2d3a;
+        """Aplica estilos específicos para las tarjetas de showcase de ajustes."""
+        self.setStyleSheet(f"""
+            QWidget#showcase_card {{
+                background-color: {BG_CARD};
+                border: 1px solid {BORDER_BASE};
+                border-radius: 8px;
+            }}
+            QWidget#author_box {{
+                background-color: {BG_INPUT};
+                border: 1px solid {BORDER_BASE};
                 border-radius: 6px;
-                margin-top: 10px;
-                padding-top: 14px;
-                background-color: #1a1a22;
-                color: #e0e0e0;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 12px;
-                padding: 0 4px;
-                color: #90caf9;
-            }
-            QLineEdit {
-                background-color: #121216;
-                border: 1px solid #33333f;
-                border-radius: 4px;
-                padding: 6px 8px;
-                color: #f0f0f0;
-                font-size: 12px;
-            }
-            QLineEdit:focus {
-                border: 1px solid #0288d1;
-            }
-            QPushButton {
-                background-color: #252530;
-                border: 1px solid #3a3a4c;
-                border-radius: 4px;
-                padding: 6px 12px;
-                color: #e0e0e0;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #2f2f3d;
-                border-color: #55556a;
-            }
-            QPushButton:pressed {
-                background-color: #1c1c24;
-            }
-            QPushButton#btn_save {
-                background-color: #2e7d32;
-                color: #ffffff;
-                font-weight: bold;
-                font-size: 13px;
-                border-radius: 5px;
-                border: none;
-                padding: 8px 16px;
-            }
-            QPushButton#btn_save:hover {
-                background-color: #388e3c;
-            }
-            QPushButton#btn_save:pressed {
-                background-color: #1b5e20;
-            }
-            QPushButton#btn_open_full {
-                background-color: #1e1e28;
-                border: 1px solid #3d3d4e;
+            }}
+            QPushButton#btn_open_full {{
+                background-color: #1e2230;
+                border: 1px solid #33384c;
                 font-size: 11px;
                 padding: 4px 8px;
-            }
-            QPushButton#btn_open_full:hover {
-                background-color: #2a2a38;
+            }}
+            QPushButton#btn_open_full:hover {{
+                background-color: #282e42;
                 border-color: #80d8ff;
                 color: #80d8ff;
-            }
-            QSpinBox, QDoubleSpinBox, QComboBox {
-                background-color: #121216;
-                border: 1px solid #33333f;
-                border-radius: 4px;
-                padding: 4px 6px;
-                color: #f0f0f0;
-            }
-            QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
-                border: 1px solid #0288d1;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #1a1a22;
-                color: #f0f0f0;
-                selection-background-color: #0288d1;
-            }
-            QWidget#showcase_card {
-                background-color: #181822;
-                border: 1px solid #2d2d3a;
-                border-radius: 8px;
-            }
-            QWidget#author_box {
-                background-color: #13131c;
-                border: 1px solid #252534;
-                border-radius: 6px;
-            }
+            }}
         """)
 
     def _update_starnet_status(self) -> None:

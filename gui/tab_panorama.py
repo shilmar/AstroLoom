@@ -40,66 +40,7 @@ from core.panorama import (
 )
 from core.icc_manager import save_tiff_with_icc
 from gui.widgets.drop_widgets import DropTableWidget, collect_image_files_from_mime
-
-
-STYLE_RUN_IDLE = """
-    QPushButton {
-        font-weight: bold;
-        font-size: 13px;
-        background-color: #2e7d32;
-        color: white;
-        border-radius: 4px;
-        padding: 8px 16px;
-    }
-    QPushButton:hover {
-        background-color: #388e3c;
-    }
-    QPushButton:pressed {
-        background-color: #1b5e20;
-    }
-    QPushButton:disabled {
-        background-color: #2b332d;
-        color: #718774;
-    }
-"""
-
-STYLE_CANCEL_ACTIVE = """
-    QPushButton {
-        font-weight: bold;
-        font-size: 12px;
-        background-color: #c62828;
-        color: white;
-        border-radius: 4px;
-        padding: 6px 12px;
-    }
-    QPushButton:hover {
-        background-color: #d32f2f;
-    }
-    QPushButton:pressed {
-        background-color: #8e0000;
-    }
-"""
-
-STYLE_TRANSFER_BTN = """
-    QPushButton {
-        font-weight: bold;
-        font-size: 12px;
-        background-color: #00838f;
-        color: white;
-        border-radius: 4px;
-        padding: 7px 14px;
-    }
-    QPushButton:hover {
-        background-color: #0097a7;
-    }
-    QPushButton:pressed {
-        background-color: #006064;
-    }
-    QPushButton:disabled {
-        background-color: #1c2e30;
-        color: #527578;
-    }
-"""
+from gui.theme import STYLE_RUN_IDLE, STYLE_CANCEL_ACTIVE, STYLE_TRANSFER_BTN
 
 
 class MetadataExtractWorker(QThread):

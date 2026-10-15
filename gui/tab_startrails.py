@@ -31,6 +31,9 @@ from core.startrails import generate_startrail, enhance_star_trails_color
 from core.icc_manager import save_tiff_with_icc
 from gui.canvas import MaskCanvas
 from gui.widgets.drop_widgets import DropTableWidget
+from gui.theme import (
+    STYLE_RUN_IDLE, STYLE_RUN_ACTIVE, STYLE_RUN_CANCELLING, STYLE_TRANSFER_BTN
+)
 
 
 class StartrailWorker(QThread):
@@ -82,48 +85,6 @@ class StartrailWorker(QThread):
             else:
                 self.error.emit(str(e))
 
-
-STYLE_RUN_IDLE = """
-    QPushButton {
-        font-weight: bold;
-        font-size: 13px;
-        background-color: #2e7d32;
-        color: white;
-        border-radius: 4px;
-    }
-    QPushButton:hover {
-        background-color: #388e3c;
-    }
-    QPushButton:pressed {
-        background-color: #1b5e20;
-    }
-"""
-
-STYLE_RUN_ACTIVE = """
-    QPushButton {
-        font-weight: bold;
-        font-size: 13px;
-        background-color: #c62828;
-        color: white;
-        border-radius: 4px;
-    }
-    QPushButton:hover {
-        background-color: #d32f2f;
-    }
-    QPushButton:pressed {
-        background-color: #b71c1c;
-    }
-"""
-
-STYLE_RUN_CANCELLING = """
-    QPushButton {
-        font-weight: bold;
-        font-size: 13px;
-        background-color: #616161;
-        color: #e0e0e0;
-        border-radius: 4px;
-    }
-"""
 
 
 class StartrailsTab(QWidget):
@@ -648,7 +609,7 @@ class StartrailsTab(QWidget):
         export_layout.addLayout(btn_tiff_row)
 
         self.btn_send_to_dev = QPushButton("➡️ Enviar al Revelador / Editor")
-        self.btn_send_to_dev.setStyleSheet("font-weight: bold; padding: 6px; color: #ffd54f;")
+        self.btn_send_to_dev.setStyleSheet(STYLE_TRANSFER_BTN)
         self.btn_send_to_dev.clicked.connect(self._on_send_to_developer_clicked)
         export_layout.addWidget(self.btn_send_to_dev)
 
@@ -662,19 +623,6 @@ class StartrailsTab(QWidget):
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(16)
         self.progress_bar.setTextVisible(True)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #333333;
-                border-radius: 3px;
-                text-align: center;
-                font-size: 10px;
-                background-color: #1a1a1a;
-                color: #ffffff;
-            }
-            QProgressBar::chunk {
-                background-color: #2e7d32;
-            }
-        """)
         self.progress_bar.setVisible(False)
         left_container_layout.addWidget(self.progress_bar)
 
@@ -685,11 +633,6 @@ class StartrailsTab(QWidget):
         self.txt_log = QTextEdit()
         self.txt_log.setReadOnly(True)
         self.txt_log.setFixedHeight(100)
-        self.txt_log.setStyleSheet(
-            "background-color: #141414; color: #a5d6a7; "
-            "font-family: Consolas, monospace; font-size: 11px; "
-            "border: 1px solid #333333; border-radius: 4px; padding: 4px;"
-        )
         left_container_layout.addWidget(self.txt_log)
 
         self.btn_run = QPushButton()
@@ -714,67 +657,8 @@ class StartrailsTab(QWidget):
         main_layout.addWidget(splitter)
 
     def _apply_styles(self) -> None:
-        """Aplica estilos consistentes con el diseño de AstroLoom."""
-        self.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid #2d2d3a;
-                border-radius: 6px;
-                margin-top: 10px;
-                padding-top: 14px;
-                background-color: #1a1a22;
-                color: #e0e0e0;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 12px;
-                padding: 0 4px;
-                color: #90caf9;
-            }
-            QTableWidget {
-                background-color: #141414;
-                border: 1px solid #333333;
-                border-radius: 4px;
-                color: #ffffff;
-                gridline-color: #262626;
-                font-size: 11px;
-            }
-            QTableWidget::item:selected {
-                background-color: #1b4d3e;
-                color: #80d8ff;
-            }
-            QHeaderView::section {
-                background-color: #1f1f28;
-                color: #a0a0a0;
-                padding: 4px;
-                border: 1px solid #2d2d3a;
-                font-weight: bold;
-                font-size: 10px;
-            }
-            QPushButton {
-                background-color: #252530;
-                border: 1px solid #3a3a4c;
-                border-radius: 4px;
-                padding: 5px 10px;
-                color: #e0e0e0;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #2f2f3d;
-                border-color: #55556a;
-            }
-            QPushButton:pressed {
-                background-color: #1c1c24;
-            }
-            QComboBox {
-                background-color: #121216;
-                border: 1px solid #33333f;
-                border-radius: 4px;
-                padding: 4px 6px;
-                color: #f0f0f0;
-            }
-        """)
+        """Los estilos base provienen de gui.theme (Cosmic Dark Pro)."""
+        pass
 
     def log(self, message: str) -> None:
         """Registra un mensaje en la consola inferior con autoscroll."""

@@ -47,6 +47,7 @@ from core.icc_manager import save_tiff_with_icc
 from core.config_manager import get_config_val
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from gui.widgets.drop_widgets import DropTableWidget, collect_image_files_from_mime
+from gui.theme import STYLE_RUN_IDLE, STYLE_TRANSFER_BTN
 
 
 class ToggleSwitch(QWidget):
@@ -833,23 +834,7 @@ class EclipseTab(QWidget):
         self.btn_fuse_hdr = QPushButton("⚡ FUSIONAR BRACKETING HDR")
         self.btn_fuse_hdr.setFixedHeight(40)
         self.btn_fuse_hdr.setCursor(Qt.PointingHandCursor)
-        self.btn_fuse_hdr.setStyleSheet("""
-            QPushButton {
-                font-weight: bold;
-                font-size: 12px;
-                background-color: #2e7d32;
-                color: white;
-                border-radius: 6px;
-                border: 1px solid #388e3c;
-            }
-            QPushButton:hover {
-                background-color: #388e3c;
-                border-color: #4caf50;
-            }
-            QPushButton:pressed {
-                background-color: #1b5e20;
-            }
-        """)
+        self.btn_fuse_hdr.setStyleSheet(STYLE_RUN_IDLE)
         self.btn_fuse_hdr.clicked.connect(self._on_fuse_hdr_clicked)
         hdr_layout.addWidget(self.btn_fuse_hdr)
         left_layout.addWidget(self.grp_hdr)
@@ -971,7 +956,7 @@ class EclipseTab(QWidget):
         self.btn_send_to_dev = QPushButton("➡️ Enviar al Revelador / Editor")
         self.btn_send_to_dev.setFixedHeight(38)
         self.btn_send_to_dev.setCursor(Qt.PointingHandCursor)
-        self.btn_send_to_dev.setStyleSheet("font-weight: bold; color: #ffcc80; padding: 6px;")
+        self.btn_send_to_dev.setStyleSheet(STYLE_TRANSFER_BTN)
         self.btn_send_to_dev.clicked.connect(self._on_send_to_developer_clicked)
         export_layout.addWidget(self.btn_send_to_dev)
 
@@ -992,19 +977,6 @@ class EclipseTab(QWidget):
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(16)
         self.progress_bar.setTextVisible(True)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #2d2d3a;
-                border-radius: 3px;
-                text-align: center;
-                font-size: 10px;
-                background-color: #141418;
-                color: #ffffff;
-            }
-            QProgressBar::chunk {
-                background-color: #0288d1;
-            }
-        """)
         self.progress_bar.setVisible(False)
         left_panel_layout.addWidget(self.progress_bar)
 
@@ -1015,11 +987,6 @@ class EclipseTab(QWidget):
         self.txt_log = QTextEdit()
         self.txt_log.setReadOnly(True)
         self.txt_log.setFixedHeight(100)
-        self.txt_log.setStyleSheet(
-            "background-color: #141418; color: #a5d6a7; "
-            "font-family: Consolas, monospace; font-size: 11px; "
-            "border: 1px solid #2d2d3a; border-radius: 4px; padding: 4px;"
-        )
         left_panel_layout.addWidget(self.txt_log)
 
         splitter.addWidget(left_panel)
@@ -1055,132 +1022,8 @@ class EclipseTab(QWidget):
         self.log("Módulo de Eclipses inicializado con escáner subpíxel y compuerta radial anti-ruido.")
 
     def _apply_styles(self) -> None:
-        """Aplica la hoja de estilos unificada consistente con el resto de módulos."""
-        self.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid #2d2d3a;
-                border-radius: 6px;
-                margin-top: 10px;
-                padding-top: 14px;
-                background-color: #1a1a22;
-                color: #e0e0e0;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 12px;
-                padding: 0 4px;
-                color: #90caf9;
-            }
-            QPushButton {
-                background-color: #252530;
-                border: 1px solid #3a3a4c;
-                border-radius: 4px;
-                padding: 5px 10px;
-                color: #e0e0e0;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #2f2f3d;
-                border-color: #55556a;
-            }
-            QPushButton:pressed {
-                background-color: #1c1c24;
-            }
-            QTableWidget {
-                background-color: #14141a;
-                border: 1px solid #262633;
-                border-radius: 4px;
-                color: #ffffff;
-                gridline-color: #22222e;
-                font-size: 11px;
-            }
-            QTableWidget::item {
-                padding: 3px;
-            }
-            QTableWidget::item:selected {
-                background-color: #1b384d;
-                color: #80d8ff;
-            }
-            QHeaderView::section {
-                background-color: #1a1a24;
-                color: #90caf9;
-                padding: 4px;
-                border: 1px solid #2d2d3a;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QComboBox {
-                background-color: #121216;
-                border: 1px solid #33333f;
-                border-radius: 4px;
-                padding: 4px 6px;
-                color: #f0f0f0;
-            }
-            QComboBox:focus {
-                border: 1px solid #0288d1;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #1a1a22;
-                selection-background-color: #1976d2;
-                color: #ffffff;
-                border: 1px solid #3a3a4c;
-            }
-            QSpinBox, QDoubleSpinBox {
-                background-color: #121216;
-                border: 1px solid #33333f;
-                border-radius: 4px;
-                padding: 3px 6px;
-                color: #f0f0f0;
-            }
-            QSpinBox:focus, QDoubleSpinBox:focus {
-                border: 1px solid #0288d1;
-            }
-            QSlider::groove:horizontal {
-                border: 1px solid #2d2d3a;
-                height: 4px;
-                background: #14141a;
-                border-radius: 2px;
-            }
-            QSlider::sub-page:horizontal {
-                background: #0288d1;
-                border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: #80d8ff;
-                border: 1px solid #0288d1;
-                width: 14px;
-                height: 14px;
-                margin: -5px 0;
-                border-radius: 7px;
-            }
-            QCheckBox, QRadioButton {
-                color: #e0e0e0;
-                font-size: 11px;
-                spacing: 6px;
-            }
-            QScrollBar:vertical {
-                background: #121216;
-                width: 8px;
-                margin: 0;
-                border-radius: 4px;
-            }
-            QScrollBar::handle:vertical {
-                background: #2f2f3d;
-                min-height: 20px;
-                border-radius: 4px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #3d3d52;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-        """)
+        """Los estilos base provienen de gui.theme (Cosmic Dark Pro)."""
+        pass
 
     def log(self, message: str):
         self.txt_log.append(f"• {message}")

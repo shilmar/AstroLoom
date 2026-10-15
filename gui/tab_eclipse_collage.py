@@ -58,6 +58,7 @@ from core.eclipse_collage import (
     HAS_PYTOSHOP
 )
 from core.config_manager import get_config_val
+from gui.theme import STYLE_RUN_IDLE, STYLE_TRANSFER_BTN
 from core.icc_manager import save_tiff_with_icc
 from gui.widgets.drop_widgets import DropTableWidget
 
@@ -337,7 +338,6 @@ class EclipseCollageTab(QWidget):
 
         # --- SECCIÓN 1: Ingesta y Cribado de Calidad ---
         grp_files = QGroupBox("1. Ingesta y Cribado de Calidad")
-        grp_files.setStyleSheet("QGroupBox { font-weight: bold; color: #80d8ff; }")
         box_files = QVBoxLayout(grp_files)
         box_files.setSpacing(6)
 
@@ -440,7 +440,6 @@ class EclipseCollageTab(QWidget):
 
         # --- SECCIÓN 2: Recomendador Inteligente ---
         grp_rec = QGroupBox("2. Recomendador Inteligente de Fases")
-        grp_rec.setStyleSheet("QGroupBox { font-weight: bold; color: #ffd54f; }")
         box_rec = QVBoxLayout(grp_rec)
         box_rec.setSpacing(6)
 
@@ -462,7 +461,6 @@ class EclipseCollageTab(QWidget):
 
         # --- SECCIÓN 3: Maquetación y Espaciado ---
         grp_layout = QGroupBox("3. Maquetación y Composición Espacial")
-        grp_layout.setStyleSheet("QGroupBox { font-weight: bold; color: #00e676; }")
         box_layout = QVBoxLayout(grp_layout)
         box_layout.setSpacing(6)
 
@@ -544,8 +542,8 @@ class EclipseCollageTab(QWidget):
         box_layout.addWidget(self.chk_captions)
 
         self.btn_apply_layout = QPushButton("🔄 Actualizar Composición / Collage")
-        self.btn_apply_layout.setFixedHeight(34)
-        self.btn_apply_layout.setStyleSheet("font-weight: bold; background: #1b5e20; color: #a5d6a7; border: 1px solid #81c784; border-radius: 3px;")
+        self.btn_apply_layout.setFixedHeight(36)
+        self.btn_apply_layout.setStyleSheet(STYLE_RUN_IDLE)
         self.btn_apply_layout.setToolTip("Aplica los cambios de modalidad, espaciado, escala y margen generando la vista previa")
         self.btn_apply_layout.clicked.connect(self._update_preview)
         box_layout.addWidget(self.btn_apply_layout)
@@ -554,7 +552,6 @@ class EclipseCollageTab(QWidget):
 
         # --- SECCIÓN 4: Exportación y Enlace ---
         grp_exp = QGroupBox("4. Exportación y Acabado")
-        grp_exp.setStyleSheet("QGroupBox { font-weight: bold; color: #ff8a80; }")
         box_exp = QVBoxLayout(grp_exp)
         box_exp.setSpacing(6)
 
@@ -576,7 +573,7 @@ class EclipseCollageTab(QWidget):
         # Enlace directo al Revelador
         self.btn_export_developer = QPushButton("➡️ Enviar Collage al Revelador / Editor")
         self.btn_export_developer.setFixedHeight(36)
-        self.btn_export_developer.setStyleSheet("font-weight: bold; background: #311b92; color: #d1c4e9; border: 1px solid #7e57c2;")
+        self.btn_export_developer.setStyleSheet(STYLE_TRANSFER_BTN)
         self.btn_export_developer.setToolTip("Exporta el collage como imagen plana y la abre inmediatamente en el Revelador para ajuste tonal y color")
         self.btn_export_developer.clicked.connect(self._export_to_developer_clicked)
         box_exp.addWidget(self.btn_export_developer)

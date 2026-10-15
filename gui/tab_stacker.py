@@ -22,6 +22,7 @@ from gui.widgets.drop_widgets import DropListWidget
 from gui.worker import StackingWorker
 from core.gpu_backend import is_gpu_enabled
 from core.config_manager import load_config
+from gui.theme import STYLE_RUN_IDLE, STYLE_RUN_ACTIVE, STYLE_RUN_CANCELLING
 
 
 class FileListRow(QWidget):
@@ -375,52 +376,18 @@ class StackerTab(QWidget):
         self.txt_log = QTextEdit()
         self.txt_log.setReadOnly(True)
         self.txt_log.setFixedHeight(100)
-        self.txt_log.setStyleSheet(
-            "background-color: #141418; color: #a5d6a7; "
-            "font-family: Consolas, monospace; font-size: 11px; "
-            "border: 1px solid #2d2d3a; border-radius: 4px; padding: 4px;"
-        )
         left_panel_layout.addWidget(self.txt_log)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(16)
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setValue(0)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #2d2d3a;
-                border-radius: 3px;
-                text-align: center;
-                font-size: 10px;
-                background-color: #141418;
-                color: #ffffff;
-            }
-            QProgressBar::chunk {
-                background-color: #0288d1;
-            }
-        """)
         left_panel_layout.addWidget(self.progress_bar)
 
         self.btn_run = QPushButton("🚀 INICIAR APILADO DUAL")
         self.btn_run.setFixedHeight(44)
         self.btn_run.setCursor(Qt.PointingHandCursor)
-        self.btn_run.setStyleSheet("""
-            QPushButton {
-                font-weight: bold;
-                font-size: 13px;
-                background-color: #1565c0;
-                color: white;
-                border-radius: 6px;
-                border: 1px solid #1976d2;
-            }
-            QPushButton:hover {
-                background-color: #1976d2;
-                border-color: #42a5f5;
-            }
-            QPushButton:pressed {
-                background-color: #0d47a1;
-            }
-        """)
+        self.btn_run.setStyleSheet(STYLE_RUN_IDLE)
         self.btn_run.clicked.connect(self._on_btn_run_clicked)
         left_panel_layout.addWidget(self.btn_run)
 
@@ -432,153 +399,8 @@ class StackerTab(QWidget):
         layout.addWidget(splitter)
 
     def _apply_styles(self) -> None:
-        """Aplica la hoja de estilos unificada consistente con el módulo de Startrails y Ajustes."""
-        self.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid #2d2d3a;
-                border-radius: 6px;
-                margin-top: 10px;
-                padding-top: 14px;
-                background-color: #1a1a22;
-                color: #e0e0e0;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 12px;
-                padding: 0 4px;
-                color: #90caf9;
-            }
-            QTabWidget::pane {
-                border: 1px solid #2d2d3a;
-                background-color: #14141a;
-                border-radius: 4px;
-            }
-            QTabBar::tab {
-                background-color: #1f1f28;
-                color: #90a4ae;
-                padding: 5px 10px;
-                border: 1px solid #2d2d3a;
-                border-bottom: none;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-                font-size: 11px;
-                margin-right: 2px;
-            }
-            QTabBar::tab:selected {
-                background-color: #282838;
-                color: #80d8ff;
-                font-weight: bold;
-                border-color: #3d3d52;
-            }
-            QTabBar::tab:hover {
-                background-color: #252532;
-                color: #e0e0e0;
-            }
-            QListWidget {
-                background-color: #14141a;
-                border: 1px solid #262633;
-                border-radius: 4px;
-                color: #ffffff;
-                font-size: 11px;
-            }
-            QListWidget::item {
-                padding: 2px;
-                border-bottom: 1px solid #1a1a24;
-            }
-            QListWidget::item:selected {
-                background-color: #1b384d;
-                color: #80d8ff;
-            }
-            QListWidget::item:hover {
-                background-color: #1f2530;
-            }
-            QPushButton {
-                background-color: #252530;
-                border: 1px solid #3a3a4c;
-                border-radius: 4px;
-                padding: 5px 10px;
-                color: #e0e0e0;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #2f2f3d;
-                border-color: #55556a;
-            }
-            QPushButton:pressed {
-                background-color: #1c1c24;
-            }
-            QComboBox {
-                background-color: #121216;
-                border: 1px solid #33333f;
-                border-radius: 4px;
-                padding: 4px 6px;
-                color: #f0f0f0;
-            }
-            QComboBox:focus {
-                border: 1px solid #0288d1;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #1a1a22;
-                selection-background-color: #1976d2;
-                color: #ffffff;
-                border: 1px solid #3a3a4c;
-            }
-            QSpinBox, QDoubleSpinBox {
-                background-color: #121216;
-                border: 1px solid #33333f;
-                border-radius: 4px;
-                padding: 3px 6px;
-                color: #f0f0f0;
-            }
-            QSpinBox:focus, QDoubleSpinBox:focus {
-                border: 1px solid #0288d1;
-            }
-            QSlider::groove:horizontal {
-                border: 1px solid #2d2d3a;
-                height: 4px;
-                background: #14141a;
-                border-radius: 2px;
-            }
-            QSlider::sub-page:horizontal {
-                background: #0288d1;
-                border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: #80d8ff;
-                border: 1px solid #0288d1;
-                width: 14px;
-                height: 14px;
-                margin: -5px 0;
-                border-radius: 7px;
-            }
-            QCheckBox, QRadioButton {
-                color: #e0e0e0;
-                font-size: 11px;
-                spacing: 6px;
-            }
-            QScrollBar:vertical {
-                background: #121216;
-                width: 8px;
-                margin: 0;
-                border-radius: 4px;
-            }
-            QScrollBar::handle:vertical {
-                background: #2f2f3d;
-                min-height: 20px;
-                border-radius: 4px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #3d3d52;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-        """)
+        """Los estilos base provienen de gui.theme (Cosmic Dark Pro)."""
+        pass
 
     def log_message(self, text: str):
         self.txt_log.append(text)
@@ -1024,21 +846,7 @@ class StackerTab(QWidget):
         self._set_ui_busy(True)
         self.btn_run.setEnabled(True)
         self.btn_run.setText("🛑 CANCELAR APILADO")
-        self.btn_run.setStyleSheet("""
-            QPushButton {
-                font-weight: bold;
-                font-size: 13px;
-                background-color: #c62828;
-                color: white;
-                border-radius: 6px;
-            }
-            QPushButton:hover {
-                background-color: #d32f2f;
-            }
-            QPushButton:pressed {
-                background-color: #b71c1c;
-            }
-        """)
+        self.btn_run.setStyleSheet(STYLE_RUN_ACTIVE)
 
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("Iniciando... %p%")
@@ -1196,9 +1004,7 @@ class StackerTab(QWidget):
         if self.worker is not None and self.worker.isRunning():
             self.btn_run.setEnabled(False)
             self.btn_run.setText("⏳ CANCELANDO PROCESOS...")
-            self.btn_run.setStyleSheet(
-                "QPushButton { font-weight: bold; font-size: 13px; background-color: #424242; color: #9e9e9e; border-radius: 6px; }"
-            )
+            self.btn_run.setStyleSheet(STYLE_RUN_CANCELLING)
             self.progress_bar.setFormat("Deteniendo... %p%")
             self.log_message("[AVISO] Solicitando parada de tareas y liberación de memoria...")
             self.worker.cancel()
@@ -1207,21 +1013,7 @@ class StackerTab(QWidget):
         """Devuelve el botón a su apariencia y comportamiento normal."""
         self.btn_run.setEnabled(True)
         self.btn_run.setText("🚀 INICIAR APILADO DUAL")
-        self.btn_run.setStyleSheet("""
-            QPushButton {
-                font-weight: bold;
-                font-size: 13px;
-                background-color: #1976d2;
-                color: white;
-                border-radius: 6px;
-            }
-            QPushButton:hover {
-                background-color: #1e88e5;
-            }
-            QPushButton:pressed {
-                background-color: #1565c0;
-            }
-        """)
+        self.btn_run.setStyleSheet(STYLE_RUN_IDLE)
         self._set_ui_busy(False)
         
     def on_ground_double_clicked(self, item):
