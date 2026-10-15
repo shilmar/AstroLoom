@@ -5,6 +5,8 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-15
+
 ### Añadido
 * **Herramienta Interactiva de Recorte y Nivelación de Horizonte (Crop & Leveling Tool):**
   - Incorporada en el **Revelador / Editor** una herramienta de recorte profesional estilo Lightroom / Camera Raw accesible con el botón de la barra superior `[ ✂️ Recortar (C) ]` o el atajo global de teclado `C`.
@@ -33,6 +35,12 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
   - Capacidad analítica para neutralizar dominantes cromáticas severas de polución lumínica (lámparas de vapor de sodio a baja/alta presión) o intensas emisiones de *airglow* verde/rojo en cielos oscuros.
   - Soporte de doble clic en las etiquetas de título para restablecimiento instantáneo a neutro (`0.000`).
   - Sincronización completa con la Pipeta de Balance de Blancos (`W`) adaptada al nuevo rango ensanchado.
+
+### Modificado
+* **Actualización de Versión:**
+  - Salto de versión a **v0.8.1** en `gui/main_window.py` y en la tarjeta de versión de `gui/tab_settings.py`.
+* **Hoja de Ruta (`README.md`):**
+  - Incorporadas nuevas metas prioritarias: Rediseño y Unificación Visual (`gui/theme.py`), Histograma RGB en vivo, Sistema de Preajustes (.astropreset), Máscaras de Luminancia y Rango de Color, Anti-parpadeo (Deflicker) y Monitor de RAM/GPU en barra de estado.
 
 ## [0.8.0] - 2026-10-14
 

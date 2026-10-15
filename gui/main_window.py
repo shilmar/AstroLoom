@@ -18,7 +18,7 @@ from gui.tab_settings import SettingsTab
 class MainWindow(QMainWindow):
     """Ventana principal de la interfaz gráfica de AstroLoom."""
 
-    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.8.0)"
+    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.8.1)"
 
 
     def __init__(self):
