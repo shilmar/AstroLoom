@@ -198,7 +198,7 @@ class MaskCanvas(QWidget):
 
         # Si hay una máscara previa activa, regenerar el overlay ajustado a la nueva resolución
         if self.last_mask_array is not None and self.show_mask_overlay:
-            self.set_refined_mask(self.last_mask_array)
+            self.set_refined_mask(self.last_mask_array, mode=getattr(self, '_mask_overlay_mode', 'bicolor'))
         elif self.refined_overlay and self.refined_overlay.size() != self.base_pixmap.size():
             self.refined_overlay = None
 
@@ -1076,11 +1076,13 @@ class MaskCanvas(QWidget):
         scribbles[(arr[..., 1] > arr[..., 0]) & has_stroke] = 2
         return scribbles
 
-    def set_refined_mask(self, mask_float: Optional[np.ndarray]) -> None:
+    def set_refined_mask(self, mask_float: Optional[np.ndarray], mode: str = "bicolor") -> None:
         """
         Genera el overlay semitransparente coloreado para la máscara calculada.
-        Rojo: Suelo (0.0). Verde: Cielo (1.0).
+        - mode 'bicolor': Rojo para suelo (0.0), Verde para cielo (1.0).
+        - mode 'ruby': Tinte rubí/carmesí estilo Lightroom con opacidad modulada por el peso de la máscara.
         """
+        self._mask_overlay_mode = mode
         if mask_float is None:
             self.last_mask_array = None
             self.refined_overlay = None
@@ -1108,11 +1110,17 @@ class MaskCanvas(QWidget):
                 h, w = bh, bw
 
         rgba = np.zeros((h, w, 4), dtype=np.uint8)
-        # Tinte rojo para suelo, verde para cielo con opacidad suave
-        rgba[..., 0] = ((1.0 - mask_f) * 220).astype(np.uint8)
-        rgba[..., 1] = (mask_f * 220).astype(np.uint8)
-        rgba[..., 2] = 30
-        rgba[..., 3] = 50  # Opacidad semitransparente óptima
+        if mode == "ruby":
+            rgba[..., 0] = 235
+            rgba[..., 1] = 40
+            rgba[..., 2] = 40
+            rgba[..., 3] = (mask_f * 135).astype(np.uint8)
+        else:
+            # Tinte rojo para suelo, verde para cielo con opacidad suave
+            rgba[..., 0] = ((1.0 - mask_f) * 220).astype(np.uint8)
+            rgba[..., 1] = (mask_f * 220).astype(np.uint8)
+            rgba[..., 2] = 30
+            rgba[..., 3] = 50  # Opacidad semitransparente óptima
 
         rgba_contiguous = np.ascontiguousarray(rgba)
         qimg = QImage(rgba_contiguous.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()

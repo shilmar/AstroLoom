@@ -50,7 +50,9 @@ from core.stretch import (
     realce_multiescala_ondiculas
 )
 from core.masking import refine_mask_guided
+from core.mask_layers import MaskLayer, apply_all_mask_layers
 from gui.widgets.curve_widget import CurveWidget
+from gui.widgets.mask_layers_widget import MaskLayersWidget
 from gui.canvas import MaskCanvas
 from gui.worker import GraXpertWorker, StarNetWorker
 from core.icc_manager import save_tiff_with_icc
@@ -798,7 +800,27 @@ class DeveloperTab(QWidget):
 
         left_layout.addWidget(grp_gnd_tone)
 
-        # --- SECCIÓN 7: Exportación ---
+        # --- SECCIÓN 7: Capas y Máscaras Locales (Lightroom Style) ---
+        grp_masks = QGroupBox("7. Máscaras y Capas de Ajuste Local (Lightroom)")
+        masks_layout = QVBoxLayout(grp_masks)
+        masks_layout.setContentsMargins(10, 14, 10, 10)
+        masks_layout.setSpacing(8)
+
+        self.mask_layers_widget = MaskLayersWidget()
+        self.mask_layers_widget.set_getters(
+            img_getter=lambda: self.preview_proxy if self.preview_proxy is not None else self.image_32bit,
+            mask_getter=lambda: self.current_mask,
+            stars_getter=lambda: self.proxy_stars if self.proxy_stars is not None else self.image_stars,
+            starless_getter=lambda: self.proxy_starless if self.proxy_starless is not None else self.image_starless
+        )
+        self.mask_layers_widget.layers_changed.connect(self.update_stretch_preview)
+        self.mask_layers_widget.preview_mask_requested.connect(self._on_layer_mask_preview_requested)
+        self.mask_layers_widget.edit_ground_mask_requested.connect(self._open_mask_tool_from_section)
+        masks_layout.addWidget(self.mask_layers_widget)
+
+        left_layout.addWidget(grp_masks)
+
+        # --- SECCIÓN 8: Exportación ---
         self.btn_export = QPushButton("💾 EXPORTAR IMAGEN REVELADA...")
         self.btn_export.setFixedHeight(44)
         self.btn_export.setCursor(Qt.PointingHandCursor)
@@ -808,12 +830,12 @@ class DeveloperTab(QWidget):
         left_layout.addStretch()
 
         # Scroll área
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFrameShape(QFrame.NoFrame)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_area.setWidget(left_panel)
-        scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.left_scroll_area = QScrollArea()
+        self.left_scroll_area.setWidgetResizable(True)
+        self.left_scroll_area.setFrameShape(QFrame.NoFrame)
+        self.left_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.left_scroll_area.setWidget(left_panel)
+        self.left_scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         left_container = QWidget()
         left_container_layout = QVBoxLayout(left_container)
@@ -822,7 +844,7 @@ class DeveloperTab(QWidget):
         left_container.setMinimumWidth(440)
         left_container.setMaximumWidth(540)
 
-        left_container_layout.addWidget(scroll_area, 1)
+        left_container_layout.addWidget(self.left_scroll_area, 1)
 
         lbl_log = QLabel("Registro de Actividad:")
         lbl_log.setStyleSheet("color: #a0a0a0; font-size: 11px; font-weight: bold;")
@@ -1792,6 +1814,17 @@ class DeveloperTab(QWidget):
         self.redo_stack.clear()
         self._update_undo_redo_buttons()
 
+    def _on_layer_mask_preview_requested(self, mask_array: Optional[np.ndarray]) -> None:
+        """Muestra u oculta la máscara de la capa seleccionada sobre el visor interactivo."""
+        if mask_array is not None:
+            self.canvas.set_refined_mask(mask_array, mode="ruby")
+            self.canvas.set_mask_visible(True)
+        else:
+            if self.current_mask is not None:
+                self.canvas.set_refined_mask(self.current_mask, mode="bicolor")
+            else:
+                self.canvas.set_refined_mask(None)
+
     def _on_toggle_clipping_shortcut(self) -> None:
         """Alterna los indicadores de recorte con la tecla 'J' ignorando entradas de texto activas."""
         focused = QApplication.focusWidget()
@@ -2463,6 +2496,19 @@ class DeveloperTab(QWidget):
         if abs(self.contrast_val) > 1e-4:
             stretched = adjust_contrast(stretched, self.contrast_val, pivot=None)
 
+        # 10. Aplicación de Capas y Máscaras Locales (Lightroom Style)
+        if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers:
+            is_full_res = (self.image_32bit is not None and stretched.shape[:2] == self.image_32bit.shape[:2])
+            st_img = self.image_stars if is_full_res else (self.proxy_stars if self.proxy_stars is not None else self.image_stars)
+            sl_img = self.image_starless if is_full_res else (self.proxy_starless if self.proxy_starless is not None else self.image_starless)
+            stretched = apply_all_mask_layers(
+                stretched,
+                self.mask_layers_widget.layers,
+                master_sky_mask=precomputed_mask,
+                starless_image=sl_img,
+                stars_image=st_img
+            )
+
         return np.ascontiguousarray(stretched, dtype=np.float32)
 
     def update_stretch_preview(self):
@@ -3032,6 +3078,9 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'curve_widget'):
             self.curve_widget.reset_all_curves()
 
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_state([])
+
         self.slider_temp.setValue(0)
         if hasattr(self, 'spin_temp'):
             self.spin_temp.setValue(0.0)
@@ -3215,6 +3264,7 @@ class DeveloperTab(QWidget):
             "gnd_sh_val": self.slider_gnd_sh.value(),
             "gnd_bp_val": self.slider_gnd_bp.value(),
             "curves": self.curve_widget.get_state() if hasattr(self, 'curve_widget') else None,
+            "mask_layers": self.mask_layers_widget.get_state() if hasattr(self, 'mask_layers_widget') else None,
         }
 
     def _state_different(self, s1: Optional[dict], s2: Optional[dict]) -> bool:
@@ -3223,7 +3273,7 @@ class DeveloperTab(QWidget):
             return True
         for k, v1 in s1.items():
             v2 = s2.get(k)
-            if k == "curves":
+            if k in ("curves", "mask_layers"):
                 if v1 != v2:
                     return True
             elif isinstance(v1, float):
@@ -3480,6 +3530,11 @@ class DeveloperTab(QWidget):
             self.curve_widget.blockSignals(True)
             self.curve_widget.set_state(state["curves"])
             self.curve_widget.blockSignals(False)
+
+        if "mask_layers" in state and hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.blockSignals(True)
+            self.mask_layers_widget.set_state(state["mask_layers"] or [])
+            self.mask_layers_widget.blockSignals(False)
 
         self.update_stretch_preview()
 
