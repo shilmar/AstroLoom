@@ -5,58 +5,57 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-15
+
 ### Añadido
+* **Gestor Avanzado de Capas y Máscaras de Ajuste Local (Estilo Photoshop / Lightroom):**
+  - **Capas Especiales de Imagen:** Integración de capas dedicadas para *Fondo Base*, *Fondo Starless (Nebular)*, *Estrellas* y *Suelo Terrestre*.
+  - **Orden Natural de la Pila (Bottom-Up):** Las capas y máscaras de ajuste afectan al contenido subyacente según su posición física en la lista, eliminando la ambigüedad del antiguo selector de ámbito.
+  - **Desacoplamiento Estricto de Parámetros:** La intensidad y densidad de estrellas (StarNet) opera como un control estelar independiente sin alterar la opacidad de la capa ni viceversa.
+  - **Paneles de Ajuste Contextuales Dedicados:**
+    - Al seleccionar la capa **Suelo**, se despliegan exclusivamente sus controles tonales (sombras, exposición, contraste, punto negro).
+    - Al seleccionar la capa **Estrellas**, se muestran los controles dedicados de reducción, presencia estelar y realce de color.
+    - Al seleccionar la capa **Fondo Starless**, se muestran los controles de claridad, dehaze y realce nebular.
+    - Para capas estándar (Pincel, Rango Luma/Color), se activan los controles locales de exposición, contraste, altas luces, sombras, saturación y balance de blancos local.
+  - **Identidad Cromática Temática:** Títulos de cabecera y bordes perimetrales con colores distintivos según el tipo de capa (Verde Esmeralda para Suelo, Púrpura Cósmico para Starless, Oro Estelar para Estrellas, Rojo Carmesí para Pincel, Amarillo para Luma, Cian para Color HSV y Ámbar para Fondo Base).
+  - **Visibilidad Interactiva y Memoria de Herramienta:**
+    - Icono de ojo interactivo (`👁️`) en cada fila de capa para alternar la visibilidad de forma inmediata.
+    - Memoria persistente de radio y opacidad/flujo del pincel durante la sesión.
+    - Supresión de auto-activación del overlay rojo de máscara al seleccionar o alternar capas de pincel.
+  - **Carga Directa de Máscaras en Barra Horizontal:**
+    - Incorporado el botón **`📂 Cargar Máscara...`** con detección inteligente en memoria de la segmentación cielo/suelo generada en el Apilador o Circumpolares, y selector de archivos en disco (PNG 16-bit, TIFF, FITS) con remuestreo automático a la resolución del lienzo.
+  - **Integración Fluida con StarNet++ AI:**
+    - Auto-despliegue de la Sección 9 y scroll automático garantizando visibilidad inmediata de las capas separadas al iniciar y al completar la inferencia con IA.
+    - Reorganización limpia de las Secciones 5 y 8 mediante tarjetas explicativas y botones de salto directo a la Sección 9.
+* **Motor de Internacionalización (i18n) Multilingüe en Tiempo Real:**
+  - Motor modular basado en diccionarios JSON en `locales/` (`es.json`, `en.json`) gestionado por `core/i18n.py`.
+  - Selector de idioma en tiempo real en la barra de estado inferior (`🌐 ES / EN`) con persistencia en `config.json` y traducción reactiva de toda la interfaz.
+* **Rediseño del Revelador con Acordeón Plegable Inteligente:**
+  - 9 secciones colapsables e interactivas (`CollapsibleSection`) que optimizan el espacio vertical y la ergonomía de trabajo.
 * **Sistema de Diseño Global "Cosmic Dark Pro" y Unificación Visual Integral:**
   - Creación del subsistema centralizado de diseño en [`gui/theme.py`](file:///D:/software/AstroLoom/gui/theme.py) con paleta de colores coherente y contrastada para astrofotografía:
     - Fondos escalonados: Fondo ventana (`#0b0d14`), Paneles laterales (`#12141e`), Tarjetas y Grupos (`#171a26`), Controles de entrada (`#0d0f17`), Consola de logs (`#08090f`).
     - Bordes refinados con estados interactivos: Base (`#232738`), Hover (`#3a415a`), Foco (`#00bcd4`), Activo (`#00e5ff`).
     - Jerarquía tipográfica consistente y legible (`#eceff4` primario, `#90a4ae` secundario, `#546e7a` atenuado).
-    - Botones de acción unificados con retroalimentación visual táctil:
-      - `STYLE_RUN_IDLE`: Botón de ejecución en verde esmeralda cósmico.
-      - `STYLE_RUN_ACTIVE`: Botón de ejecución activo / cancelación en rojo carmesí.
-      - `STYLE_RUN_CANCELLING`: Estado transitorio de parada segura en gris pizarra.
-      - `STYLE_TRANSFER_BTN`: Botón de transferencia intermodular ("Enviar al Revelador") en cian/petróleo.
-  - Unificación visual y eliminación de estilos fragmentados en los 7 módulos del sistema:
-    - **1. Apilador (Stacker):** Botones de apilado estandarizados, consola de log y barras de progreso integradas en el tema.
-    - **2. Revelador / Editor:** Barra de herramientas de recorte, botones de exportación y visores estandarizados.
-    - **3. Eclipses (HDR):** Estilos limpios sin sobreescrituras CSS individuales en fusiones HDR y transferencia a revelado.
-    - **4. Eclipses (Collage):** Eliminados estilos de colores dispares en groupboxes, interfaz integrada y uniforme.
-    - **5. Trazas de Estrellas (Startrails):** Controles de simulación y generación enlazados al sistema de diseño unificado.
-    - **6. Panorámicas (Mosaicos):** Tabla de teselas, cosido y controles de proyección alineados con la estética general.
-    - **7. Configuración / Ajustes:** Reestructuración de márgenes y espaciados de las 5 secciones de ajustes para evitar cortes verticales.
-  - Navegación superior moderna (`QTabBar`) con resaltado de pestaña activa mediante barra inferior cian brillante (`#00e5ff`) y transiciones hover.
+    - Botones de acción unificados con retroalimentación visual táctil (`STYLE_RUN_IDLE`, `STYLE_RUN_ACTIVE`, `STYLE_RUN_CANCELLING`, `STYLE_TRANSFER_BTN`).
+  - Unificación visual y eliminación de estilos fragmentados en los 7 módulos del sistema (Apilador, Revelador, Eclipses HDR, Eclipses Collage, Startrails, Panorámicas y Ajustes).
+  - Navegación superior moderna (`QTabBar`) con resaltado de pestaña activa mediante barra inferior cian brillante (`#00e5ff`).
 * **Barra de Estado Interactiva y Monitor de Hardware en Tiempo Real:**
-  - Indicador permanente del motor y versión activa (`⚡ AstroLoom Engine v0.8.1`).
+  - Indicador permanente del motor y versión activa (`⚡ AstroLoom Engine v0.8.2`).
   - Monitor dinámico de memoria RAM del sistema con lectura porcentual y en gigabytes (`🧠 RAM: XX% (XX.X / XX.X GB)`) actualizado cada 2.5 segundos mediante `psutil`.
 * **Gestor de Presets y Estilos de Revelado Astronómico (Developer Presets Manager):**
   - **Subsistema Paramétrico Centralizado ([`core/developer_presets.py`](file:///D:/software/AstroLoom/core/developer_presets.py)):**
-    - Modelo de datos serializable en JSON con soporte de metadatos (nombre, autor, categoría, fecha, descripción y 21 parámetros de procesado).
-    - Colección de 8 presets de fábrica (*Built-in*) calibrados para astrofotografía:
-      1. `⭐ Neutro / Restablecer`: Retorno a valores base iniciales.
-      2. `🌌 Vía Láctea - Alto Contraste & Polvo Oscuro`: Realce de bandas de absorción y centro galáctico.
-      3. `🌠 Vía Láctea - Fiel y Natural`: Transición equilibrada con preservación estelar suave.
-      4. `🏕️ Paisaje Nocturno - Suelo Iluminado`: Realce de sombras terrestres (+1.2 EV) preservando el cielo.
-      5. `🔭 Cielo Profundo - Nebulosas (Deep Sky Pop)`: Optimizado para nebulosas H-Alpha y espacio profundo con reducción estelar.
-      6. `🏙️ Reducción de Polución Lumínica Periurbana`: Atenuación de cúpula de luz (38%) y balance frío.
-      7. `✨ Reducción Drástica de Estrellas (Star Minimizer)`: Contracción estelar al 35% para despejar nebulosidades.
-      8. `🌫️ Starless Puro (Solo Nebulosa / Sin Estrellas)`: Modo estrella oculta con realce de texturas de gas.
+    - Modelo de datos serializable en JSON con soporte de metadatos y 8 presets de fábrica calibrados para astrofotografía.
   - **Protección del Estirado Tonal Nativo (Histograma Protegido):**
-    - El estirado MTF y el Punto Negro (`bp_val` y `mtf_val`) quedan estrictamente protegidos y nunca son sobreescritos por ningún preset, garantizando que la calibración lumínica única de cada sensor y toma permanezca intacta.
-  - **Aplicación Granular / Selectiva por Ámbitos:**
-    - Modo `Todo (Sin estirado)`: Aplica todos los parámetros de color, estrellas, contraste y suelo respetando el estirado nativo.
-    - Modo `Solo Color y WB`: Aplica temperatura, tinte, saturación y vibración (mantiene el contraste y filtros).
-    - Modo `Solo Estrellas y Filtros`: Aplica reducción de estrellas, claridad, dehaze, ondículas y denoise.
-    - Modo `Solo Contraste y Suelo`: Aplica contraste general y exposición/sombras del suelo terrestre.
-  - **Optimización de Espacio Vertical:**
-    - Integración en una sola fila horizontal del selector de modo y del botón `[ ⚡ Aplicar ]`, reduciendo la huella vertical del panel lateral.
-  - **Integración No Destructiva con Deshacer / Rehacer:**
-    - La aplicación de cualquier preset queda registrada en la pila de `Ctrl+Z`, permitiendo revertir al estado previo de un solo clic.
-  - **Diálogos de Gestión e Interfaz ([`gui/dialog_presets.py`](file:///D:/software/AstroLoom/gui/dialog_presets.py)):**
-    - Panel integrado en la cabecera del Revelador con selector rápido categorizado y descripciones contextuales.
-    - Diálogo `SavePresetDialog`: Permite guardar los ajustes actuales con nombre, autor, categoría y notas.
-    - Diálogo `PresetManagerDialog`: Administrador completo con tabla de presets, búsqueda interactiva, filtrado por categorías, importación externa (`.json`), exportación para compartir y borrado de presets de usuario.
-    - Integración de la ruta de presets (`presets/developer/`) en [`core/config_manager.py`](file:///D:/software/AstroLoom/core/config_manager.py) y en la pestaña de Configuración.
+    - El estirado MTF y el Punto Negro (`bp_val` y `mtf_val`) quedan estrictamente protegidos para preservar la calibración lumínica única del sensor.
+  - **Aplicación Granular / Selectiva por Ámbitos:** Modos Todo, Solo Color/WB, Solo Estrellas/Filtros y Solo Contraste/Suelo.
+  - **Diálogos de Gestión e Interfaz ([`gui/dialog_presets.py`](file:///D:/software/AstroLoom/gui/dialog_presets.py)):** Panel en cabecera del Revelador, diálogo para guardar presets y administrador completo con búsqueda y categorías.
 
+### Modificado
+* **Actualización de Versión:**
+  - Salto de versión a **v0.8.2** en `gui/main_window.py`, `gui/tab_settings.py` y diccionarios de internacionalización (`locales/es.json` y `locales/en.json`).
+
+## [0.8.1] - 2026-10-15
 
 ### Añadido
 * **Herramienta Interactiva de Recorte y Nivelación de Horizonte (Crop & Leveling Tool):**

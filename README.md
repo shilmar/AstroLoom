@@ -146,17 +146,24 @@
 astroloom/
 ├── config.json              # Configuración persistente del usuario
 ├── run_app.py               # Punto de entrada de la aplicación
+├── locales/                 # Ficheros de traducción multilingüe (i18n)
+│   ├── es.json              # Diccionario en español (nativo)
+│   └── en.json              # Diccionario en inglés
 ├── core/
 │   ├── config_manager.py    # Carga y almacenamiento de ajustes JSON
+│   ├── developer_presets.py # Gestor y catálogo de presets astronómicos (.astropreset)
 │   ├── eclipse.py           # Detección de limbo, alineación subpíxel, fusión HDR y NRGF continuo
 │   ├── gpu_backend.py       # Detección y gestión de aceleración NVIDIA CUDA / CuPy
 │   ├── graxpert_bridge.py   # Conector CLI con GraXpert AI
+│   ├── i18n.py              # Motor reactivo de internacionalización multilingüe
 │   ├── icc_manager.py       # Gestión e incrustación de perfiles ICC en TIFF (Tag 34675)
 │   ├── icc_profiles/        # Perfiles de color ICC estándar embebibles
 │   │   ├── AdobeRGB1998.icc # Espacio amplio para monitores profesionales e impresión
 │   │   ├── ProPhotoRGB.icc  # Espacio de gamut extendido (ROMM RGB) para astrofotografía
 │   │   └── sRGB.icc         # Espacio estándar universal para web y visualización
+│   ├── mask_layers.py       # Modelo de capas y máscaras de ajuste local estilo Photoshop
 │   ├── masking.py           # Algoritmos de segmentación y refinado guiado de máscaras
+│   ├── panorama.py          # Motor de composición panorámica multifila y cosido 2D
 │   ├── project_manager.py   # Serialización y persistencia de proyectos (.mwstack)
 │   ├── stacking.py          # Motor de calibración (Dark/Flat/Bias), alineación y apilado
 │   ├── starnet_bridge.py    # Conector y parser CLI con StarNet++ v2
@@ -166,15 +173,20 @@ astroloom/
     ├── assets/              # Recursos gráficos y fotografía de demostración
     │   └── showcase_milkyway.jpg
     ├── canvas.py            # Visor interactivo QGraphicsView acelerado con zoom 1:1 y clipping
-    ├── main_window.py       # Ventana principal y gestión de pestañas maestras
-    ├── tab_developer.py     # Pestaña de revelado y composición de capas
+    ├── dialog_presets.py    # Diálogos de administración y guardado de presets
+    ├── main_window.py       # Ventana principal, barra de estado y pestañas maestras
+    ├── tab_developer.py     # Pestaña de revelado, acordeón de 9 secciones y capas
     ├── tab_eclipse.py       # Pestaña de procesado integral de eclipses solares y lunares (HDR)
     ├── tab_eclipse_collage.py # Pestaña dedicada de diseño de secuencias y collage de eclipses
+    ├── tab_panorama.py      # Pestaña de composición panorámica y mosaicos
     ├── tab_settings.py      # Pestaña de configuración de rutas, selector ICC y parámetros
     ├── tab_stacker.py       # Pestaña de apilado dual, calibración y máscaras
     ├── tab_startrails.py    # Pestaña de generación de trazas de estrellas (Startrails)
+    ├── theme.py             # Sistema de diseño global "Cosmic Dark Pro" y paletas
     ├── widgets/
-    │   └── curve_widget.py  # Curvas tonales, histograma logarítmico y botones de clipping
+    │   ├── collapsible_section.py # Acordeón colapsable con animaciones y badges
+    │   ├── curve_widget.py  # Curvas tonales, histograma logarítmico y botones de clipping
+    │   └── mask_layers_widget.py  # Gestor de capas con orden de pila e identidad cromática
     └── worker.py            # Orquestador de tareas en segundo plano multihilo (QThread)
 ```
 
@@ -332,12 +344,16 @@ python run_app.py
 * [x] Auto-reparación y robustez en arranque ante directorios inexistentes con plantilla base config.default.json.
 * [x] Herramienta interactiva de Recorte (Crop) en el Revelador / Editor con encuadre libre y proporciones fijas (1:1, 16:9, 4:3, etc.), nivelación y guías de composición.
 * [x] Ampliación del rango de ajuste de Balance de Blancos (Temperatura y Tinte a ±1.000) con cajas de entrada numérica directa en el Revelador.
-* [ ] Rediseño y Unificación Visual Global (Design System `gui/theme.py`): Paleta oscura unificada (Dark Astro Pro), botones y tipografía homogénea, estandarización de controles y barras de herramientas comunes entre todos los módulos.
+* [x] Rediseño y Unificación Visual Global (Design System `gui/theme.py`): Paleta oscura unificada (Cosmic Dark Pro), botones y tipografía homogénea, estandarización de controles y barras de herramientas comunes entre todos los módulos.
+* [x] Barra de Estado Interactiva y Monitor de Hardware en Tiempo Real: Indicador permanente del motor y monitor dinámico de memoria RAM del sistema con lectura porcentual y en GB (psutil).
+* [x] Sistema de Preajustes (Presets / Recetas) en el Revelador: Guardado, importación y aplicación en un clic de ajustes de procesado (.astropreset) con protección del estirado nativo.
+* [x] Rediseño del Revelador con Acordeón Plegable Inteligente (9 secciones colapsables e interactivas).
+* [x] Motor de Internacionalización (i18n) Multilingüe en tiempo real con soporte modular de diccionarios (Español / Inglés).
+* [x] Gestor Avanzado de Capas y Máscaras de Ajuste Local estilo Photoshop / Lightroom: Capas especiales (Fondo Base, Fondo Starless, Estrellas, Suelo), orden natural de pila (bottom-up), controles contextuales dinámicos, identidad cromática por capa y carga directa de máscaras en barra horizontal.
 * [ ] Histograma RGB Interactivo en Vivo en el Revelador: Visualización en tiempo real de canales R, G, B superpuestos con marcadores de saturación y recorte tonal.
-* [ ] Sistema de Preajustes (Presets / Recetas) en el Revelador: Guardado, importación y aplicación en un clic de ajustes de procesado (.astropreset).
-* [ ] Máscaras de Luminancia y Rango de Color (Range Masks) en el Revelador: Aislamiento selectivo automático por brillo (sombras/altas luces) o tono (H-alfa, airglow, cielo profundo) para procesado quirúrgico.
+* [ ] Control de Calidad Previo (Frame Culling): Medición automática previa de FWHM, excentricidad (deriva/viento) y SNR para descartar tomas defectuosas antes del apilado.
+* [ ] Deconvolución Estelar (FWHM / Richardson-Lucy): Algoritmo regularizado para afinar perfiles estelares y recuperar microcontraste en nebulosas y detalles galácticos.
 * [ ] Anti-parpadeo (Deflicker) y morphing temporal entre fotogramas en Startrails / Time-Lapse.
-* [ ] Monitor de Memoria RAM / VRAM y GPU en Barra de Estado: Indicador inferior permanente en tiempo real con alertas de saturación y gestión de recursos (psutil).
 * [ ] Estimación de tiempo restante (ETA) y progreso fluido en barras de ejecución durante apilado, cosido de panorámicas y startrails.
 ---
 

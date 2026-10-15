@@ -8,7 +8,7 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 
 | Prioridad | Tarea / Módulo | Dificultad (1-10) | Impacto (1-10) | Estado | Descripción |
 | :---: | :--- | :---: | :---: | :---: | :--- |
-| **P1** | **Internacionalización (i18n: Español / Inglés)** | 4 / 10 | 8 / 10 | 📋 Planificado | Sistema de traducción modular mediante ficheros (`locales/es.json`, `locales/en.json`) con gestor `core/i18n.py`, selector de idioma en interfaz y persistencia en configuración. |
+| **P1** | **Internacionalización (i18n: Español / Inglés)** | 4 / 10 | 8 / 10 | ✅ Completado (v0.8.2) | Sistema de traducción modular mediante ficheros (`locales/es.json`, `locales/en.json`) con gestor `core/i18n.py`, selector de idioma en interfaz y persistencia en configuración. |
 | **P2** | **Control de Calidad (Frame Culling)** | 6 / 10 | 6 / 10 | ⏳ Pendiente | Medición automática previa de FWHM, excentricidad (deriva/viento) y SNR para descartar tomas defectuosas antes del apilado. |
 | **P3** | **Persistencia Avanzada de Configuración** | 3 / 10 | 5 / 10 | ⏳ Pendiente | Centralización y sincronización de preferencias de usuario y rutas recientes en `config.json` o `QSettings`. |
 | **P4** | **Deconvolución Estelar (FWHM / Richardson-Lucy)** | 7 / 10 | 8 / 10 | 🔍 En estudio | Algoritmo regularizado para afinar perfiles estelares y recuperar microcontraste en nebulosas y detalles galácticos. |
@@ -55,7 +55,10 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 ---
 
 ## ✅ Tareas Recientemente Completadas
-- **Acordeón Plegable Inteligente en el Revelador:** Rediseño modular estilo Lightroom con 9 secciones colapsables y prioridad a StarNet++ AI.
-- **Pincel de Máscaras:** Pincel continuo con control de dureza y opacidad sin acumulación descontrolada.
+- **Gestor de Capas y Máscaras de Ajuste Local (v0.8.2):** Integración de capas especiales de imagen (Fondo Base, Fondo Starless, Estrellas, Suelo), orden natural de pila (bottom-up), controles contextuales dedicados por tipo de capa, tematización cromática, memoria de herramientas, ojo de visibilidad y botón de carga de máscaras desde apilado/archivo.
+- **Internacionalización i18n Multilingüe en Tiempo Real (v0.8.2):** Arquitectura JSON modular (`locales/es.json`, `locales/en.json`) con gestor `core/i18n.py` y selector de idioma en barra de estado.
+- **Acordeón Plegable Inteligente en el Revelador (v0.8.2):** Rediseño modular estilo Lightroom con 9 secciones colapsables y prioridad a StarNet++ AI.
+- **Sistema de Diseño Global "Cosmic Dark Pro" (v0.8.2):** Unificación visual de paletas oscuras, tipografías y botones de ejecución en los 7 módulos del sistema con monitor de hardware (RAM).
+- **Gestor de Presets y Estilos de Revelado Astronómico (v0.8.2):** Biblioteca con 8 presets oficiales calibrados, protección de estirado nativo y aplicación granular por ámbitos.
+- **Pincel de Máscaras y Ajustes Locales:** Pincel continuo con control de dureza y opacidad sin acumulación descontrolada.
 - **Herramientas de Balance de Blancos Local y Suelo:** Ajustes con 4 decimales de precisión e interactividad con doble clic para resetear deslizadores.
-- **Presets Astrofotográficos Oficiales:** Biblioteca con 12 presets y gestor de estilos de revelado.
