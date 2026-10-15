@@ -19,34 +19,51 @@ from core.masking import refine_mask_guided
 from core.stacking import load_image_as_float32
 from gui.canvas import MaskCanvas
 from gui.widgets.drop_widgets import DropListWidget
-from gui.worker import StackingWorker
+from gui.worker import StackingWorker, QualityCullingWorker
 from core.gpu_backend import is_gpu_enabled
 from core.config_manager import load_config
 from gui.theme import STYLE_RUN_IDLE, STYLE_RUN_ACTIVE, STYLE_RUN_CANCELLING
 
 
 class FileListRow(QWidget):
-    """Widget de fila con etiqueta de referencia estilizada y botón de borrado individual."""
-    delete_requested = Signal(str, str)  # (tab_name, filepath)
+    """Widget de fila con casilla de inclusión, etiqueta de referencia, badge de calidad y botón de borrado."""
+    delete_requested = Signal(str, str)         # (tab_name, filepath)
+    include_toggled = Signal(str, str, bool)    # (tab_name, filepath, is_included)
 
-    def __init__(self, filepath: str, tab_name: str, is_ref: bool = False, parent=None):
+    def __init__(self, filepath: str, tab_name: str, is_ref: bool = False, is_included: bool = True, parent=None):
         super().__init__(parent)
         self.filepath = filepath
         self.tab_name = tab_name
+        self._is_included = is_included
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(6)
+
+        # Casilla de inclusión (para Lights)
+        self.chk_include = QCheckBox()
+        self.chk_include.setChecked(is_included)
+        self.chk_include.setToolTip("Incluir / descartar esta toma del apilado")
+        self.chk_include.toggled.connect(self._on_include_toggled)
+        if tab_name != "Lights":
+            self.chk_include.setVisible(False)
+        layout.addWidget(self.chk_include)
 
         # Indicador de referencia / activo tipo badge
         self.lbl_ref = QLabel()
         self.set_as_reference(is_ref)
         layout.addWidget(self.lbl_ref)
 
+        # Badge de calidad (FWHM / Redondez)
+        self.lbl_quality = QLabel("")
+        self.lbl_quality.setVisible(False)
+        layout.addWidget(self.lbl_quality)
+
         # Nombre del archivo
         self.lbl_name = QLabel(os.path.basename(filepath))
         self.lbl_name.setToolTip(filepath)
         self.lbl_name.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._update_name_style()
         layout.addWidget(self.lbl_name)
 
         # Botón de eliminar individual (Cruz roja)
@@ -68,6 +85,52 @@ class FileListRow(QWidget):
             self.lbl_ref.setText("      ")
             self.lbl_ref.setStyleSheet("color: transparent; font-size: 10px; padding: 1px 4px;")
 
+    def set_quality_result(self, res):
+        """Asigna y muestra el badge de calidad óptica del frame culling."""
+        if res is None:
+            self.lbl_quality.setVisible(False)
+            return
+
+        self.lbl_quality.setVisible(True)
+        tip = (
+            f"Puntuación: {res.score:.1f}%\n"
+            f"Nitidez (FWHM): {res.fwhm:.1f} px\n"
+            f"Redondez (Excentricidad): {res.eccentricity:.2f}\n"
+            f"Estrellas detectadas: {res.star_count}"
+        )
+        if res.defect_reason:
+            tip += f"\nMotivo: {res.defect_reason}"
+        self.lbl_quality.setToolTip(tip)
+
+        if res.status == "EXCELLENT":
+            self.lbl_quality.setText(f"🟢 {int(round(res.score))}%")
+            self.lbl_quality.setStyleSheet("color: #69f0ae; background-color: #1b3a24; border-radius: 3px; padding: 1px 4px; font-size: 10px; font-weight: bold;")
+        elif res.status == "ACCEPTABLE":
+            self.lbl_quality.setText(f"🟡 {int(round(res.score))}%")
+            self.lbl_quality.setStyleSheet("color: #ffd54f; background-color: #3e3814; border-radius: 3px; padding: 1px 4px; font-size: 10px; font-weight: bold;")
+        else:
+            short_lbl = "Movida" if "Movida" in res.status_label else ("Nubes" if "Nubes" in res.status_label else "Baja")
+            self.lbl_quality.setText(f"🔴 {short_lbl}")
+            self.lbl_quality.setStyleSheet("color: #ff5252; background-color: #3e1b1b; border-radius: 3px; padding: 1px 4px; font-size: 10px; font-weight: bold;")
+
+    def set_included(self, is_included: bool):
+        self.chk_include.blockSignals(True)
+        self.chk_include.setChecked(is_included)
+        self.chk_include.blockSignals(False)
+        self._is_included = is_included
+        self._update_name_style()
+
+    def _on_include_toggled(self, checked: bool):
+        self._is_included = checked
+        self._update_name_style()
+        self.include_toggled.emit(self.tab_name, self.filepath, checked)
+
+    def _update_name_style(self):
+        if self._is_included:
+            self.lbl_name.setStyleSheet("color: #eceff4; font-size: 11px;")
+        else:
+            self.lbl_name.setStyleSheet("color: #546e7a; font-size: 11px; text-decoration: line-through;")
+
 
 class StackerTab(QWidget):
     stacking_finished = Signal(str, object)
@@ -82,6 +145,9 @@ class StackerTab(QWidget):
         self.flats_list = []
         self.bias_list = []
         self.ground_list = []
+        self.excluded_lights = set()       # Conjunto de rutas de Lights desmarcadas / excluidas
+        self.culling_results = {}          # Diccionario filepath -> FrameQualityResult
+        self.culling_worker = None         # Hilo secundario para análisis en lote
         self.computed_mask = None
         self.last_stacked_output_path = None
         self.current_ref_path = None
@@ -190,6 +256,56 @@ class StackerTab(QWidget):
         
         files_layout.addWidget(self.tabs_files)
 
+        # Barra de Control de Calidad y Cribado (Frame Culling) para Lights
+        self.culling_bar = QWidget()
+        culling_layout = QHBoxLayout(self.culling_bar)
+        culling_layout.setContentsMargins(0, 2, 0, 2)
+        culling_layout.setSpacing(6)
+
+        self.btn_cull_analyze = QPushButton("🔍 Analizar Calidad")
+        self.btn_cull_analyze.setCursor(Qt.PointingHandCursor)
+        self.btn_cull_analyze.setStyleSheet("""
+            QPushButton {
+                background-color: #1a2736;
+                color: #80d8ff;
+                font-weight: bold;
+                border: 1px solid #0288d1;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: #0288d1; color: #ffffff; }
+        """)
+        self.btn_cull_analyze.setToolTip("Analiza FWHM, redondez de estrellas (viento/deriva) y presencia de nubes en todo el lote")
+        self.btn_cull_analyze.clicked.connect(self.start_culling_analysis)
+        culling_layout.addWidget(self.btn_cull_analyze)
+
+        self.btn_cull_discard = QPushButton("⚡ Auto-Descartar")
+        self.btn_cull_discard.setCursor(Qt.PointingHandCursor)
+        self.btn_cull_discard.setStyleSheet("""
+            QPushButton {
+                background-color: #2b1f24;
+                color: #ff80ab;
+                font-weight: bold;
+                border: 1px solid #c2185b;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: #c2185b; color: #ffffff; }
+        """)
+        self.btn_cull_discard.setToolTip("Desmarca automáticamente las tomas clasificadas como defectuosas o con estrellas movidas")
+        self.btn_cull_discard.clicked.connect(self.auto_discard_defective_frames)
+        culling_layout.addWidget(self.btn_cull_discard)
+
+        self.lbl_cull_summary = QLabel("")
+        self.lbl_cull_summary.setStyleSheet("font-size: 11px; color: #80cbc4; font-weight: bold;")
+        culling_layout.addWidget(self.lbl_cull_summary)
+        culling_layout.addStretch()
+
+        files_layout.addWidget(self.culling_bar)
+        self.tabs_files.currentChanged.connect(self._on_files_tab_changed)
+
         btn_box = QHBoxLayout()
         btn_box.setSpacing(6)
         self.btn_add_files = QPushButton("➕ Añadir Tomas...")
@@ -233,6 +349,52 @@ class StackerTab(QWidget):
         row_ground.addWidget(lbl_ground)
         row_ground.addWidget(self.combo_ground)
         set_layout.addLayout(row_ground)
+
+        # Sub-bloque Anti-Ghosting de Árboles en Horizonte (Min-Horizon)
+        self.box_anti_ghosting = QWidget()
+        ag_layout = QVBoxLayout(self.box_anti_ghosting)
+        ag_layout.setContentsMargins(0, 4, 0, 4)
+        ag_layout.setSpacing(4)
+
+        self.chk_anti_ghosting = QCheckBox("🌲 Anti-Ghosting de Árboles (Min-Horizon)")
+        self.chk_anti_ghosting.setChecked(True)
+        self.chk_anti_ghosting.setToolTip(
+            "Erradica ramas fantasma y sangrado estelar en vegetación y horizontes complejos\n"
+            "usando proyección Min-Horizon y transición continua por transformada de distancias."
+        )
+        ag_layout.addWidget(self.chk_anti_ghosting)
+
+        row_ag_params = QHBoxLayout()
+        row_ag_params.setContentsMargins(18, 0, 0, 0)
+        row_ag_params.setSpacing(8)
+
+        lbl_ag_rad = QLabel("Radio Frontera:")
+        lbl_ag_rad.setStyleSheet("font-size: 11px; color: #90a4ae;")
+        self.spin_ag_radius = QSpinBox()
+        self.spin_ag_radius.setRange(5, 80)
+        self.spin_ag_radius.setValue(25)
+        self.spin_ag_radius.setSuffix(" px")
+        self.spin_ag_radius.setToolTip("Ancho de la banda perimétrica de seguridad alrededor del contorno del suelo")
+
+        lbl_ag_sens = QLabel("Follaje:")
+        lbl_ag_sens.setStyleSheet("font-size: 11px; color: #90a4ae;")
+        self.combo_ag_sens = QComboBox()
+        self.combo_ag_sens.addItem("Equilibrada (Recomendada)", 0.5)
+        self.combo_ag_sens.addItem("Fino / Con Viento (Alta opacidad)", 0.8)
+        self.combo_ag_sens.addItem("Bordes Gruesos / Roca", 0.3)
+        self.combo_ag_sens.setToolTip("Sensibilidad de opacidad para ramas finas y hojas")
+
+        row_ag_params.addWidget(lbl_ag_rad)
+        row_ag_params.addWidget(self.spin_ag_radius)
+        row_ag_params.addWidget(lbl_ag_sens)
+        row_ag_params.addWidget(self.combo_ag_sens)
+        row_ag_params.addStretch()
+        ag_layout.addLayout(row_ag_params)
+
+        self.chk_anti_ghosting.toggled.connect(
+            lambda checked: self.spin_ag_radius.setEnabled(checked) and self.combo_ag_sens.setEnabled(checked)
+        )
+        set_layout.addWidget(self.box_anti_ghosting)
 
         row_kappa = QHBoxLayout()
         row_kappa.addWidget(QLabel("Factor Kappa (MAD Rejection):"))
@@ -407,11 +569,18 @@ class StackerTab(QWidget):
         self.txt_log.moveCursor(QTextCursor.End)
 
     def _on_capture_mode_changed(self, idx: int):
-        """Si es star tracker, inhabilita el modo de apilar suelo de ráfaga."""
+        """Si es star tracker, inhabilita el modo de apilar suelo de ráfaga y anti-ghosting."""
         is_fixed = (idx == 0)
         self.combo_ground.setEnabled(is_fixed)
+        if hasattr(self, 'box_anti_ghosting'):
+            self.box_anti_ghosting.setEnabled(is_fixed)
         if not is_fixed:
             self.log_message("[MODO] Star Tracker activado: apilado restringido al cielo en movimiento.")
+
+    def _on_files_tab_changed(self, idx: int):
+        """Muestra la barra de análisis de calidad únicamente en la pestaña de Lights."""
+        if hasattr(self, 'culling_bar'):
+            self.culling_bar.setVisible(idx == 0)
 
     # --- Reconstrucción de la lista visual ---
     def _refresh_list_view(self, tab_name: str):
@@ -435,10 +604,19 @@ class StackerTab(QWidget):
         for idx, path in enumerate(files_data):
             item = QListWidgetItem(widget_list)
             is_ref = (tab_name == "Lights") and (path == self.current_ref_path)
-            row_widget = FileListRow(path, tab_name=tab_name, is_ref=is_ref)
+            is_included = (path not in self.excluded_lights) if tab_name == "Lights" else True
+            row_widget = FileListRow(path, tab_name=tab_name, is_ref=is_ref, is_included=is_included)
             row_widget.delete_requested.connect(self.delete_single_file)
+            row_widget.include_toggled.connect(self.on_file_include_toggled)
+
+            if tab_name == "Lights" and path in self.culling_results:
+                row_widget.set_quality_result(self.culling_results[path])
+
             item.setSizeHint(row_widget.sizeHint())
             widget_list.setItemWidget(item, row_widget)
+
+        if tab_name == "Lights":
+            self._update_culling_summary_label()
 
     def delete_single_file(self, tab_name: str, filepath: str):
         if tab_name == "Lights":
@@ -536,7 +714,11 @@ class StackerTab(QWidget):
         idx = self.tabs_files.currentIndex()
         if idx == 0:
             self.lights_list.clear()
+            self.excluded_lights.clear()
+            self.culling_results.clear()
             self.list_lights.clear()
+            if hasattr(self, 'lbl_cull_summary'):
+                self.lbl_cull_summary.setText("")
             self.current_ref_path = None
             self.canvas.base_pixmap = None
             self.canvas.update()
@@ -557,6 +739,93 @@ class StackerTab(QWidget):
             self.ground_list.clear()
             self.list_ground.clear()
             self.log_message("Lista de Suelo vaciada.")
+
+    def on_file_include_toggled(self, tab_name: str, filepath: str, is_included: bool):
+        """Gestiona la inclusión/exclusión de tomas para el apilado."""
+        if tab_name == "Lights":
+            if is_included:
+                self.excluded_lights.discard(filepath)
+            else:
+                self.excluded_lights.add(filepath)
+            self._update_culling_summary_label()
+
+    def _update_culling_summary_label(self):
+        """Actualiza la etiqueta de balance de calidad en la barra de cribado."""
+        if not hasattr(self, 'lbl_cull_summary'):
+            return
+        total = len(self.lights_list)
+        if total == 0:
+            self.lbl_cull_summary.setText("")
+            return
+        active = total - len(self.excluded_lights)
+        pct = (active / total) * 100.0 if total > 0 else 0
+        if not self.culling_results:
+            self.lbl_cull_summary.setText(f"Aptas: {active}/{total} ({pct:.0f}%)")
+        else:
+            self.lbl_cull_summary.setText(f"Aptas: {active}/{total} ({pct:.0f}%) | Calidad analizada")
+
+    def start_culling_analysis(self):
+        """Lanza el análisis paralelo de calidad estelar sobre las tomas de Lights."""
+        if not self.lights_list:
+            QMessageBox.information(self, "Aviso", "Añade primero tomas de Lights para analizar.")
+            return
+
+        self.btn_cull_analyze.setEnabled(False)
+        self.btn_cull_discard.setEnabled(False)
+        self.lbl_cull_summary.setText("🔍 Analizando calidad...")
+        self.log_message(f"=== INICIANDO ANÁLISIS DE CALIDAD ESTELAR ({len(self.lights_list)} tomas) ===")
+
+        self.culling_worker = QualityCullingWorker(
+            file_paths=list(self.lights_list),
+            sky_mask=self.computed_mask,
+            parent=self
+        )
+        self.culling_worker.progress_changed.connect(self._on_culling_progress)
+        self.culling_worker.all_finished.connect(self._on_culling_finished)
+        self.culling_worker.error_occurred.connect(self._on_culling_error)
+        self.culling_worker.start()
+
+    def _on_culling_progress(self, current: int, total: int, filename: str):
+        pct = int((current / max(1, total)) * 100)
+        self.lbl_cull_summary.setText(f"Analizando: {current}/{total} ({pct}%)")
+
+    def _on_culling_finished(self, results: list):
+        self.btn_cull_analyze.setEnabled(True)
+        self.btn_cull_discard.setEnabled(True)
+
+        defective_count = 0
+        for r in results:
+            self.culling_results[r.filepath] = r
+            if not r.is_recommended:
+                defective_count += 1
+
+        self._refresh_list_view("Lights")
+        total = len(results)
+        aptas = total - defective_count
+        self.log_message(f"✓ [CRIBADO] Análisis completado: {aptas}/{total} tomas excelentes/aceptables, {defective_count} con anomalías.")
+        if defective_count > 0:
+            self.log_message(f"-> Pulsa '⚡ Auto-Descartar' para excluir automáticamente las {defective_count} tomas defectuosas.")
+
+    def _on_culling_error(self, err_msg: str):
+        self.btn_cull_analyze.setEnabled(True)
+        self.btn_cull_discard.setEnabled(True)
+        self.lbl_cull_summary.setText("Error en análisis")
+        self.log_message(f"[ERROR CRIBADO] {err_msg}")
+
+    def auto_discard_defective_frames(self):
+        """Desmarca automáticamente las tomas clasificadas como defectuosas."""
+        if not self.culling_results:
+            self.start_culling_analysis()
+            return
+
+        discarded_now = 0
+        for path, res in self.culling_results.items():
+            if not res.is_recommended:
+                self.excluded_lights.add(path)
+                discarded_now += 1
+
+        self._refresh_list_view("Lights")
+        self.log_message(f"[CRIBADO] Auto-descartadas {discarded_now} tomas defectuosas (viento/nubes/foco).")
 
     def on_light_double_clicked(self, item):
         row = self.list_lights.row(item)
@@ -801,6 +1070,9 @@ class StackerTab(QWidget):
         self.bias_list.clear()
         self.list_bias.clear()      
         self.list_ground.clear()
+        self.excluded_lights.clear()
+        self.culling_results.clear()
+        self._update_culling_summary_label()
         self.current_ref_path = None
         self.last_stacked_output_path = None
 
@@ -820,14 +1092,22 @@ class StackerTab(QWidget):
         self.slider_stack_lp.setValue(50)
         self.spin_feather.setValue(7)
         self.spin_iter.setValue(3)
+        self.chk_anti_ghosting.setChecked(True)
+        self.spin_ag_radius.setValue(12)
+        self.combo_ag_sens.setCurrentIndex(0)
 
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("%p%")
         self.txt_log.clear()
 
     def start_stacking(self):
-        if len(self.lights_list) < 2:
-            QMessageBox.warning(self, "Aviso", "Añade al menos 2 tomas de luz (Lights) para apilar.")
+        active_lights = [p for p in self.lights_list if p not in self.excluded_lights]
+        if len(active_lights) < 2:
+            QMessageBox.warning(
+                self, "Aviso", 
+                f"Añade al menos 2 tomas de luz (Lights) activas para apilar.\n"
+                f"(Activas: {len(active_lights)} / Total: {len(self.lights_list)}, Excluidas: {len(self.excluded_lights)})"
+            )
             return
 
         app_cfg = load_config()
@@ -880,7 +1160,7 @@ class StackerTab(QWidget):
             external_path = self.ground_list[0]
 
         cfg = {
-            "lights": self.lights_list,
+            "lights": active_lights,
             "darks": self.darks_list,
             "flats": self.flats_list,
             "mask": self.computed_mask,
@@ -892,6 +1172,9 @@ class StackerTab(QWidget):
             "output_path": out_path,
             "lp_method": selected_lp_method,
             "lp_strength": selected_lp_strength,
+            "anti_ghosting": self.chk_anti_ghosting.isChecked(),
+            "anti_ghosting_radius": self.spin_ag_radius.value(),
+            "anti_ghosting_sensitivity": self.combo_ag_sens.currentData() or 0.5,
             "use_gpu": is_gpu_enabled(),
             "storage_strategy": saved_storage,
             "cpu_workers": cpu_workers,

@@ -847,3 +847,78 @@ def stream_stack_auto(
 
     gc.collect()
     return stacked_out
+
+
+def compose_sky_ground_with_anti_ghosting(
+    sky_stacked: np.ndarray,
+    ground_layer: np.ndarray,
+    sky_mask: np.ndarray,
+    enable_anti_ghosting: bool = True,
+    boundary_radius: int = 25,
+    tree_sensitivity: float = 0.5
+) -> np.ndarray:
+    """
+    Composición avanzada cielo/suelo con algoritmo Min-Horizon Anti-Ghosting.
+    Erradica ramas fantasma y sangrado estelar en siluetas de vegetación y perfiles complejos.
+    
+    :param sky_stacked: Array float32 (H, W, 3) con el cielo integrado y alineado a estrellas.
+    :param ground_layer: Array float32 (H, W, 3) con el suelo estático integrado o de referencia.
+    :param sky_mask: Array float32 (H, W) donde 1.0 = cielo y 0.0 = suelo.
+    :param enable_anti_ghosting: Si es False, aplica fusión por difuminado gausiano convencional.
+    :param boundary_radius: Radio en píxeles de la franja perimétrica de seguridad (ej. 20 a 30 px).
+    :param tree_sensitivity: Factor de modulación de silueta vegetal [0.1 a 1.0].
+    """
+    h, w = sky_stacked.shape[:2]
+    raw_mask = np.clip(sky_mask.astype(np.float32), 0.0, 1.0)
+    if raw_mask.shape[:2] != (h, w):
+        raw_mask = cv2.resize(raw_mask, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    if not enable_anti_ghosting:
+        smooth_mask = cv2.GaussianBlur(raw_mask, (5, 5), sigmaX=0.8)
+        mask_3d = smooth_mask[..., np.newaxis]
+        return (sky_stacked * mask_3d) + (ground_layer * (1.0 - mask_3d))
+
+    # 1. Banda de frontera mediante dilatación morfológica
+    rad = max(5, int(boundary_radius))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * rad + 1, 2 * rad + 1))
+    
+    bin_mask = (raw_mask > 0.5).astype(np.uint8)
+    sky_dilated = cv2.dilate(bin_mask, kernel)
+    gnd_dilated = cv2.dilate(1 - bin_mask, kernel)
+    boundary_band = ((sky_dilated > 0) & (gnd_dilated > 0)).astype(np.float32)
+
+    # 2. Signed Distance Function (SDF) para transición continua suave de radio R
+    dist_to_gnd = cv2.distanceTransform(bin_mask, cv2.DIST_L2, 5)
+    dist_to_sky = cv2.distanceTransform(1 - bin_mask, cv2.DIST_L2, 5)
+
+    # SDF: positivo en cielo, negativo en suelo, 0 en la frontera
+    sdf = dist_to_gnd - dist_to_sky
+    
+    # Transición lineal normalizada en la franja [-rad, +rad]
+    w_linear = np.clip((sdf / (2.0 * rad)) + 0.5, 0.0, 1.0)
+
+    # Suavizado cosenoidal continuo (C1 continuo sin discontinuidades visuales)
+    w_smooth = 0.5 - 0.5 * np.cos(np.pi * w_linear)
+
+    # 3. Min-Horizon: Proyección de silueta sólida de vegetación
+    lum_sky = cv2.cvtColor(sky_stacked, cv2.COLOR_RGB2GRAY) if sky_stacked.ndim == 3 else sky_stacked
+    lum_gnd = cv2.cvtColor(ground_layer, cv2.COLOR_RGB2GRAY) if ground_layer.ndim == 3 else ground_layer
+
+    # Ratio de oscuridad de la silueta terrestre respecto al cielo
+    # Si lum_gnd < lum_sky, hay vegetación/roca oscura en la frontera
+    ratio = np.clip(lum_gnd / (lum_sky + 1e-4), 0.0, 1.0)
+    
+    # Exponente modulador según sensibilidad
+    exponent = 1.0 + 2.0 * float(np.clip(tree_sensitivity, 0.1, 1.0))
+    foliage_factor = ratio ** exponent
+
+    # En la zona de frontera, modular el peso del cielo con el factor de follaje
+    w_effective = np.where(
+        (boundary_band > 0) & (lum_gnd < lum_sky),
+        w_smooth * foliage_factor,
+        w_smooth
+    )
+
+    mask_3d = np.clip(w_effective, 0.0, 1.0)[..., np.newaxis]
+    composite = (sky_stacked * mask_3d) + (ground_layer * (1.0 - mask_3d))
+    return composite

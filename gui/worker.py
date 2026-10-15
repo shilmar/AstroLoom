@@ -31,7 +31,8 @@ from core.stacking import (
     align_single_light_task,
     save_frame_float32,
     evaluate_storage_mode,
-    StorageModeDecision
+    StorageModeDecision,
+    compose_sky_ground_with_anti_ghosting
 )
 from core.graxpert_bridge import run_graxpert_background_extraction
 from core.starnet_bridge import run_starnet
@@ -536,23 +537,24 @@ class StackingWorker(QThread):
 
             if has_ground and sky_mask is not None and ground_layer is not None:
                 t0_comp = time.perf_counter()
-                self.status_changed.emit("[Fase 4/4] Componiendo imagen final de 32 bits sin discontinuidades...")
+                use_ag = self.config.get("anti_ghosting", True)
+                ag_rad = self.config.get("anti_ghosting_radius", 25)
+                ag_sens = self.config.get("anti_ghosting_sensitivity", 0.5)
+
+                msg_ag = f"con Min-Horizon Anti-Ghosting (R={ag_rad}px)" if use_ag else "estándar"
+                self.status_changed.emit(f"[Fase 4/4] Componiendo imagen final de 32 bits ({msg_ag})...")
                 self.progress_changed.emit(96)
 
-                raw_mask = np.clip(sky_mask.astype(np.float32), 0.0, 1.0)
-                smooth_mask = cv2.GaussianBlur(raw_mask, (5, 5), sigmaX=0.8)
-                mask_3d = smooth_mask[..., np.newaxis] if smooth_mask.ndim == 2 else smooth_mask
-
-                base_composite = (sky_stacked * mask_3d) + (ground_layer * (1.0 - mask_3d))
-
-                transition_zone = (mask_3d > 0.02) & (mask_3d < 0.90)
-                final_composite = np.where(
-                    transition_zone & (ground_layer < base_composite),
-                    ground_layer * (1.0 - mask_3d * 0.5) + base_composite * (mask_3d * 0.5),
-                    base_composite
+                final_composite = compose_sky_ground_with_anti_ghosting(
+                    sky_stacked=sky_stacked,
+                    ground_layer=ground_layer,
+                    sky_mask=sky_mask,
+                    enable_anti_ghosting=use_ag,
+                    boundary_radius=ag_rad,
+                    tree_sensitivity=ag_sens
                 )
 
-                del ground_layer, mask_3d, smooth_mask, base_composite, sky_stacked
+                del ground_layer, sky_stacked
                 dt_comp = time.perf_counter() - t0_comp
                 self.status_changed.emit(f"-> Composición completada en {dt_comp:.2f}s.")
             else:
@@ -685,5 +687,36 @@ class StarNetWorker(QThread):
         except Exception as exc:
             if not self._is_cancelled:
                 self.error_occurred.emit(str(exc))
+
+
+class QualityCullingWorker(QThread):
+    """Hilo secundario para análisis en lote de calidad óptica y cribado inteligente de tomas (Frame Culling)."""
+    progress_changed = Signal(int, int, str)  # (actual, total, nombre_archivo)
+    all_finished = Signal(list)              # List[FrameQualityResult]
+    error_occurred = Signal(str)
+
+    def __init__(self, file_paths: list, sky_mask=None, parent=None):
+        super().__init__(parent)
+        self.file_paths = file_paths
+        self.sky_mask = sky_mask
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
+
+    def run(self):
+        try:
+            from core.frame_culling import batch_analyze_frame_quality
+            results = batch_analyze_frame_quality(
+                self.file_paths,
+                sky_mask=self.sky_mask,
+                progress_callback=lambda cur, tot, name: self.progress_changed.emit(cur, tot, name),
+                cancel_check=lambda: self._is_cancelled
+            )
+            if not self._is_cancelled:
+                self.all_finished.emit(results)
+        except Exception as e:
+            if not self._is_cancelled:
+                self.error_occurred.emit(str(e))
             else:
                 self.cancelled.emit()
