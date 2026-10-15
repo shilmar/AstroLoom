@@ -31,6 +31,7 @@ class MaskCanvas(QWidget):
     crop_rect_changed = Signal(int, int)         # (pixel_w, pixel_h)
     crop_toggled = Signal(bool)
     crop_applied = Signal()
+    layer_brush_stroke_started = Signal()        # Inicio de trazado interactivo
     layer_brush_stroke_finished = Signal(object) # np.ndarray máscara de capa tras pintar
     layer_brush_radius_changed = Signal(int)     # Sincronización de radio con rueda
 
@@ -561,6 +562,7 @@ class MaskCanvas(QWidget):
                 self._apply_brush_stamp(ipt, native_r)
                 self.set_refined_mask(self.layer_brush_mask, mode="ruby")
                 self.set_mask_visible(True)
+                self.layer_brush_stroke_started.emit()
                 self.update()
                 event.accept()
                 return

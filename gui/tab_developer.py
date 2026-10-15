@@ -137,6 +137,15 @@ class DeveloperTab(QWidget):
         self._connect_undo_triggers()
         self._populate_presets_combo()
         
+    @staticmethod
+    def _make_resettable_label(lbl: QLabel, reset_action, default_desc: str = "") -> QLabel:
+        """Asigna comportamiento de doble clic para restablecer el control asociado."""
+        lbl.setCursor(Qt.PointingHandCursor)
+        tt = f"Doble clic para restablecer a {default_desc}" if default_desc else "Doble clic para restablecer"
+        lbl.setToolTip(tt)
+        lbl.mouseDoubleClickEvent = lambda e: reset_action()
+        return lbl
+
     def _setup_ui(self):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -268,7 +277,7 @@ class DeveloperTab(QWidget):
 
         # Cúpula de luz (Contaminación Lumínica) integrada
         row_lp = QHBoxLayout()
-        row_lp.addWidget(QLabel("Atenuar Cúpula de Luz:"))
+        row_lp.addWidget(self._make_resettable_label(QLabel("Atenuar Cúpula de Luz:"), lambda: self.slider_lp.setValue(0), "0%"))
         self.lbl_lp = QLabel("0%")
         self.lbl_lp.setStyleSheet("color: #ffd54f; font-weight: bold;")
         self.lbl_lp.setMinimumWidth(38)
@@ -304,7 +313,7 @@ class DeveloperTab(QWidget):
         row_spins.setSpacing(14)
 
         col_bp_lbl = QHBoxLayout()
-        col_bp_lbl.addWidget(QLabel("P. Negro:"))
+        col_bp_lbl.addWidget(self._make_resettable_label(QLabel("P. Negro:"), lambda: self.spin_bp.setValue(getattr(self, 'initial_bp', 0.0)), "0.00000"))
         self.spin_bp = QDoubleSpinBox()
         self.spin_bp.setDecimals(5)
         self.spin_bp.setRange(0.0, 0.20000)
@@ -315,7 +324,7 @@ class DeveloperTab(QWidget):
         row_spins.addLayout(col_bp_lbl)
 
         col_mtf_lbl = QHBoxLayout()
-        col_mtf_lbl.addWidget(QLabel("Medios (m):"))
+        col_mtf_lbl.addWidget(self._make_resettable_label(QLabel("Medios (m):"), lambda: self.spin_mtf.setValue(getattr(self, 'initial_mtf', 0.10000)), "0.10000"))
         self.spin_mtf = QDoubleSpinBox()
         self.spin_mtf.setDecimals(5)
         self.spin_mtf.setRange(0.00010, 0.50000)
@@ -342,7 +351,7 @@ class DeveloperTab(QWidget):
         stretch_layout.addLayout(row_sliders)
 
         row_cnt = QHBoxLayout()
-        row_cnt.addWidget(QLabel("Contraste:"))
+        row_cnt.addWidget(self._make_resettable_label(QLabel("Contraste:"), lambda: self.slider_contrast.setValue(0), "0.00"))
         self.lbl_contrast = QLabel("0.00")
         self.lbl_contrast.setStyleSheet("color: #ffd54f; font-weight: bold;")
         row_cnt.addWidget(self.lbl_contrast)
@@ -520,7 +529,7 @@ class DeveloperTab(QWidget):
         col_sky = QVBoxLayout()
         col_sky.setSpacing(4)
         row_sky_lbl = QHBoxLayout()
-        row_sky_lbl.addWidget(QLabel("Sat. Cielo:"))
+        row_sky_lbl.addWidget(self._make_resettable_label(QLabel("Sat. Cielo:"), lambda: self.slider_sat_sky.setValue(100), "1.00x"))
         self.lbl_sat_sky = QLabel("1.00x")
         self.lbl_sat_sky.setStyleSheet("color: #80d8ff; font-weight: bold;")
         row_sky_lbl.addWidget(self.lbl_sat_sky)
@@ -536,7 +545,7 @@ class DeveloperTab(QWidget):
         col_gnd = QVBoxLayout()
         col_gnd.setSpacing(4)
         row_gnd_lbl = QHBoxLayout()
-        row_gnd_lbl.addWidget(QLabel("Sat. Suelo:"))
+        row_gnd_lbl.addWidget(self._make_resettable_label(QLabel("Sat. Suelo:"), lambda: self.slider_sat_gnd.setValue(100), "1.00x"))
         self.lbl_sat_gnd = QLabel("1.00x")
         self.lbl_sat_gnd.setStyleSheet("color: #a5d6a7; font-weight: bold;")
         row_gnd_lbl.addWidget(self.lbl_sat_gnd)
@@ -553,7 +562,7 @@ class DeveloperTab(QWidget):
 
         # Vibrance y Reset en una fila compacta
         row_vib = QHBoxLayout()
-        row_vib.addWidget(QLabel("Vibranza:"))
+        row_vib.addWidget(self._make_resettable_label(QLabel("Vibranza:"), lambda: self.slider_vibrance.setValue(0), "0.00"))
         self.lbl_vibrance = QLabel("0.00")
         self.lbl_vibrance.setStyleSheet("color: #ffd54f; font-weight: bold;")
         row_vib.addWidget(self.lbl_vibrance)
@@ -609,7 +618,7 @@ class DeveloperTab(QWidget):
         row_view.addWidget(self.combo_layer)
 
         row_view.addSpacing(10)
-        row_view.addWidget(QLabel("Estrellas:"))
+        row_view.addWidget(self._make_resettable_label(QLabel("Estrellas:"), lambda: self.slider_stars.setValue(100), "100%"))
         self.lbl_stars = QLabel("100%")
         self.lbl_stars.setStyleSheet("color: #ffd54f; font-weight: bold;")
         row_view.addWidget(self.lbl_stars)
@@ -628,7 +637,7 @@ class DeveloperTab(QWidget):
         col_clarity = QVBoxLayout()
         col_clarity.setSpacing(4)
         row_cl_lbl = QHBoxLayout()
-        row_cl_lbl.addWidget(QLabel("Claridad Fondo:"))
+        row_cl_lbl.addWidget(self._make_resettable_label(QLabel("Claridad Fondo:"), lambda: self.slider_clarity.setValue(0), "0.00"))
         self.lbl_clarity = QLabel("0.00")
         self.lbl_clarity.setStyleSheet("color: #80d8ff; font-weight: bold;")
         row_cl_lbl.addWidget(self.lbl_clarity)
@@ -643,7 +652,7 @@ class DeveloperTab(QWidget):
         col_dehaze = QVBoxLayout()
         col_dehaze.setSpacing(4)
         row_dh_lbl = QHBoxLayout()
-        row_dh_lbl.addWidget(QLabel("Borrar Neblina:"))
+        row_dh_lbl.addWidget(self._make_resettable_label(QLabel("Borrar Neblina:"), lambda: self.slider_dehaze.setValue(0), "0.00"))
         self.lbl_dehaze = QLabel("0.00")
         self.lbl_dehaze.setStyleSheet("color: #80d8ff; font-weight: bold;")
         row_dh_lbl.addWidget(self.lbl_dehaze)
@@ -663,7 +672,7 @@ class DeveloperTab(QWidget):
         col_ond = QVBoxLayout()
         col_ond.setSpacing(4)
         row_ond_lbl = QHBoxLayout()
-        row_ond_lbl.addWidget(QLabel("Estructura (Ondículas):"))
+        row_ond_lbl.addWidget(self._make_resettable_label(QLabel("Estructura (Ondículas):"), lambda: self.slider_ond_est.setValue(0), "0.00"))
         self.lbl_ond_est = QLabel("0.00")
         self.lbl_ond_est.setStyleSheet("color: #b388ff; font-weight: bold;")
         row_ond_lbl.addWidget(self.lbl_ond_est)
@@ -678,7 +687,7 @@ class DeveloperTab(QWidget):
         col_ond_bg = QVBoxLayout()
         col_ond_bg.setSpacing(4)
         row_ondbg_lbl = QHBoxLayout()
-        row_ondbg_lbl.addWidget(QLabel("Atenuar Fondo:"))
+        row_ondbg_lbl.addWidget(self._make_resettable_label(QLabel("Atenuar Fondo:"), lambda: self.slider_ond_bg.setValue(0), "0%"))
         self.lbl_ond_bg = QLabel("0%")
         self.lbl_ond_bg.setStyleSheet("color: #b388ff; font-weight: bold;")
         row_ondbg_lbl.addWidget(self.lbl_ond_bg)
@@ -698,7 +707,7 @@ class DeveloperTab(QWidget):
         col_cs = QVBoxLayout()
         col_cs.setSpacing(4)
         row_cs_lbl = QHBoxLayout()
-        row_cs_lbl.addWidget(QLabel("Contraste Fondo:"))
+        row_cs_lbl.addWidget(self._make_resettable_label(QLabel("Contraste Fondo:"), lambda: self.slider_contrast_starless.setValue(0), "0.00"))
         self.lbl_contrast_starless = QLabel("0.00")
         self.lbl_contrast_starless.setStyleSheet("color: #a5d6a7; font-weight: bold;")
         row_cs_lbl.addWidget(self.lbl_contrast_starless)
@@ -713,7 +722,7 @@ class DeveloperTab(QWidget):
         col_dn = QVBoxLayout()
         col_dn.setSpacing(4)
         row_dn_lbl = QHBoxLayout()
-        row_dn_lbl.addWidget(QLabel("Reducción Ruido:"))
+        row_dn_lbl.addWidget(self._make_resettable_label(QLabel("Reducción Ruido:"), lambda: self.slider_denoise.setValue(0), "0%"))
         self.lbl_denoise = QLabel("0%")
         self.lbl_denoise.setStyleSheet("color: #a5d6a7; font-weight: bold;")
         row_dn_lbl.addWidget(self.lbl_denoise)
@@ -750,7 +759,7 @@ class DeveloperTab(QWidget):
         gnd_tone_layout.addLayout(row_mask_status)
 
         row_gnd_ev = QHBoxLayout()
-        row_gnd_ev.addWidget(QLabel("Exposición Suelo:"))
+        row_gnd_ev.addWidget(self._make_resettable_label(QLabel("Exposición Suelo:"), lambda: self.slider_gnd_ev.setValue(0), "0.00 EV"))
         self.lbl_gnd_ev = QLabel("0.00 EV")
         self.lbl_gnd_ev.setStyleSheet("color: #ffd54f; font-weight: bold;")
         row_gnd_ev.addWidget(self.lbl_gnd_ev)
@@ -769,7 +778,7 @@ class DeveloperTab(QWidget):
         col_sh = QVBoxLayout()
         col_sh.setSpacing(4)
         row_sh_lbl = QHBoxLayout()
-        row_sh_lbl.addWidget(QLabel("Sombras:"))
+        row_sh_lbl.addWidget(self._make_resettable_label(QLabel("Sombras:"), lambda: self.slider_gnd_sh.setValue(0), "0%"))
         self.lbl_gnd_sh = QLabel("0%")
         self.lbl_gnd_sh.setStyleSheet("color: #80d8ff; font-weight: bold;")
         row_sh_lbl.addWidget(self.lbl_gnd_sh)
@@ -784,7 +793,7 @@ class DeveloperTab(QWidget):
         col_bp = QVBoxLayout()
         col_bp.setSpacing(4)
         row_bp_lbl = QHBoxLayout()
-        row_bp_lbl.addWidget(QLabel("Punto Negro:"))
+        row_bp_lbl.addWidget(self._make_resettable_label(QLabel("Punto Negro:"), lambda: self.slider_gnd_bp.setValue(0), "0.000"))
         self.lbl_gnd_bp = QLabel("0.000")
         self.lbl_gnd_bp.setStyleSheet("color: #80d8ff; font-weight: bold;")
         row_bp_lbl.addWidget(self.lbl_gnd_bp)
@@ -886,6 +895,7 @@ class DeveloperTab(QWidget):
         self.canvas.crop_applied.connect(self._apply_crop)
         self.canvas.color_sampled.connect(self._on_eyedropper_color_sampled)
         self.canvas.brush_size_changed.connect(self._on_brush_size_changed)
+        self.canvas.layer_brush_stroke_started.connect(lambda: self.mask_layers_widget.set_preview_active(True))
         self.canvas.layer_brush_stroke_finished.connect(self._on_layer_brush_stroke_finished)
         self.canvas.layer_brush_radius_changed.connect(self.mask_layers_widget.set_brush_radius_from_canvas)
 
@@ -1169,7 +1179,7 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep1)
 
         # 4. Nivelación de Horizonte / Ángulo de rotación
-        lbl_ang = QLabel("📐 Ángulo:")
+        lbl_ang = self._make_resettable_label(QLabel("📐 Ángulo:"), lambda: self.slider_crop_angle.setValue(0), "0.0°")
         lbl_ang.setStyleSheet("color: #c0caf5; font-size: 11px;")
         tb_layout.addWidget(lbl_ang)
         self.slider_crop_angle = QSlider(Qt.Horizontal)
@@ -1514,7 +1524,7 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep1)
 
         # 3. Radio del pincel
-        lbl_r = QLabel("Pincel:")
+        lbl_r = self._make_resettable_label(QLabel("Pincel:"), lambda: self.slider_mask_brush.setValue(20), "20 px")
         lbl_r.setStyleSheet("color: #c0caf5; font-size: 11px;")
         tb_layout.addWidget(lbl_r)
 
@@ -1816,6 +1826,7 @@ class DeveloperTab(QWidget):
             self.canvas.set_refined_mask(mask_array, mode="ruby")
             self.canvas.set_mask_visible(True)
         else:
+            self.canvas.set_mask_visible(False)
             if self.current_mask is not None:
                 self.canvas.set_refined_mask(self.current_mask, mode="bicolor")
             else:

@@ -61,6 +61,20 @@ class MaskLayersWidget(QWidget):
         self._stars_getter = stars_getter
         self._starless_getter = starless_getter
 
+    @staticmethod
+    def _make_resettable_label(lbl: QLabel, reset_action, default_desc: str = "") -> QLabel:
+        """Asigna comportamiento de doble clic para restablecer el control asociado."""
+        lbl.setCursor(Qt.PointingHandCursor)
+        tt = f"Doble clic para restablecer a {default_desc}" if default_desc else "Doble clic para restablecer"
+        lbl.setToolTip(tt)
+        lbl.mouseDoubleClickEvent = lambda e: reset_action()
+        return lbl
+
+    def set_preview_active(self, active: bool) -> None:
+        """Sincroniza el botón de previsualización sin entrar en bucles de emisión redundantes."""
+        if hasattr(self, 'btn_preview_mask') and self.btn_preview_mask.isChecked() != active:
+            self.btn_preview_mask.setChecked(active)
+
     def _setup_ui(self) -> None:
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -193,7 +207,7 @@ class MaskLayersWidget(QWidget):
 
         # Fila C: Opacidad de la capa
         row_op = QHBoxLayout()
-        row_op.addWidget(QLabel("Opacidad:"))
+        row_op.addWidget(self._make_resettable_label(QLabel("Opacidad:"), lambda: self.slider_opacity.setValue(100), "100%"))
         self.lbl_opacity = QLabel("100%")
         self.lbl_opacity.setStyleSheet("color: #80d8ff; font-weight: bold;")
         row_op.addWidget(self.lbl_opacity)
@@ -218,7 +232,7 @@ class MaskLayersWidget(QWidget):
 
         # Fila Radio / Tamaño
         row_b_radius = QHBoxLayout()
-        row_b_radius.addWidget(QLabel("Radio (Tamaño):"))
+        row_b_radius.addWidget(self._make_resettable_label(QLabel("Radio (Tamaño):"), lambda: self.slider_b_radius.setValue(35), "35 px"))
         self.lbl_b_radius = QLabel("35 px")
         self.lbl_b_radius.setStyleSheet("color: #80d8ff; font-weight: bold;")
         row_b_radius.addWidget(self.lbl_b_radius)
@@ -231,7 +245,7 @@ class MaskLayersWidget(QWidget):
 
         # Fila Dureza (Hardness / Feather)
         row_b_hard = QHBoxLayout()
-        row_b_hard.addWidget(QLabel("Dureza:"))
+        row_b_hard.addWidget(self._make_resettable_label(QLabel("Dureza:"), lambda: self.slider_b_hardness.setValue(50), "50%"))
         self.lbl_b_hardness = QLabel("50%")
         self.lbl_b_hardness.setStyleSheet("color: #ffd54f; font-weight: bold;")
         row_b_hard.addWidget(self.lbl_b_hardness)
@@ -244,7 +258,7 @@ class MaskLayersWidget(QWidget):
 
         # Fila Flujo / Opacidad por trazo
         row_b_flow = QHBoxLayout()
-        row_b_flow.addWidget(QLabel("Flujo / Opacidad:"))
+        row_b_flow.addWidget(self._make_resettable_label(QLabel("Flujo / Opacidad:"), lambda: self.slider_b_flow.setValue(80), "80%"))
         self.lbl_b_flow = QLabel("80%")
         self.lbl_b_flow.setStyleSheet("color: #a5d6a7; font-weight: bold;")
         row_b_flow.addWidget(self.lbl_b_flow)
@@ -336,7 +350,7 @@ class MaskLayersWidget(QWidget):
         color_layout.setSpacing(6)
 
         row_hue = QHBoxLayout()
-        row_hue.addWidget(QLabel("Matiz (Hue):"))
+        row_hue.addWidget(self._make_resettable_label(QLabel("Matiz (Hue):"), lambda: self.slider_hue.setValue(0), "0°"))
         self.lbl_hue_val = QLabel("0°")
         self.lbl_hue_val.setStyleSheet("color: #ffd54f; font-weight: bold;")
         row_hue.addWidget(self.lbl_hue_val)
@@ -445,7 +459,7 @@ class MaskLayersWidget(QWidget):
 
         # Exposición (EV)
         row_adj_ev = QHBoxLayout()
-        row_adj_ev.addWidget(QLabel("Exposición:"))
+        row_adj_ev.addWidget(self._make_resettable_label(QLabel("Exposición:"), lambda: self.slider_adj_ev.setValue(0), "0.00 EV"))
         self.lbl_adj_ev = QLabel("0.00 EV")
         self.lbl_adj_ev.setStyleSheet("color: #ffd54f; font-weight: bold;")
         row_adj_ev.addWidget(self.lbl_adj_ev)
@@ -463,7 +477,7 @@ class MaskLayersWidget(QWidget):
         col_c = QVBoxLayout()
         col_c.setSpacing(2)
         row_c_lbl = QHBoxLayout()
-        row_c_lbl.addWidget(QLabel("Contraste:"))
+        row_c_lbl.addWidget(self._make_resettable_label(QLabel("Contraste:"), lambda: self.slider_adj_contrast.setValue(0), "0.00"))
         self.lbl_adj_contrast = QLabel("0.00")
         self.lbl_adj_contrast.setStyleSheet("color: #80d8ff; font-weight: bold;")
         row_c_lbl.addWidget(self.lbl_adj_contrast)
@@ -478,7 +492,7 @@ class MaskLayersWidget(QWidget):
         col_sh = QVBoxLayout()
         col_sh.setSpacing(2)
         row_sh_lbl = QHBoxLayout()
-        row_sh_lbl.addWidget(QLabel("Sombras:"))
+        row_sh_lbl.addWidget(self._make_resettable_label(QLabel("Sombras:"), lambda: self.slider_adj_shadows.setValue(0), "0.00"))
         self.lbl_adj_shadows = QLabel("0.00")
         self.lbl_adj_shadows.setStyleSheet("color: #80d8ff; font-weight: bold;")
         row_sh_lbl.addWidget(self.lbl_adj_shadows)
@@ -499,7 +513,7 @@ class MaskLayersWidget(QWidget):
         col_hl = QVBoxLayout()
         col_hl.setSpacing(2)
         row_hl_lbl = QHBoxLayout()
-        row_hl_lbl.addWidget(QLabel("Luces:"))
+        row_hl_lbl.addWidget(self._make_resettable_label(QLabel("Luces:"), lambda: self.slider_adj_highlights.setValue(0), "0.00"))
         self.lbl_adj_highlights = QLabel("0.00")
         self.lbl_adj_highlights.setStyleSheet("color: #ffd54f; font-weight: bold;")
         row_hl_lbl.addWidget(self.lbl_adj_highlights)
@@ -514,7 +528,7 @@ class MaskLayersWidget(QWidget):
         col_sat = QVBoxLayout()
         col_sat.setSpacing(2)
         row_sat_lbl = QHBoxLayout()
-        row_sat_lbl.addWidget(QLabel("Saturación:"))
+        row_sat_lbl.addWidget(self._make_resettable_label(QLabel("Saturación:"), lambda: self.slider_adj_sat.setValue(100), "1.00x"))
         self.lbl_adj_sat = QLabel("1.00x")
         self.lbl_adj_sat.setStyleSheet("color: #a5d6a7; font-weight: bold;")
         row_sat_lbl.addWidget(self.lbl_adj_sat)
@@ -624,6 +638,8 @@ class MaskLayersWidget(QWidget):
         layer = MaskLayer(name=name, mask_type=mask_type)
         self.layers.append(layer)
         self._rebuild_list_items(select_layer_id=layer.id)
+        if mask_type == MASK_TYPE_BRUSH:
+            self.set_preview_active(True)
         self.layers_changed.emit()
         return layer
 
