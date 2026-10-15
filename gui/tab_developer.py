@@ -27,10 +27,11 @@ from PySide6.QtWidgets import (
     QScrollArea, 
     QFrame,
     QButtonGroup,
-    QSizePolicy
+    QSizePolicy,
+    QMenu
 )
 from PySide6.QtCore import Qt, QCoreApplication, QTimer
-from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap, QColor, QFont
+from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap, QColor, QFont, QCursor
 from core.stacking import load_image_as_float32
 from core.stretch import (
     calculate_mtf_params, 
@@ -1826,6 +1827,31 @@ class DeveloperTab(QWidget):
         self.btn_generate_mask.clicked.connect(self._compute_mask_from_scribbles)
         tb_layout.addWidget(self.btn_generate_mask)
 
+        # 5b. Cargar Máscara (del Apilado o desde Archivo)
+        self.btn_load_mask = QPushButton("📂 Cargar Máscara...")
+        self.btn_load_mask.setCursor(Qt.PointingHandCursor)
+        self.btn_load_mask.setStyleSheet("""
+            QPushButton {
+                background-color: #1a2736;
+                color: #80d8ff;
+                font-weight: bold;
+                border: 1px solid #0288d1;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #0288d1;
+                color: #ffffff;
+            }
+            QPushButton:pressed {
+                background-color: #01579b;
+            }
+        """)
+        self.btn_load_mask.setToolTip("Carga una máscara generada previamente durante el apilado o desde un archivo (.png, .tif, .fits)")
+        self.btn_load_mask.clicked.connect(self._load_mask_from_toolbar)
+        tb_layout.addWidget(self.btn_load_mask)
+
         # 6. Ver / Ocultar Máscara Overlay
         self.btn_mask_overlay_toggle = QPushButton("👁️ Ver Máscara")
         self.btn_mask_overlay_toggle.setCheckable(True)
@@ -2019,6 +2045,106 @@ class DeveloperTab(QWidget):
         self._update_mask_status_ui()
         self._record_mask_action(old_m, None, "Eliminar Máscara")
         self.log_message("[MÁSCARA] Máscara de suelo eliminada.")
+
+    def _load_mask_from_toolbar(self) -> None:
+        """Permite cargar una máscara de cielo/suelo previamente generada en el apilado o desde archivo."""
+        if self.image_32bit is None:
+            QMessageBox.warning(self, "Aviso", "Abre primero una toma en el revelador.")
+            return
+
+        # Comprobar si existe una máscara activa en el Apilador (Stacker) o Startrails
+        stacker_mask = None
+        win = self.window()
+        if win is not None:
+            if hasattr(win, "tab_stacker") and getattr(win.tab_stacker, "computed_mask", None) is not None:
+                stacker_mask = win.tab_stacker.computed_mask
+            elif hasattr(win, "tab_startrails") and getattr(win.tab_startrails, "current_mask", None) is not None:
+                stacker_mask = win.tab_startrails.current_mask
+
+        if stacker_mask is not None:
+            menu = QMenu(self)
+            menu.setStyleSheet("""
+                QMenu {
+                    background-color: #1a1e2d;
+                    color: #e0e0e0;
+                    border: 1px solid #33384c;
+                    padding: 4px;
+                }
+                QMenu::item {
+                    padding: 6px 20px 6px 10px;
+                    border-radius: 4px;
+                }
+                QMenu::item:selected {
+                    background-color: #0288d1;
+                    color: #ffffff;
+                }
+            """)
+            act_stacker = menu.addAction("📥 Usar Máscara generada en el Apilado")
+            act_file = menu.addAction("📁 Cargar Archivo de Máscara (.png, .tif, .fits)...")
+
+            pos = self.btn_load_mask.mapToGlobal(self.btn_load_mask.rect().bottomLeft())
+            selected = menu.exec(pos)
+            if selected == act_stacker:
+                self._apply_loaded_mask(stacker_mask, source_desc="Apilador (Stacker)")
+            elif selected == act_file:
+                self._load_mask_from_file()
+        else:
+            self._load_mask_from_file()
+
+    def _load_mask_from_file(self) -> None:
+        """Abre un selector de archivo para cargar una máscara desde disco."""
+        cfg = load_config()
+        default_dir = cfg.get("masks_dir", os.getcwd())
+        filtros = "Imágenes de Máscara (*.png *.tif *.tiff *.fits *.fit);;Todos los archivos (*.*)"
+        filepath, _ = QFileDialog.getOpenFileName(self, "Cargar Máscara de Suelo / Cielo", default_dir, filtros)
+        if not filepath:
+            return
+
+        try:
+            raw = cv2.imread(filepath, cv2.IMREAD_UNCHANGED)
+            if raw is None:
+                raw = load_image_as_float32(filepath)
+                if raw is not None and raw.ndim == 3:
+                    raw = raw[..., 0]
+
+            if raw is None:
+                QMessageBox.warning(self, "Error", f"No se pudo decodificar el archivo de máscara:\n{filepath}")
+                return
+
+            if raw.ndim == 3:
+                raw = raw[..., 0]
+
+            max_v = 65535.0 if raw.dtype == np.uint16 else (1.0 if raw.dtype in (np.float32, np.float64) and np.max(raw) <= 1.0 else 255.0)
+            mask_float = np.clip(raw.astype(np.float32) / max_v, 0.0, 1.0)
+            self._apply_loaded_mask(mask_float, source_desc=os.path.basename(filepath))
+        except Exception as e:
+            QMessageBox.critical(self, "Error al cargar máscara", f"Fallo al procesar la máscara:\n{e}")
+
+    def _apply_loaded_mask(self, mask: np.ndarray, source_desc: str = "") -> None:
+        """Adapta y aplica una máscara cargada a la imagen actual en el Revelador."""
+        if self.image_32bit is None or mask is None:
+            return
+
+        h, w = self.image_32bit.shape[:2]
+        if mask.shape[:2] != (h, w):
+            self.log_message(f"[MÁSCARA] Redimensionando máscara ({mask.shape[1]}x{mask.shape[0]}) a resolución de lienzo ({w}x{h})...")
+            mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR)
+
+        old_m = self.current_mask.copy() if self.current_mask is not None else None
+        self.current_mask = np.ascontiguousarray(np.clip(mask, 0.0, 1.0), dtype=np.float32)
+        self.canvas.set_refined_mask(self.current_mask)
+        self.canvas.set_mask_visible(True)
+        if hasattr(self, 'btn_mask_overlay_toggle'):
+            self.btn_mask_overlay_toggle.blockSignals(True)
+            self.btn_mask_overlay_toggle.setChecked(True)
+            self.btn_mask_overlay_toggle.blockSignals(False)
+
+        self._generate_preview_proxy()
+        self.update_stretch_preview()
+        self._update_mask_status_ui()
+        self._record_mask_action(old_m, self.current_mask, f"Cargar Máscara ({source_desc})")
+        self.log_message(f"✓ [MÁSCARA] Máscara cargada y aplicada con éxito desde: {source_desc}.")
+
 
     def _update_mask_status_ui(self) -> None:
         """Actualiza el indicador visual de presencia de máscara en la Sección 8 y botones."""
@@ -2876,6 +3002,9 @@ class DeveloperTab(QWidget):
 
         self._set_ai_processing_state(True)
         self.log_message("=== INICIANDO SEPARACIÓN STARNET++ AI ===")
+        if hasattr(self, 'sec_masks'):
+            self.sec_masks.expand()
+
         stride = self.spin_stride.value()
 
         self.sn_worker = StarNetWorker(
@@ -2917,6 +3046,12 @@ class DeveloperTab(QWidget):
         self._generate_preview_proxy()
         self.update_stretch_preview()
         self.log_message("[STARNET] Estrellas separadas y purgadas con máscara de cielo. Capas activadas.")
+
+        # Desplegar automáticamente la sección de capas para acceso inmediato
+        if hasattr(self, 'sec_masks'):
+            self.sec_masks.expand()
+            if hasattr(self, 'left_scroll_area'):
+                self.left_scroll_area.ensureWidgetVisible(self.sec_masks)
 
     def on_starnet_error(self, err_msg: str):
         self._set_ai_processing_state(False)
@@ -3700,7 +3835,6 @@ class DeveloperTab(QWidget):
         if hasattr(self, "sec_starnet"):
             if enabled:
                 self.sec_starnet.set_status_badge("● Separadas", "#00e5ff")
-                self.sec_starnet.expand()
             else:
                 self.sec_starnet.set_status_badge("")
 
