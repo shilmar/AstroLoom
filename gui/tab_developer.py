@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QButtonGroup
 )
 from PySide6.QtCore import Qt, QCoreApplication, QTimer
-from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap
+from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap, QColor, QFont
 from core.stacking import load_image_as_float32
 from core.stretch import (
     calculate_mtf_params, 
@@ -52,8 +52,14 @@ from gui.canvas import MaskCanvas
 from gui.worker import GraXpertWorker, StarNetWorker
 from core.icc_manager import save_tiff_with_icc
 from core.config_manager import load_config
+from core.developer_presets import (
+    DeveloperPreset, get_builtin_presets, load_user_presets,
+    save_user_preset, delete_user_preset, filter_preset_params,
+    SCOPE_ALL, SCOPE_TONE, SCOPE_COLOR, SCOPE_DETAILS
+)
+from gui.dialog_presets import SavePresetDialog, PresetManagerDialog
 from gui.theme import (
-    STYLE_RUN_IDLE, BG_PANEL, BORDER_BASE, TEXT_PRIMARY,
+    STYLE_RUN_IDLE, STYLE_TRANSFER_BTN, BG_PANEL, BORDER_BASE, TEXT_PRIMARY,
     TEXT_SECONDARY, TEXT_MUTED, TEXT_CYAN, ACCENT_CYAN
 )
 
@@ -124,6 +130,7 @@ class DeveloperTab(QWidget):
         self._setup_ui()
         self._apply_styles()
         self._connect_undo_triggers()
+        self._populate_presets_combo()
         
     def _setup_ui(self):
         layout = QHBoxLayout(self)
@@ -149,6 +156,62 @@ class DeveloperTab(QWidget):
         self.btn_open_img.setStyleSheet("font-weight: bold; color: #80d8ff; padding: 7px;")
         self.btn_open_img.clicked.connect(self.open_image_file)
         left_layout.addWidget(self.btn_open_img)
+
+        # --- SECCIÓN 0: Estilos y Ajustes Preestablecidos (Presets) ---
+        grp_presets = QGroupBox("🎨 Estilos y Presets de Revelado")
+        presets_layout = QVBoxLayout(grp_presets)
+        presets_layout.setContentsMargins(10, 14, 10, 10)
+        presets_layout.setSpacing(8)
+
+        # Fila 1: Selector de Preset (ancho completo)
+        self.combo_presets = QComboBox()
+        self.combo_presets.setToolTip("Selecciona un estilo astronómico preestablecido oficial o personalizado")
+        self.combo_presets.currentIndexChanged.connect(self._on_preset_combo_changed)
+        presets_layout.addWidget(self.combo_presets)
+
+        # Fila 2: Descripción corta del preset seleccionado
+        self.lbl_preset_desc = QLabel("")
+        self.lbl_preset_desc.setWordWrap(True)
+        self.lbl_preset_desc.setStyleSheet("color: #90a4ae; font-size: 11px; font-style: italic;")
+        presets_layout.addWidget(self.lbl_preset_desc)
+
+        # Fila 3: Selector de Ámbito (Scope)
+        row_scope = QHBoxLayout()
+        row_scope.setSpacing(6)
+        lbl_scope = QLabel("Modo:")
+        lbl_scope.setStyleSheet("font-size: 11px; color: #80d8ff; font-weight: bold;")
+        row_scope.addWidget(lbl_scope)
+
+        self.combo_preset_scope = QComboBox()
+        self.combo_preset_scope.addItem("Completo (Todos)", SCOPE_ALL)
+        self.combo_preset_scope.addItem("Solo Tono y Curvas", SCOPE_TONE)
+        self.combo_preset_scope.addItem("Solo Color y WB", SCOPE_COLOR)
+        self.combo_preset_scope.addItem("Solo Estrellas y Filtros", SCOPE_DETAILS)
+        self.combo_preset_scope.setToolTip("Elige si aplicar todos los ajustes del preset o solo un subconjunto específico")
+        row_scope.addWidget(self.combo_preset_scope, stretch=1)
+        presets_layout.addLayout(row_scope)
+
+        # Fila 4: Botón Aplicar Preset (Prominente)
+        self.btn_apply_preset = QPushButton("⚡ Aplicar Preset a la Imagen")
+        self.btn_apply_preset.setStyleSheet(STYLE_TRANSFER_BTN)
+        self.btn_apply_preset.setToolTip("Aplica el preset seleccionado a la imagen actual según el modo elegido")
+        self.btn_apply_preset.clicked.connect(self.apply_selected_preset)
+        presets_layout.addWidget(self.btn_apply_preset)
+
+        # Fila 5: Botones Guardar Actual y Administrar
+        row_preset_btns = QHBoxLayout()
+        self.btn_save_preset = QPushButton("💾 Guardar...")
+        self.btn_save_preset.setToolTip("Guarda los ajustes y deslizadores actuales como un nuevo preset")
+        self.btn_save_preset.clicked.connect(self.open_save_preset_dialog)
+        row_preset_btns.addWidget(self.btn_save_preset)
+
+        self.btn_manage_presets = QPushButton("⚙️ Gestor Presets...")
+        self.btn_manage_presets.setToolTip("Abre el administrador para importar, exportar, inspeccionar o eliminar presets")
+        self.btn_manage_presets.clicked.connect(self.open_preset_manager_dialog)
+        row_preset_btns.addWidget(self.btn_manage_presets)
+
+        presets_layout.addLayout(row_preset_btns)
+        left_layout.addWidget(grp_presets)
 
         # --- SECCIÓN 1: Extracción de Fondo y Polución Lumínica (Fusión 3.3) ---
         grp_bg = QGroupBox("1. Fondo y Polución Lumínica")
@@ -2922,3 +2985,131 @@ class DeveloperTab(QWidget):
                 self.btn_redo.setToolTip(f"Rehacer {desc} (Ctrl+Y / Ctrl+Shift+Z) — {len(self.redo_stack)} pasos disponibles")
             else:
                 self.btn_redo.setToolTip("Rehacer (Ctrl+Y) — Sin acciones para rehacer")
+
+    # -------------------------------------------------------------
+    # GESTOR DE PRESETS DE REVELADO (AJUSTES PREESTABLECIDOS)
+    # -------------------------------------------------------------
+    def _populate_presets_combo(self, select_preset_id: Optional[str] = None):
+        """Carga y categoriza los presets en el desplegable con separadores elegantes."""
+        if not hasattr(self, "combo_presets"):
+            return
+        self.combo_presets.blockSignals(True)
+        self.combo_presets.clear()
+
+        builtins = get_builtin_presets()
+        user_presets = load_user_presets()
+
+        # Agrupar por categoría
+        categories_dict: Dict[str, List[DeveloperPreset]] = {}
+        for p in builtins:
+            categories_dict.setdefault(p.category, []).append(p)
+        for p in user_presets:
+            categories_dict.setdefault(p.category, []).append(p)
+
+        cat_order = ["Básicos", "Vía Láctea", "Paisaje Nocturno", "Cielo Profundo", "Corrección", "Estrellas", "Usuario"]
+        sorted_cats = [c for c in cat_order if c in categories_dict] + [c for c in categories_dict if c not in cat_order]
+
+        model = self.combo_presets.model()
+        target_index = -1
+
+        for cat in sorted_cats:
+            # Cabecera de categoría visual no seleccionable
+            self.combo_presets.addItem(f"── {cat.upper()} ──", None)
+            hdr_idx = self.combo_presets.count() - 1
+            if model:
+                hdr_item = model.item(hdr_idx)
+                if hdr_item:
+                    hdr_item.setEnabled(False)
+                    hdr_item.setForeground(QColor("#80d8ff"))
+                    font = hdr_item.font()
+                    font.setBold(True)
+                    hdr_item.setFont(font)
+
+            for p in categories_dict[cat]:
+                self.combo_presets.addItem(f"  {p.name}", p)
+                if select_preset_id and p.id == select_preset_id:
+                    target_index = self.combo_presets.count() - 1
+
+        self.combo_presets.blockSignals(False)
+
+        if target_index >= 0:
+            self.combo_presets.setCurrentIndex(target_index)
+        else:
+            # Seleccionar el primer preset seleccionable real (saltando la primera cabecera)
+            for i in range(self.combo_presets.count()):
+                if self.combo_presets.itemData(i, Qt.UserRole) is not None:
+                    self.combo_presets.setCurrentIndex(i)
+                    break
+
+        self._on_preset_combo_changed(self.combo_presets.currentIndex())
+
+    def _on_preset_combo_changed(self, index: int):
+        """Actualiza la descripción al cambiar de preset en el desplegable."""
+        preset = self.combo_presets.itemData(index, Qt.UserRole)
+        if isinstance(preset, DeveloperPreset):
+            self.lbl_preset_desc.setText(preset.description or "")
+            self.btn_apply_preset.setEnabled(True)
+        else:
+            self.lbl_preset_desc.setText("")
+            self.btn_apply_preset.setEnabled(False)
+
+    def apply_selected_preset(self):
+        """Aplica el preset actualmente seleccionado en el desplegable."""
+        preset = self.combo_presets.currentData(Qt.UserRole)
+        if not isinstance(preset, DeveloperPreset):
+            return
+        scope = self.combo_preset_scope.currentData() or SCOPE_ALL
+        self.apply_preset(preset, scope)
+
+    def apply_preset(self, preset: DeveloperPreset, scope: str = SCOPE_ALL):
+        """Aplica los parámetros de un preset a la imagen actual registrando la acción en el historial de Deshacer."""
+        if not preset or not preset.params:
+            return
+
+        # 1. Registrar el estado previo para poder deshacer con Ctrl+Z
+        current_state = self._capture_state()
+        base_state = self._last_committed_state if self._last_committed_state is not None else current_state
+        self.undo_stack.append(base_state)
+        if len(self.undo_stack) > self.MAX_UNDO_STEPS:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+
+        # 2. Filtrar y fusionar parámetros según el ámbito elegido
+        target_state = filter_preset_params(preset.params, current_state, scope)
+
+        # 3. Restaurar parámetros en todos los controles
+        self._restore_state(target_state)
+        self._last_committed_state = self._capture_state()
+        self._update_undo_redo_buttons()
+
+        # 4. Mensaje explicativo en el log
+        scope_names = {
+            SCOPE_ALL: "Completo",
+            SCOPE_TONE: "Solo Tono",
+            SCOPE_COLOR: "Solo Color",
+            SCOPE_DETAILS: "Solo Estrellas/Detalles"
+        }
+        scope_str = scope_names.get(scope, scope)
+        self.log_message(f"🎨 Preset aplicado: '{preset.name}' [{scope_str}]")
+
+    def open_save_preset_dialog(self):
+        """Abre el diálogo para guardar los ajustes actuales como un preset."""
+        current_params = self._capture_state()
+        builtins = get_builtin_presets()
+        users = load_user_presets()
+        categories = list(set(p.category for p in builtins + users))
+
+        dlg = SavePresetDialog(current_params, categories, self)
+        if dlg.exec() == QDialog.Accepted and dlg.created_preset:
+            self._populate_presets_combo(select_preset_id=dlg.created_preset.id)
+            self.log_message(f"💾 Nuevo preset guardado con éxito: '{dlg.created_preset.name}' ({dlg.created_preset.category})")
+
+    def open_preset_manager_dialog(self):
+        """Abre el diálogo de gestión, importación y exportación de presets."""
+        current_params = self._capture_state()
+        dlg = PresetManagerDialog(current_params, self)
+        dlg.apply_preset_requested.connect(self.apply_preset)
+        dlg.exec()
+        curr_preset = self.combo_presets.currentData(Qt.UserRole)
+        curr_id = curr_preset.id if isinstance(curr_preset, DeveloperPreset) else None
+        self._populate_presets_combo(select_preset_id=curr_id)

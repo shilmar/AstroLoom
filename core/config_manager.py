@@ -11,6 +11,7 @@ DEFAULT_SUBDIRS = {
     "masks_dir": os.path.join("sesiones", "mascaras"),
     "stacked_dir": "imagenes",
     "export_dir": "exportaciones",
+    "presets_dir": "presets",
 }
 
 DEFAULT_CONFIG = {
@@ -19,6 +20,7 @@ DEFAULT_CONFIG = {
     "masks_dir": os.path.join(APP_ROOT, DEFAULT_SUBDIRS["masks_dir"]),
     "stacked_dir": os.path.join(APP_ROOT, DEFAULT_SUBDIRS["stacked_dir"]),
     "export_dir": os.path.join(APP_ROOT, DEFAULT_SUBDIRS["export_dir"]),
+    "presets_dir": os.path.join(APP_ROOT, DEFAULT_SUBDIRS["presets_dir"]),
 
     # Parámetros del motor de apilado y hardware
     "kappa": 2.2,
@@ -103,7 +105,7 @@ def ensure_workspace_directories(config: dict) -> bool:
     Devuelve True si alguna ruta tuvo que ser corregida/sanitizada.
     """
     modified = False
-    for key in ["sessions_dir", "masks_dir", "stacked_dir", "export_dir"]:
+    for key in ["sessions_dir", "masks_dir", "stacked_dir", "export_dir", "presets_dir"]:
         raw_val = config.get(key)
         resolved = _validate_and_resolve_dir(raw_val, key)
         if raw_val != resolved:

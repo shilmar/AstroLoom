@@ -28,7 +28,30 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 * **Barra de Estado Interactiva y Monitor de Hardware en Tiempo Real:**
   - Indicador permanente del motor y versión activa (`⚡ AstroLoom Engine v0.8.1`).
   - Monitor dinámico de memoria RAM del sistema con lectura porcentual y en gigabytes (`🧠 RAM: XX% (XX.X / XX.X GB)`) actualizado cada 2.5 segundos mediante `psutil`.
-  - Alerta cromática automática en rojo carmesí cuando la memoria disponible supera el 85% de saturación para prevenir cuelgues por Out-Of-Memory en apilados o mosaicos gigantescos.
+* **Gestor de Presets y Estilos de Revelado Astronómico (Developer Presets Manager):**
+  - **Subsistema Paramétrico Centralizado ([`core/developer_presets.py`](file:///D:/software/AstroLoom/core/developer_presets.py)):**
+    - Modelo de datos serializable en JSON con soporte de metadatos (nombre, autor, categoría, fecha, descripción y 21 parámetros de procesado).
+    - Colección de 8 presets de fábrica (*Built-in*) calibrados para astrofotografía:
+      1. `⭐ Neutro / Restablecer`: Retorno a valores base iniciales.
+      2. `🌌 Vía Láctea - Alto Contraste & Polvo Oscuro`: Realce de bandas de absorción y centro galáctico.
+      3. `🌠 Vía Láctea - Fiel y Natural`: Transición equilibrada con preservación estelar suave.
+      4. `🏕️ Paisaje Nocturno - Suelo Iluminado`: Realce de sombras terrestres (+1.2 EV) preservando el cielo.
+      5. `🔭 Cielo Profundo - Nebulosas (Deep Sky Pop)`: Optimizado para nebulosas H-Alpha y espacio profundo con reducción estelar.
+      6. `🏙️ Reducción de Polución Lumínica Periurbana`: Atenuación de cúpula de luz (38%) y balance frío.
+      7. `✨ Reducción Drástica de Estrellas (Star Minimizer)`: Contracción estelar al 35% para despejar nebulosidades.
+      8. `🌫️ Starless Puro (Solo Nebulosa / Sin Estrellas)`: Modo estrella oculta con realce de texturas de gas.
+  - **Aplicación Granular / Selectiva por Ámbitos:**
+    - Modo `Completo (Todos)`: Aplica todos los parámetros tonales, de color y StarNet.
+    - Modo `Solo Tono y Curvas`: Aplica MTF, punto negro, contraste y suelo (mantiene el balance de blancos existente).
+    - Modo `Solo Color y WB`: Aplica temperatura, tinte, saturación y vibración (mantiene el estirado existente).
+    - Modo `Solo Estrellas y Filtros`: Aplica reducción de estrellas, claridad, dehaze, ondículas y denoise.
+  - **Integración No Destructiva con Deshacer / Rehacer:**
+    - La aplicación de cualquier preset queda registrada en la pila de `Ctrl+Z`, permitiendo revertir al estado previo de un solo clic.
+  - **Diálogos de Gestión e Interfaz ([`gui/dialog_presets.py`](file:///D:/software/AstroLoom/gui/dialog_presets.py)):**
+    - Panel integrado en la cabecera del Revelador con selector rápido categorizado y descripciones contextuales.
+    - Diálogo `SavePresetDialog`: Permite guardar los ajustes actuales con nombre, autor, categoría y notas.
+    - Diálogo `PresetManagerDialog`: Administrador completo con tabla de presets, búsqueda interactiva, filtrado por categorías, importación externa (`.json`), exportación para compartir y borrado de presets de usuario.
+    - Integración de la ruta de presets (`presets/developer/`) en [`core/config_manager.py`](file:///D:/software/AstroLoom/core/config_manager.py) y en la pestaña de Configuración.
 
 
 ### Añadido

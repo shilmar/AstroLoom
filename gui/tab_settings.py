@@ -164,6 +164,19 @@ class SettingsTab(QWidget):
         row_exp.addWidget(btn_browse_exp)
         dirs_layout.addLayout(row_exp)
 
+        # Presets y Estilos
+        lbl_presets = QLabel("🎨 Carpeta de Presets de Revelado (.json):")
+        dirs_layout.addWidget(lbl_presets)
+        row_presets = QHBoxLayout()
+        row_presets.setSpacing(8)
+        self.txt_presets = QLineEdit(self.cfg.get("presets_dir", ""))
+        self.txt_presets.setReadOnly(True)
+        row_presets.addWidget(self.txt_presets)
+        btn_browse_presets = QPushButton("Examinar...")
+        btn_browse_presets.clicked.connect(lambda: self._browse_directory(self.txt_presets, "Seleccionar Carpeta de Presets"))
+        row_presets.addWidget(btn_browse_presets)
+        dirs_layout.addLayout(row_presets)
+
         left_layout.addWidget(grp_dirs)
 
         # -------------------------------------------------------------
@@ -512,6 +525,7 @@ class SettingsTab(QWidget):
         self.cfg["sessions_dir"] = self.txt_sessions.text().strip()
         self.cfg["stacked_dir"] = self.txt_stacked.text().strip()
         self.cfg["export_dir"] = self.txt_export.text().strip()
+        self.cfg["presets_dir"] = self.txt_presets.text().strip()
         self.cfg["masks_dir"] = os.path.join(self.cfg["sessions_dir"], "mascaras")
 
         self.cfg["starnet_exe"] = self.txt_starnet.text().strip()
