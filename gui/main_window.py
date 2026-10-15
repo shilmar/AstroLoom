@@ -5,8 +5,9 @@ Coordina las pestañas principales (Apilador, Revelador, Eclipses, Startrails, P
 """
 from typing import Optional
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QMainWindow, QTabWidget, QStatusBar, QLabel, QWidget, QHBoxLayout
+from PySide6.QtWidgets import QMainWindow, QTabWidget, QStatusBar, QLabel, QWidget, QHBoxLayout, QComboBox
 
+from core.i18n import tr, get_i18n
 from gui.theme import apply_theme, STYLE_STATUS_PILL
 from gui.tab_stacker import StackerTab
 from gui.tab_developer import DeveloperTab
@@ -34,6 +35,10 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._setup_status_bar()
 
+        # Conectar cambio reactivo de idioma global
+        get_i18n().language_changed.connect(lambda _: self._retranslate_ui())
+        self._retranslate_ui()
+
     def _setup_status_bar(self) -> None:
         """Configura la barra de estado moderna con monitor de memoria RAM y motor de procesado."""
         status_bar = self.statusBar()
@@ -55,11 +60,76 @@ class MainWindow(QMainWindow):
         )
         status_bar.addPermanentWidget(self.lbl_ram_monitor)
 
+        # Selector de Idioma en tiempo real
+        self.combo_lang_bar = QComboBox()
+        self.combo_lang_bar.setStyleSheet("""
+            QComboBox {
+                background-color: #141724;
+                border: 1px solid #232738;
+                border-radius: 4px;
+                padding: 1px 6px;
+                color: #80d8ff;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 14px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1a1e2e;
+                color: #e0e0e0;
+                selection-background-color: #28334a;
+            }
+        """)
+        avail_langs = get_i18n().get_available_languages()
+        for code, name in avail_langs:
+            self.combo_lang_bar.addItem(f"🌐 {code.upper()} ({name})", code)
+
+        curr_lang = get_i18n().get_current_language()
+        idx_lang = self.combo_lang_bar.findData(curr_lang)
+        if idx_lang >= 0:
+            self.combo_lang_bar.setCurrentIndex(idx_lang)
+
+        self.combo_lang_bar.currentIndexChanged.connect(self._on_lang_bar_changed)
+        status_bar.addPermanentWidget(self.combo_lang_bar)
+
         # Temporizador para actualizar métricas de hardware cada 2.5 segundos
         self._timer_ram = QTimer(self)
         self._timer_ram.timeout.connect(self._update_system_stats)
         self._timer_ram.start(2500)
         self._update_system_stats()
+
+    def _on_lang_bar_changed(self, index: int) -> None:
+        """Manejador al seleccionar un nuevo idioma desde la barra de estado."""
+        code = self.combo_lang_bar.currentData()
+        if code and code != get_i18n().get_current_language():
+            get_i18n().set_language(code)
+
+    def _retranslate_ui(self) -> None:
+        """Actualiza todos los textos estáticos principales al cambiar de idioma."""
+        self.setWindowTitle(tr("app.title", self.BASE_TITLE))
+        self.lbl_status.setText(tr("app.ready", "Listo para procesar"))
+        self.lbl_engine_badge.setText(tr("app.engine_badge", "⚡ AstroLoom Engine v0.8.1"))
+
+        if hasattr(self, 'tab_widget'):
+            self.tab_widget.setTabText(0, tr("app.tabs.stacker", "1. Apilador (Stacker)"))
+            self.tab_widget.setTabText(1, tr("app.tabs.developer", "2. Revelador / Editor"))
+            self.tab_widget.setTabText(2, tr("app.tabs.eclipse_hdr", "3. Eclipses (HDR)"))
+            self.tab_widget.setTabText(3, tr("app.tabs.eclipse_collage", "4. Eclipses (Collage)"))
+            self.tab_widget.setTabText(4, tr("app.tabs.startrails", "5. Trazas de Estrellas (Startrails)"))
+            self.tab_widget.setTabText(5, tr("app.tabs.panorama", "6. Panorámicas (Mosaicos)"))
+            self.tab_widget.setTabText(6, tr("app.tabs.settings", "7. Configuración / Ajustes"))
+
+        if hasattr(self, 'combo_lang_bar'):
+            idx = self.combo_lang_bar.findData(get_i18n().get_current_language())
+            if idx >= 0 and self.combo_lang_bar.currentIndex() != idx:
+                self.combo_lang_bar.blockSignals(True)
+                self.combo_lang_bar.setCurrentIndex(idx)
+                self.combo_lang_bar.blockSignals(False)
+
+        if hasattr(self, 'tab_developer') and hasattr(self.tab_developer, "retranslate_ui"):
+            self.tab_developer.retranslate_ui()
 
     def _update_system_stats(self) -> None:
         """Actualiza el consumo de memoria RAM física del sistema."""

@@ -58,6 +58,7 @@ from gui.canvas import MaskCanvas
 from gui.worker import GraXpertWorker, StarNetWorker
 from core.icc_manager import save_tiff_with_icc
 from core.config_manager import load_config
+from core.i18n import tr, get_i18n
 from core.developer_presets import (
     DeveloperPreset, get_builtin_presets, load_user_presets,
     save_user_preset, delete_user_preset, filter_preset_params,
@@ -137,6 +138,10 @@ class DeveloperTab(QWidget):
         self._apply_styles()
         self._connect_undo_triggers()
         self._populate_presets_combo()
+
+        # Conectar actualización reactiva de idioma
+        get_i18n().language_changed.connect(lambda _: self.retranslate_ui())
+        self.retranslate_ui()
         
     @staticmethod
     def _make_resettable_label(lbl: QLabel, reset_action, default_desc: str = "") -> QLabel:
@@ -917,9 +922,9 @@ class DeveloperTab(QWidget):
         left_container_layout.addWidget(self.btn_export, 0)
 
         # Registro de Actividad compacto
-        lbl_log = QLabel("Registro de Actividad:")
-        lbl_log.setStyleSheet("color: #a0a0a0; font-size: 11px; font-weight: bold;")
-        left_container_layout.addWidget(lbl_log, 0)
+        self.lbl_log_title = QLabel(tr("developer.activity_log", "Registro de Actividad:"))
+        self.lbl_log_title.setStyleSheet("color: #a0a0a0; font-size: 11px; font-weight: bold;")
+        left_container_layout.addWidget(self.lbl_log_title, 0)
 
         self.txt_log = QTextEdit()
         self.txt_log.setReadOnly(True)
@@ -1183,6 +1188,61 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.lbl_canvas_info)
 
         return toolbar
+
+    def retranslate_ui(self) -> None:
+        """Actualiza todos los textos visibles del Revelador según el idioma activo."""
+        if hasattr(self, 'btn_open_img'):
+            self.btn_open_img.setText(tr("developer.btn_open", "📁 Abrir Imagen (TIFF / FITS / RAW)..."))
+        if hasattr(self, 'btn_export'):
+            self.btn_export.setText(tr("developer.btn_export", "💾 EXPORTAR IMAGEN REVELADA..."))
+        if hasattr(self, 'lbl_log_title'):
+            self.lbl_log_title.setText(tr("developer.activity_log", "Registro de Actividad:"))
+
+        # Secciones del acordeón
+        if hasattr(self, 'sec_presets'):
+            self.sec_presets.set_title(tr("developer.sections.presets", "🎨 Presets y Estilos de Revelado"))
+        if hasattr(self, 'sec_gradients'):
+            self.sec_gradients.set_title(tr("developer.sections.gradients", "⚡ Calibración y Gradientes (GraXpert AI)"))
+        if hasattr(self, 'sec_stretch'):
+            self.sec_stretch.set_title(tr("developer.sections.stretch", "📈 Estirado Tonal y Contraste"))
+        if hasattr(self, 'sec_curves'):
+            self.sec_curves.set_title(tr("developer.sections.curves", "📈 Curva Tonal Interactiva (RGB / Saturación)"))
+        if hasattr(self, 'sec_starnet'):
+            self.sec_starnet.set_title(tr("developer.sections.starnet", "⭐ StarNet++ AI — Desacoplo de Estrellas"))
+        if hasattr(self, 'sec_wb'):
+            self.sec_wb.set_title(tr("developer.sections.wb", "🌡️ Balance de Blancos y Calibración"))
+        if hasattr(self, 'sec_color'):
+            self.sec_color.set_title(tr("developer.sections.color", "🎨 Color y Saturación"))
+        if hasattr(self, 'sec_gnd_tone'):
+            self.sec_gnd_tone.set_title(tr("developer.sections.ground_tone", "🏞️ Ajuste Tonal Suelo (Paisaje)"))
+        if hasattr(self, 'sec_masks'):
+            self.sec_masks.set_title(tr("developer.sections.masks", "🎭 Máscaras y Capas de Ajuste Local"))
+
+        # Botones de herramientas
+        if hasattr(self, 'btn_starnet'):
+            self.btn_starnet.setText(tr("developer.starnet.btn_separate", "✨ Separar Estrellas con StarNet"))
+        if hasattr(self, 'btn_panel_pipette'):
+            self.btn_panel_pipette.setText(tr("developer.wb.pipette", "Pipeta WB (W)"))
+
+        # Barra superior del visor
+        if hasattr(self, 'btn_undo'):
+            self.btn_undo.setText("↺ " + tr("developer.toolbar.undo", "Deshacer"))
+        if hasattr(self, 'btn_redo'):
+            self.btn_redo.setText("↻ " + tr("developer.toolbar.redo", "Rehacer"))
+        if hasattr(self, 'btn_split_view'):
+            self.btn_split_view.setText("◫ " + tr("developer.toolbar.before_after", "Antes / Después (Y)"))
+        if hasattr(self, 'btn_set_before'):
+            self.btn_set_before.setText("📸 " + tr("developer.toolbar.set_as_before", "Fijar como Antes"))
+        if hasattr(self, 'btn_toggle_clipping'):
+            self.btn_toggle_clipping.setText("⚠️ " + tr("developer.toolbar.clipping", "Recorte Sombras/Luces (J)"))
+        if hasattr(self, 'btn_toggle_zoom'):
+            self.btn_toggle_zoom.setText("🔍 " + tr("developer.toolbar.zoom_100", "Zoom 100% (Clic Der.)"))
+        if hasattr(self, 'btn_magnifier'):
+            self.btn_magnifier.setText("🔎 " + tr("developer.toolbar.loupe", "Lupa (Z)"))
+        if hasattr(self, 'btn_crop'):
+            self.btn_crop.setText("✂️ " + tr("developer.toolbar.crop", "Recortar (C)"))
+        if hasattr(self, 'btn_mask_tool'):
+            self.btn_mask_tool.setText("🖌️ " + tr("developer.toolbar.ground_mask", "Máscara Suelo (M)"))
 
     def _create_crop_toolbar(self) -> QWidget:
         """Crea la barra de herramientas interactiva de recorte y nivelación de horizonte."""

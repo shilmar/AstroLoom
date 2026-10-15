@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QComboBox, QScrollArea, QSplitter, QSizePolicy, QFrame
 )
 from core.config_manager import load_config, save_config
+from core.i18n import tr, get_i18n
 from gui.theme import STYLE_RUN_IDLE, BG_CARD, BG_INPUT, BORDER_BASE
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
@@ -266,6 +267,25 @@ class SettingsTab(QWidget):
         row_icc.addWidget(self.combo_icc)
         row_icc.addStretch()
         def_layout.addLayout(row_icc)
+
+        # Idioma de la interfaz / Language
+        row_lang = QHBoxLayout()
+        lbl_lang = QLabel(tr("settings.language", "Idioma de la Interfaz / Interface Language:"))
+        row_lang.addWidget(lbl_lang)
+        self.combo_lang = QComboBox()
+        avail_langs = get_i18n().get_available_languages()
+        for code, name in avail_langs:
+            self.combo_lang.addItem(f"🌐 {name} ({code.upper()})", code)
+
+        curr_lang = get_i18n().get_current_language()
+        idx_lang = self.combo_lang.findData(curr_lang)
+        if idx_lang >= 0:
+            self.combo_lang.setCurrentIndex(idx_lang)
+
+        self.combo_lang.setToolTip("Selecciona el idioma de los menús, botones y herramientas de AstroLoom.")
+        row_lang.addWidget(self.combo_lang)
+        row_lang.addStretch()
+        def_layout.addLayout(row_lang)
 
         left_layout.addWidget(grp_defaults)
 
@@ -534,6 +554,11 @@ class SettingsTab(QWidget):
         self.cfg["cpu_workers"] = self.spin_cpu_workers.value()
         self.cfg["storage_strategy"] = self.combo_storage.currentData()
         self.cfg["icc_profile"] = self.combo_icc.currentData()
+
+        new_lang = self.combo_lang.currentData()
+        if new_lang:
+            self.cfg["language"] = new_lang
+            get_i18n().set_language(new_lang, save_to_config=False)
 
         save_config(self.cfg)
         QMessageBox.information(self, "Ajustes", "Configuración guardada correctamente en config.json.")

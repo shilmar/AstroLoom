@@ -1,0 +1,121 @@
+{
+  "_meta": {
+    "language_code": "en",
+    "language_name": "English",
+    "version": "1.0"
+  },
+  "app": {
+    "title": "AstroLoom - Astrophotography & Nightscape Suite (v0.8.1)",
+    "ready": "Ready to process",
+    "engine_badge": "⚡ AstroLoom Engine v0.8.1",
+    "ram_monitor": "🧠 RAM: {pct}% ({used:.1f} / {total:.1f} GB)",
+    "language": "Language",
+    "tabs": {
+      "stacker": "1. Stacker",
+      "developer": "2. Developer / Editor",
+      "eclipse_hdr": "3. Eclipses (HDR)",
+      "eclipse_collage": "4. Eclipses (Collage)",
+      "startrails": "5. Star Trails (Startrails)",
+      "panorama": "6. Panoramas (Mosaics)",
+      "settings": "7. Configuration / Settings"
+    }
+  },
+  "common": {
+    "apply": "Apply",
+    "cancel": "Cancel",
+    "save": "Save",
+    "reset": "Reset",
+    "warning": "Warning",
+    "error": "Error",
+    "success": "Success",
+    "ok": "OK",
+    "delete": "Delete",
+    "edit": "Edit",
+    "open": "Open",
+    "export": "Export",
+    "close": "Close"
+  },
+  "developer": {
+    "btn_open": "📁 Open Image (TIFF / FITS / RAW)...",
+    "btn_export": "💾 EXPORT REVEALED IMAGE...",
+    "activity_log": "Activity Log:",
+    "sections": {
+      "presets": "🎨 Presets & Developing Styles",
+      "gradients": "⚡ Calibration & Gradients (GraXpert AI)",
+      "stretch": "📈 Tonal Stretch & Contrast",
+      "curves": "📈 Interactive Tone Curve (RGB / Saturation)",
+      "starnet": "⭐ StarNet++ AI — Star Separation",
+      "wb": "🌡️ White Balance & Calibration",
+      "color": "🎨 Color & Saturation",
+      "ground_tone": "🏞️ Landscape Ground Tone Adjustment",
+      "masks": "🎭 Masks & Local Adjustment Layers"
+    },
+    "stretch": {
+      "auto_mtf": "⚡ Auto-Stretch MTF",
+      "reset_tone": "Reset Tone",
+      "black_point": "Black Pt:",
+      "midtones": "Midtones (m):",
+      "contrast": "Contrast:"
+    },
+    "starnet": {
+      "stride": "Stride:",
+      "btn_separate": "✨ Separate Stars with StarNet",
+      "badge_separated": "● Separated",
+      "layer_visible": "Visible layer:",
+      "mode_composite": "Composite (Normal)",
+      "mode_starless": "Background Only (Starless)",
+      "mode_stars": "Stars Only",
+      "stars": "Stars:",
+      "clarity": "Background Clarity:",
+      "dehaze": "Dehaze:",
+      "wavelets": "Structure (Wavelets):",
+      "fade_bg": "Fade Background:",
+      "contrast": "Background Contrast:",
+      "denoise": "Noise Reduction:"
+    },
+    "wb": {
+      "temp": "Temp:",
+      "tint": "Tint:",
+      "pipette": "WB Pipette (W)",
+      "reset": "Reset"
+    },
+    "color": {
+      "sat_sky": "Sky Sat:",
+      "sat_ground": "Ground Sat:",
+      "vibrance": "Vibrance:",
+      "reset": "Reset"
+    },
+    "ground": {
+      "badge_active": "● Ground Active",
+      "status_active": "✓ Ground mask active",
+      "status_inactive": "⚠️ No active ground mask",
+      "btn_create": "🖌️ Create Ground Mask...",
+      "btn_edit": "🖌️ Edit Mask...",
+      "btn_delete": "Delete",
+      "exposure": "Ground Exposure (EV):",
+      "shadows": "Shadow Recovery:",
+      "black_point": "Ground Black Point:",
+      "reset": "Reset Ground Tone"
+    },
+    "toolbar": {
+      "undo": "Undo",
+      "redo": "Redo",
+      "before_after": "Before / After (Y)",
+      "vertical": "Vertical",
+      "horizontal": "Horizontal",
+      "set_as_before": "Set as Before",
+      "clipping": "Shadow/Highlight Clipping (J)",
+      "zoom_100": "100% Zoom (Right Click)",
+      "loupe": "Loupe (Z)",
+      "crop": "Crop (C)",
+      "ground_mask": "Ground Mask (M)"
+    }
+  },
+  "settings": {
+    "title": "Configuration / Settings",
+    "language": "Interface Language / Idioma:",
+    "lang_es": "🇪🇸 Español (Spanish)",
+    "lang_en": "🇬🇧 English (Inglés)",
+    "btn_save": "💾 Save Configuration Changes"
+  }
+}

@@ -1,0 +1,121 @@
+{
+  "_meta": {
+    "language_code": "es",
+    "language_name": "Español",
+    "version": "1.0"
+  },
+  "app": {
+    "title": "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.8.1)",
+    "ready": "Listo para procesar",
+    "engine_badge": "⚡ AstroLoom Engine v0.8.1",
+    "ram_monitor": "🧠 RAM: {pct}% ({used:.1f} / {total:.1f} GB)",
+    "language": "Idioma",
+    "tabs": {
+      "stacker": "1. Apilador (Stacker)",
+      "developer": "2. Revelador / Editor",
+      "eclipse_hdr": "3. Eclipses (HDR)",
+      "eclipse_collage": "4. Eclipses (Collage)",
+      "startrails": "5. Trazas de Estrellas (Startrails)",
+      "panorama": "6. Panorámicas (Mosaicos)",
+      "settings": "7. Configuración / Ajustes"
+    }
+  },
+  "common": {
+    "apply": "Aplicar",
+    "cancel": "Cancelar",
+    "save": "Guardar",
+    "reset": "Restablecer",
+    "warning": "Aviso",
+    "error": "Error",
+    "success": "Éxito",
+    "ok": "Aceptar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "open": "Abrir",
+    "export": "Exportar",
+    "close": "Cerrar"
+  },
+  "developer": {
+    "btn_open": "📁 Abrir Imagen (TIFF / FITS / RAW)...",
+    "btn_export": "💾 EXPORTAR IMAGEN REVELADA...",
+    "activity_log": "Registro de Actividad:",
+    "sections": {
+      "presets": "🎨 Presets y Estilos de Revelado",
+      "gradients": "⚡ Calibración y Gradientes (GraXpert AI)",
+      "stretch": "📈 Estirado Tonal y Contraste",
+      "curves": "📈 Curva Tonal Interactiva (RGB / Saturación)",
+      "starnet": "⭐ StarNet++ AI — Desacoplo de Estrellas",
+      "wb": "🌡️ Balance de Blancos y Calibración",
+      "color": "🎨 Color y Saturación",
+      "ground_tone": "🏞️ Ajuste Tonal Suelo (Paisaje)",
+      "masks": "🎭 Máscaras y Capas de Ajuste Local"
+    },
+    "stretch": {
+      "auto_mtf": "⚡ Auto-Estirado MTF",
+      "reset_tone": "Restablecer Tono",
+      "black_point": "P. Negro:",
+      "midtones": "Medios (m):",
+      "contrast": "Contraste:"
+    },
+    "starnet": {
+      "stride": "Paso (Stride):",
+      "btn_separate": "✨ Separar Estrellas con StarNet",
+      "badge_separated": "● Separadas",
+      "layer_visible": "Capa visible:",
+      "mode_composite": "Compuesta (Normal)",
+      "mode_starless": "Solo Fondo (Starless)",
+      "mode_stars": "Solo Estrellas",
+      "stars": "Estrellas:",
+      "clarity": "Claridad Fondo:",
+      "dehaze": "Borrar Neblina:",
+      "wavelets": "Estructura (Ondículas):",
+      "fade_bg": "Atenuar Fondo:",
+      "contrast": "Contraste Fondo:",
+      "denoise": "Reducción Ruido:"
+    },
+    "wb": {
+      "temp": "Temp:",
+      "tint": "Tinte:",
+      "pipette": "Pipeta WB (W)",
+      "reset": "Restablecer"
+    },
+    "color": {
+      "sat_sky": "Sat. Cielo:",
+      "sat_ground": "Sat. Suelo:",
+      "vibrance": "Vibranza:",
+      "reset": "Restablecer"
+    },
+    "ground": {
+      "badge_active": "● Suelo Activo",
+      "status_active": "✓ Máscara de suelo activa",
+      "status_inactive": "⚠️ Sin máscara de suelo activa",
+      "btn_create": "🖌️ Crear Máscara Suelo...",
+      "btn_edit": "🖌️ Editar Máscara...",
+      "btn_delete": "Eliminar",
+      "exposure": "Exposición Suelo (EV):",
+      "shadows": "Levantar Sombras:",
+      "black_point": "Punto Negro Suelo:",
+      "reset": "Restablecer Tono Suelo"
+    },
+    "toolbar": {
+      "undo": "Deshacer",
+      "redo": "Rehacer",
+      "before_after": "Antes / Después (Y)",
+      "vertical": "Vertical",
+      "horizontal": "Horizontal",
+      "set_as_before": "Fijar como Antes",
+      "clipping": "Recorte Sombras/Luces (J)",
+      "zoom_100": "Zoom 100% (Clic Der.)",
+      "loupe": "Lupa (Z)",
+      "crop": "Recortar (C)",
+      "ground_mask": "Máscara Suelo (M)"
+    }
+  },
+  "settings": {
+    "title": "Configuración / Ajustes",
+    "language": "Idioma de la Interfaz / Interface Language:",
+    "lang_es": "🇪🇸 Español (Spanish)",
+    "lang_en": "🇬🇧 English (Inglés)",
+    "btn_save": "💾 Guardar Cambios de Configuración"
+  }
+}

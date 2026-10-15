@@ -35,6 +35,7 @@ DEFAULT_CONFIG = {
     "graxpert_smoothing": 0.5,
     "preview_max_dim": 1500,
     "export_format_default": "TIFF 16-bit (*.tif *.tiff)",
+    "language": "es",
 }
 
 CONFIG_FILE = os.path.join(APP_ROOT, "config.json")
