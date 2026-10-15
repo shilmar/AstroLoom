@@ -53,6 +53,7 @@ from core.masking import refine_mask_guided
 from core.mask_layers import MaskLayer, apply_all_mask_layers
 from gui.widgets.curve_widget import CurveWidget
 from gui.widgets.mask_layers_widget import MaskLayersWidget
+from gui.widgets.collapsible_section import CollapsibleSection
 from gui.canvas import MaskCanvas
 from gui.worker import GraXpertWorker, StarNetWorker
 from core.icc_manager import save_tiff_with_icc
@@ -159,23 +160,39 @@ class DeveloperTab(QWidget):
         self.canvas.zoom_toggled.connect(self.on_canvas_zoom_toggled)
         self.canvas.files_dropped.connect(self._on_canvas_files_dropped)
 
-        # 2. Panel interno de controles
+        # 2. Panel interno de controles con Acordeón Plegable Inteligente
+        left_container = QWidget()
+        left_container_layout = QVBoxLayout(left_container)
+        left_container_layout.setContentsMargins(4, 4, 4, 4)
+        left_container_layout.setSpacing(6)
+        left_container.setMinimumWidth(440)
+        left_container.setMaximumWidth(540)
+
+        # Carga externa (Siempre fijada arriba)
+        self.btn_open_img = QPushButton("📁 Abrir Imagen (TIFF / FITS / RAW)...")
+        self.btn_open_img.setStyleSheet("font-weight: bold; color: #80d8ff; padding: 7px; background: #1c2030; border: 1px solid #2f3549; border-radius: 4px;")
+        self.btn_open_img.setCursor(Qt.PointingHandCursor)
+        self.btn_open_img.clicked.connect(self.open_image_file)
+        left_container_layout.addWidget(self.btn_open_img, 0)
+
+        # Scroll área para los acordeones
+        self.left_scroll_area = QScrollArea()
+        self.left_scroll_area.setWidgetResizable(True)
+        self.left_scroll_area.setFrameShape(QFrame.NoFrame)
+        self.left_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.left_scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(4, 4, 10, 4)
-        left_layout.setSpacing(12)
+        left_layout.setContentsMargins(0, 0, 4, 0)
+        left_layout.setSpacing(6)
 
-        # Carga externa
-        self.btn_open_img = QPushButton("📁 Abrir Imagen (TIFF / FITS / RAW)...")
-        self.btn_open_img.setStyleSheet("font-weight: bold; color: #80d8ff; padding: 7px;")
-        self.btn_open_img.clicked.connect(self.open_image_file)
-        left_layout.addWidget(self.btn_open_img)
-
-        # --- SECCIÓN 0: Estilos y Ajustes Preestablecidos (Presets) ---
-        grp_presets = QGroupBox("🎨 Estilos y Presets de Revelado")
-        presets_layout = QVBoxLayout(grp_presets)
-        presets_layout.setContentsMargins(10, 14, 10, 10)
-        presets_layout.setSpacing(8)
+        # --- SECCIÓN 1: Estilos y Presets de Revelado ---
+        self.sec_presets = CollapsibleSection("🎨 Presets y Estilos de Revelado", is_expanded=False)
+        w_presets = QWidget()
+        presets_layout = QVBoxLayout(w_presets)
+        presets_layout.setContentsMargins(6, 4, 6, 6)
+        presets_layout.setSpacing(6)
 
         # Fila 1: Selector de Preset (ancho completo)
         self.combo_presets = QComboBox()
@@ -230,10 +247,9 @@ class DeveloperTab(QWidget):
         self.btn_apply_preset.setToolTip("Aplica el preset seleccionado a la imagen actual según el modo elegido")
         self.btn_apply_preset.clicked.connect(self.apply_selected_preset)
         row_mode_apply.addWidget(self.btn_apply_preset)
-
         presets_layout.addLayout(row_mode_apply)
 
-        # Fila 5: Botones Guardar Actual y Administrar
+        # Fila 4: Botones Guardar Actual y Administrar
         row_preset_btns = QHBoxLayout()
         self.btn_save_preset = QPushButton("💾 Guardar...")
         self.btn_save_preset.setToolTip("Guarda los ajustes y deslizadores actuales como un nuevo preset")
@@ -244,14 +260,20 @@ class DeveloperTab(QWidget):
         self.btn_manage_presets.setToolTip("Abre el administrador para importar, exportar, inspeccionar o eliminar presets")
         self.btn_manage_presets.clicked.connect(self.open_preset_manager_dialog)
         row_preset_btns.addWidget(self.btn_manage_presets)
-
         presets_layout.addLayout(row_preset_btns)
-        left_layout.addWidget(grp_presets)
 
-        # --- SECCIÓN 1: Extracción de Fondo y Polución Lumínica (Fusión 3.3) ---
-        grp_bg = QGroupBox("1. Fondo y Polución Lumínica")
-        layout_bg = QVBoxLayout(grp_bg)
-        layout_bg.setContentsMargins(10, 14, 10, 10)
+        self.sec_presets.set_content_widget(w_presets)
+        left_layout.addWidget(self.sec_presets)
+
+        # --- SECCIÓN 2: Extracción de Fondo y Polución Lumínica (GraXpert AI) ---
+        self.sec_gradients = CollapsibleSection(
+            "⚡ Calibración y Gradientes (GraXpert AI)",
+            is_expanded=False,
+            on_reset=lambda: self.slider_lp.setValue(0)
+        )
+        w_bg = QWidget()
+        layout_bg = QVBoxLayout(w_bg)
+        layout_bg.setContentsMargins(6, 4, 6, 6)
         layout_bg.setSpacing(8)
 
         row_engine = QHBoxLayout()
@@ -290,12 +312,18 @@ class DeveloperTab(QWidget):
         row_lp.addWidget(self.slider_lp, stretch=1)
         layout_bg.addLayout(row_lp)
 
-        left_layout.addWidget(grp_bg)
+        self.sec_gradients.set_content_widget(w_bg)
+        left_layout.addWidget(self.sec_gradients)
 
-        # --- SECCIÓN 2: Estirado Tonal y Curvas (Histograma) ---
-        grp_stretch = QGroupBox("2. Estirado Tonal y Curvas (Histograma)")
-        stretch_layout = QVBoxLayout(grp_stretch)
-        stretch_layout.setContentsMargins(10, 14, 10, 10)
+        # --- SECCIÓN 3: Estirado Tonal y Contraste (MTF) ---
+        self.sec_stretch = CollapsibleSection(
+            "📈 Estirado Tonal y Contraste",
+            is_expanded=True,
+            on_reset=self.reset_sliders
+        )
+        w_stretch = QWidget()
+        stretch_layout = QVBoxLayout(w_stretch)
+        stretch_layout.setContentsMargins(6, 4, 6, 6)
         stretch_layout.setSpacing(8)
 
         btn_row_mtf = QHBoxLayout()
@@ -363,6 +391,20 @@ class DeveloperTab(QWidget):
         row_cnt.addWidget(self.slider_contrast, stretch=1)
         stretch_layout.addLayout(row_cnt)
 
+        self.sec_stretch.set_content_widget(w_stretch)
+        left_layout.addWidget(self.sec_stretch)
+
+        # --- SECCIÓN 4: Curva Tonal Interactiva (RGB / Saturación) ---
+        self.sec_curves = CollapsibleSection(
+            "📈 Curva Tonal Interactiva (RGB / Saturación)",
+            is_expanded=False,
+            on_reset=lambda: self.curve_widget.reset_all_curves()
+        )
+        w_curves = QWidget()
+        curves_layout = QVBoxLayout(w_curves)
+        curves_layout.setContentsMargins(6, 4, 6, 6)
+        curves_layout.setSpacing(8)
+
         # Selector de Modo de Curva (RGB / Hue vs Sat / Luma vs Sat)
         row_curve_mode = QHBoxLayout()
         row_curve_mode.setSpacing(4)
@@ -404,13 +446,13 @@ class DeveloperTab(QWidget):
         row_curve_mode.addWidget(self.btn_curve_rgb)
         row_curve_mode.addWidget(self.btn_curve_hue)
         row_curve_mode.addWidget(self.btn_curve_luma)
-        stretch_layout.addLayout(row_curve_mode)
+        curves_layout.addLayout(row_curve_mode)
 
         # Curva de Tono con Histograma
         self.curve_widget = CurveWidget()
         self.curve_widget.curveChanged.connect(self.update_stretch_preview)
         self.curve_widget.clippingChanged.connect(self.on_clipping_changed_sync)
-        stretch_layout.addWidget(self.curve_widget)
+        curves_layout.addWidget(self.curve_widget)
 
         row_crv_btn = QHBoxLayout()
         row_crv_btn.setSpacing(6)
@@ -426,165 +468,16 @@ class DeveloperTab(QWidget):
 
         row_crv_btn.addWidget(self.btn_reset_curve)
         row_crv_btn.addWidget(self.btn_reset_all_curves)
-        stretch_layout.addLayout(row_crv_btn)
+        curves_layout.addLayout(row_crv_btn)
 
-        left_layout.addWidget(grp_stretch)
+        self.sec_curves.set_content_widget(w_curves)
+        left_layout.addWidget(self.sec_curves)
 
-        # --- SECCIÓN 3: Balance de Blancos ---
-        grp_wb = QGroupBox("3. Balance de Blancos (Precisión Fina)")
-        wb_layout = QVBoxLayout(grp_wb)
-        wb_layout.setContentsMargins(10, 14, 10, 10)
-        wb_layout.setSpacing(8)
-
-        # Emparejamiento 3.2: Temp (izq) y Tinte (der) en 2 columnas
-        row_wb = QHBoxLayout()
-        row_wb.setSpacing(14)
-
-        col_temp = QVBoxLayout()
-        col_temp.setSpacing(4)
-        row_temp_lbl = QHBoxLayout()
-        lbl_temp_title = QLabel("Temp:")
-        lbl_temp_title.setToolTip("Doble clic para restablecer Temperatura a 0.000")
-        lbl_temp_title.setCursor(Qt.PointingHandCursor)
-        row_temp_lbl.addWidget(lbl_temp_title)
-
-        self.spin_temp = QDoubleSpinBox()
-        self.spin_temp.setDecimals(3)
-        self.spin_temp.setRange(-1.000, 1.000)
-        self.spin_temp.setSingleStep(0.010)
-        self.spin_temp.setValue(0.000)
-        self.spin_temp.setFixedWidth(82)
-        self.spin_temp.setStyleSheet("color: #ffd54f; font-weight: bold;")
-        self.spin_temp.setToolTip("Ajuste numérico manual de Temperatura (-1.000 a +1.000). Doble clic en 'Temp:' para reiniciar")
-        self.spin_temp.valueChanged.connect(self.on_spin_temp_changed)
-        row_temp_lbl.addWidget(self.spin_temp)
-        col_temp.addLayout(row_temp_lbl)
-
-        self.slider_temp = QSlider(Qt.Horizontal)
-        self.slider_temp.setRange(-1000, 1000)
-        self.slider_temp.setValue(0)
-        self.slider_temp.setToolTip("Temperatura de color (-1.000 azul/frío a +1.000 rojo/cálido). Doble clic en 'Temp:' para reiniciar")
-        self.slider_temp.valueChanged.connect(self.on_temp_changed)
-        lbl_temp_title.mouseDoubleClickEvent = lambda e: self.spin_temp.setValue(0.0)
-        col_temp.addWidget(self.slider_temp)
-        row_wb.addLayout(col_temp)
-
-        col_tint = QVBoxLayout()
-        col_tint.setSpacing(4)
-        row_tint_lbl = QHBoxLayout()
-        lbl_tint_title = QLabel("Tinte:")
-        lbl_tint_title.setToolTip("Doble clic para restablecer Tinte a 0.000")
-        lbl_tint_title.setCursor(Qt.PointingHandCursor)
-        row_tint_lbl.addWidget(lbl_tint_title)
-
-        self.spin_tint = QDoubleSpinBox()
-        self.spin_tint.setDecimals(3)
-        self.spin_tint.setRange(-1.000, 1.000)
-        self.spin_tint.setSingleStep(0.010)
-        self.spin_tint.setValue(0.000)
-        self.spin_tint.setFixedWidth(82)
-        self.spin_tint.setStyleSheet("color: #b388ff; font-weight: bold;")
-        self.spin_tint.setToolTip("Ajuste numérico manual de Tinte (-1.000 a +1.000). Doble clic en 'Tinte:' para reiniciar")
-        self.spin_tint.valueChanged.connect(self.on_spin_tint_changed)
-        row_tint_lbl.addWidget(self.spin_tint)
-        col_tint.addLayout(row_tint_lbl)
-
-        self.slider_tint = QSlider(Qt.Horizontal)
-        self.slider_tint.setRange(-1000, 1000)
-        self.slider_tint.setValue(0)
-        self.slider_tint.setToolTip("Tinte de color (-1.000 verde a +1.000 magenta). Doble clic en 'Tinte:' para reiniciar")
-        self.slider_tint.valueChanged.connect(self.on_tint_changed)
-        lbl_tint_title.mouseDoubleClickEvent = lambda e: self.spin_tint.setValue(0.0)
-        col_tint.addWidget(self.slider_tint)
-        row_wb.addLayout(col_tint)
-
-        wb_layout.addLayout(row_wb)
-
-        row_wb_btn = QHBoxLayout()
-        self.btn_panel_pipette = QPushButton("🧪 Pipeta WB (W)")
-        self.btn_panel_pipette.setCheckable(True)
-        self.btn_panel_pipette.setCursor(Qt.PointingHandCursor)
-        self.btn_panel_pipette.setStyleSheet("font-weight: bold; color: #80d8ff;")
-        self.btn_panel_pipette.setToolTip("Activa la pipeta para calibrar el balance de blancos haciendo clic sobre un fondo neutro en la imagen (Atajo: W)")
-        self.btn_panel_pipette.toggled.connect(self.canvas.set_eyedropper_active)
-        row_wb_btn.addWidget(self.btn_panel_pipette)
-        self.btn_pipette = self.btn_panel_pipette
-
-        btn_reset_wb = QPushButton("Restablecer")
-        btn_reset_wb.clicked.connect(self.reset_wb)
-        row_wb_btn.addWidget(btn_reset_wb)
-        wb_layout.addLayout(row_wb_btn)
-        left_layout.addWidget(grp_wb)
-
-        # --- SECCIÓN 4: Color: Saturación e Intensidad ---
-        grp_sat = QGroupBox("4. Color: Saturación e Intensidad")
-        sat_layout = QVBoxLayout(grp_sat)
-        sat_layout.setContentsMargins(10, 14, 10, 10)
-        sat_layout.setSpacing(8)
-
-        # Emparejamiento 3.2: Saturación Cielo (izq) y Suelo (der) en 2 columnas
-        row_sat_dual = QHBoxLayout()
-        row_sat_dual.setSpacing(14)
-
-        col_sky = QVBoxLayout()
-        col_sky.setSpacing(4)
-        row_sky_lbl = QHBoxLayout()
-        row_sky_lbl.addWidget(self._make_resettable_label(QLabel("Sat. Cielo:"), lambda: self.slider_sat_sky.setValue(100), "1.00x"))
-        self.lbl_sat_sky = QLabel("1.00x")
-        self.lbl_sat_sky.setStyleSheet("color: #80d8ff; font-weight: bold;")
-        row_sky_lbl.addWidget(self.lbl_sat_sky)
-        col_sky.addLayout(row_sky_lbl)
-
-        self.slider_sat_sky = QSlider(Qt.Horizontal)
-        self.slider_sat_sky.setRange(0, 250)
-        self.slider_sat_sky.setValue(100)
-        self.slider_sat_sky.valueChanged.connect(self.on_sat_sky_changed)
-        col_sky.addWidget(self.slider_sat_sky)
-        row_sat_dual.addLayout(col_sky)
-
-        col_gnd = QVBoxLayout()
-        col_gnd.setSpacing(4)
-        row_gnd_lbl = QHBoxLayout()
-        row_gnd_lbl.addWidget(self._make_resettable_label(QLabel("Sat. Suelo:"), lambda: self.slider_sat_gnd.setValue(100), "1.00x"))
-        self.lbl_sat_gnd = QLabel("1.00x")
-        self.lbl_sat_gnd.setStyleSheet("color: #a5d6a7; font-weight: bold;")
-        row_gnd_lbl.addWidget(self.lbl_sat_gnd)
-        col_gnd.addLayout(row_gnd_lbl)
-
-        self.slider_sat_gnd = QSlider(Qt.Horizontal)
-        self.slider_sat_gnd.setRange(0, 250)
-        self.slider_sat_gnd.setValue(100)
-        self.slider_sat_gnd.valueChanged.connect(self.on_sat_gnd_changed)
-        col_gnd.addWidget(self.slider_sat_gnd)
-        row_sat_dual.addLayout(col_gnd)
-
-        sat_layout.addLayout(row_sat_dual)
-
-        # Vibrance y Reset en una fila compacta
-        row_vib = QHBoxLayout()
-        row_vib.addWidget(self._make_resettable_label(QLabel("Vibranza:"), lambda: self.slider_vibrance.setValue(0), "0.00"))
-        self.lbl_vibrance = QLabel("0.00")
-        self.lbl_vibrance.setStyleSheet("color: #ffd54f; font-weight: bold;")
-        row_vib.addWidget(self.lbl_vibrance)
-        row_vib.addSpacing(6)
-        self.slider_vibrance = QSlider(Qt.Horizontal)
-        self.slider_vibrance.setRange(-100, 100)
-        self.slider_vibrance.setValue(0)
-        self.slider_vibrance.valueChanged.connect(self.on_vibrance_changed)
-        row_vib.addWidget(self.slider_vibrance, stretch=1)
-
-        btn_reset_sat = QPushButton("Restablecer")
-        btn_reset_sat.setToolTip("Restablecer Saturación y Vibranza")
-        btn_reset_sat.clicked.connect(self.reset_saturation)
-        row_vib.addWidget(btn_reset_sat)
-        sat_layout.addLayout(row_vib)
-
-        left_layout.addWidget(grp_sat)
-
-        # --- SECCIÓN 5: StarNet++ AI y Procesado de Capas ---
-        grp_starnet = QGroupBox("5. StarNet++ AI — Desacoplo y Procesado de Capas")
-        layout_starnet = QVBoxLayout(grp_starnet)
-        layout_starnet.setContentsMargins(10, 14, 10, 10)
+        # --- SECCIÓN 5: StarNet++ AI — Desacoplo y Procesado de Capas ---
+        self.sec_starnet = CollapsibleSection("⭐ StarNet++ AI — Desacoplo de Estrellas", is_expanded=False)
+        w_starnet = QWidget()
+        layout_starnet = QVBoxLayout(w_starnet)
+        layout_starnet.setContentsMargins(6, 4, 6, 6)
         layout_starnet.setSpacing(8)
 
         # 1. Disparador de Ejecución
@@ -736,13 +629,183 @@ class DeveloperTab(QWidget):
         tools_layout.addLayout(row_pair3)
 
         layout_starnet.addWidget(self.container_starnet_tools)
-        left_layout.addWidget(grp_starnet)
+        self.sec_starnet.set_content_widget(w_starnet)
+        left_layout.addWidget(self.sec_starnet)
         self._set_starnet_tools_enabled(False)
 
-        # --- SECCIÓN 6: Ajuste Tonal Suelo ---
-        grp_gnd_tone = QGroupBox("6. Ajuste Tonal Suelo (Paisaje)")
-        gnd_tone_layout = QVBoxLayout(grp_gnd_tone)
-        gnd_tone_layout.setContentsMargins(10, 14, 10, 10)
+        # --- SECCIÓN 6: Balance de Blancos (Precisión Fina) ---
+        self.sec_wb = CollapsibleSection(
+            "🌡️ Balance de Blancos y Calibración",
+            is_expanded=True,
+            on_reset=self.reset_wb
+        )
+        w_wb = QWidget()
+        wb_layout = QVBoxLayout(w_wb)
+        wb_layout.setContentsMargins(6, 4, 6, 6)
+        wb_layout.setSpacing(8)
+
+        # Emparejamiento 3.2: Temp (izq) y Tinte (der) en 2 columnas
+        row_wb = QHBoxLayout()
+        row_wb.setSpacing(14)
+
+        col_temp = QVBoxLayout()
+        col_temp.setSpacing(4)
+        row_temp_lbl = QHBoxLayout()
+        lbl_temp_title = QLabel("Temp:")
+        lbl_temp_title.setToolTip("Doble clic para restablecer Temperatura a 0.000")
+        lbl_temp_title.setCursor(Qt.PointingHandCursor)
+        row_temp_lbl.addWidget(lbl_temp_title)
+
+        self.spin_temp = QDoubleSpinBox()
+        self.spin_temp.setDecimals(3)
+        self.spin_temp.setRange(-1.000, 1.000)
+        self.spin_temp.setSingleStep(0.010)
+        self.spin_temp.setValue(0.000)
+        self.spin_temp.setFixedWidth(82)
+        self.spin_temp.setStyleSheet("color: #ffd54f; font-weight: bold;")
+        self.spin_temp.setToolTip("Ajuste numérico manual de Temperatura (-1.000 a +1.000). Doble clic en 'Temp:' para reiniciar")
+        self.spin_temp.valueChanged.connect(self.on_spin_temp_changed)
+        row_temp_lbl.addWidget(self.spin_temp)
+        col_temp.addLayout(row_temp_lbl)
+
+        self.slider_temp = QSlider(Qt.Horizontal)
+        self.slider_temp.setRange(-1000, 1000)
+        self.slider_temp.setValue(0)
+        self.slider_temp.setToolTip("Temperatura de color (-1.000 azul/frío a +1.000 rojo/cálido). Doble clic en 'Temp:' para reiniciar")
+        self.slider_temp.valueChanged.connect(self.on_temp_changed)
+        lbl_temp_title.mouseDoubleClickEvent = lambda e: self.spin_temp.setValue(0.0)
+        col_temp.addWidget(self.slider_temp)
+        row_wb.addLayout(col_temp)
+
+        col_tint = QVBoxLayout()
+        col_tint.setSpacing(4)
+        row_tint_lbl = QHBoxLayout()
+        lbl_tint_title = QLabel("Tinte:")
+        lbl_tint_title.setToolTip("Doble clic para restablecer Tinte a 0.000")
+        lbl_tint_title.setCursor(Qt.PointingHandCursor)
+        row_tint_lbl.addWidget(lbl_tint_title)
+
+        self.spin_tint = QDoubleSpinBox()
+        self.spin_tint.setDecimals(3)
+        self.spin_tint.setRange(-1.000, 1.000)
+        self.spin_tint.setSingleStep(0.010)
+        self.spin_tint.setValue(0.000)
+        self.spin_tint.setFixedWidth(82)
+        self.spin_tint.setStyleSheet("color: #b388ff; font-weight: bold;")
+        self.spin_tint.setToolTip("Ajuste numérico manual de Tinte (-1.000 a +1.000). Doble clic en 'Tinte:' para reiniciar")
+        self.spin_tint.valueChanged.connect(self.on_spin_tint_changed)
+        row_tint_lbl.addWidget(self.spin_tint)
+        col_tint.addLayout(row_tint_lbl)
+
+        self.slider_tint = QSlider(Qt.Horizontal)
+        self.slider_tint.setRange(-1000, 1000)
+        self.slider_tint.setValue(0)
+        self.slider_tint.setToolTip("Tinte de color (-1.000 verde a +1.000 magenta). Doble clic en 'Tinte:' para reiniciar")
+        self.slider_tint.valueChanged.connect(self.on_tint_changed)
+        lbl_tint_title.mouseDoubleClickEvent = lambda e: self.spin_tint.setValue(0.0)
+        col_tint.addWidget(self.slider_tint)
+        row_wb.addLayout(col_tint)
+
+        wb_layout.addLayout(row_wb)
+
+        row_wb_btn = QHBoxLayout()
+        self.btn_panel_pipette = QPushButton("🧪 Pipeta WB (W)")
+        self.btn_panel_pipette.setCheckable(True)
+        self.btn_panel_pipette.setCursor(Qt.PointingHandCursor)
+        self.btn_panel_pipette.setStyleSheet("font-weight: bold; color: #80d8ff;")
+        self.btn_panel_pipette.setToolTip("Activa la pipeta para calibrar el balance de blancos haciendo clic sobre un fondo neutro en la imagen (Atajo: W)")
+        self.btn_panel_pipette.toggled.connect(self.canvas.set_eyedropper_active)
+        row_wb_btn.addWidget(self.btn_panel_pipette)
+        self.btn_pipette = self.btn_panel_pipette
+
+        btn_reset_wb = QPushButton("Restablecer")
+        btn_reset_wb.clicked.connect(self.reset_wb)
+        row_wb_btn.addWidget(btn_reset_wb)
+        wb_layout.addLayout(row_wb_btn)
+
+        self.sec_wb.set_content_widget(w_wb)
+        left_layout.addWidget(self.sec_wb)
+
+        # --- SECCIÓN 7: Color: Saturación e Intensidad ---
+        self.sec_color = CollapsibleSection(
+            "🎨 Color y Saturación",
+            is_expanded=True,
+            on_reset=self.reset_saturation
+        )
+        w_sat = QWidget()
+        sat_layout = QVBoxLayout(w_sat)
+        sat_layout.setContentsMargins(6, 4, 6, 6)
+        sat_layout.setSpacing(8)
+
+        # Emparejamiento 3.2: Saturación Cielo (izq) y Suelo (der) en 2 columnas
+        row_sat_dual = QHBoxLayout()
+        row_sat_dual.setSpacing(14)
+
+        col_sky = QVBoxLayout()
+        col_sky.setSpacing(4)
+        row_sky_lbl = QHBoxLayout()
+        row_sky_lbl.addWidget(self._make_resettable_label(QLabel("Sat. Cielo:"), lambda: self.slider_sat_sky.setValue(100), "1.00x"))
+        self.lbl_sat_sky = QLabel("1.00x")
+        self.lbl_sat_sky.setStyleSheet("color: #80d8ff; font-weight: bold;")
+        row_sky_lbl.addWidget(self.lbl_sat_sky)
+        col_sky.addLayout(row_sky_lbl)
+
+        self.slider_sat_sky = QSlider(Qt.Horizontal)
+        self.slider_sat_sky.setRange(0, 250)
+        self.slider_sat_sky.setValue(100)
+        self.slider_sat_sky.valueChanged.connect(self.on_sat_sky_changed)
+        col_sky.addWidget(self.slider_sat_sky)
+        row_sat_dual.addLayout(col_sky)
+
+        col_gnd = QVBoxLayout()
+        col_gnd.setSpacing(4)
+        row_gnd_lbl = QHBoxLayout()
+        row_gnd_lbl.addWidget(self._make_resettable_label(QLabel("Sat. Suelo:"), lambda: self.slider_sat_gnd.setValue(100), "1.00x"))
+        self.lbl_sat_gnd = QLabel("1.00x")
+        self.lbl_sat_gnd.setStyleSheet("color: #a5d6a7; font-weight: bold;")
+        row_gnd_lbl.addWidget(self.lbl_sat_gnd)
+        col_gnd.addLayout(row_gnd_lbl)
+
+        self.slider_sat_gnd = QSlider(Qt.Horizontal)
+        self.slider_sat_gnd.setRange(0, 250)
+        self.slider_sat_gnd.setValue(100)
+        self.slider_sat_gnd.valueChanged.connect(self.on_sat_gnd_changed)
+        col_gnd.addWidget(self.slider_sat_gnd)
+        row_sat_dual.addLayout(col_gnd)
+
+        sat_layout.addLayout(row_sat_dual)
+
+        # Vibrance y Reset en una fila compacta
+        row_vib = QHBoxLayout()
+        row_vib.addWidget(self._make_resettable_label(QLabel("Vibranza:"), lambda: self.slider_vibrance.setValue(0), "0.00"))
+        self.lbl_vibrance = QLabel("0.00")
+        self.lbl_vibrance.setStyleSheet("color: #ffd54f; font-weight: bold;")
+        row_vib.addWidget(self.lbl_vibrance)
+        row_vib.addSpacing(6)
+        self.slider_vibrance = QSlider(Qt.Horizontal)
+        self.slider_vibrance.setRange(-100, 100)
+        self.slider_vibrance.setValue(0)
+        self.slider_vibrance.valueChanged.connect(self.on_vibrance_changed)
+        row_vib.addWidget(self.slider_vibrance, stretch=1)
+
+        btn_reset_sat = QPushButton("Restablecer")
+        btn_reset_sat.setToolTip("Restablecer Saturación y Vibranza")
+        btn_reset_sat.clicked.connect(self.reset_saturation)
+        row_vib.addWidget(btn_reset_sat)
+        sat_layout.addLayout(row_vib)
+
+        self.sec_color.set_content_widget(w_sat)
+        left_layout.addWidget(self.sec_color)
+
+        # --- SECCIÓN 8: Ajuste Tonal Suelo (Paisaje) ---
+        self.sec_gnd_tone = CollapsibleSection(
+            "🏞️ Ajuste Tonal Suelo (Paisaje)",
+            is_expanded=False,
+            on_reset=self.reset_gnd_tone
+        )
+        w_gnd_tone = QWidget()
+        gnd_tone_layout = QVBoxLayout(w_gnd_tone)
+        gnd_tone_layout.setContentsMargins(6, 4, 6, 6)
         gnd_tone_layout.setSpacing(8)
 
         # Acceso y estado de la Máscara de Suelo
@@ -810,14 +873,11 @@ class DeveloperTab(QWidget):
         btn_reset_gnd.clicked.connect(self.reset_gnd_tone)
         gnd_tone_layout.addWidget(btn_reset_gnd)
 
-        left_layout.addWidget(grp_gnd_tone)
+        self.sec_gnd_tone.set_content_widget(w_gnd_tone)
+        left_layout.addWidget(self.sec_gnd_tone)
 
-        # --- SECCIÓN 7: Capas y Máscaras Locales ---
-        grp_masks = QGroupBox("7. Máscaras y Capas de Ajuste Local")
-        masks_layout = QVBoxLayout(grp_masks)
-        masks_layout.setContentsMargins(10, 14, 10, 10)
-        masks_layout.setSpacing(8)
-
+        # --- SECCIÓN 9: Máscaras y Capas de Ajuste Local ---
+        self.sec_masks = CollapsibleSection("🎭 Máscaras y Capas de Ajuste Local", is_expanded=False)
         self.mask_layers_widget = MaskLayersWidget()
         self.mask_layers_widget.set_getters(
             img_getter=lambda: self.preview_proxy if self.preview_proxy is not None else self.image_32bit,
@@ -830,43 +890,40 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.edit_ground_mask_requested.connect(self._open_mask_tool_from_section)
         self.mask_layers_widget.brush_tool_toggled.connect(self._on_layer_brush_toggled)
         self.mask_layers_widget.brush_params_changed.connect(self._on_layer_brush_params_changed)
-        masks_layout.addWidget(self.mask_layers_widget)
 
-        left_layout.addWidget(grp_masks)
+        def _update_masks_badge():
+            count = len(self.mask_layers_widget.layers)
+            if count > 0:
+                self.sec_masks.set_status_badge(f"● {count} {'capas' if count > 1 else 'capa'}", "#80d8ff")
+            else:
+                self.sec_masks.set_status_badge("")
+        self.mask_layers_widget.layers_changed.connect(_update_masks_badge)
 
-        # --- SECCIÓN 8: Exportación ---
+        self.sec_masks.set_content_widget(self.mask_layers_widget)
+        left_layout.addWidget(self.sec_masks)
+
+        left_layout.addStretch(1)
+
+        # Asignar panel de acordeones al área de scroll
+        self.left_scroll_area.setWidget(left_panel)
+        left_container_layout.addWidget(self.left_scroll_area, 1)
+
+        # Botón Exportar siempre fijado al pie del panel izquierdo
         self.btn_export = QPushButton("💾 EXPORTAR IMAGEN REVELADA...")
         self.btn_export.setFixedHeight(44)
         self.btn_export.setCursor(Qt.PointingHandCursor)
         self.btn_export.setStyleSheet(STYLE_RUN_IDLE)
         self.btn_export.clicked.connect(self.export_image)
-        left_layout.addWidget(self.btn_export)
-        left_layout.addStretch()
+        left_container_layout.addWidget(self.btn_export, 0)
 
-        # Scroll área
-        self.left_scroll_area = QScrollArea()
-        self.left_scroll_area.setWidgetResizable(True)
-        self.left_scroll_area.setFrameShape(QFrame.NoFrame)
-        self.left_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.left_scroll_area.setWidget(left_panel)
-        self.left_scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-
-        left_container = QWidget()
-        left_container_layout = QVBoxLayout(left_container)
-        left_container_layout.setContentsMargins(4, 4, 4, 4)
-        left_container_layout.setSpacing(6)
-        left_container.setMinimumWidth(440)
-        left_container.setMaximumWidth(540)
-
-        left_container_layout.addWidget(self.left_scroll_area, 1)
-
+        # Registro de Actividad compacto
         lbl_log = QLabel("Registro de Actividad:")
         lbl_log.setStyleSheet("color: #a0a0a0; font-size: 11px; font-weight: bold;")
         left_container_layout.addWidget(lbl_log, 0)
 
         self.txt_log = QTextEdit()
         self.txt_log.setReadOnly(True)
-        self.txt_log.setFixedHeight(100)
+        self.txt_log.setFixedHeight(85)
         left_container_layout.addWidget(self.txt_log, 0)
 
         splitter.addWidget(left_container)
@@ -1788,7 +1845,13 @@ class DeveloperTab(QWidget):
         self.log_message("[MÁSCARA] Máscara de suelo eliminada.")
 
     def _update_mask_status_ui(self) -> None:
-        """Actualiza el indicador visual de presencia de máscara en la Sección 6 y botones."""
+        """Actualiza el indicador visual de presencia de máscara en la Sección 8 y botones."""
+        if hasattr(self, 'sec_gnd_tone'):
+            if self.current_mask is not None:
+                self.sec_gnd_tone.set_status_badge("● Suelo Activo", "#a5d6a7")
+            else:
+                self.sec_gnd_tone.set_status_badge("")
+
         if not hasattr(self, 'lbl_gnd_mask_status'):
             return
         if self.current_mask is not None:
@@ -3109,6 +3172,8 @@ class DeveloperTab(QWidget):
         self.lbl_denoise.setText("0%")
         
         self._set_starnet_tools_enabled(False)
+        if hasattr(self, 'sec_presets'):
+            self.sec_presets.set_status_badge("")
 
         if hasattr(self, 'curve_widget'):
             self.curve_widget.reset_all_curves()
@@ -3231,6 +3296,13 @@ class DeveloperTab(QWidget):
         
     def _set_starnet_tools_enabled(self, enabled: bool):
         """Habilita o deshabilita individualmente todos los controles que dependen de StarNet."""
+        if hasattr(self, "sec_starnet"):
+            if enabled:
+                self.sec_starnet.set_status_badge("● Separadas", "#00e5ff")
+                self.sec_starnet.expand()
+            else:
+                self.sec_starnet.set_status_badge("")
+
         if hasattr(self, "container_starnet_tools"):
             self.container_starnet_tools.setEnabled(enabled)
 
@@ -3696,7 +3768,7 @@ class DeveloperTab(QWidget):
         self._last_committed_state = self._capture_state()
         self._update_undo_redo_buttons()
 
-        # 4. Mensaje explicativo en el log
+        # 4. Mensaje explicativo en el log y badge de estado
         scope_names = {
             SCOPE_ALL: "Todo (Sin estirado)",
             SCOPE_TONE: "Solo Contraste y Suelo",
@@ -3705,6 +3777,12 @@ class DeveloperTab(QWidget):
         }
         scope_str = scope_names.get(scope, scope)
         self.log_message(f"🎨 Preset aplicado: '{preset.name}' [{scope_str}]")
+
+        if hasattr(self, 'sec_presets'):
+            if preset and preset.name and "Neutro" not in preset.name:
+                self.sec_presets.set_status_badge(f"● {preset.name}", "#80d8ff")
+            else:
+                self.sec_presets.set_status_badge("")
 
     def open_save_preset_dialog(self):
         """Abre el diálogo para guardar los ajustes actuales como un preset."""
