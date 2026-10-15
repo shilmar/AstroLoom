@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
 from core.mask_layers import (
     MaskLayer, compute_layer_mask, compute_effective_layer_mask,
     MASK_TYPE_BRUSH, MASK_TYPE_GROUND, MASK_TYPE_SKY, MASK_TYPE_LUMA, MASK_TYPE_COLOR, MASK_TYPE_CUSTOM,
+    LAYER_KIND_ADJUSTMENT, LAYER_KIND_IMAGE,
+    MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_STARS, MASK_TYPE_IMAGE_GROUND,
     SCOPE_TARGET_ALL, SCOPE_TARGET_GROUND, SCOPE_TARGET_STARLESS, SCOPE_TARGET_STARS
 )
 from gui.theme import (
@@ -36,6 +38,8 @@ class MaskLayersWidget(QWidget):
     edit_ground_mask_requested = Signal()        # Solicitud de abrir el pincel interactivo de suelo
     brush_tool_toggled = Signal(bool, object)    # (activo, MaskLayer) para activar el pincel en el lienzo
     brush_params_changed = Signal(int, float, float, str) # (radio, dureza, flujo, modo)
+    starnet_opacity_changed = Signal(float)       # (opacidad 0.0 - 1.0) para sincronizar con slider_stars de StarNet
+    starnet_visibility_changed = Signal(bool)     # (visibilidad) para sincronizar con combo_layer de StarNet
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -452,8 +456,8 @@ class MaskLayersWidget(QWidget):
         props_layout.addWidget(self.grp_mask_def)
 
         # 6. Controles de Ajustes Locales de Revelado
-        grp_local_adj = QGroupBox("Ajustes Locales de Revelado")
-        adj_layout = QVBoxLayout(grp_local_adj)
+        self.grp_local_adj = QGroupBox("Ajustes Locales de Revelado")
+        adj_layout = QVBoxLayout(self.grp_local_adj)
         adj_layout.setContentsMargins(8, 12, 8, 8)
         adj_layout.setSpacing(6)
 
@@ -608,7 +612,7 @@ class MaskLayersWidget(QWidget):
         btn_reset_local.clicked.connect(self._reset_local_adjustments)
         adj_layout.addWidget(btn_reset_local)
 
-        props_layout.addWidget(grp_local_adj)
+        props_layout.addWidget(self.grp_local_adj)
 
         main_layout.addWidget(self.container_layer_props)
 
@@ -619,8 +623,115 @@ class MaskLayersWidget(QWidget):
     # GESTIÓN DE CAPAS (AÑADIR, DUPLICAR, ELIMINAR, REORDENAR)
     # =========================================================================
 
+    def has_image_layers(self) -> bool:
+        """Indica si la lista contiene capas especiales de imagen (StarNet / Suelo)."""
+        return any(l.layer_kind == LAYER_KIND_IMAGE for l in self.layers)
+
+    def ensure_starnet_layers(self, has_ground: bool = False) -> None:
+        """
+        Asegura que las capas de imagen producidas por StarNet existan en la pila (estilo Photoshop).
+        Si no existían, las inicializa en el orden por defecto:
+          [TOP]    Máscaras de ajuste del usuario
+                   ⭐ Capa de Estrellas
+                   🏞️ Capa de Suelo (si has_ground=True)
+          [BOTTOM] 🌌 Fondo Nebular (Starless)
+        Si ya existían, preserva fielmente el orden personalizado en que el usuario las haya movido.
+        """
+        existing_sys = {l.mask_type: l for l in self.layers if l.is_system_layer}
+
+        if not existing_sys:
+            user_layers = [l for l in self.layers if not l.is_system_layer]
+            stars_layer = MaskLayer(
+                name="Capa de Estrellas",
+                layer_kind=LAYER_KIND_IMAGE,
+                mask_type=MASK_TYPE_IMAGE_STARS,
+                target_scope=SCOPE_TARGET_STARS,
+                is_system_layer=True
+            )
+            starless_layer = MaskLayer(
+                name="Fondo Nebular (Starless)",
+                layer_kind=LAYER_KIND_IMAGE,
+                mask_type=MASK_TYPE_IMAGE_STARLESS,
+                target_scope=SCOPE_TARGET_STARLESS,
+                is_system_layer=True
+            )
+            new_layers: List[MaskLayer] = list(user_layers)
+            new_layers.append(stars_layer)
+            if has_ground:
+                ground_layer = MaskLayer(
+                    name="Capa de Suelo (Terreno)",
+                    layer_kind=LAYER_KIND_IMAGE,
+                    mask_type=MASK_TYPE_IMAGE_GROUND,
+                    target_scope=SCOPE_TARGET_GROUND,
+                    is_system_layer=True
+                )
+                new_layers.append(ground_layer)
+            new_layers.append(starless_layer)
+
+            self.layers = new_layers
+            self._rebuild_list_items(select_layer_id=stars_layer.id)
+            self.layers_changed.emit()
+            return
+
+        # Si ya existían capas del sistema, comprobar si el estado de suelo ha cambiado
+        has_gnd_layer = MASK_TYPE_IMAGE_GROUND in existing_sys
+        modified = False
+
+        if has_ground and not has_gnd_layer:
+            # Crear e insertar capa de suelo justo encima del fondo starless
+            gnd = MaskLayer(
+                name="Capa de Suelo (Terreno)",
+                layer_kind=LAYER_KIND_IMAGE,
+                mask_type=MASK_TYPE_IMAGE_GROUND,
+                target_scope=SCOPE_TARGET_GROUND,
+                is_system_layer=True
+            )
+            starless_idx = next((i for i, l in enumerate(self.layers) if l.mask_type == MASK_TYPE_IMAGE_STARLESS), len(self.layers))
+            self.layers.insert(starless_idx, gnd)
+            modified = True
+        elif not has_ground and has_gnd_layer:
+            # Quitar la capa de suelo porque se eliminó la máscara
+            self.layers = [l for l in self.layers if l.mask_type != MASK_TYPE_IMAGE_GROUND]
+            modified = True
+
+        if modified:
+            self._rebuild_list_items(select_layer_id=self._selected_layer_id)
+            self.layers_changed.emit()
+
+    def remove_starnet_layers(self) -> None:
+        """Elimina las capas de sistema generadas por StarNet (ej: al iniciar nueva sesión)."""
+        self.layers = [l for l in self.layers if not l.is_system_layer]
+        self._rebuild_list_items()
+        self.layers_changed.emit()
+
+    def set_starnet_stars_opacity(self, opacity: float) -> None:
+        """Sincroniza la opacidad de la capa de estrellas con controles externos."""
+        for l in self.layers:
+            if l.mask_type == MASK_TYPE_IMAGE_STARS:
+                l.opacity = float(np.clip(opacity, 0.0, 1.0))
+                if self._selected_layer_id == l.id:
+                    self._updating_ui = True
+                    op_pct = int(round(l.opacity * 100))
+                    self.slider_opacity.setValue(op_pct)
+                    self.lbl_opacity.setText(f"{op_pct}%")
+                    self._updating_ui = False
+                break
+        self._rebuild_list_items(select_layer_id=self._selected_layer_id)
+
+    def set_starnet_stars_enabled(self, enabled: bool) -> None:
+        """Sincroniza la visibilidad de la capa de estrellas con controles externos."""
+        for l in self.layers:
+            if l.mask_type == MASK_TYPE_IMAGE_STARS:
+                l.enabled = enabled
+                if self._selected_layer_id == l.id:
+                    self._updating_ui = True
+                    self.chk_layer_enabled.setChecked(enabled)
+                    self._updating_ui = False
+                break
+        self._rebuild_list_items(select_layer_id=self._selected_layer_id)
+
     def add_new_layer(self, mask_type: str) -> MaskLayer:
-        """Crea una nueva capa del tipo indicado y la añade a la pila."""
+        """Crea una nueva capa de ajuste del tipo indicado y la sitúa al inicio (TOP) de la pila."""
         count = len(self.layers) + 1
         if mask_type == MASK_TYPE_BRUSH:
             name = f"Pincel {count}"
@@ -636,7 +747,8 @@ class MaskLayersWidget(QWidget):
             name = f"Máscara {count}"
 
         layer = MaskLayer(name=name, mask_type=mask_type)
-        self.layers.append(layer)
+        # En Photoshop las capas nuevas se insertan arriba del todo
+        self.layers.insert(0, layer)
         self._rebuild_list_items(select_layer_id=layer.id)
         if mask_type == MASK_TYPE_BRUSH:
             self.set_preview_active(True)
@@ -644,18 +756,21 @@ class MaskLayersWidget(QWidget):
         return layer
 
     def _delete_selected(self) -> None:
-        """Elimina la capa actualmente seleccionada."""
+        """Elimina la capa actualmente seleccionada protegiendo las capas del sistema."""
         idx = self.list_layers.currentRow()
         if 0 <= idx < len(self.layers):
-            layer = self.layers.pop(idx)
+            layer = self.layers[idx]
+            if layer.is_system_layer:
+                return  # No se permite borrar capas de sistema
+            self.layers.pop(idx)
             next_select = self.layers[idx].id if idx < len(self.layers) else (self.layers[-1].id if self.layers else None)
             self._rebuild_list_items(select_layer_id=next_select)
             self.layers_changed.emit()
 
     def _duplicate_selected(self) -> None:
-        """Duplica la capa seleccionada."""
+        """Duplica la capa seleccionada si no es de sistema."""
         layer = self.get_selected_layer()
-        if layer:
+        if layer and not layer.is_system_layer:
             d = layer.to_dict()
             new_layer = MaskLayer.from_dict(d)
             if layer.brush_mask is not None:
@@ -692,32 +807,49 @@ class MaskLayersWidget(QWidget):
         return None
 
     def _rebuild_list_items(self, select_layer_id: Optional[str] = None) -> None:
-        """Regenera los elementos de la lista QListWidget."""
+        """Regenera los elementos de la lista QListWidget con iconos y estilos acordes a su tipo."""
         self._updating_ui = True
         self.list_layers.clear()
 
         select_row = -1
         for i, layer in enumerate(self.layers):
-            scope_tag = {
-                SCOPE_TARGET_ALL: "Compuesta",
-                SCOPE_TARGET_GROUND: "Suelo",
-                SCOPE_TARGET_STARLESS: "Starless",
-                SCOPE_TARGET_STARS: "Estrellas",
-            }.get(layer.target_scope, "Todo")
+            if layer.mask_type == MASK_TYPE_IMAGE_STARS:
+                icon = "⭐"
+                scope_tag = "StarNet AI"
+                fg_col = QColor("#80d8ff") if layer.enabled else QColor("#455a64")
+            elif layer.mask_type == MASK_TYPE_IMAGE_STARLESS:
+                icon = "🌌"
+                scope_tag = "StarNet AI"
+                fg_col = QColor("#ce93d8") if layer.enabled else QColor("#455a64")
+            elif layer.mask_type == MASK_TYPE_IMAGE_GROUND:
+                icon = "🏞️"
+                scope_tag = "Paisaje Suelo"
+                fg_col = QColor("#a5d6a7") if layer.enabled else QColor("#455a64")
+            else:
+                scope_tag = {
+                    SCOPE_TARGET_ALL: "Compuesta",
+                    SCOPE_TARGET_GROUND: "Suelo",
+                    SCOPE_TARGET_STARLESS: "Starless",
+                    SCOPE_TARGET_STARS: "Estrellas",
+                }.get(layer.target_scope, "Todo")
 
-            icon = {
-                MASK_TYPE_BRUSH: "🖌️",
-                MASK_TYPE_LUMA: "💡",
-                MASK_TYPE_COLOR: "🎨",
-                MASK_TYPE_GROUND: "🏞️",
-                MASK_TYPE_SKY: "🌌",
-            }.get(layer.mask_type, "📑")
+                icon = {
+                    MASK_TYPE_BRUSH: "🖌️",
+                    MASK_TYPE_LUMA: "💡",
+                    MASK_TYPE_COLOR: "🎨",
+                    MASK_TYPE_GROUND: "🏞️",
+                    MASK_TYPE_SKY: "🌌",
+                }.get(layer.mask_type, "📑")
+                fg_col = QColor("#e0e6f0") if layer.enabled else QColor("#78909c")
 
             status = "✓" if layer.enabled else "✕"
             txt = f"{status} {icon} {layer.name}  [{scope_tag}]"
             item = QListWidgetItem(txt)
-            if not layer.enabled:
-                item.setForeground(QColor("#78909c"))
+            item.setForeground(fg_col)
+            if layer.is_system_layer:
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
             self.list_layers.addItem(item)
 
             if select_layer_id and layer.id == select_layer_id:
@@ -749,12 +881,13 @@ class MaskLayersWidget(QWidget):
         """Actualiza la visibilidad y los valores de los controles según la capa activa."""
         layer = self.get_selected_layer()
         has_sel = layer is not None
+        is_sys = layer.is_system_layer if layer else False
 
         self.container_layer_props.setVisible(has_sel)
         self.btn_move_up.setEnabled(has_sel)
         self.btn_move_down.setEnabled(has_sel)
-        self.btn_duplicate.setEnabled(has_sel)
-        self.btn_delete.setEnabled(has_sel)
+        self.btn_duplicate.setEnabled(has_sel and not is_sys)
+        self.btn_delete.setEnabled(has_sel and not is_sys)
 
         if not layer:
             self.brush_tool_toggled.emit(False, None)
@@ -764,24 +897,38 @@ class MaskLayersWidget(QWidget):
 
         # Fila A
         self.txt_layer_name.setText(layer.name)
+        self.txt_layer_name.setEnabled(not is_sys)
         self.chk_layer_enabled.setChecked(layer.enabled)
         self.chk_layer_invert.setChecked(layer.inverted)
+        self.chk_layer_invert.setEnabled(not is_sys)
 
         # Fila B: Scope
         idx = self.combo_target_scope.findData(layer.target_scope)
         if idx >= 0:
             self.combo_target_scope.setCurrentIndex(idx)
+        self.combo_target_scope.setEnabled(not is_sys)
 
         # Fila C: Opacidad
         op_pct = int(round(layer.opacity * 100))
         self.slider_opacity.setValue(op_pct)
         self.lbl_opacity.setText(f"{op_pct}%")
 
-        # Sub-paneles de tipo de máscara
-        self.panel_brush.setVisible(layer.mask_type == MASK_TYPE_BRUSH)
-        self.panel_luma.setVisible(layer.mask_type == MASK_TYPE_LUMA)
-        self.panel_color.setVisible(layer.mask_type == MASK_TYPE_COLOR)
-        self.panel_ground.setVisible(layer.mask_type in (MASK_TYPE_GROUND, MASK_TYPE_SKY))
+        # Grupo de definición de máscara (Ocultar si es capa de sistema de StarNet)
+        self.grp_mask_def.setVisible(not is_sys)
+        if hasattr(self, 'grp_local_adj'):
+            self.grp_local_adj.setTitle("Ajustes de Capa" if is_sys else "Ajustes Locales de Revelado")
+
+        if not is_sys:
+            # Sub-paneles de tipo de máscara
+            self.panel_brush.setVisible(layer.mask_type == MASK_TYPE_BRUSH)
+            self.panel_luma.setVisible(layer.mask_type == MASK_TYPE_LUMA)
+            self.panel_color.setVisible(layer.mask_type == MASK_TYPE_COLOR)
+            self.panel_ground.setVisible(layer.mask_type in (MASK_TYPE_GROUND, MASK_TYPE_SKY))
+        else:
+            self.panel_brush.setVisible(False)
+            self.panel_luma.setVisible(False)
+            self.panel_color.setVisible(False)
+            self.panel_ground.setVisible(False)
 
         if layer.mask_type == MASK_TYPE_BRUSH:
             self.slider_b_radius.setValue(layer.brush_radius)
@@ -852,6 +999,8 @@ class MaskLayersWidget(QWidget):
         if self._updating_ui: return
         layer = self.get_selected_layer()
         if layer:
+            if layer.is_system_layer:
+                return  # No se permite renombrar capas de sistema
             layer.name = text.strip() or "Máscara"
             # Actualizar texto del item en la lista sin reconstruir todo
             row = self.list_layers.currentRow()
@@ -880,6 +1029,8 @@ class MaskLayersWidget(QWidget):
             self._rebuild_list_items(select_layer_id=layer.id)
             if layer.mask_type == MASK_TYPE_BRUSH:
                 self.brush_tool_toggled.emit(checked, layer if checked else None)
+            elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
+                self.starnet_visibility_changed.emit(checked)
             self.layers_changed.emit()
 
     def _on_layer_invert_toggled(self, checked: bool) -> None:
@@ -905,6 +1056,8 @@ class MaskLayersWidget(QWidget):
         if layer:
             layer.opacity = val / 100.0
             self.lbl_opacity.setText(f"{val}%")
+            if layer.mask_type == MASK_TYPE_IMAGE_STARS:
+                self.starnet_opacity_changed.emit(layer.opacity)
             self.layers_changed.emit()
 
     # Controles de Pincel interactivo

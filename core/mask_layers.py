@@ -20,7 +20,11 @@ SCOPE_TARGET_GROUND = "ground"      # Solo Suelo (aislado por la máscara de sue
 SCOPE_TARGET_STARLESS = "starless"  # Solo Fondo Starless (estrellas desacopladas)
 SCOPE_TARGET_STARS = "stars"        # Solo Capa de Estrellas
 
-# Tipos de Máscara
+# Naturaleza de la Capa (Layer Kind)
+LAYER_KIND_ADJUSTMENT = "adjustment"  # Capa de ajuste paramétrico con máscara
+LAYER_KIND_IMAGE = "image"            # Capa portadora de imagen (Fondo Starless, Estrellas, Suelo)
+
+# Tipos de Máscara de Ajuste
 MASK_TYPE_BRUSH = "brush"           # Pincel interactivo con dureza y opacidad de trazo
 MASK_TYPE_GROUND = "ground"         # Máscara Suelo (invertida del cielo)
 MASK_TYPE_SKY = "sky"               # Máscara Cielo
@@ -28,17 +32,24 @@ MASK_TYPE_LUMA = "luminance"        # Rango de Luminancia (Sombras/Medios/Luces)
 MASK_TYPE_COLOR = "color"           # Rango de Color (HSV)
 MASK_TYPE_CUSTOM = "custom"         # Trazos libres / raster personalizado
 
+# Tipos Especiales de Capas de Imagen (StarNet / Pipeline)
+MASK_TYPE_IMAGE_STARLESS = "image_starless"  # 🌌 Fondo Nebular (Starless AI)
+MASK_TYPE_IMAGE_STARS = "image_stars"        # ⭐ Capa de Estrellas (StarNet AI)
+MASK_TYPE_IMAGE_GROUND = "image_ground"      # 🏞️ Capa de Suelo / Terreno (Paisaje)
+
 
 @dataclass
 class MaskLayer:
-    """Representa una capa de ajuste local con su propia máscara y parámetros."""
+    """Representa una capa (de ajuste o de imagen especial) con su propia máscara y parámetros."""
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     name: str = "Nueva Máscara"
+    layer_kind: str = LAYER_KIND_ADJUSTMENT   # "adjustment" o "image"
     mask_type: str = MASK_TYPE_BRUSH
     target_scope: str = SCOPE_TARGET_ALL
     enabled: bool = True
     inverted: bool = False
     opacity: float = 1.0  # 0.0 a 1.0
+    is_system_layer: bool = False  # Si es True, no se puede eliminar con el botón de borrar
 
     # Parámetros para máscara de Pincel interactivo
     brush_radius: int = 35          # Radio en píxeles (5 a 250 px)
@@ -280,25 +291,101 @@ def apply_all_mask_layers(
     stars_image: Optional[np.ndarray] = None
 ) -> np.ndarray:
     """
-    Aplica secuencialmente todas las capas de ajuste local activas considerando su ámbito (Target Scope).
+    Aplica secuencialmente la composición de capas (estilo Photoshop),
+    integrando capas de imagen (Fondo Starless, Suelo, Estrellas) y capas de ajuste locales.
     """
     if not mask_layers:
         return composite_image
 
-    img = composite_image.copy()
+    has_image_layers = any(l.layer_kind == LAYER_KIND_IMAGE for l in mask_layers)
+    if not has_image_layers:
+        # Modo clásico de solo máscaras de ajuste sobre la imagen compuesta
+        img = composite_image.copy()
+        for layer in mask_layers:
+            if not layer.enabled or layer.opacity <= 1e-4:
+                continue
+            m_eff = compute_effective_layer_mask(
+                layer, img,
+                master_sky_mask=master_sky_mask,
+                starless_image=starless_image,
+                stars_image=stars_image
+            )
+            img = apply_local_adjustments_to_image(img, m_eff, layer)
+        return img
 
-    for layer in mask_layers:
-        if not layer.enabled or layer.opacity <= 1e-4:
+    # =========================================================================
+    # MODO COMPOSITOR MULTICAPA COMPLETO (Estilo Photoshop: evaluación Bottom-Up)
+    # =========================================================================
+    # En la interfaz de usuario, la fila 0 es la capa superior (TOP), y la última fila es la base (BOTTOM).
+    # Para evaluar la pila de abajo hacia arriba, invertimos el orden de las capas.
+    eval_layers = list(reversed(mask_layers))
+
+    # Base inicial del lienzo (Fondo estirado y ajustado por el pipeline)
+    canvas = composite_image.copy()
+    img_h, img_w = canvas.shape[:2]
+
+    # Máscara 2D de cielo y suelo normalizada
+    sky_m = None
+    gnd_m = None
+    if master_sky_mask is not None:
+        sky_m = master_sky_mask[..., 0] if master_sky_mask.ndim == 3 else master_sky_mask
+        if sky_m.shape[:2] != (img_h, img_w):
+            sky_m = cv2.resize(sky_m, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
+        gnd_m = np.clip(1.0 - sky_m, 0.0, 1.0).astype(np.float32)
+
+    for layer in eval_layers:
+        if not layer.enabled:
             continue
 
-        m_eff = compute_effective_layer_mask(
-            layer, img,
-            master_sky_mask=master_sky_mask,
-            starless_image=starless_image,
-            stars_image=stars_image
-        )
+        if layer.mask_type == MASK_TYPE_IMAGE_STARLESS:
+            # Capa 🌌 Fondo Starless
+            has_adj = (abs(layer.temp) > 1e-4 or abs(layer.tint) > 1e-4 or 
+                       abs(layer.exposure) > 1e-3 or abs(layer.contrast) > 1e-3 or 
+                       abs(layer.saturation - 1.0) > 1e-3 or abs(layer.shadows) > 1e-3 or 
+                       abs(layer.highlights) > 1e-3)
+            if has_adj:
+                canvas = apply_local_adjustments_to_image(canvas, np.ones((img_h, img_w), dtype=np.float32), layer)
+            if layer.opacity < 0.999:
+                canvas = canvas * layer.opacity
 
-        img = apply_local_adjustments_to_image(img, m_eff, layer)
+        elif layer.mask_type == MASK_TYPE_IMAGE_GROUND:
+            # Capa 🏞️ Suelo / Terreno
+            if gnd_m is not None:
+                eff_m = np.clip(gnd_m * layer.opacity, 0.0, 1.0)
+                # Si el suelo está encima de las estrellas, restaura el suelo limpio sin estrellas debajo
+                w_3d = eff_m[..., np.newaxis]
+                canvas = (composite_image * w_3d) + (canvas * (1.0 - w_3d))
+                canvas = apply_local_adjustments_to_image(canvas, eff_m, layer)
 
-    return img
+        elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
+            # Capa ⭐ Estrellas
+            if stars_image is not None and layer.opacity > 1e-4:
+                st = stars_image.copy()
+                if st.shape[:2] != (img_h, img_w):
+                    st = cv2.resize(st, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
+                
+                # Ajustes cromáticos propios de la capa de estrellas
+                has_adj = (abs(layer.temp) > 1e-4 or abs(layer.tint) > 1e-4 or 
+                           abs(layer.exposure) > 1e-3 or abs(layer.contrast) > 1e-3 or 
+                           abs(layer.saturation - 1.0) > 1e-3)
+                if has_adj:
+                    st = apply_local_adjustments_to_image(st, np.ones((img_h, img_w), dtype=np.float32), layer)
+
+                # Mezcla Screen (Trama estilo Photoshop): 1 - (1 - canvas) * (1 - st * opacity)
+                # Garantiza que las estrellas no quemen núcleos y se fundan de forma natural
+                st_weighted = np.clip(st * layer.opacity, 0.0, 1.0)
+                canvas = 1.0 - (1.0 - canvas) * (1.0 - st_weighted)
+
+        else:
+            # Capas de ajuste estándar (Pincel, Luminancia, Color, etc.)
+            if layer.opacity > 1e-4:
+                m_eff = compute_effective_layer_mask(
+                    layer, canvas,
+                    master_sky_mask=master_sky_mask,
+                    starless_image=starless_image,
+                    stars_image=stars_image
+                )
+                canvas = apply_local_adjustments_to_image(canvas, m_eff, layer)
+
+    return np.ascontiguousarray(np.clip(canvas, 0.0, 1.0), dtype=np.float32)
 

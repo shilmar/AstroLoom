@@ -895,6 +895,8 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.edit_ground_mask_requested.connect(self._open_mask_tool_from_section)
         self.mask_layers_widget.brush_tool_toggled.connect(self._on_layer_brush_toggled)
         self.mask_layers_widget.brush_params_changed.connect(self._on_layer_brush_params_changed)
+        self.mask_layers_widget.starnet_opacity_changed.connect(self._on_mask_layer_starnet_opacity)
+        self.mask_layers_widget.starnet_visibility_changed.connect(self._on_mask_layer_starnet_visibility)
 
         def _update_masks_badge():
             count = len(self.mask_layers_widget.layers)
@@ -1912,6 +1914,9 @@ class DeveloperTab(QWidget):
             else:
                 self.sec_gnd_tone.set_status_badge("")
 
+        if hasattr(self, 'mask_layers_widget') and self.image_starless is not None:
+            self.mask_layers_widget.ensure_starnet_layers(has_ground=(self.current_mask is not None))
+
         if not hasattr(self, 'lbl_gnd_mask_status'):
             return
         if self.current_mask is not None:
@@ -2542,6 +2547,14 @@ class DeveloperTab(QWidget):
             )
 
         # 4. Mezcla de capas
+        # Si el gestor de capas contiene capas de imagen activas (StarNet / Suelo),
+        # delegamos la composición completa al motor multicapa de apply_all_mask_layers
+        # para respetar el orden visual de capas del usuario y evitar duplicar estrellas.
+        if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.has_image_layers():
+            if self.view_layer_mode == 2:
+                return stars, mask_3d
+            return processed_starless, mask_3d
+
         if self.view_layer_mode == 0:
             composed = np.clip(processed_starless + (stars * self.star_intensity), 0.0, 1.0)
             return composed, mask_3d
@@ -2654,17 +2667,25 @@ class DeveloperTab(QWidget):
         if abs(self.contrast_val) > 1e-4:
             stretched = adjust_contrast(stretched, self.contrast_val, pivot=None)
 
-        # 10. Aplicación de Capas y Máscaras Locales
+        # 10. Aplicación de Capas y Máscaras Locales (Compositor Multicapa estilo Photoshop)
         if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers:
             is_full_res = (self.image_32bit is not None and stretched.shape[:2] == self.image_32bit.shape[:2])
             st_img = self.image_stars if is_full_res else (self.proxy_stars if self.proxy_stars is not None else self.image_stars)
             sl_img = self.image_starless if is_full_res else (self.proxy_starless if self.proxy_starless is not None else self.image_starless)
+            
+            # Si hay capas de imagen especiales activas, preparamos las estrellas estiradas con el MTF
+            # para el modo Screen de Photoshop en apply_all_mask_layers
+            if st_img is not None and self.mask_layers_widget.has_image_layers():
+                st_stretched = manual_stretch(st_img, black_point=0.0, midtone=self.spin_mtf.value())
+            else:
+                st_stretched = st_img
+
             stretched = apply_all_mask_layers(
                 stretched,
                 self.mask_layers_widget.layers,
                 master_sky_mask=precomputed_mask,
                 starless_image=sl_img,
-                stars_image=st_img
+                stars_image=st_stretched
             )
 
         return np.ascontiguousarray(stretched, dtype=np.float32)
@@ -2740,6 +2761,10 @@ class DeveloperTab(QWidget):
         self.image_starless = np.ascontiguousarray(starless_img, dtype=np.float32)
         self.image_stars = np.ascontiguousarray(stars_img, dtype=np.float32)
 
+        # Integrar capas de imagen (Fondo, Estrellas y opcionalmente Suelo) en el Gestor de Capas
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.ensure_starnet_layers(has_ground=(self.current_mask is not None))
+
         self._set_starnet_tools_enabled(True)
         self._generate_preview_proxy()
         self.update_stretch_preview()
@@ -2754,11 +2779,40 @@ class DeveloperTab(QWidget):
         """Ajusta la intensidad relativa de la capa de estrellas separada."""
         self.star_intensity = val / 100.0
         self.lbl_stars.setText(f"{val}%")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_starnet_stars_opacity(self.star_intensity)
         self.update_stretch_preview()
 
     def on_layer_mode_changed(self, idx: int):
         self.view_layer_mode = idx
         self.slider_stars.setEnabled(idx == 0)
+        if hasattr(self, 'mask_layers_widget'):
+            if idx == 0:
+                self.mask_layers_widget.set_starnet_stars_enabled(True)
+            elif idx == 1:
+                self.mask_layers_widget.set_starnet_stars_enabled(False)
+        self.update_stretch_preview()
+
+    def _on_mask_layer_starnet_opacity(self, opacity: float):
+        """Sincroniza el cambio de opacidad de la capa de estrellas hacia la Sección 5."""
+        val = int(round(opacity * 100))
+        self.star_intensity = opacity
+        if hasattr(self, 'slider_stars'):
+            self.slider_stars.blockSignals(True)
+            self.slider_stars.setValue(val)
+            self.lbl_stars.setText(f"{val}%")
+            self.slider_stars.blockSignals(False)
+        self.update_stretch_preview()
+
+    def _on_mask_layer_starnet_visibility(self, visible: bool):
+        """Sincroniza la visibilidad de la capa de estrellas hacia la Sección 5."""
+        if hasattr(self, 'combo_layer'):
+            self.combo_layer.blockSignals(True)
+            new_idx = 0 if visible else 1
+            self.combo_layer.setCurrentIndex(new_idx)
+            self.view_layer_mode = new_idx
+            self.slider_stars.setEnabled(visible)
+            self.combo_layer.blockSignals(False)
         self.update_stretch_preview()
 
     def on_temp_changed(self, val: int):
@@ -3300,6 +3354,9 @@ class DeveloperTab(QWidget):
 
         self.current_mask = None
         self.active_filepath = None
+
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.remove_starnet_layers()
 
         self.has_custom_snapshot = False
         self.snapshot_before_pixmap = None
