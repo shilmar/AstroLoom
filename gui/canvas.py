@@ -161,17 +161,22 @@ class MaskCanvas(QWidget):
         self.layer_brush_mode = "erase" if mode == "erase" else "paint"
         self.update()
 
-    def set_active_layer_mask(self, mask: Optional[np.ndarray]) -> None:
+    def set_active_layer_mask(self, mask: Optional[np.ndarray], show_overlay: bool = False) -> None:
         """Establece la máscara actual sobre la que pintará el pincel de capa."""
         self._stroke_start_mask = None
         self._stroke_buffer = None
         if mask is not None:
             self.layer_brush_mask = mask.copy()
-            self.set_refined_mask(self.layer_brush_mask, mode="ruby")
-            self.set_mask_visible(True)
+            if show_overlay:
+                self.set_refined_mask(self.layer_brush_mask, mode="ruby")
+                self.set_mask_visible(True)
+            else:
+                self.set_refined_mask(None)
+                self.set_mask_visible(False)
         else:
             self.layer_brush_mask = None
             self.set_refined_mask(None)
+            self.set_mask_visible(False)
         self.update()
 
     def get_active_layer_mask(self) -> Optional[np.ndarray]:

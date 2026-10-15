@@ -959,7 +959,6 @@ class DeveloperTab(QWidget):
         self.canvas.crop_applied.connect(self._apply_crop)
         self.canvas.color_sampled.connect(self._on_eyedropper_color_sampled)
         self.canvas.brush_size_changed.connect(self._on_brush_size_changed)
-        self.canvas.layer_brush_stroke_started.connect(lambda: self.mask_layers_widget.set_preview_active(True))
         self.canvas.layer_brush_stroke_finished.connect(self._on_layer_brush_stroke_finished)
         self.canvas.layer_brush_radius_changed.connect(self.mask_layers_widget.set_brush_radius_from_canvas)
 
@@ -1967,7 +1966,15 @@ class DeveloperTab(QWidget):
             self.canvas.set_layer_brush_params(
                 layer.brush_radius, layer.brush_hardness, layer.brush_flow, layer.brush_mode
             )
-            self.canvas.set_active_layer_mask(layer.brush_mask)
+            show_overlay = bool(
+                hasattr(self, 'mask_layers_widget') and 
+                hasattr(self.mask_layers_widget, 'btn_preview_mask') and 
+                self.mask_layers_widget.btn_preview_mask.isChecked()
+            )
+            self.canvas.set_active_layer_mask(layer.brush_mask, show_overlay=show_overlay)
+            if not show_overlay:
+                self.canvas.set_refined_mask(None)
+                self.canvas.set_mask_visible(False)
         else:
             self.canvas.set_layer_brush_enabled(False)
             self.canvas.set_active_layer_mask(None)
@@ -1997,6 +2004,11 @@ class DeveloperTab(QWidget):
         layer = self.mask_layers_widget.get_selected_layer()
         if layer and layer.mask_type == "brush":
             layer.brush_mask = stroke_mask.copy()
+            # Si el botón de previsualización NO está activado expresamente, retirar el overlay temporal
+            # del trazo para que el usuario pueda apreciar de inmediato los cambios tonales en la imagen
+            if hasattr(self, 'mask_layers_widget') and not self.mask_layers_widget.btn_preview_mask.isChecked():
+                self.canvas.set_refined_mask(None)
+                self.canvas.set_mask_visible(False)
             self._commit_action()
             self.update_stretch_preview()
 
@@ -3781,9 +3793,11 @@ class DeveloperTab(QWidget):
             self.mask_layers_widget.blockSignals(False)
             sel_layer = self.mask_layers_widget.get_selected_layer()
             if sel_layer and sel_layer.mask_type == "brush" and sel_layer.enabled:
-                self.canvas.set_active_layer_mask(sel_layer.brush_mask)
+                show_overlay = self.mask_layers_widget.btn_preview_mask.isChecked()
+                self.canvas.set_active_layer_mask(sel_layer.brush_mask, show_overlay=show_overlay)
             elif not self.mask_layers_widget.btn_preview_mask.isChecked():
                 self.canvas.set_refined_mask(None)
+                self.canvas.set_mask_visible(False)
 
         self.update_stretch_preview()
 

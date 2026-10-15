@@ -779,8 +779,6 @@ class MaskLayersWidget(QWidget):
         # En Photoshop las capas nuevas se insertan arriba del todo
         self.layers.insert(0, layer)
         self._rebuild_list_items(select_layer_id=layer.id)
-        if mask_type == MASK_TYPE_BRUSH:
-            self.set_preview_active(True)
         self.layers_changed.emit()
         return layer
 
@@ -1024,10 +1022,14 @@ class MaskLayersWidget(QWidget):
             )
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
+            else:
+                self.preview_mask_requested.emit(None)
         else:
             self.brush_tool_toggled.emit(False, None)
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
+            else:
+                self.preview_mask_requested.emit(None)
 
     # =========================================================================
     # ACTUALIZACIÓN DE PARÁMETROS DE LA CAPA
