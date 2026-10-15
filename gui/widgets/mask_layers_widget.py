@@ -238,6 +238,7 @@ class MaskLayersWidget(QWidget):
 
         # 5. Caja dinámica de definición de máscara (Pincel / Luminancia / Color / Suelo)
         self.grp_mask_def = QGroupBox("Definición de Máscara")
+        self.grp_mask_def.setObjectName("mask_def_group")
         self.layout_mask_def = QVBoxLayout(self.grp_mask_def)
         self.layout_mask_def.setContentsMargins(8, 10, 8, 8)
         self.layout_mask_def.setSpacing(6)
@@ -471,6 +472,7 @@ class MaskLayersWidget(QWidget):
 
         # 6. Controles de Ajustes Locales de Revelado
         self.grp_local_adj = QGroupBox("Ajustes Locales de Revelado")
+        self.grp_local_adj.setObjectName("local_adj_group")
         adj_layout = QVBoxLayout(self.grp_local_adj)
         adj_layout.setContentsMargins(8, 12, 8, 8)
         adj_layout.setSpacing(6)
@@ -630,6 +632,7 @@ class MaskLayersWidget(QWidget):
 
         # 7. Controles Especiales de Tono de Suelo (Visibles SOLO cuando se selecciona una capa de Suelo)
         self.grp_gnd_special = QGroupBox("Ajustes Tonales Especiales de Suelo")
+        self.grp_gnd_special.setObjectName("gnd_special_group")
         gnd_spec_layout = QVBoxLayout(self.grp_gnd_special)
         gnd_spec_layout.setContentsMargins(8, 12, 8, 8)
         gnd_spec_layout.setSpacing(6)
@@ -700,6 +703,7 @@ class MaskLayersWidget(QWidget):
 
         # 8. Controles Especiales de Capa de Estrellas (Visibles SOLO en Capa de Estrellas)
         self.grp_stars_special = QGroupBox("Ajustes Especiales de Estrellas")
+        self.grp_stars_special.setObjectName("stars_special_group")
         stars_spec_layout = QVBoxLayout(self.grp_stars_special)
         stars_spec_layout.setContentsMargins(8, 12, 8, 8)
         stars_spec_layout.setSpacing(6)
@@ -731,6 +735,7 @@ class MaskLayersWidget(QWidget):
 
         # 9. Controles Especiales de Fondo Nebular (Visibles SOLO en Fondo Nebular Starless)
         self.grp_starless_special = QGroupBox("Ajustes Especiales de Fondo Nebular")
+        self.grp_starless_special.setObjectName("starless_special_group")
         sl_layout = QVBoxLayout(self.grp_starless_special)
         sl_layout.setContentsMargins(8, 12, 8, 8)
         sl_layout.setSpacing(6)
@@ -1265,6 +1270,9 @@ class MaskLayersWidget(QWidget):
         if hasattr(self, 'grp_starless_special'):
             self.grp_starless_special.setVisible(is_starless)
 
+        # Aplicar identidad temática y cromática dinámica según el tipo de capa activa
+        self._apply_layer_theme(layer)
+
         if not layer:
             self.brush_tool_toggled.emit(False, None)
             self.preview_mask_requested.emit(None)
@@ -1286,8 +1294,6 @@ class MaskLayersWidget(QWidget):
 
         # Grupo de definición de máscara (Ocultar si es capa de sistema de StarNet)
         self.grp_mask_def.setVisible(not is_sys)
-        if hasattr(self, 'grp_local_adj'):
-            self.grp_local_adj.setTitle("Ajustes de Capa" if is_sys else "Ajustes Locales de Revelado")
 
         if not is_sys:
             # Sub-paneles de tipo de máscara
@@ -1369,6 +1375,131 @@ class MaskLayersWidget(QWidget):
             else:
                 self.preview_mask_requested.emit(None)
 
+    def _apply_layer_theme(self, layer: Optional[MaskLayer]) -> None:
+        """Aplica un estilo cromático identificativo a los grupos de controles según el tipo de capa activa."""
+        if not hasattr(self, 'grp_local_adj'):
+            return
+
+        def _make_box_qss(obj_name: str, border_col: str, title_col: str, bg_col: str) -> str:
+            return f"""
+                QGroupBox#{obj_name} {{
+                    font-weight: bold;
+                    border: 1px solid {border_col};
+                    border-radius: 6px;
+                    margin-top: 12px;
+                    padding-top: 14px;
+                    background-color: {bg_col};
+                    color: #dce1eb;
+                }}
+                QGroupBox#{obj_name}::title {{
+                    subcontrol-origin: margin;
+                    subcontrol-position: top left;
+                    left: 12px;
+                    padding: 0 6px;
+                    color: {title_col};
+                    font-weight: bold;
+                    font-size: 11px;
+                }}
+            """
+
+        if layer is None:
+            self.grp_local_adj.setStyleSheet(_make_box_qss("local_adj_group", "#2b3044", "#00e5ff", "#171a26"))
+            self.grp_local_adj.setTitle("Ajustes Locales de Revelado")
+            if hasattr(self, 'grp_mask_def'):
+                self.grp_mask_def.setStyleSheet(_make_box_qss("mask_def_group", "#2b3044", "#00e5ff", "#171a26"))
+                self.grp_mask_def.setTitle("Definición de Máscara")
+            return
+
+        mtype = layer.mask_type
+        if mtype in (MASK_TYPE_IMAGE_GROUND, MASK_TYPE_GROUND):
+            border_c = "#43a047"
+            title_c = "#81c784"
+            bg_c = "#141f17"
+            adj_title = "🏞️ Ajustes de Capa de Suelo"
+            mask_def_title = "🏞️ Definición de Máscara de Suelo"
+        elif mtype == MASK_TYPE_IMAGE_STARLESS:
+            border_c = "#8e24aa"
+            title_c = "#ce93d8"
+            bg_c = "#1c1424"
+            adj_title = "🌌 Ajustes de Capa de Fondo Nebular"
+            mask_def_title = "Definición de Máscara"
+        elif mtype == MASK_TYPE_IMAGE_STARS:
+            border_c = "#fbc02d"
+            title_c = "#ffd54f"
+            bg_c = "#221f14"
+            adj_title = "⭐ Ajustes de Capa de Estrellas"
+            mask_def_title = "Definición de Máscara"
+        elif mtype == MASK_TYPE_BRUSH:
+            border_c = "#e53935"
+            title_c = "#ef5350"
+            bg_c = "#221415"
+            adj_title = "🖌️ Ajustes Locales de Pincel"
+            mask_def_title = "🖌️ Trazo y Parámetros de Pincel"
+        elif mtype == MASK_TYPE_LUMA:
+            border_c = "#fdd835"
+            title_c = "#fff59d"
+            bg_c = "#202018"
+            adj_title = "💡 Ajustes Locales de Luminancia"
+            mask_def_title = "💡 Rango de Luminancia"
+        elif mtype == MASK_TYPE_COLOR:
+            border_c = "#00acc1"
+            title_c = "#80d8ff"
+            bg_c = "#141f24"
+            adj_title = "🎨 Ajustes Locales de Color HSV"
+            mask_def_title = "🎨 Tono y Tolerancia de Color"
+        elif mtype == MASK_TYPE_SKY:
+            border_c = "#1976d2"
+            title_c = "#90caf9"
+            bg_c = "#141924"
+            adj_title = "☁️ Ajustes de Capa de Cielo"
+            mask_def_title = "☁️ Definición de Máscara de Cielo"
+        elif mtype == MASK_TYPE_IMAGE_BASE:
+            border_c = "#ffa000"
+            title_c = "#ffe082"
+            bg_c = "#1f1c14"
+            adj_title = "🖼️ Ajustes de Imagen Base"
+            mask_def_title = "Definición de Máscara"
+        else:
+            border_c = "#2b3044"
+            title_c = "#00e5ff"
+            bg_c = "#171a26"
+            adj_title = "Ajustes Locales de Revelado"
+            mask_def_title = "Definición de Máscara"
+
+        self.grp_local_adj.setStyleSheet(_make_box_qss("local_adj_group", border_c, title_c, bg_c))
+        self.grp_local_adj.setTitle(adj_title)
+
+        if hasattr(self, 'grp_mask_def'):
+            self.grp_mask_def.setStyleSheet(_make_box_qss("mask_def_group", border_c, title_c, bg_c))
+            self.grp_mask_def.setTitle(mask_def_title)
+
+        # Tematizar de manera fija y distinguible los paneles contextuales dedicados
+        if hasattr(self, 'grp_gnd_special'):
+            self.grp_gnd_special.setStyleSheet(_make_box_qss("gnd_special_group", "#43a047", "#81c784", "#141f17"))
+            self.grp_gnd_special.setTitle("🏞️ Ajustes Tonales Especiales de Suelo")
+        if hasattr(self, 'grp_stars_special'):
+            self.grp_stars_special.setStyleSheet(_make_box_qss("stars_special_group", "#fbc02d", "#ffd54f", "#221f14"))
+            self.grp_stars_special.setTitle("⭐ Ajustes Especiales de Estrellas")
+        if hasattr(self, 'grp_starless_special'):
+            self.grp_starless_special.setStyleSheet(_make_box_qss("starless_special_group", "#8e24aa", "#ce93d8", "#1c1424"))
+            self.grp_starless_special.setTitle("🌌 Ajustes Especiales de Fondo Nebular")
+
+    def select_layer_by_id(self, layer_id: str) -> bool:
+        """Selecciona la capa con el ID especificado."""
+        for layer in self.layers:
+            if layer.id == layer_id:
+                self._rebuild_list_items(select_layer_id=layer.id)
+                return True
+        return False
+
+    def select_layer_by_type(self, mask_type: str) -> bool:
+        """Selecciona la primera capa que coincida con el tipo especificado."""
+        for layer in self.layers:
+            if layer.mask_type == mask_type:
+                self._rebuild_list_items(select_layer_id=layer.id)
+                return True
+        return False
+
     # =========================================================================
     # ACTUALIZACIÓN DE PARÁMETROS DE LA CAPA
     # =========================================================================
@@ -1420,8 +1551,6 @@ class MaskLayersWidget(QWidget):
             if layer.mask_type == MASK_TYPE_BRUSH:
                 self._last_brush_opacity = layer.opacity
             self.lbl_opacity.setText(f"{val}%")
-            if layer.mask_type == MASK_TYPE_IMAGE_STARS:
-                self.starnet_opacity_changed.emit(layer.opacity)
             self.layers_changed.emit()
 
     # Controles de Pincel interactivo

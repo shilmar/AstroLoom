@@ -50,7 +50,12 @@ from core.stretch import (
     realce_multiescala_ondiculas
 )
 from core.masking import refine_mask_guided
-from core.mask_layers import MaskLayer, apply_all_mask_layers
+from core.mask_layers import (
+    MaskLayer, apply_all_mask_layers,
+    MASK_TYPE_IMAGE_BASE, MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_STARS,
+    MASK_TYPE_IMAGE_GROUND, MASK_TYPE_BRUSH, MASK_TYPE_LUMA, MASK_TYPE_COLOR,
+    MASK_TYPE_GROUND, MASK_TYPE_SKY
+)
 from gui.widgets.curve_widget import CurveWidget
 from gui.widgets.mask_layers_widget import MaskLayersWidget
 from gui.widgets.collapsible_section import CollapsibleSection
@@ -501,10 +506,57 @@ class DeveloperTab(QWidget):
         row_sn.addWidget(self.btn_starnet)
         layout_starnet.addLayout(row_sn)
 
-        # 2. Contenedor de herramientas dependientes (desactivado por defecto)
+        # 2. Tarjeta informativa y acceso directo al Gestor de Capas
+        self.card_starnet_info = QFrame()
+        self.card_starnet_info.setStyleSheet("""
+            QFrame {
+                background-color: #1a1e2d;
+                border: 1px solid #33384c;
+                border-radius: 6px;
+                padding: 6px;
+            }
+        """)
+        layout_card_sn = QVBoxLayout(self.card_starnet_info)
+        layout_card_sn.setContentsMargins(8, 8, 8, 8)
+        layout_card_sn.setSpacing(8)
+
+        self.lbl_starnet_info = QLabel(
+            "💡 Ejecuta StarNet para desacoplar las estrellas del fondo cósmico.\n"
+            "Se generarán automáticamente las capas '🌌 Fondo Nebular' y '⭐ Estrellas' en el Gestor de Capas (Sección 9), donde podrás ajustar de forma contextual su presencia, claridad, contraste y reducción de ruido."
+        )
+        self.lbl_starnet_info.setWordWrap(True)
+        self.lbl_starnet_info.setStyleSheet("color: #b0bec5; font-size: 11px; line-height: 1.4;")
+        layout_card_sn.addWidget(self.lbl_starnet_info)
+
+        self.btn_go_to_masks_starnet = QPushButton("🌌 Abrir Capas en Gestor de Capas (Sección 9) ➔")
+        self.btn_go_to_masks_starnet.setCursor(Qt.PointingHandCursor)
+        self.btn_go_to_masks_starnet.setStyleSheet("""
+            QPushButton {
+                background-color: #2b1f3d;
+                color: #ce93d8;
+                border: 1px solid #7b1fa2;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #3b2854;
+                border-color: #ba68c8;
+                color: #ffffff;
+            }
+        """)
+        self.btn_go_to_masks_starnet.clicked.connect(lambda: self._jump_to_mask_layers(MASK_TYPE_IMAGE_STARLESS))
+        self.btn_go_to_masks_starnet.setVisible(False)
+        layout_card_sn.addWidget(self.btn_go_to_masks_starnet)
+
+        layout_starnet.addWidget(self.card_starnet_info)
+
+        # 3. Contenedor de herramientas dependientes en memoria (oculto de la UI para mantener compatibilidad con presets)
         self.container_starnet_tools = QWidget()
+        self.container_starnet_tools.setVisible(False)
         tools_layout = QVBoxLayout(self.container_starnet_tools)
-        tools_layout.setContentsMargins(0, 6, 0, 0)
+        tools_layout.setContentsMargins(0, 0, 0, 0)
         tools_layout.setSpacing(8)
 
         # Capas y Estrellas
@@ -633,7 +685,6 @@ class DeveloperTab(QWidget):
         row_pair3.addLayout(col_dn)
         tools_layout.addLayout(row_pair3)
 
-        layout_starnet.addWidget(self.container_starnet_tools)
         self.sec_starnet.set_content_widget(w_starnet)
         left_layout.addWidget(self.sec_starnet)
         self._set_starnet_tools_enabled(False)
@@ -826,57 +877,80 @@ class DeveloperTab(QWidget):
         row_mask_status.addWidget(self.btn_edit_ground_mask)
         gnd_tone_layout.addLayout(row_mask_status)
 
-        row_gnd_ev = QHBoxLayout()
-        row_gnd_ev.addWidget(self._make_resettable_label(QLabel("Exposición Suelo:"), lambda: self.slider_gnd_ev.setValue(0), "0.00 EV"))
+        # Tarjeta informativa y acceso directo a la Capa de Suelo
+        self.card_gnd_info = QFrame()
+        self.card_gnd_info.setStyleSheet("""
+            QFrame {
+                background-color: #152219;
+                border: 1px solid #2e7d32;
+                border-radius: 6px;
+                padding: 6px;
+            }
+        """)
+        layout_card_gnd = QVBoxLayout(self.card_gnd_info)
+        layout_card_gnd.setContentsMargins(8, 8, 8, 8)
+        layout_card_gnd.setSpacing(8)
+
+        self.lbl_gnd_info = QLabel(
+            "💡 Los ajustes tonales de la superficie terrestre (Exposición, Sombras, Punto Negro y Balance de Blancos dedicado) "
+            "se gestionan ahora de forma centralizada e intuitiva en la Capa de Suelo dentro del Gestor de Capas (Sección 9)."
+        )
+        self.lbl_gnd_info.setWordWrap(True)
+        self.lbl_gnd_info.setStyleSheet("color: #c8e6c9; font-size: 11px; line-height: 1.4;")
+        layout_card_gnd.addWidget(self.lbl_gnd_info)
+
+        self.btn_go_to_ground_layer = QPushButton("🏞️ Abrir Capa de Suelo en Sección 9 ➔")
+        self.btn_go_to_ground_layer.setCursor(Qt.PointingHandCursor)
+        self.btn_go_to_ground_layer.setStyleSheet("""
+            QPushButton {
+                background-color: #1b3822;
+                color: #a5d6a7;
+                border: 1px solid #43a047;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #254d2f;
+                border-color: #81c784;
+                color: #ffffff;
+            }
+        """)
+        self.btn_go_to_ground_layer.clicked.connect(lambda: self._jump_to_mask_layers(MASK_TYPE_IMAGE_GROUND))
+        layout_card_gnd.addWidget(self.btn_go_to_ground_layer)
+
+        gnd_tone_layout.addWidget(self.card_gnd_info)
+
+        # Controles en memoria (ocultos de la interfaz para mantener compatibilidad con presets)
+        self._hidden_gnd_container = QWidget()
+        self._hidden_gnd_container.setVisible(False)
+        hidden_gnd_layout = QVBoxLayout(self._hidden_gnd_container)
+
         self.lbl_gnd_ev = QLabel("0.00 EV")
-        self.lbl_gnd_ev.setStyleSheet("color: #ffd54f; font-weight: bold;")
-        row_gnd_ev.addWidget(self.lbl_gnd_ev)
-        row_gnd_ev.addSpacing(10)
         self.slider_gnd_ev = QSlider(Qt.Horizontal)
         self.slider_gnd_ev.setRange(-200, 300)
         self.slider_gnd_ev.setValue(0)
         self.slider_gnd_ev.valueChanged.connect(self.on_gnd_ev_changed)
-        row_gnd_ev.addWidget(self.slider_gnd_ev, stretch=1)
-        gnd_tone_layout.addLayout(row_gnd_ev)
+        hidden_gnd_layout.addWidget(self.slider_gnd_ev)
 
-        # Emparejamiento 3.2: Sombras (izq) y Punto Negro (der)
-        row_gnd_pair = QHBoxLayout()
-        row_gnd_pair.setSpacing(14)
-
-        col_sh = QVBoxLayout()
-        col_sh.setSpacing(4)
-        row_sh_lbl = QHBoxLayout()
-        row_sh_lbl.addWidget(self._make_resettable_label(QLabel("Sombras:"), lambda: self.slider_gnd_sh.setValue(0), "0%"))
         self.lbl_gnd_sh = QLabel("0%")
-        self.lbl_gnd_sh.setStyleSheet("color: #80d8ff; font-weight: bold;")
-        row_sh_lbl.addWidget(self.lbl_gnd_sh)
-        col_sh.addLayout(row_sh_lbl)
         self.slider_gnd_sh = QSlider(Qt.Horizontal)
         self.slider_gnd_sh.setRange(0, 100)
         self.slider_gnd_sh.setValue(0)
         self.slider_gnd_sh.valueChanged.connect(self.on_gnd_shadows_changed)
-        col_sh.addWidget(self.slider_gnd_sh)
-        row_gnd_pair.addLayout(col_sh)
+        hidden_gnd_layout.addWidget(self.slider_gnd_sh)
 
-        col_bp = QVBoxLayout()
-        col_bp.setSpacing(4)
-        row_bp_lbl = QHBoxLayout()
-        row_bp_lbl.addWidget(self._make_resettable_label(QLabel("Punto Negro:"), lambda: self.slider_gnd_bp.setValue(0), "0.000"))
         self.lbl_gnd_bp = QLabel("0.000")
-        self.lbl_gnd_bp.setStyleSheet("color: #80d8ff; font-weight: bold;")
-        row_bp_lbl.addWidget(self.lbl_gnd_bp)
-        col_bp.addLayout(row_bp_lbl)
         self.slider_gnd_bp = QSlider(Qt.Horizontal)
         self.slider_gnd_bp.setRange(-50, 100)
         self.slider_gnd_bp.setValue(0)
         self.slider_gnd_bp.valueChanged.connect(self.on_gnd_bp_changed)
-        col_bp.addWidget(self.slider_gnd_bp)
-        row_gnd_pair.addLayout(col_bp)
-        gnd_tone_layout.addLayout(row_gnd_pair)
+        hidden_gnd_layout.addWidget(self.slider_gnd_bp)
 
         btn_reset_gnd = QPushButton("Restablecer Tono Suelo")
         btn_reset_gnd.clicked.connect(self.reset_gnd_tone)
-        gnd_tone_layout.addWidget(btn_reset_gnd)
+        hidden_gnd_layout.addWidget(btn_reset_gnd)
 
         self.sec_gnd_tone.set_content_widget(w_gnd_tone)
         left_layout.addWidget(self.sec_gnd_tone)
@@ -1862,6 +1936,16 @@ class DeveloperTab(QWidget):
             else:
                 self.canvas.set_masking_enabled(True)
 
+    def _jump_to_mask_layers(self, target_layer_type: Optional[str] = None) -> None:
+        """Expande la Sección 9 y selecciona la capa especificada para edición contextual."""
+        if hasattr(self, 'sec_masks'):
+            self.sec_masks.expand()
+        if hasattr(self, 'mask_layers_widget') and target_layer_type:
+            found = self.mask_layers_widget.select_layer_by_type(target_layer_type)
+            if not found and target_layer_type == MASK_TYPE_IMAGE_GROUND:
+                self.mask_layers_widget.select_layer_by_type(MASK_TYPE_GROUND)
+
+
     def _compute_mask_from_scribbles(self) -> None:
         """Calcula la segmentación continua cielo/suelo mediante GrabCut y fotometría guiada."""
         if self.image_32bit is None:
@@ -2733,9 +2817,14 @@ class DeveloperTab(QWidget):
             sl_img = self.image_starless if is_full_res else (self.proxy_starless if self.proxy_starless is not None else self.image_starless)
             
             # Si hay capas de imagen especiales activas, preparamos las estrellas estiradas con el MTF
-            # para el modo Screen de Photoshop en apply_all_mask_layers
+            # y moduladas por la intensidad estelar relativa (self.star_intensity) para el modo Screen
             if st_img is not None and self.mask_layers_widget.has_image_layers():
-                st_stretched = manual_stretch(st_img, black_point=0.0, midtone=self.spin_mtf.value())
+                st_stretched = np.clip(
+                    manual_stretch(st_img, black_point=0.0, midtone=self.spin_mtf.value()) * self.star_intensity,
+                    0.0, 1.0
+                )
+            elif st_img is not None:
+                st_stretched = np.clip(st_img * self.star_intensity, 0.0, 1.0)
             else:
                 st_stretched = st_img
 
@@ -2839,7 +2928,6 @@ class DeveloperTab(QWidget):
         self.star_intensity = val / 100.0
         self.lbl_stars.setText(f"{val}%")
         if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_starnet_stars_opacity(self.star_intensity)
             self.mask_layers_widget.set_stars_special_value(val)
         self.update_stretch_preview()
 
@@ -2855,7 +2943,6 @@ class DeveloperTab(QWidget):
             self.lbl_stars.setText("100%")
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_stars_special_value(100)
-            self.mask_layers_widget.set_starnet_stars_opacity(1.0)
         self.update_stretch_preview()
 
     def on_layer_mode_changed(self, idx: int):
@@ -2869,15 +2956,8 @@ class DeveloperTab(QWidget):
         self.update_stretch_preview()
 
     def _on_mask_layer_starnet_opacity(self, opacity: float):
-        """Sincroniza el cambio de opacidad de la capa de estrellas hacia la Sección 5."""
-        val = int(round(opacity * 100))
-        self.star_intensity = opacity
-        if hasattr(self, 'slider_stars'):
-            self.slider_stars.blockSignals(True)
-            self.slider_stars.setValue(val)
-            self.lbl_stars.setText(f"{val}%")
-            self.slider_stars.blockSignals(False)
-        self.update_stretch_preview()
+        """Manejador de cambio de opacidad de la capa de estrellas (desacoplado de la intensidad estelar)."""
+        pass
 
     def _on_mask_layer_starnet_visibility(self, visible: bool):
         """Sincroniza la visibilidad de la capa de estrellas hacia la Sección 5."""
@@ -3623,6 +3703,22 @@ class DeveloperTab(QWidget):
                 self.sec_starnet.expand()
             else:
                 self.sec_starnet.set_status_badge("")
+
+        if hasattr(self, "btn_go_to_masks_starnet"):
+            self.btn_go_to_masks_starnet.setVisible(enabled)
+
+        if hasattr(self, "lbl_starnet_info"):
+            if enabled:
+                self.lbl_starnet_info.setText(
+                    "✅ Estrellas separadas correctamente.\n"
+                    "Las capas '🌌 Fondo Nebular' y '⭐ Estrellas' están activas en el Gestor de Capas (Sección 9). "
+                    "Selecciona cada capa allí para regular su presencia estelar, claridad, neblina, contraste y reducción de ruido."
+                )
+            else:
+                self.lbl_starnet_info.setText(
+                    "💡 Ejecuta StarNet para desacoplar las estrellas del fondo cósmico.\n"
+                    "Se generarán automáticamente las capas '🌌 Fondo Nebular' y '⭐ Estrellas' en el Gestor de Capas (Sección 9), donde podrás ajustar de forma contextual su presencia, claridad, contraste y reducción de ruido."
+                )
 
         if hasattr(self, "container_starnet_tools"):
             self.container_starnet_tools.setEnabled(enabled)
