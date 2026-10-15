@@ -1,8 +1,8 @@
 {
-    "sessions_dir": "D:\\software\\apilator\\sesiones",
-    "masks_dir": "D:\\software\\apilator\\sesiones\\mascaras",
-    "stacked_dir": "D:\\software\\apilator\\imagenes",
-    "export_dir": "D:\\software\\apilator\\exportaciones",
+    "sessions_dir": "D:\\software\\AstroLoom\\sesiones",
+    "masks_dir": "D:\\software\\AstroLoom\\sesiones\\mascaras",
+    "stacked_dir": "D:\\software\\AstroLoom\\imagenes",
+    "export_dir": "D:\\software\\AstroLoom\\exportaciones",
     "kappa": 2.2,
     "default_kappa": 2.2,
     "storage_strategy": "auto",

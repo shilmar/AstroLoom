@@ -345,11 +345,17 @@ class DeveloperTab(QWidget):
         lbl_temp_title.setToolTip("Doble clic para restablecer Temperatura a 0.000")
         lbl_temp_title.setCursor(Qt.PointingHandCursor)
         row_temp_lbl.addWidget(lbl_temp_title)
-        self.lbl_temp_val = QLabel("0.000")
-        self.lbl_temp_val.setStyleSheet("color: #ffd54f; font-weight: bold;")
-        self.lbl_temp_val.setToolTip("Doble clic para restablecer Temperatura a 0.000")
-        self.lbl_temp_val.setCursor(Qt.PointingHandCursor)
-        row_temp_lbl.addWidget(self.lbl_temp_val)
+
+        self.spin_temp = QDoubleSpinBox()
+        self.spin_temp.setDecimals(3)
+        self.spin_temp.setRange(-1.000, 1.000)
+        self.spin_temp.setSingleStep(0.010)
+        self.spin_temp.setValue(0.000)
+        self.spin_temp.setFixedWidth(82)
+        self.spin_temp.setStyleSheet("color: #ffd54f; font-weight: bold;")
+        self.spin_temp.setToolTip("Ajuste numérico manual de Temperatura (-1.000 a +1.000). Doble clic en 'Temp:' para reiniciar")
+        self.spin_temp.valueChanged.connect(self.on_spin_temp_changed)
+        row_temp_lbl.addWidget(self.spin_temp)
         col_temp.addLayout(row_temp_lbl)
 
         self.slider_temp = QSlider(Qt.Horizontal)
@@ -357,8 +363,7 @@ class DeveloperTab(QWidget):
         self.slider_temp.setValue(0)
         self.slider_temp.setToolTip("Temperatura de color (-1.000 azul/frío a +1.000 rojo/cálido). Doble clic en 'Temp:' para reiniciar")
         self.slider_temp.valueChanged.connect(self.on_temp_changed)
-        lbl_temp_title.mouseDoubleClickEvent = lambda e: self.slider_temp.setValue(0)
-        self.lbl_temp_val.mouseDoubleClickEvent = lambda e: self.slider_temp.setValue(0)
+        lbl_temp_title.mouseDoubleClickEvent = lambda e: self.spin_temp.setValue(0.0)
         col_temp.addWidget(self.slider_temp)
         row_wb.addLayout(col_temp)
 
@@ -369,11 +374,17 @@ class DeveloperTab(QWidget):
         lbl_tint_title.setToolTip("Doble clic para restablecer Tinte a 0.000")
         lbl_tint_title.setCursor(Qt.PointingHandCursor)
         row_tint_lbl.addWidget(lbl_tint_title)
-        self.lbl_tint_val = QLabel("0.000")
-        self.lbl_tint_val.setStyleSheet("color: #b388ff; font-weight: bold;")
-        self.lbl_tint_val.setToolTip("Doble clic para restablecer Tinte a 0.000")
-        self.lbl_tint_val.setCursor(Qt.PointingHandCursor)
-        row_tint_lbl.addWidget(self.lbl_tint_val)
+
+        self.spin_tint = QDoubleSpinBox()
+        self.spin_tint.setDecimals(3)
+        self.spin_tint.setRange(-1.000, 1.000)
+        self.spin_tint.setSingleStep(0.010)
+        self.spin_tint.setValue(0.000)
+        self.spin_tint.setFixedWidth(82)
+        self.spin_tint.setStyleSheet("color: #b388ff; font-weight: bold;")
+        self.spin_tint.setToolTip("Ajuste numérico manual de Tinte (-1.000 a +1.000). Doble clic en 'Tinte:' para reiniciar")
+        self.spin_tint.valueChanged.connect(self.on_spin_tint_changed)
+        row_tint_lbl.addWidget(self.spin_tint)
         col_tint.addLayout(row_tint_lbl)
 
         self.slider_tint = QSlider(Qt.Horizontal)
@@ -381,8 +392,7 @@ class DeveloperTab(QWidget):
         self.slider_tint.setValue(0)
         self.slider_tint.setToolTip("Tinte de color (-1.000 verde a +1.000 magenta). Doble clic en 'Tinte:' para reiniciar")
         self.slider_tint.valueChanged.connect(self.on_tint_changed)
-        lbl_tint_title.mouseDoubleClickEvent = lambda e: self.slider_tint.setValue(0)
-        self.lbl_tint_val.mouseDoubleClickEvent = lambda e: self.slider_tint.setValue(0)
+        lbl_tint_title.mouseDoubleClickEvent = lambda e: self.spin_tint.setValue(0.0)
         col_tint.addWidget(self.slider_tint)
         row_wb.addLayout(col_tint)
 
@@ -2117,26 +2127,57 @@ class DeveloperTab(QWidget):
 
     def on_temp_changed(self, val: int):
         self.temp_val = val / 1000.0
-        self.lbl_temp_val.setText(f"{self.temp_val:+.3f}")
+        if hasattr(self, 'spin_temp'):
+            self.spin_temp.blockSignals(True)
+            self.spin_temp.setValue(self.temp_val)
+            self.spin_temp.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_spin_temp_changed(self, val: float):
+        self.temp_val = float(val)
+        slider_val = int(round(val * 1000.0))
+        if hasattr(self, 'slider_temp'):
+            self.slider_temp.blockSignals(True)
+            self.slider_temp.setValue(slider_val)
+            self.slider_temp.blockSignals(False)
         self.update_stretch_preview()
 
     def on_tint_changed(self, val: int):
         self.tint_val = val / 1000.0
-        self.lbl_tint_val.setText(f"{self.tint_val:+.3f}")
+        if hasattr(self, 'spin_tint'):
+            self.spin_tint.blockSignals(True)
+            self.spin_tint.setValue(self.tint_val)
+            self.spin_tint.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_spin_tint_changed(self, val: float):
+        self.tint_val = float(val)
+        slider_val = int(round(val * 1000.0))
+        if hasattr(self, 'slider_tint'):
+            self.slider_tint.blockSignals(True)
+            self.slider_tint.setValue(slider_val)
+            self.slider_tint.blockSignals(False)
         self.update_stretch_preview()
 
     def reset_wb(self):
         self.slider_temp.blockSignals(True)
         self.slider_tint.blockSignals(True)
+        if hasattr(self, 'spin_temp'):
+            self.spin_temp.blockSignals(True)
+            self.spin_temp.setValue(0.0)
+            self.spin_temp.blockSignals(False)
+        if hasattr(self, 'spin_tint'):
+            self.spin_tint.blockSignals(True)
+            self.spin_tint.setValue(0.0)
+            self.spin_tint.blockSignals(False)
         self.slider_temp.setValue(0)
         self.slider_tint.setValue(0)
         self.temp_val = 0.0
         self.tint_val = 0.0
-        self.lbl_temp_val.setText("0.000")
-        self.lbl_tint_val.setText("0.000")
         self.slider_temp.blockSignals(False)
         self.slider_tint.blockSignals(False)
         self.update_stretch_preview()
+        self._commit_action()
 
     def on_sat_sky_changed(self, val: int):
         self.sat_sky_val = val / 100.0
@@ -2560,9 +2601,11 @@ class DeveloperTab(QWidget):
             self.curve_widget.reset_all_curves()
 
         self.slider_temp.setValue(0)
-        self.lbl_temp_val.setText("0.000")
+        if hasattr(self, 'spin_temp'):
+            self.spin_temp.setValue(0.0)
         self.slider_tint.setValue(0)
-        self.lbl_tint_val.setText("0.000")
+        if hasattr(self, 'spin_tint'):
+            self.spin_tint.setValue(0.0)
 
         self.slider_sat_sky.setValue(100)
         self.lbl_sat_sky.setText("1.00x")
@@ -2706,6 +2749,8 @@ class DeveloperTab(QWidget):
 
         self.spin_bp.editingFinished.connect(self._commit_action)
         self.spin_mtf.editingFinished.connect(self._commit_action)
+        self.spin_temp.editingFinished.connect(self._commit_action)
+        self.spin_tint.editingFinished.connect(self._commit_action)
         self.combo_layer.activated.connect(lambda _: self._commit_action())
 
         if hasattr(self, 'curve_widget'):
@@ -2855,9 +2900,9 @@ class DeveloperTab(QWidget):
             self.slider_lp, self.slider_stars, self.slider_contrast_starless,
             self.slider_clarity, self.slider_dehaze, self.slider_ond_est,
             self.slider_ond_bg, self.slider_denoise, 
-            self.slider_temp, self.slider_tint, self.slider_sat_sky,
-            self.slider_sat_gnd, self.slider_vibrance, self.slider_contrast,
-            self.combo_layer, self.spin_bp, self.slider_bp,
+            self.slider_temp, self.slider_tint, self.spin_temp, self.spin_tint,
+            self.slider_sat_sky, self.slider_sat_gnd, self.slider_vibrance,
+            self.slider_contrast, self.combo_layer, self.spin_bp, self.slider_bp,
             self.spin_mtf, self.slider_mtf,
             self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp,
         ]
@@ -2911,12 +2956,14 @@ class DeveloperTab(QWidget):
         if "temp_val" in state:
             self.slider_temp.setValue(state["temp_val"])
             self.temp_val = state["temp_val"] / 1000.0
-            self.lbl_temp_val.setText(f"{self.temp_val:+.3f}")
+            if hasattr(self, 'spin_temp'):
+                self.spin_temp.setValue(self.temp_val)
 
         if "tint_val" in state:
             self.slider_tint.setValue(state["tint_val"])
             self.tint_val = state["tint_val"] / 1000.0
-            self.lbl_tint_val.setText(f"{self.tint_val:+.3f}")
+            if hasattr(self, 'spin_tint'):
+                self.spin_tint.setValue(self.tint_val)
 
         if "sat_sky_val" in state:
             self.slider_sat_sky.setValue(state["sat_sky_val"])

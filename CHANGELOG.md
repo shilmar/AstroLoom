@@ -29,8 +29,9 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
     - Integrado con la pila de 50 pasos de historial (`Ctrl+Z` / `Ctrl+Y`), permitiendo restaurar la toma sin recortar en cualquier momento sin pérdida de datos.
 * **Ampliación del Rango de Balance de Blancos (Temperatura y Tinte):**
   - Rango cuadruplicado de $\pm 0.250$ a $\pm 1.000$ (en 2000 pasos de $0.001$) en `slider_temp` y `slider_tint`.
+  - Cuadros de entrada numérica directa (`QDoubleSpinBox`) con 3 decimales (`spin_temp` y `spin_tint`) para introducir valores exactos con el teclado o variar con las flechas paso a paso, sincronizados bidireccionalmente con los deslizadores y el historial de Deshacer/Rehacer (`editingFinished`).
   - Capacidad analítica para neutralizar dominantes cromáticas severas de polución lumínica (lámparas de vapor de sodio a baja/alta presión) o intensas emisiones de *airglow* verde/rojo en cielos oscuros.
-  - Soporte de doble clic en las etiquetas de título o valor para restablecimiento instantáneo a neutro (`0.000`).
+  - Soporte de doble clic en las etiquetas de título para restablecimiento instantáneo a neutro (`0.000`).
   - Sincronización completa con la Pipeta de Balance de Blancos (`W`) adaptada al nuevo rango ensanchado.
 
 ## [0.8.0] - 2026-10-14
