@@ -897,6 +897,16 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.brush_params_changed.connect(self._on_layer_brush_params_changed)
         self.mask_layers_widget.starnet_opacity_changed.connect(self._on_mask_layer_starnet_opacity)
         self.mask_layers_widget.starnet_visibility_changed.connect(self._on_mask_layer_starnet_visibility)
+        self.mask_layers_widget.ground_ev_changed.connect(self._on_mask_widget_gnd_ev)
+        self.mask_layers_widget.ground_shadows_changed.connect(self._on_mask_widget_gnd_sh)
+        self.mask_layers_widget.ground_bp_changed.connect(self._on_mask_widget_gnd_bp)
+        self.mask_layers_widget.ground_reset_requested.connect(self.reset_gnd_tone)
+        self.mask_layers_widget.ground_slider_released.connect(self._commit_action)
+        self.mask_layers_widget.set_ground_tone_values(
+            self.slider_gnd_ev.value(),
+            self.slider_gnd_sh.value(),
+            self.slider_gnd_bp.value()
+        )
 
         def _update_masks_badge():
             count = len(self.mask_layers_widget.layers)
@@ -3108,20 +3118,44 @@ class DeveloperTab(QWidget):
         self.lbl_ond_bg.setText(f"{val}%")
         self.update_stretch_preview()
     
+    def _on_mask_widget_gnd_ev(self, val: int):
+        if self.slider_gnd_ev.value() != val:
+            self.slider_gnd_ev.setValue(val)
+
+    def _on_mask_widget_gnd_sh(self, val: int):
+        if self.slider_gnd_sh.value() != val:
+            self.slider_gnd_sh.setValue(val)
+
+    def _on_mask_widget_gnd_bp(self, val: int):
+        if self.slider_gnd_bp.value() != val:
+            self.slider_gnd_bp.setValue(val)
+
     def on_gnd_ev_changed(self, val: int):
         self.gnd_ev_val = val / 100.0
         self.lbl_gnd_ev.setText(f"{self.gnd_ev_val:+.2f} EV")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_ground_tone_values(
+                val, self.slider_gnd_sh.value(), self.slider_gnd_bp.value()
+            )
         self.update_stretch_preview()
 
     def on_gnd_shadows_changed(self, val: int):
         self.gnd_shadows_val = val / 100.0
         self.lbl_gnd_sh.setText(f"{val}%")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_ground_tone_values(
+                self.slider_gnd_ev.value(), val, self.slider_gnd_bp.value()
+            )
         self.update_stretch_preview()
 
     def on_gnd_bp_changed(self, val: int):
         self.gnd_bp_val = - (val / 1000.0)
         display_val = val / 1000.0
         self.lbl_gnd_bp.setText(f"{display_val:+.3f}")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_ground_tone_values(
+                self.slider_gnd_ev.value(), self.slider_gnd_sh.value(), val
+            )
         self.update_stretch_preview()
 
     def reset_gnd_tone(self):
@@ -3144,6 +3178,9 @@ class DeveloperTab(QWidget):
         self.slider_gnd_ev.blockSignals(False)
         self.slider_gnd_sh.blockSignals(False)
         self.slider_gnd_bp.blockSignals(False)
+
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_ground_tone_values(0, 0, 0)
 
         self.update_stretch_preview()
     
@@ -3347,6 +3384,8 @@ class DeveloperTab(QWidget):
         self.lbl_gnd_sh.setText("0%")
         self.slider_gnd_bp.setValue(0)
         self.lbl_gnd_bp.setText("0.000")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_ground_tone_values(0, 0, 0)
 
         self.spin_bp.setValue(0.0)
         self.slider_bp.setValue(0)
@@ -3781,6 +3820,13 @@ class DeveloperTab(QWidget):
 
         for w in widgets_to_block:
             w.blockSignals(False)
+
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_ground_tone_values(
+                self.slider_gnd_ev.value(),
+                self.slider_gnd_sh.value(),
+                self.slider_gnd_bp.value()
+            )
 
         if "curves" in state and state["curves"] is not None and hasattr(self, 'curve_widget'):
             self.curve_widget.blockSignals(True)

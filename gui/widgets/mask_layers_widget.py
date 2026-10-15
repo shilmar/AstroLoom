@@ -40,6 +40,11 @@ class MaskLayersWidget(QWidget):
     brush_params_changed = Signal(int, float, float, str) # (radio, dureza, flujo, modo)
     starnet_opacity_changed = Signal(float)       # (opacidad 0.0 - 1.0) para sincronizar con slider_stars de StarNet
     starnet_visibility_changed = Signal(bool)     # (visibilidad) para sincronizar con combo_layer de StarNet
+    ground_ev_changed = Signal(int)              # (val) sincronizar slider_gnd_ev (-200 a 300)
+    ground_shadows_changed = Signal(int)         # (val) sincronizar slider_gnd_sh (0 a 100)
+    ground_bp_changed = Signal(int)              # (val) sincronizar slider_gnd_bp (-50 a 100)
+    ground_reset_requested = Signal()            # reset tono suelo
+    ground_slider_released = Signal()            # commit de deshacer tras soltar deslizador de suelo
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -50,6 +55,14 @@ class MaskLayersWidget(QWidget):
         self._master_mask_getter: Optional[Callable[[], Optional[np.ndarray]]] = None
         self._stars_getter: Optional[Callable[[], Optional[np.ndarray]]] = None
         self._starless_getter: Optional[Callable[[], Optional[np.ndarray]]] = None
+
+        # Memoria de herramienta para Pincel y Máscaras
+        self._last_brush_radius: int = 35
+        self._last_brush_hardness: float = 0.50
+        self._last_brush_flow: float = 0.80
+        self._last_brush_mode: str = "paint"
+        self._last_brush_opacity: float = 1.00
+
         self._setup_ui()
 
     def set_getters(
@@ -602,6 +615,76 @@ class MaskLayersWidget(QWidget):
 
         props_layout.addWidget(self.grp_local_adj)
 
+        # 7. Controles Especiales de Tono de Suelo (Visibles SOLO cuando se selecciona una capa de Suelo)
+        self.grp_gnd_special = QGroupBox("Ajustes Tonales Especiales de Suelo")
+        gnd_spec_layout = QVBoxLayout(self.grp_gnd_special)
+        gnd_spec_layout.setContentsMargins(8, 12, 8, 8)
+        gnd_spec_layout.setSpacing(6)
+
+        lbl_gnd_notice = QLabel("Ajustes dedicados para la superficie terrestre.")
+        lbl_gnd_notice.setStyleSheet("color: #a5d6a7; font-size: 11px; font-style: italic;")
+        gnd_spec_layout.addWidget(lbl_gnd_notice)
+
+        # Exposición Suelo
+        row_gnd_sp_ev = QHBoxLayout()
+        row_gnd_sp_ev.addWidget(self._make_resettable_label(QLabel("Exposición Suelo:"), lambda: self.slider_gnd_special_ev.setValue(0), "0.00 EV"))
+        self.lbl_gnd_special_ev = QLabel("0.00 EV")
+        self.lbl_gnd_special_ev.setStyleSheet("color: #ffd54f; font-weight: bold;")
+        row_gnd_sp_ev.addWidget(self.lbl_gnd_special_ev)
+        row_gnd_sp_ev.addSpacing(6)
+        self.slider_gnd_special_ev = QSlider(Qt.Horizontal)
+        self.slider_gnd_special_ev.setRange(-200, 300)
+        self.slider_gnd_special_ev.setValue(0)
+        self.slider_gnd_special_ev.valueChanged.connect(self._on_gnd_special_ev_changed)
+        self.slider_gnd_special_ev.sliderReleased.connect(self.ground_slider_released.emit)
+        row_gnd_sp_ev.addWidget(self.slider_gnd_special_ev, stretch=1)
+        gnd_spec_layout.addLayout(row_gnd_sp_ev)
+
+        # Par Sombras / Punto Negro en 2 columnas compactas
+        row_gnd_sp_pair = QHBoxLayout()
+        row_gnd_sp_pair.setSpacing(10)
+
+        col_gnd_sp_sh = QVBoxLayout()
+        col_gnd_sp_sh.setSpacing(2)
+        row_gnd_sp_sh_lbl = QHBoxLayout()
+        row_gnd_sp_sh_lbl.addWidget(self._make_resettable_label(QLabel("Sombras:"), lambda: self.slider_gnd_special_sh.setValue(0), "0%"))
+        self.lbl_gnd_special_sh = QLabel("0%")
+        self.lbl_gnd_special_sh.setStyleSheet("color: #80d8ff; font-weight: bold;")
+        row_gnd_sp_sh_lbl.addWidget(self.lbl_gnd_special_sh)
+        col_gnd_sp_sh.addLayout(row_gnd_sp_sh_lbl)
+        self.slider_gnd_special_sh = QSlider(Qt.Horizontal)
+        self.slider_gnd_special_sh.setRange(0, 100)
+        self.slider_gnd_special_sh.setValue(0)
+        self.slider_gnd_special_sh.valueChanged.connect(self._on_gnd_special_sh_changed)
+        self.slider_gnd_special_sh.sliderReleased.connect(self.ground_slider_released.emit)
+        col_gnd_sp_sh.addWidget(self.slider_gnd_special_sh)
+        row_gnd_sp_pair.addLayout(col_gnd_sp_sh)
+
+        col_gnd_sp_bp = QVBoxLayout()
+        col_gnd_sp_bp.setSpacing(2)
+        row_gnd_sp_bp_lbl = QHBoxLayout()
+        row_gnd_sp_bp_lbl.addWidget(self._make_resettable_label(QLabel("Punto Negro:"), lambda: self.slider_gnd_special_bp.setValue(0), "0.000"))
+        self.lbl_gnd_special_bp = QLabel("0.000")
+        self.lbl_gnd_special_bp.setStyleSheet("color: #80d8ff; font-weight: bold;")
+        row_gnd_sp_bp_lbl.addWidget(self.lbl_gnd_special_bp)
+        col_gnd_sp_bp.addLayout(row_gnd_sp_bp_lbl)
+        self.slider_gnd_special_bp = QSlider(Qt.Horizontal)
+        self.slider_gnd_special_bp.setRange(-50, 100)
+        self.slider_gnd_special_bp.setValue(0)
+        self.slider_gnd_special_bp.valueChanged.connect(self._on_gnd_special_bp_changed)
+        self.slider_gnd_special_bp.sliderReleased.connect(self.ground_slider_released.emit)
+        col_gnd_sp_bp.addWidget(self.slider_gnd_special_bp)
+        row_gnd_sp_pair.addLayout(col_gnd_sp_bp)
+
+        gnd_spec_layout.addLayout(row_gnd_sp_pair)
+
+        self.btn_reset_gnd_special = QPushButton("↺ Restablecer Tono Suelo")
+        self.btn_reset_gnd_special.setCursor(Qt.PointingHandCursor)
+        self.btn_reset_gnd_special.clicked.connect(self.ground_reset_requested.emit)
+        gnd_spec_layout.addWidget(self.btn_reset_gnd_special)
+
+        props_layout.addWidget(self.grp_gnd_special)
+
         main_layout.addWidget(self.container_layer_props)
 
         # Estado inicial vacío
@@ -764,18 +847,31 @@ class MaskLayersWidget(QWidget):
         count = len(self.layers) + 1
         if mask_type == MASK_TYPE_BRUSH:
             name = f"Pincel {count}"
+            layer = MaskLayer(
+                name=name,
+                mask_type=mask_type,
+                opacity=self._last_brush_opacity,
+                brush_radius=self._last_brush_radius,
+                brush_hardness=self._last_brush_hardness,
+                brush_flow=self._last_brush_flow,
+                brush_mode=self._last_brush_mode
+            )
         elif mask_type == MASK_TYPE_LUMA:
             name = f"Luminancia {count}"
+            layer = MaskLayer(name=name, mask_type=mask_type)
         elif mask_type == MASK_TYPE_COLOR:
             name = f"Color {count}"
+            layer = MaskLayer(name=name, mask_type=mask_type)
         elif mask_type == MASK_TYPE_GROUND:
             name = f"Suelo {count}"
+            layer = MaskLayer(name=name, mask_type=mask_type)
         elif mask_type == MASK_TYPE_SKY:
             name = f"Cielo {count}"
+            layer = MaskLayer(name=name, mask_type=mask_type)
         else:
             name = f"Máscara {count}"
+            layer = MaskLayer(name=name, mask_type=mask_type)
 
-        layer = MaskLayer(name=name, mask_type=mask_type)
         # En Photoshop las capas nuevas se insertan arriba del todo
         self.layers.insert(0, layer)
         self._rebuild_list_items(select_layer_id=layer.id)
@@ -840,7 +936,7 @@ class MaskLayersWidget(QWidget):
         return None
 
     def _rebuild_list_items(self, select_layer_id: Optional[str] = None) -> None:
-        """Regenera los elementos de la lista QListWidget con iconos y estilos acordes a su tipo."""
+        """Regenera los elementos de la lista QListWidget con iconos, botón de ojo y estilos acordes a su tipo."""
         self._updating_ui = True
         self.list_layers.clear()
 
@@ -849,19 +945,19 @@ class MaskLayersWidget(QWidget):
             if layer.mask_type == MASK_TYPE_IMAGE_BASE:
                 icon = "🖼️"
                 type_tag = "Fondo Base"
-                fg_col = QColor("#ffd54f") if layer.enabled else QColor("#455a64")
+                fg_col = "#ffd54f" if layer.enabled else "#607d8b"
             elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
                 icon = "⭐"
                 type_tag = "StarNet AI"
-                fg_col = QColor("#80d8ff") if layer.enabled else QColor("#455a64")
+                fg_col = "#80d8ff" if layer.enabled else "#607d8b"
             elif layer.mask_type == MASK_TYPE_IMAGE_STARLESS:
                 icon = "🌌"
                 type_tag = "StarNet AI"
-                fg_col = QColor("#ce93d8") if layer.enabled else QColor("#455a64")
+                fg_col = "#ce93d8" if layer.enabled else "#607d8b"
             elif layer.mask_type == MASK_TYPE_IMAGE_GROUND:
                 icon = "🏞️"
                 type_tag = "Paisaje Suelo"
-                fg_col = QColor("#a5d6a7") if layer.enabled else QColor("#455a64")
+                fg_col = "#a5d6a7" if layer.enabled else "#607d8b"
             else:
                 type_tag = {
                     MASK_TYPE_BRUSH: "Pincel",
@@ -878,17 +974,53 @@ class MaskLayersWidget(QWidget):
                     MASK_TYPE_GROUND: "🏞️",
                     MASK_TYPE_SKY: "🌌",
                 }.get(layer.mask_type, "📑")
-                fg_col = QColor("#e0e6f0") if layer.enabled else QColor("#78909c")
+                fg_col = "#e0e6f0" if layer.enabled else "#607d8b"
 
-            status = "✓" if layer.enabled else "✕"
-            txt = f"{status} {icon} {layer.name}  [{type_tag}]"
-            item = QListWidgetItem(txt)
-            item.setForeground(fg_col)
-            if layer.is_system_layer:
-                font = item.font()
-                font.setBold(True)
-                item.setFont(font)
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(0, 30))
             self.list_layers.addItem(item)
+
+            row_widget = QWidget()
+            row_widget.setStyleSheet("background: transparent;")
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(6, 2, 4, 2)
+            row_layout.setSpacing(6)
+
+            bold_css = "font-weight: bold; " if layer.is_system_layer else ""
+            lbl_title = QLabel(f"{icon}  {layer.name}  [{type_tag}]")
+            lbl_title.setStyleSheet(f"color: {fg_col}; {bold_css}background: transparent;")
+            lbl_title.setCursor(Qt.PointingHandCursor)
+            row_layout.addWidget(lbl_title, stretch=1)
+
+            btn_eye = QPushButton("👁️" if layer.enabled else "🚫")
+            btn_eye.setFixedSize(26, 22)
+            btn_eye.setCursor(Qt.PointingHandCursor)
+            btn_eye.setToolTip("Capa visible (clic para ocultar)" if layer.enabled else "Capa oculta (clic para mostrar)")
+            btn_eye.setStyleSheet("""
+                QPushButton {
+                    background-color: transparent;
+                    border: none;
+                    font-size: 13px;
+                    padding: 0px;
+                }
+                QPushButton:hover {
+                    background-color: #2a3147;
+                    border-radius: 3px;
+                }
+            """)
+
+            def make_click_handler(r):
+                return lambda e: self.list_layers.setCurrentRow(r)
+
+            def make_eye_handler(r):
+                return lambda: self._toggle_layer_enabled_at(r)
+
+            row_widget.mousePressEvent = make_click_handler(i)
+            lbl_title.mousePressEvent = make_click_handler(i)
+            btn_eye.clicked.connect(make_eye_handler(i))
+
+            row_layout.addWidget(btn_eye)
+            self.list_layers.setItemWidget(item, row_widget)
 
             if select_layer_id and layer.id == select_layer_id:
                 select_row = i
@@ -905,6 +1037,30 @@ class MaskLayersWidget(QWidget):
         self._updating_ui = False
         self._update_list_and_props_state()
 
+    def _toggle_layer_enabled_at(self, idx: int) -> None:
+        """Alterna el estado enabled de la capa en el índice indicado al hacer clic en el ojo."""
+        if 0 <= idx < len(self.layers):
+            layer = self.layers[idx]
+            new_state = not layer.enabled
+            layer.enabled = new_state
+
+            if not new_state:
+                if layer.mask_type == MASK_TYPE_BRUSH:
+                    self.brush_tool_toggled.emit(False, None)
+                self.set_preview_active(False)
+                self.preview_mask_requested.emit(None)
+            else:
+                if layer.mask_type == MASK_TYPE_BRUSH:
+                    self.brush_tool_toggled.emit(True, layer)
+                elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
+                    self.starnet_visibility_changed.emit(True)
+
+            if not new_state and layer.mask_type == MASK_TYPE_IMAGE_STARS:
+                self.starnet_visibility_changed.emit(False)
+
+            self._rebuild_list_items(select_layer_id=layer.id)
+            self.layers_changed.emit()
+
     def _on_layer_selection_changed(self, row: int) -> None:
         """Manejador al cambiar la fila seleccionada."""
         if self._updating_ui:
@@ -920,12 +1076,16 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         has_sel = layer is not None
         is_sys = layer.is_system_layer if layer else False
+        is_ground = (layer is not None and layer.mask_type in (MASK_TYPE_IMAGE_GROUND, MASK_TYPE_GROUND))
 
         self.container_layer_props.setVisible(has_sel)
         self.btn_move_up.setEnabled(has_sel)
         self.btn_move_down.setEnabled(has_sel)
         self.btn_duplicate.setEnabled(has_sel and not is_sys)
         self.btn_delete.setEnabled(has_sel and not is_sys)
+
+        if hasattr(self, 'grp_gnd_special'):
+            self.grp_gnd_special.setVisible(is_ground)
 
         if not layer:
             self.brush_tool_toggled.emit(False, None)
@@ -1042,25 +1202,7 @@ class MaskLayersWidget(QWidget):
             if layer.is_system_layer:
                 return  # No se permite renombrar capas de sistema
             layer.name = text.strip() or "Máscara"
-            # Actualizar texto del item en la lista sin reconstruir todo
-            row = self.list_layers.currentRow()
-            if row >= 0:
-                type_tag = {
-                    MASK_TYPE_BRUSH: "Pincel",
-                    MASK_TYPE_LUMA: "Luminancia",
-                    MASK_TYPE_COLOR: "Color HSV",
-                    MASK_TYPE_GROUND: "Máscara Suelo",
-                    MASK_TYPE_SKY: "Máscara Cielo",
-                }.get(layer.mask_type, "Ajuste")
-                icon = {
-                    MASK_TYPE_BRUSH: "🖌️",
-                    MASK_TYPE_LUMA: "💡",
-                    MASK_TYPE_COLOR: "🎨",
-                    MASK_TYPE_GROUND: "🏞️",
-                    MASK_TYPE_SKY: "🌌",
-                }.get(layer.mask_type, "📑")
-                status = "✓" if layer.enabled else "✕"
-                self.list_layers.item(row).setText(f"{status} {icon} {layer.name}  [{type_tag}]")
+            self._rebuild_list_items(select_layer_id=layer.id)
 
     def _on_layer_enabled_toggled(self, checked: bool) -> None:
         if self._updating_ui: return
@@ -1097,6 +1239,8 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if layer:
             layer.opacity = val / 100.0
+            if layer.mask_type == MASK_TYPE_BRUSH:
+                self._last_brush_opacity = layer.opacity
             self.lbl_opacity.setText(f"{val}%")
             if layer.mask_type == MASK_TYPE_IMAGE_STARS:
                 self.starnet_opacity_changed.emit(layer.opacity)
@@ -1110,6 +1254,9 @@ class MaskLayersWidget(QWidget):
             layer.brush_radius = self.slider_b_radius.value()
             layer.brush_hardness = self.slider_b_hardness.value() / 100.0
             layer.brush_flow = self.slider_b_flow.value() / 100.0
+            self._last_brush_radius = layer.brush_radius
+            self._last_brush_hardness = layer.brush_hardness
+            self._last_brush_flow = layer.brush_flow
             self.lbl_b_radius.setText(f"{layer.brush_radius} px")
             self.lbl_b_hardness.setText(f"{self.slider_b_hardness.value()}%")
             self.lbl_b_flow.setText(f"{self.slider_b_flow.value()}%")
@@ -1122,6 +1269,7 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if layer and layer.mask_type == MASK_TYPE_BRUSH:
             layer.brush_mode = mode
+            self._last_brush_mode = mode
             self.btn_b_paint.setChecked(mode == "paint")
             self.btn_b_erase.setChecked(mode == "erase")
             self.brush_params_changed.emit(
@@ -1139,6 +1287,7 @@ class MaskLayersWidget(QWidget):
 
     def set_brush_radius_from_canvas(self, radius: int) -> None:
         """Actualiza el control deslizante de radio cuando se redimensiona con la rueda del ratón."""
+        self._last_brush_radius = radius
         layer = self.get_selected_layer()
         if layer and layer.mask_type == MASK_TYPE_BRUSH:
             layer.brush_radius = radius
@@ -1294,6 +1443,37 @@ class MaskLayersWidget(QWidget):
         layer.tint = 0.0
         self._update_list_and_props_state()
         self.layers_changed.emit()
+
+    # Controles Especiales de Tono de Suelo
+    def _on_gnd_special_ev_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_gnd_special_ev.setText(f"{val / 100.0:+.2f} EV")
+        self.ground_ev_changed.emit(val)
+
+    def _on_gnd_special_sh_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_gnd_special_sh.setText(f"{val}%")
+        self.ground_shadows_changed.emit(val)
+
+    def _on_gnd_special_bp_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        display_val = val / 1000.0
+        self.lbl_gnd_special_bp.setText(f"{display_val:+.3f}")
+        self.ground_bp_changed.emit(val)
+
+    def set_ground_tone_values(self, ev_val: int, sh_val: int, bp_val: int) -> None:
+        """Sincroniza los valores de los controles tonales de suelo desde tab_developer."""
+        self._updating_ui = True
+        if hasattr(self, 'slider_gnd_special_ev'):
+            self.slider_gnd_special_ev.setValue(ev_val)
+            self.lbl_gnd_special_ev.setText(f"{ev_val / 100.0:+.2f} EV")
+        if hasattr(self, 'slider_gnd_special_sh'):
+            self.slider_gnd_special_sh.setValue(sh_val)
+            self.lbl_gnd_special_sh.setText(f"{sh_val}%")
+        if hasattr(self, 'slider_gnd_special_bp'):
+            self.slider_gnd_special_bp.setValue(bp_val)
+            self.lbl_gnd_special_bp.setText(f"{bp_val / 1000.0:+.3f}")
+        self._updating_ui = False
 
     # Previsualización interactiva de la máscara en el lienzo
     def _on_preview_mask_toggled(self, checked: bool) -> None:
