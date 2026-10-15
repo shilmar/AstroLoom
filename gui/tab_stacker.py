@@ -49,15 +49,15 @@ class FileListRow(QWidget):
             self.chk_include.setVisible(False)
         layout.addWidget(self.chk_include)
 
+        # Badge de calidad (FWHM / Redondez / Cribado)
+        self.lbl_quality = QLabel("")
+        self.lbl_quality.setVisible(False)
+        layout.addWidget(self.lbl_quality)
+
         # Indicador de referencia / activo tipo badge
         self.lbl_ref = QLabel()
         self.set_as_reference(is_ref)
         layout.addWidget(self.lbl_ref)
-
-        # Badge de calidad (FWHM / Redondez)
-        self.lbl_quality = QLabel("")
-        self.lbl_quality.setVisible(False)
-        layout.addWidget(self.lbl_quality)
 
         # Nombre del archivo
         self.lbl_name = QLabel(os.path.basename(filepath))
@@ -81,15 +81,17 @@ class FileListRow(QWidget):
         if is_ref:
             self.lbl_ref.setText("📌 REF")
             self.lbl_ref.setStyleSheet("color: #69f0ae; font-weight: bold; font-size: 10px; background-color: #1b3a24; border-radius: 3px; padding: 1px 4px;")
+            self.lbl_ref.setVisible(True)
         else:
-            self.lbl_ref.setText("      ")
-            self.lbl_ref.setStyleSheet("color: transparent; font-size: 10px; padding: 1px 4px;")
+            self.lbl_ref.setText("")
+            self.lbl_ref.setVisible(False)
 
     def set_quality_result(self, res):
         """Asigna y muestra el badge de calidad óptica del frame culling."""
         if res is None:
             self.lbl_quality.setVisible(False)
             return
+        self.lbl_quality.setVisible(True)
 
         tip = (
             f"Puntuación: {res.score:.1f}%\n"
@@ -109,8 +111,9 @@ class FileListRow(QWidget):
             self.lbl_quality.setText(f"🟡 {int(round(res.score))}%")
             self.lbl_quality.setStyleSheet("color: #ffd54f; background-color: #3e3814; border-radius: 3px; padding: 1px 4px; font-size: 10px; font-weight: bold;")
         else:
-            short_lbl = "Movida" if "Movida" in res.status_label else ("Nubes" if "Nubes" in res.status_label else ("Desenfoque" if "Desenfoque" in res.status_label else f"{int(round(res.score))}%"))
-            self.lbl_quality.setText(f"🔴 {short_lbl}")
+            defect_type = "Movida" if "Movida" in res.status_label else ("Nubes" if "Nubes" in res.status_label else ("Desenfoque" if "Desenfoque" in res.status_label else ""))
+            suffix = f" {defect_type}" if defect_type else ""
+            self.lbl_quality.setText(f"🔴 {int(round(res.score))}%{suffix}")
             self.lbl_quality.setStyleSheet("color: #ff5252; background-color: #3e1b1b; border-radius: 3px; padding: 1px 4px; font-size: 10px; font-weight: bold;")
 
     def set_included(self, is_included: bool):
