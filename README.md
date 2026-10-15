@@ -327,14 +327,18 @@ python run_app.py
 * [x] Aceleración multiproceso/multihilo en el cribado masivo del collage de eclipses con selector configurable de rendimiento (Velocidad half-size RAW vs Máxima resolución nativa).
 * [x] Aceleración multihilo (ThreadPoolExecutor) en la detección de limbo en lote y precarga HDR en la pestaña de Eclipses (manteniendo resolución nativa 1:1 estricta sin downscaling para máxima precisión subpíxel).
 * [x] Módulo de composición panorámica para mosaicos nocturnos (Nightscape Panorama Stitcher).
-* [ ] Modo automático de gestión de memoria RAM según carga del sistema (psutil).
 * [x] Deshacer / Rehacer (Undo / Redo) paramétrico de 50 pasos en el Revelador con botones dedicados y atajos de teclado.
 * [x] Conversión cromática matemática exacta (adaptación Bradford D65/D50 y aceleración LUT) en exportación con perfiles ICC (sRGB, Adobe RGB, ProPhoto RGB).
 * [x] Auto-reparación y robustez en arranque ante directorios inexistentes con plantilla base config.default.json.
-* [ ] Anti-parpadeo (Deflicker) y morphing temporal entre fotogramas en Startrails / Time-Lapse.
 * [x] Herramienta interactiva de Recorte (Crop) en el Revelador / Editor con encuadre libre y proporciones fijas (1:1, 16:9, 4:3, etc.), nivelación y guías de composición.
-* [x] Ampliación y revisión del rango de ajuste de Balance de Blancos (Temperatura y Tinte) en el Revelador (el rango actual de ±0.250 resulta insuficiente para tomas con dominantes extremas, airglow intenso o calibraciones nocturnas).
-* [ ] Miniaturas previas (Thumbnails) en las tablas de archivos y estimación de tiempo restante (ETA) en barra de progreso.
+* [x] Ampliación del rango de ajuste de Balance de Blancos (Temperatura y Tinte a ±1.000) con cajas de entrada numérica directa en el Revelador.
+* [ ] Rediseño y Unificación Visual Global (Design System `gui/theme.py`): Paleta oscura unificada (Dark Astro Pro), botones y tipografía homogénea, estandarización de controles y barras de herramientas comunes entre todos los módulos.
+* [ ] Histograma RGB Interactivo en Vivo en el Revelador: Visualización en tiempo real de canales R, G, B superpuestos con marcadores de saturación y recorte tonal.
+* [ ] Sistema de Preajustes (Presets / Recetas) en el Revelador: Guardado, importación y aplicación en un clic de ajustes de procesado (.astropreset).
+* [ ] Máscaras de Luminancia y Rango de Color (Range Masks) en el Revelador: Aislamiento selectivo automático por brillo (sombras/altas luces) o tono (H-alfa, airglow, cielo profundo) para procesado quirúrgico.
+* [ ] Anti-parpadeo (Deflicker) y morphing temporal entre fotogramas en Startrails / Time-Lapse.
+* [ ] Monitor de Memoria RAM / VRAM y GPU en Barra de Estado: Indicador inferior permanente en tiempo real con alertas de saturación y gestión de recursos (psutil).
+* [ ] Estimación de tiempo restante (ETA) y progreso fluido en barras de ejecución durante apilado, cosido de panorámicas y startrails.
 ---
 
 ## Licencia
