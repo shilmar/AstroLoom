@@ -40,11 +40,15 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
       6. `🏙️ Reducción de Polución Lumínica Periurbana`: Atenuación de cúpula de luz (38%) y balance frío.
       7. `✨ Reducción Drástica de Estrellas (Star Minimizer)`: Contracción estelar al 35% para despejar nebulosidades.
       8. `🌫️ Starless Puro (Solo Nebulosa / Sin Estrellas)`: Modo estrella oculta con realce de texturas de gas.
+  - **Protección del Estirado Tonal Nativo (Histograma Protegido):**
+    - El estirado MTF y el Punto Negro (`bp_val` y `mtf_val`) quedan estrictamente protegidos y nunca son sobreescritos por ningún preset, garantizando que la calibración lumínica única de cada sensor y toma permanezca intacta.
   - **Aplicación Granular / Selectiva por Ámbitos:**
-    - Modo `Completo (Todos)`: Aplica todos los parámetros tonales, de color y StarNet.
-    - Modo `Solo Tono y Curvas`: Aplica MTF, punto negro, contraste y suelo (mantiene el balance de blancos existente).
-    - Modo `Solo Color y WB`: Aplica temperatura, tinte, saturación y vibración (mantiene el estirado existente).
+    - Modo `Todo (Sin estirado)`: Aplica todos los parámetros de color, estrellas, contraste y suelo respetando el estirado nativo.
+    - Modo `Solo Color y WB`: Aplica temperatura, tinte, saturación y vibración (mantiene el contraste y filtros).
     - Modo `Solo Estrellas y Filtros`: Aplica reducción de estrellas, claridad, dehaze, ondículas y denoise.
+    - Modo `Solo Contraste y Suelo`: Aplica contraste general y exposición/sombras del suelo terrestre.
+  - **Optimización de Espacio Vertical:**
+    - Integración en una sola fila horizontal del selector de modo y del botón `[ ⚡ Aplicar ]`, reduciendo la huella vertical del panel lateral.
   - **Integración No Destructiva con Deshacer / Rehacer:**
     - La aplicación de cualquier preset queda registrada en la pila de `Ctrl+Z`, permitiendo revertir al estado previo de un solo clic.
   - **Diálogos de Gestión e Interfaz ([`gui/dialog_presets.py`](file:///D:/software/AstroLoom/gui/dialog_presets.py)):**

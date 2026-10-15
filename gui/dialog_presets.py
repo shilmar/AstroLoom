@@ -257,11 +257,11 @@ class PresetManagerDialog(QDialog):
         scope_layout.setSpacing(4)
 
         self.scope_group = QButtonGroup(self)
-        self.rad_all = QRadioButton("Completo (Todos los parámetros)")
+        self.rad_all = QRadioButton("Todo (Sin alterar estirado MTF ni punto negro)")
         self.rad_all.setChecked(True)
-        self.rad_tone = QRadioButton("Solo Tono y Curvas (MTF, BP, Contraste, Suelo)")
+        self.rad_tone = QRadioButton("Solo Contraste y Suelo (Contraste general, EV y sombras)")
         self.rad_color = QRadioButton("Solo Color y WB (Temp, Tinte, Saturación, Vibración)")
-        self.rad_details = QRadioButton("Solo Estrellas y Detalles (Claridad, Dehaze, StarNet)")
+        self.rad_details = QRadioButton("Solo Estrellas y Detalles (Claridad, Dehaze, StarNet, Ondículas)")
 
         self.scope_group.addButton(self.rad_all, 0)
         self.scope_group.addButton(self.rad_tone, 1)
@@ -377,13 +377,15 @@ class PresetManagerDialog(QDialog):
         # Construir resumen de parámetros
         lines = []
         params = preset.params
-        if "mtf_val" in params or "bp_val" in params:
-            lines.append("--- TONALIDAD & ESTIRADO ---")
-            lines.append(f"  • Estirado MTF: {params.get('mtf_val', 0.10):.4f}")
-            lines.append(f"  • Punto Negro: {params.get('bp_val', 0.0):.4f}")
+        if "contrast_val" in params or "gnd_ev_val" in params or "gnd_sh_val" in params:
+            lines.append("--- CONTRASTE & SUELO (Sin estirado) ---")
             lines.append(f"  • Contraste: {params.get('contrast_val', 0)/100.0:+.2f}")
             if params.get("gnd_ev_val", 0) != 0:
                 lines.append(f"  • Suelo EV: {params.get('gnd_ev_val', 0)/100.0:+.2f} EV")
+            if params.get("gnd_sh_val", 0) != 0:
+                lines.append(f"  • Sombras Suelo: {params.get('gnd_sh_val', 0)}%")
+            if params.get("gnd_bp_val", 0) != 0:
+                lines.append(f"  • Suelo BP: {params.get('gnd_bp_val', 0)/1000.0:+.3f}")
         if "temp_val" in params or "tint_val" in params:
             lines.append("--- COLOR & BALANCE ---")
             lines.append(f"  • Temp: {params.get('temp_val', 0)/1000.0:+.3f}")

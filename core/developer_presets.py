@@ -25,9 +25,11 @@ SCOPE_TONE = "tone"
 SCOPE_COLOR = "color"
 SCOPE_DETAILS = "details"
 
+# Claves de estirado tonal que son únicas para cada imagen y NO deben ser alteradas por los presets
+KEYS_EXCLUDED_FROM_PRESETS = {"bp_val", "mtf_val"}
+
 PARAM_KEYS_TONE = {
-    "bp_val", "mtf_val", "contrast_val",
-    "gnd_ev_val", "gnd_sh_val", "gnd_bp_val", "curves"
+    "contrast_val", "gnd_ev_val", "gnd_sh_val", "gnd_bp_val", "curves"
 }
 
 PARAM_KEYS_COLOR = {
@@ -91,7 +93,7 @@ def get_builtin_presets() -> List[DeveloperPreset]:
             id="builtin_neutral",
             name="⭐ Neutro / Restablecer",
             category="Básicos",
-            description="Restablece todos los parámetros tonales, de color y StarNet a sus valores neutros de fábrica.",
+            description="Restablece todos los parámetros de color, contraste y StarNet a sus valores neutros (sin alterar el estirado MTF de la imagen).",
             is_builtin=True,
             author="AstroLoom",
             params={
@@ -110,8 +112,6 @@ def get_builtin_presets() -> List[DeveloperPreset]:
                 "sat_gnd_val": 100,
                 "vibrance_val": 0,
                 "contrast_val": 0,
-                "bp_val": 0.0,
-                "mtf_val": 0.10,
                 "gnd_ev_val": 0,
                 "gnd_sh_val": 0,
                 "gnd_bp_val": 0,
@@ -122,7 +122,7 @@ def get_builtin_presets() -> List[DeveloperPreset]:
             id="builtin_mw_high_contrast",
             name="🌌 Vía Láctea - Alto Contraste & Polvo Oscuro",
             category="Vía Láctea",
-            description="Realce agresivo de bandas oscuras y carril de polvo en el centro galáctico con microtextura de ondículas y estirado contrastado.",
+            description="Realce agresivo de bandas oscuras y carril de polvo en el centro galáctico con microtextura de ondículas y contraste refinado.",
             is_builtin=True,
             author="AstroLoom",
             params={
@@ -141,8 +141,6 @@ def get_builtin_presets() -> List[DeveloperPreset]:
                 "sat_gnd_val": 105,
                 "vibrance_val": 20,
                 "contrast_val": 22,
-                "bp_val": 0.005,
-                "mtf_val": 0.08,
                 "gnd_ev_val": 0,
                 "gnd_sh_val": 0,
                 "gnd_bp_val": 0,
@@ -172,8 +170,6 @@ def get_builtin_presets() -> List[DeveloperPreset]:
                 "sat_gnd_val": 100,
                 "vibrance_val": 10,
                 "contrast_val": 10,
-                "bp_val": 0.002,
-                "mtf_val": 0.095,
                 "gnd_ev_val": 0,
                 "gnd_sh_val": 0,
                 "gnd_bp_val": 0,
@@ -203,8 +199,6 @@ def get_builtin_presets() -> List[DeveloperPreset]:
                 "sat_gnd_val": 120,
                 "vibrance_val": 15,
                 "contrast_val": 12,
-                "bp_val": 0.003,
-                "mtf_val": 0.09,
                 "gnd_ev_val": 120,
                 "gnd_sh_val": 35,
                 "gnd_bp_val": -8,
@@ -215,7 +209,7 @@ def get_builtin_presets() -> List[DeveloperPreset]:
             id="builtin_dso_nebula",
             name="🔭 Cielo Profundo - Nebulosas (Deep Sky Pop)",
             category="Cielo Profundo",
-            description="Optimizado para nebulosas difusas y objetos de espacio profundo; reduce estrellas de fondo y estira estructuras gaseosas débiles.",
+            description="Optimizado para nebulosas difusas y objetos de espacio profundo; reduce estrellas de fondo y destaca estructuras gaseosas débiles.",
             is_builtin=True,
             author="AstroLoom",
             params={
@@ -234,8 +228,6 @@ def get_builtin_presets() -> List[DeveloperPreset]:
                 "sat_gnd_val": 100,
                 "vibrance_val": 25,
                 "contrast_val": 20,
-                "bp_val": 0.006,
-                "mtf_val": 0.07,
                 "gnd_ev_val": 0,
                 "gnd_sh_val": 0,
                 "gnd_bp_val": 0,
@@ -246,7 +238,7 @@ def get_builtin_presets() -> List[DeveloperPreset]:
             id="builtin_light_pollution_fix",
             name="🏙️ Reducción de Polución Lumínica Periurbana",
             category="Corrección",
-            description="Atenúa cúpulas de luz amarillentas/anaranjadas de ciudades cercanas, neutraliza la dominante térmica y fija el negro de fondo.",
+            description="Atenúa cúpulas de luz amarillentas/anaranjadas de ciudades cercanas, neutraliza la dominante térmica y limpia el fondo.",
             is_builtin=True,
             author="AstroLoom",
             params={
@@ -265,8 +257,6 @@ def get_builtin_presets() -> List[DeveloperPreset]:
                 "sat_gnd_val": 95,
                 "vibrance_val": 5,
                 "contrast_val": 15,
-                "bp_val": 0.015,
-                "mtf_val": 0.10,
                 "gnd_ev_val": 0,
                 "gnd_sh_val": 0,
                 "gnd_bp_val": 0,
@@ -296,8 +286,6 @@ def get_builtin_presets() -> List[DeveloperPreset]:
                 "sat_gnd_val": 100,
                 "vibrance_val": 10,
                 "contrast_val": 10,
-                "bp_val": 0.0,
-                "mtf_val": 0.10,
                 "gnd_ev_val": 0,
                 "gnd_sh_val": 0,
                 "gnd_bp_val": 0,
@@ -327,8 +315,6 @@ def get_builtin_presets() -> List[DeveloperPreset]:
                 "sat_gnd_val": 100,
                 "vibrance_val": 20,
                 "contrast_val": 20,
-                "bp_val": 0.004,
-                "mtf_val": 0.08,
                 "gnd_ev_val": 0,
                 "gnd_sh_val": 0,
                 "gnd_bp_val": 0,
@@ -396,6 +382,9 @@ def save_user_preset(
     filename = f"{safe_name}.json"
     file_path = target_dir / filename
 
+    # Excluir parámetros de estirado tonal específicos de cada imagen (punto negro y MTF)
+    clean_params = {k: v for k, v in params.items() if k not in KEYS_EXCLUDED_FROM_PRESETS}
+
     preset = DeveloperPreset(
         id=clean_id,
         name=name.strip(),
@@ -404,7 +393,7 @@ def save_user_preset(
         is_builtin=False,
         author=author.strip() or "Usuario",
         created_at=datetime.datetime.now().isoformat(),
-        params=params,
+        params=clean_params,
     )
 
     with open(file_path, "w", encoding="utf-8") as fp:
@@ -478,29 +467,26 @@ def filter_preset_params(
 ) -> Dict[str, Any]:
     """
     Combina los parámetros del preset con los actuales según el ámbito seleccionado:
-    - SCOPE_ALL: Aplica todos los parámetros del preset.
-    - SCOPE_TONE: Solo actualiza parámetros tonales y curvas.
+    - SCOPE_ALL: Aplica todos los parámetros del preset (sin alterar el estirado MTF ni el punto negro de la imagen).
+    - SCOPE_TONE: Solo actualiza contraste general, curvas y tono del suelo.
     - SCOPE_COLOR: Solo actualiza balance de blancos, tintes y saturación.
     - SCOPE_DETAILS: Solo actualiza reducción de estrellas, claridad, dehaze y filtros.
     """
-    if scope == SCOPE_ALL:
-        target = current_params.copy()
-        target.update(preset_params)
-        return target
-
     target = current_params.copy()
 
-    if scope == SCOPE_TONE:
-        keys = PARAM_KEYS_TONE
+    if scope == SCOPE_ALL:
+        keys = set(preset_params.keys()) - KEYS_EXCLUDED_FROM_PRESETS
+    elif scope == SCOPE_TONE:
+        keys = PARAM_KEYS_TONE - KEYS_EXCLUDED_FROM_PRESETS
     elif scope == SCOPE_COLOR:
-        keys = PARAM_KEYS_COLOR
+        keys = PARAM_KEYS_COLOR - KEYS_EXCLUDED_FROM_PRESETS
     elif scope == SCOPE_DETAILS:
-        keys = PARAM_KEYS_DETAILS
+        keys = PARAM_KEYS_DETAILS - KEYS_EXCLUDED_FROM_PRESETS
     else:
-        keys = set(preset_params.keys())
+        keys = set(preset_params.keys()) - KEYS_EXCLUDED_FROM_PRESETS
 
     for k in keys:
-        if k in preset_params:
+        if k in preset_params and k not in KEYS_EXCLUDED_FROM_PRESETS:
             target[k] = preset_params[k]
 
     return target

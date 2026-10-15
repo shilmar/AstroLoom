@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QScrollArea, 
     QFrame,
-    QButtonGroup
+    QButtonGroup,
+    QSizePolicy
 )
 from PySide6.QtCore import Qt, QCoreApplication, QTimer
 from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap, QColor, QFont
@@ -175,28 +176,49 @@ class DeveloperTab(QWidget):
         self.lbl_preset_desc.setStyleSheet("color: #90a4ae; font-size: 11px; font-style: italic;")
         presets_layout.addWidget(self.lbl_preset_desc)
 
-        # Fila 3: Selector de Ámbito (Scope)
-        row_scope = QHBoxLayout()
-        row_scope.setSpacing(6)
-        lbl_scope = QLabel("Modo:")
-        lbl_scope.setStyleSheet("font-size: 11px; color: #80d8ff; font-weight: bold;")
-        row_scope.addWidget(lbl_scope)
+        # Fila 3: Modo de Aplicación + Botón Aplicar en la misma línea (ahorro vertical)
+        row_mode_apply = QHBoxLayout()
+        row_mode_apply.setSpacing(6)
 
         self.combo_preset_scope = QComboBox()
-        self.combo_preset_scope.addItem("Completo (Todos)", SCOPE_ALL)
-        self.combo_preset_scope.addItem("Solo Tono y Curvas", SCOPE_TONE)
+        self.combo_preset_scope.addItem("Todo (Sin estirado)", SCOPE_ALL)
         self.combo_preset_scope.addItem("Solo Color y WB", SCOPE_COLOR)
         self.combo_preset_scope.addItem("Solo Estrellas y Filtros", SCOPE_DETAILS)
-        self.combo_preset_scope.setToolTip("Elige si aplicar todos los ajustes del preset o solo un subconjunto específico")
-        row_scope.addWidget(self.combo_preset_scope, stretch=1)
-        presets_layout.addLayout(row_scope)
+        self.combo_preset_scope.addItem("Solo Contraste y Suelo", SCOPE_TONE)
+        self.combo_preset_scope.setToolTip("Elige qué controles aplicar del preset (el estirado MTF y el punto negro de la imagen se respetan siempre)")
+        row_mode_apply.addWidget(self.combo_preset_scope, stretch=1)
 
-        # Fila 4: Botón Aplicar Preset (Prominente)
-        self.btn_apply_preset = QPushButton("⚡ Aplicar Preset a la Imagen")
-        self.btn_apply_preset.setStyleSheet(STYLE_TRANSFER_BTN)
+        self.btn_apply_preset = QPushButton("⚡ Aplicar")
+        self.btn_apply_preset.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.btn_apply_preset.setFixedWidth(84)
+        self.btn_apply_preset.setStyleSheet("""
+            QPushButton {
+                font-weight: bold;
+                font-size: 11px;
+                background-color: #00838f;
+                color: #ffffff;
+                border: 1px solid #00acc1;
+                border-radius: 5px;
+                padding: 4px 6px;
+            }
+            QPushButton:hover {
+                background-color: #0097a7;
+                border-color: #26c6da;
+            }
+            QPushButton:pressed {
+                background-color: #006064;
+            }
+            QPushButton:disabled {
+                background-color: #152528;
+                color: #43656b;
+                border-color: #1f373b;
+            }
+        """)
         self.btn_apply_preset.setToolTip("Aplica el preset seleccionado a la imagen actual según el modo elegido")
         self.btn_apply_preset.clicked.connect(self.apply_selected_preset)
-        presets_layout.addWidget(self.btn_apply_preset)
+        row_mode_apply.addWidget(self.btn_apply_preset)
+
+        presets_layout.addLayout(row_mode_apply)
 
         # Fila 5: Botones Guardar Actual y Administrar
         row_preset_btns = QHBoxLayout()
@@ -782,8 +804,8 @@ class DeveloperTab(QWidget):
         left_container_layout = QVBoxLayout(left_container)
         left_container_layout.setContentsMargins(4, 4, 4, 4)
         left_container_layout.setSpacing(6)
-        left_container.setMinimumWidth(420)
-        left_container.setMaximumWidth(520)
+        left_container.setMinimumWidth(440)
+        left_container.setMaximumWidth(540)
 
         left_container_layout.addWidget(scroll_area, 1)
 
@@ -3084,8 +3106,8 @@ class DeveloperTab(QWidget):
 
         # 4. Mensaje explicativo en el log
         scope_names = {
-            SCOPE_ALL: "Completo",
-            SCOPE_TONE: "Solo Tono",
+            SCOPE_ALL: "Todo (Sin estirado)",
+            SCOPE_TONE: "Solo Contraste y Suelo",
             SCOPE_COLOR: "Solo Color",
             SCOPE_DETAILS: "Solo Estrellas/Detalles"
         }
