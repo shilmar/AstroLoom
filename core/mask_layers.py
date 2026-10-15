@@ -7,7 +7,7 @@ locales paramétricos independientes y conciencia de capas StarNet (Compuesta, S
 import uuid
 import base64
 from dataclasses import dataclass, field, asdict
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import cv2
 import numpy as np
 from core.masking import generate_luminance_mask, generate_color_range_mask
@@ -116,36 +116,60 @@ class MaskLayer:
 def compute_layer_mask(
     layer: MaskLayer,
     base_rgb: np.ndarray,
-    master_sky_mask: Optional[np.ndarray] = None
+    master_sky_mask: Optional[np.ndarray] = None,
+    crop_rect: Optional[Tuple[int, int, int, int]] = None,
+    full_image_shape: Optional[Tuple[int, int]] = None
 ) -> np.ndarray:
     """
     Calcula o evalúa la máscara 2D [0.0, 1.0] correspondiente a la capa.
-    Aplica inversión si la capa lo requiere.
+    Aplica inversión si la capa lo requiere. Soporta recorte espacial cuando el visor
+    se encuentra en modo Zoom 100%.
     """
     h, w = base_rgb.shape[:2]
 
+    def _slice_or_resize_mask(m_src: np.ndarray) -> np.ndarray:
+        if m_src is None:
+            return np.zeros((h, w), dtype=np.float32)
+        if m_src.shape[:2] == (h, w):
+            return m_src.copy()
+        if crop_rect is not None and full_image_shape is not None:
+            x1, y1, x2, y2 = crop_rect
+            h_f, w_f = full_image_shape
+            h_m, w_m = m_src.shape[:2]
+            sx = w_m / float(w_f)
+            sy = h_m / float(h_f)
+            mx1 = max(0, min(w_m, int(round(x1 * sx))))
+            my1 = max(0, min(h_m, int(round(y1 * sy))))
+            mx2 = max(0, min(w_m, int(round(x2 * sx))))
+            my2 = max(0, min(h_m, int(round(y2 * sy))))
+            m_sub = m_src[my1:my2, mx1:mx2]
+            if m_sub.shape[:2] != (h, w):
+                return cv2.resize(m_sub, (w, h), interpolation=cv2.INTER_LINEAR)
+            return m_sub.copy()
+        return cv2.resize(m_src, (w, h), interpolation=cv2.INTER_LINEAR)
+
     if layer.mask_type == MASK_TYPE_BRUSH:
         if layer.brush_mask is not None:
-            m = layer.brush_mask.copy()
-            if m.shape[:2] != (h, w):
-                m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
+            m = _slice_or_resize_mask(layer.brush_mask)
         else:
             m = np.zeros((h, w), dtype=np.float32)
 
     elif layer.mask_type == MASK_TYPE_GROUND:
         if master_sky_mask is not None:
-            m = 1.0 - master_sky_mask
-            if m.shape[:2] != (h, w):
-                m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
+            m_sky = master_sky_mask[..., 0] if master_sky_mask.ndim == 3 else master_sky_mask
+            if m_sky.shape[:2] != (h, w):
+                m_sky = cv2.resize(m_sky, (w, h), interpolation=cv2.INTER_LINEAR)
+            m = np.clip(1.0 - m_sky, 0.0, 1.0)
         else:
-            # Si no hay máscara de suelo, todo activo
             m = np.ones((h, w), dtype=np.float32)
 
     elif layer.mask_type == MASK_TYPE_SKY:
         if master_sky_mask is not None:
-            m = master_sky_mask.copy()
-            if m.shape[:2] != (h, w):
-                m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
+            m_sky = master_sky_mask[..., 0] if master_sky_mask.ndim == 3 else master_sky_mask
+            if m_sky.shape[:2] != (h, w):
+                m = cv2.resize(m_sky, (w, h), interpolation=cv2.INTER_LINEAR)
+            else:
+                m = m_sky.copy()
         else:
             m = np.ones((h, w), dtype=np.float32)
 
@@ -169,9 +193,7 @@ def compute_layer_mask(
         )
 
     elif layer.mask_type == MASK_TYPE_CUSTOM and layer.custom_mask is not None:
-        m = layer.custom_mask
-        if m.shape[:2] != (h, w):
-            m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
+        m = _slice_or_resize_mask(layer.custom_mask)
     else:
         m = np.ones((h, w), dtype=np.float32)
 
@@ -241,14 +263,21 @@ def compute_effective_layer_mask(
     composite_image: np.ndarray,
     master_sky_mask: Optional[np.ndarray] = None,
     starless_image: Optional[np.ndarray] = None,
-    stars_image: Optional[np.ndarray] = None
+    stars_image: Optional[np.ndarray] = None,
+    crop_rect: Optional[Tuple[int, int, int, int]] = None,
+    full_image_shape: Optional[Tuple[int, int]] = None
 ) -> np.ndarray:
     """
     Calcula la máscara final efectiva considerando su tipo, parámetros e inversión.
     En el modelo de capas de Photoshop, el ámbito de afectación lo determina de forma
     natural la posición de la capa en la pila (afecta y lee del lienzo que tiene debajo).
     """
-    m_base = compute_layer_mask(layer, composite_image, master_sky_mask=master_sky_mask)
+    m_base = compute_layer_mask(
+        layer, composite_image,
+        master_sky_mask=master_sky_mask,
+        crop_rect=crop_rect,
+        full_image_shape=full_image_shape
+    )
 
     # Compatibilidad con proyectos legados que tengan un target_scope explícito distinto de 'all'
     if layer.target_scope == SCOPE_TARGET_ALL or not layer.target_scope:
@@ -281,11 +310,14 @@ def apply_all_mask_layers(
     mask_layers: List[MaskLayer],
     master_sky_mask: Optional[np.ndarray] = None,
     starless_image: Optional[np.ndarray] = None,
-    stars_image: Optional[np.ndarray] = None
+    stars_image: Optional[np.ndarray] = None,
+    crop_rect: Optional[Tuple[int, int, int, int]] = None,
+    full_image_shape: Optional[Tuple[int, int]] = None
 ) -> np.ndarray:
     """
     Aplica secuencialmente la composición de capas (estilo Photoshop),
     integrando capas de imagen (Fondo Starless, Suelo, Estrellas) y capas de ajuste locales.
+    Soporta modo Zoom 100% mediante crop_rect y full_image_shape para alineación exacta 1:1.
     """
     if not mask_layers:
         return composite_image
@@ -301,7 +333,9 @@ def apply_all_mask_layers(
                 layer, img,
                 master_sky_mask=master_sky_mask,
                 starless_image=starless_image,
-                stars_image=stars_image
+                stars_image=stars_image,
+                crop_rect=crop_rect,
+                full_image_shape=full_image_shape
             )
             img = apply_local_adjustments_to_image(img, m_eff, layer)
         return img
@@ -355,7 +389,23 @@ def apply_all_mask_layers(
             if stars_image is not None and layer.opacity > 1e-4:
                 st = stars_image.copy()
                 if st.shape[:2] != (img_h, img_w):
-                    st = cv2.resize(st, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
+                    if crop_rect is not None and full_image_shape is not None:
+                        x1, y1, x2, y2 = crop_rect
+                        h_f, w_f = full_image_shape
+                        h_s, w_s = st.shape[:2]
+                        sx = w_s / float(w_f)
+                        sy = h_s / float(h_f)
+                        sx1 = max(0, min(w_s, int(round(x1 * sx))))
+                        sy1 = max(0, min(h_s, int(round(y1 * sy))))
+                        sx2 = max(0, min(w_s, int(round(x2 * sx))))
+                        sy2 = max(0, min(h_s, int(round(y2 * sy))))
+                        st_sub = st[sy1:sy2, sx1:sx2]
+                        if st_sub.shape[:2] != (img_h, img_w):
+                            st = cv2.resize(st_sub, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
+                        else:
+                            st = st_sub
+                    else:
+                        st = cv2.resize(st, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
                 
                 # Ajustes cromáticos propios de la capa de estrellas
                 has_adj = (abs(layer.temp) > 1e-4 or abs(layer.tint) > 1e-4 or 
@@ -376,7 +426,9 @@ def apply_all_mask_layers(
                     layer, canvas,
                     master_sky_mask=master_sky_mask,
                     starless_image=starless_image,
-                    stars_image=stars_image
+                    stars_image=stars_image,
+                    crop_rect=crop_rect,
+                    full_image_shape=full_image_shape
                 )
                 canvas = apply_local_adjustments_to_image(canvas, m_eff, layer)
 
@@ -389,7 +441,9 @@ def get_canvas_below_layer(
     target_layer_id: str,
     master_sky_mask: Optional[np.ndarray] = None,
     starless_image: Optional[np.ndarray] = None,
-    stars_image: Optional[np.ndarray] = None
+    stars_image: Optional[np.ndarray] = None,
+    crop_rect: Optional[Tuple[int, int, int, int]] = None,
+    full_image_shape: Optional[Tuple[int, int]] = None
 ) -> np.ndarray:
     """
     Calcula el estado del lienzo directamente por debajo de la capa indicada (target_layer_id).
@@ -414,7 +468,9 @@ def get_canvas_below_layer(
         layers_below,
         master_sky_mask=master_sky_mask,
         starless_image=starless_image,
-        stars_image=stars_image
+        stars_image=stars_image,
+        crop_rect=crop_rect,
+        full_image_shape=full_image_shape
     )
 
 

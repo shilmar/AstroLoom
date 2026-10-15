@@ -1,12 +1,9 @@
 # core/frame_culling.py
 """
-core/frame_culling.py - Módulo de inspección de calidad estelar y cribado inteligente de tomas (Frame Culling).
-
-Evalúa métricas ópticas objetivas sobre cada fotograma antes del apilado:
-- FWHM (Full Width at Half Maximum) / Nitidez de enfoque.
-- Excentricidad / Elongación estelar (detección de deriva por viento o trípode golpeado).
-- Densidad estelar y relación señal/ruido (detección de nubes o niebla).
-- Puntuación de calidad normalizada (0 - 100%) y clasificación semafórica.
+Módulo de cribado inteligente de tomas y control de calidad óptica (Frame Culling).
+Analiza FWHM, excentricidad/elongación de estrellas (para detectar trepidación por viento o deriva)
+y censo estelar (para detectar paso de nubes o niebla) de forma rápida y multihilo.
+Diseñado especialmente para astrofotografía de paisaje (soporta gran angular y coma de esquinas).
 """
 
 import os
@@ -24,8 +21,8 @@ class FrameQualityResult:
     """Resultado del análisis de calidad óptica para una sola toma."""
     filepath: str
     filename: str
-    fwhm: float            # FWHM en píxeles (mediana de estrellas analizadas)
-    eccentricity: float    # Excentricidad estelar [0.0 = círculo perfecto, 1.0 = trazo lineal]
+    fwhm: float            # FWHM en píxeles (mediana en zona central/óptica)
+    eccentricity: float    # Excentricidad efectiva [0.0 = círculo perfecto, 1.0 = trazo lineal]
     star_count: int        # Número total de estrellas detectadas en el cielo
     score: float           # Puntuación global de calidad [0.0 a 100.0]
     status: str            # 'EXCELLENT', 'ACCEPTABLE', 'DEFECTIVE'
@@ -33,6 +30,8 @@ class FrameQualityResult:
     defect_reason: str     # Razón del defecto si aplica
     is_recommended: bool   # True si se recomienda incluir en el apilado
     bg_noise: float = 0.0  # Nivel de ruido del fondo
+    center_ecc: float = 0.0 # Excentricidad en zona central / eje óptico (libre de coma)
+    corner_ecc: float = 0.0 # Excentricidad en periferia / esquinas (coma óptica de la lente)
 
 
 def load_fast_frame_preview(filepath: str, max_dim: int = 1600) -> Optional[np.ndarray]:
@@ -60,6 +59,10 @@ def load_fast_frame_preview(filepath: str, max_dim: int = 1600) -> Optional[np.n
                         output_bps=8
                     )
                     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+                    h, w = gray.shape[:2]
+                    if max(h, w) > max_dim:
+                        scale = max_dim / max(h, w)
+                        gray = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
                     return gray.astype(np.float32) / 255.0
             except Exception:
                 pass
@@ -110,15 +113,21 @@ def load_fast_frame_preview(filepath: str, max_dim: int = 1600) -> Optional[np.n
 def extract_star_metrics(
     gray_img: np.ndarray,
     sky_mask: Optional[np.ndarray] = None,
-    max_stars_to_profile: int = 60
-) -> Tuple[float, float, int, float]:
+    max_stars_to_profile: int = 70,
+    profile_mode: str = "wide_angle"
+) -> Tuple[float, float, int, float, float, float]:
     """
     Analiza las propiedades geométricas de las estrellas en el área de cielo.
+    Distingue de forma inteligente entre la zona central (eje óptico, sensible al viento/deriva)
+    y las esquinas/periferia (donde los objetivos gran angular tienen coma natural).
     
     Retorna:
-        (median_fwhm, median_eccentricity, total_stars_detected, bg_noise)
+        (median_fwhm, effective_ecc, total_stars_detected, bg_noise, center_ecc, corner_ecc)
     """
     h, w = gray_img.shape[:2]
+    cx_center = w / 2.0
+    cy_center = h / 2.0
+    r_max = max(1.0, math.hypot(cx_center, cy_center))
 
     # Delimitar zona de cielo:
     if sky_mask is not None:
@@ -134,14 +143,14 @@ def extract_star_metrics(
 
     sky_pixels = gray_img[sky_roi_mask]
     if len(sky_pixels) < 500:
-        return 0.0, 0.0, 0, 0.0
+        return 0.0, 0.0, 0, 0.0, 0.0, 0.0
 
     # Estimación robusta del fondo usando percentil 25 y MAD
     bg_median = float(np.median(sky_pixels))
     bg_mad = float(np.median(np.abs(sky_pixels - bg_median)))
     bg_sigma = max(1e-4, 1.4826 * bg_mad)
 
-    # Umbral de detección para núcleos estelares (5 sigmas sobre el fondo)
+    # Umbral de detección para núcleos estelares (4.5 sigmas sobre el fondo)
     threshold = bg_median + 4.5 * bg_sigma
 
     # Máscara binaria de picos estelares dentro del cielo
@@ -158,26 +167,42 @@ def extract_star_metrics(
         area = stats[i, cv2.CC_STAT_AREA]
         if 4 <= area <= 400:
             cx, cy = centroids[i]
-            # Descartar estrellas pegadas a los bordes
+            # Descartar estrellas pegadas al borde absoluto
             if 10 <= cx < w - 10 and 10 <= cy < h - 10:
                 peak_val = gray_img[int(cy), int(cx)]
                 # Descartar saturadas al límite (donde se aplana el núcleo)
                 if peak_val < 0.98:
-                    valid_stars.append((cx, cy, area, peak_val))
+                    r_norm = math.hypot(cx - cx_center, cy - cy_center) / r_max
+                    valid_stars.append((cx, cy, area, peak_val, r_norm))
 
     total_stars = len(valid_stars)
     if total_stars < 4:
-        return 0.0, 0.0, total_stars, bg_sigma
+        return 0.0, 0.0, total_stars, bg_sigma, 0.0, 0.0
 
-    # Ordenar por brillo para analizar las estrellas con mejor SNR
-    valid_stars.sort(key=lambda s: s[3], reverse=True)
-    sample_stars = valid_stars[:max_stars_to_profile]
+    # Estratificación: separar estrellas centrales (r < 0.60) y periféricas (r >= 0.60)
+    central_candidates = [s for s in valid_stars if s[4] < 0.60]
+    outer_candidates = [s for s in valid_stars if s[4] >= 0.60]
 
-    fwhm_list = []
-    eccentricity_list = []
+    central_candidates.sort(key=lambda s: s[3], reverse=True)
+    outer_candidates.sort(key=lambda s: s[3], reverse=True)
+
+    # Muestreo representativo dando prioridad a la zona central (inmune a coma)
+    if len(central_candidates) >= 6:
+        n_center = min(len(central_candidates), int(max_stars_to_profile * 0.70))
+        n_outer = min(len(outer_candidates), max_stars_to_profile - n_center)
+        sample_stars = central_candidates[:n_center] + outer_candidates[:n_outer]
+    else:
+        valid_stars.sort(key=lambda s: s[3], reverse=True)
+        sample_stars = valid_stars[:max_stars_to_profile]
+
+    center_fwhms = []
+    center_eccs = []
+    corner_eccs = []
+    all_fwhms = []
+    all_eccs = []
     patch_radius = 6
 
-    for cx, cy, _, _ in sample_stars:
+    for cx, cy, _, _, r_norm in sample_stars:
         ix, iy = int(round(cx)), int(round(cy))
         patch = gray_img[iy - patch_radius : iy + patch_radius + 1, ix - patch_radius : ix + patch_radius + 1]
         if patch.shape != (2 * patch_radius + 1, 2 * patch_radius + 1):
@@ -217,20 +242,39 @@ def extract_star_metrics(
         fwhm = 2.35482 * sigma_mean
 
         if 0.5 <= fwhm <= 25.0:
-            fwhm_list.append(fwhm)
-            eccentricity_list.append(ecc)
+            all_fwhms.append(fwhm)
+            all_eccs.append(ecc)
+            if r_norm < 0.60:
+                center_fwhms.append(fwhm)
+                center_eccs.append(ecc)
+            else:
+                corner_eccs.append(ecc)
 
-    if not fwhm_list:
-        return 0.0, 0.0, total_stars, bg_sigma
+    if not all_fwhms:
+        return 0.0, 0.0, total_stars, bg_sigma, 0.0, 0.0
 
-    median_fwhm = float(np.median(fwhm_list))
-    median_ecc = float(np.median(eccentricity_list))
+    median_center_ecc = float(np.median(center_eccs)) if center_eccs else float(np.median(all_eccs))
+    median_corner_ecc = float(np.median(corner_eccs)) if corner_eccs else median_center_ecc
+    median_fwhm = float(np.median(center_fwhms)) if center_fwhms else float(np.median(all_fwhms))
 
-    return median_fwhm, median_ecc, total_stars, bg_sigma
+    # Ponderación de excentricidad según el perfil del objetivo
+    if profile_mode == "wide_angle":
+        # En gran angular, la trepidación/deriva se mide en el centro (las esquinas tienen coma óptica inherente)
+        effective_ecc = (0.85 * median_center_ecc) + (0.15 * median_corner_ecc)
+    elif profile_mode == "strict":
+        effective_ecc = (0.50 * median_center_ecc) + (0.50 * median_corner_ecc)
+    else:  # balanced
+        effective_ecc = (0.70 * median_center_ecc) + (0.30 * median_corner_ecc)
+
+    return median_fwhm, effective_ecc, total_stars, bg_sigma, median_center_ecc, median_corner_ecc
 
 
-def analyze_single_frame(filepath: str, sky_mask: Optional[np.ndarray] = None) -> FrameQualityResult:
-    """Analiza una sola toma y calcula sus métricas y diagnóstico individual."""
+def analyze_single_frame(
+    filepath: str, 
+    sky_mask: Optional[np.ndarray] = None,
+    profile_mode: str = "wide_angle"
+) -> FrameQualityResult:
+    """Analiza una sola toma y calcula sus métricas y diagnóstico individual preliminar."""
     filename = os.path.basename(filepath)
     gray = load_fast_frame_preview(filepath)
 
@@ -248,42 +292,49 @@ def analyze_single_frame(filepath: str, sky_mask: Optional[np.ndarray] = None) -
             is_recommended=False
         )
 
-    fwhm, ecc, stars, bg_noise = extract_star_metrics(gray, sky_mask=sky_mask)
+    fwhm, ecc, stars, bg_noise, c_ecc, cor_ecc = extract_star_metrics(
+        gray, sky_mask=sky_mask, profile_mode=profile_mode
+    )
 
-    # Diagnóstico preliminar absoluto
-    if stars < 10:
+    # Diagnóstico preliminar absoluto para casos extremos
+    if stars < 6:
         return FrameQualityResult(
             filepath=filepath,
             filename=filename,
             fwhm=fwhm,
             eccentricity=ecc,
             star_count=stars,
-            score=15.0,
+            score=10.0,
             status="DEFECTIVE",
             status_label="🔴 Nubes / Sin estrellas",
-            defect_reason="Conteo de estrellas crítico (< 10 estrellas detectadas)",
+            defect_reason="Conteo de estrellas crítico (< 6 estrellas detectadas)",
             is_recommended=False,
-            bg_noise=bg_noise
+            bg_noise=bg_noise,
+            center_ecc=c_ecc,
+            corner_ecc=cor_ecc
         )
 
-    if ecc >= 0.65:
+    # Trepidación severa en el centro (indica movimiento global de cámara)
+    if c_ecc >= 0.75:
         return FrameQualityResult(
             filepath=filepath,
             filename=filename,
             fwhm=fwhm,
             eccentricity=ecc,
             star_count=stars,
-            score=30.0,
+            score=25.0,
             status="DEFECTIVE",
             status_label="🔴 Movida (Viento / Deriva)",
-            defect_reason=f"Excentricidad estelar severa ({ecc:.2f} >= 0.65)",
+            defect_reason=f"Trepidación central severa ({c_ecc:.2f} >= 0.75)",
             is_recommended=False,
-            bg_noise=bg_noise
+            bg_noise=bg_noise,
+            center_ecc=c_ecc,
+            corner_ecc=cor_ecc
         )
 
-    # Base provisional (se normalizará en batch con el resto de tomas)
-    base_score = 100.0 * (1.0 - 0.7 * ecc)
-    status = "EXCELLENT" if ecc < 0.40 else "ACCEPTABLE"
+    # Base provisional normal (se recalculará en batch comparando con el lote)
+    base_score = 100.0 * (1.0 - 0.55 * ecc)
+    status = "EXCELLENT" if ecc < 0.45 else "ACCEPTABLE"
     label = "🟢 Excelente" if status == "EXCELLENT" else "🟡 Aceptable"
 
     return FrameQualityResult(
@@ -292,12 +343,14 @@ def analyze_single_frame(filepath: str, sky_mask: Optional[np.ndarray] = None) -
         fwhm=fwhm,
         eccentricity=ecc,
         star_count=stars,
-        score=max(10.0, min(100.0, base_score)),
+        score=max(15.0, min(100.0, base_score)),
         status=status,
         status_label=label,
         defect_reason="",
         is_recommended=True,
-        bg_noise=bg_noise
+        bg_noise=bg_noise,
+        center_ecc=c_ecc,
+        corner_ecc=cor_ecc
     )
 
 
@@ -306,11 +359,13 @@ def batch_analyze_frame_quality(
     sky_mask: Optional[np.ndarray] = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
-    max_workers: Optional[int] = None
+    max_workers: Optional[int] = None,
+    profile_mode: str = "wide_angle"
 ) -> List[FrameQualityResult]:
     """
     Ejecuta el cribado y control de calidad en paralelo sobre una lista de tomas.
-    Calcula una puntuación relativa consistente para todo el lote.
+    Calcula una puntuación relativa consistente para todo el lote usando la mediana de la sesión
+    como referencia, evitando descartar falsamente fotos por aberraciones ópticas de la lente.
     """
     if not file_paths:
         return []
@@ -323,7 +378,7 @@ def batch_analyze_frame_quality(
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_idx = {
-            executor.submit(analyze_single_frame, path, sky_mask): idx
+            executor.submit(analyze_single_frame, path, sky_mask, profile_mode): idx
             for idx, path in enumerate(file_paths)
         }
 
@@ -359,58 +414,87 @@ def batch_analyze_frame_quality(
         return []
 
     # =========================================================================
-    # NORMALIZACIÓN RELATIVA DE LA PUNTUACIÓN SEGÚN EL MEJOR DE LA SESIÓN
+    # LÍNEA BASE DE LA SESIÓN (Estilo SubframeSelector relativo)
     # =========================================================================
-    valid_fwhms = [r.fwhm for r in valid_results if r.fwhm > 0.5 and r.is_recommended]
-    best_fwhm = min(valid_fwhms) if valid_fwhms else 3.0
+    valid_center_eccs = [r.center_ecc for r in valid_results if r.star_count >= 8 and r.center_ecc > 0.05]
+    session_median_ecc = float(np.median(valid_center_eccs)) if valid_center_eccs else 0.32
 
-    valid_stars = [r.star_count for r in valid_results if r.is_recommended]
-    max_stars = max(valid_stars) if valid_stars else 100
+    valid_stars = [r.star_count for r in valid_results]
+    session_median_stars = float(np.median(valid_stars)) if valid_stars else 100.0
+
+    valid_fwhms = [r.fwhm for r in valid_results if r.fwhm > 0.5 and r.center_ecc < 0.65]
+    if len(valid_fwhms) >= 5:
+        best_fwhm = float(np.percentile(valid_fwhms, 15))
+    elif valid_fwhms:
+        best_fwhm = min(valid_fwhms)
+    else:
+        best_fwhm = 3.0
+
+    # Umbrales según perfil
+    if profile_mode == "wide_angle":
+        # Tolerante con coma de esquinas; solo descarta anomalías reales
+        ecc_outlier_thresh = max(0.66, session_median_ecc + 0.22)
+        clouds_thresh_ratio = 0.35
+        fwhm_thresh_ratio = 2.1
+        min_accept_score = 40.0
+        min_excel_score = 70.0
+    elif profile_mode == "strict":
+        ecc_outlier_thresh = max(0.50, session_median_ecc + 0.14)
+        clouds_thresh_ratio = 0.55
+        fwhm_thresh_ratio = 1.6
+        min_accept_score = 60.0
+        min_excel_score = 80.0
+    else:  # balanced
+        ecc_outlier_thresh = max(0.58, session_median_ecc + 0.18)
+        clouds_thresh_ratio = 0.45
+        fwhm_thresh_ratio = 1.8
+        min_accept_score = 50.0
+        min_excel_score = 75.0
 
     for r in valid_results:
-        if not r.is_recommended:
-            continue
+        # Penalización relativa por excentricidad respecto a la mediana del lote
+        delta_ecc = max(0.0, r.center_ecc - session_median_ecc)
+        ecc_factor = max(0.0, 1.0 - (delta_ecc / 0.38) ** 1.3)
 
-        # Penalización cuadrática si la excentricidad supera 0.40
-        ecc_factor = max(0.0, 1.0 - (r.eccentricity / 0.70) ** 1.8)
-        
-        # Penalización por FWHM respecto a la toma más nítida del lote
-        fwhm_factor = min(1.0, (best_fwhm / max(r.fwhm, 1e-3)) ** 1.2)
-        
+        # Factor FWHM respecto a la mejor toma
+        fwhm_factor = min(1.0, (best_fwhm / max(r.fwhm, 1e-3)) ** 1.0)
+
         # Factor de permanencia estelar (detección de nubes parciales)
-        stars_factor = min(1.0, r.star_count / max(1, 0.75 * max_stars))
+        stars_factor = min(1.0, r.star_count / max(1.0, 0.80 * session_median_stars))
 
         composite = 100.0 * (0.45 * ecc_factor + 0.35 * fwhm_factor + 0.20 * stars_factor)
         r.score = round(max(5.0, min(100.0, composite)), 1)
 
-        # Re-evaluar estatus tras normalización
-        if r.eccentricity >= 0.58:
+        # Clasificación por defectos reales vs calidad aceptable
+        if r.center_ecc >= ecc_outlier_thresh:
             r.status = "DEFECTIVE"
             r.status_label = "🔴 Movida (Viento)"
-            r.defect_reason = f"Estrellas elongadas (Excentricidad {r.eccentricity:.2f})"
+            r.defect_reason = f"Trepidación anómala ({r.center_ecc:.2f} vs mediana {session_median_ecc:.2f})"
             r.is_recommended = False
-        elif r.fwhm > best_fwhm * 1.8 and r.fwhm > 5.0:
+        elif r.star_count < clouds_thresh_ratio * session_median_stars:
+            r.status = "DEFECTIVE"
+            r.status_label = "🔴 Nubes"
+            r.defect_reason = f"Caída de estrellas ({r.star_count} vs mediana {int(session_median_stars)})"
+            r.is_recommended = False
+        elif r.fwhm > best_fwhm * fwhm_thresh_ratio and r.fwhm > 5.5:
             r.status = "DEFECTIVE"
             r.status_label = "🔴 Desenfoque"
             r.defect_reason = f"FWHM inflado ({r.fwhm:.1f}px vs mejor {best_fwhm:.1f}px)"
             r.is_recommended = False
-        elif r.star_count < 0.35 * max_stars:
-            r.status = "DEFECTIVE"
-            r.status_label = "🟡 Nubes"
-            r.defect_reason = f"Bajo conteo de estrellas ({r.star_count} vs máx {max_stars})"
-            r.is_recommended = False
-        elif r.score >= 82.0:
+        elif r.score >= min_excel_score:
             r.status = "EXCELLENT"
-            r.status_label = "🟢 Excelente"
+            r.status_label = f"🟢 {r.score:.0f}%"
+            r.defect_reason = ""
             r.is_recommended = True
-        elif r.score >= 65.0:
+        elif r.score >= min_accept_score:
             r.status = "ACCEPTABLE"
-            r.status_label = "🟡 Aceptable"
+            r.status_label = f"🟡 {r.score:.0f}%"
+            r.defect_reason = ""
             r.is_recommended = True
         else:
             r.status = "DEFECTIVE"
-            r.status_label = "🔴 Calidad Baja"
-            r.defect_reason = f"Puntuación insuficiente ({r.score:.1f}%)"
+            r.status_label = f"🔴 {r.score:.0f}%"
+            r.defect_reason = f"Puntuación insuficiente ({r.score:.1f}% < {min_accept_score:.0f}%)"
             r.is_recommended = False
 
     return valid_results

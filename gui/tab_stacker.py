@@ -91,11 +91,11 @@ class FileListRow(QWidget):
             self.lbl_quality.setVisible(False)
             return
 
-        self.lbl_quality.setVisible(True)
         tip = (
             f"Puntuación: {res.score:.1f}%\n"
             f"Nitidez (FWHM): {res.fwhm:.1f} px\n"
-            f"Redondez (Excentricidad): {res.eccentricity:.2f}\n"
+            f"Redondez centro (eje óptico): {res.center_ecc:.2f}\n"
+            f"Coma esquinas: {res.corner_ecc:.2f}\n"
             f"Estrellas detectadas: {res.star_count}"
         )
         if res.defect_reason:
@@ -109,7 +109,7 @@ class FileListRow(QWidget):
             self.lbl_quality.setText(f"🟡 {int(round(res.score))}%")
             self.lbl_quality.setStyleSheet("color: #ffd54f; background-color: #3e3814; border-radius: 3px; padding: 1px 4px; font-size: 10px; font-weight: bold;")
         else:
-            short_lbl = "Movida" if "Movida" in res.status_label else ("Nubes" if "Nubes" in res.status_label else "Baja")
+            short_lbl = "Movida" if "Movida" in res.status_label else ("Nubes" if "Nubes" in res.status_label else ("Desenfoque" if "Desenfoque" in res.status_label else f"{int(round(res.score))}%"))
             self.lbl_quality.setText(f"🔴 {short_lbl}")
             self.lbl_quality.setStyleSheet("color: #ff5252; background-color: #3e1b1b; border-radius: 3px; padding: 1px 4px; font-size: 10px; font-weight: bold;")
 
@@ -297,6 +297,28 @@ class StackerTab(QWidget):
         self.btn_cull_discard.setToolTip("Desmarca automáticamente las tomas clasificadas como defectuosas o con estrellas movidas")
         self.btn_cull_discard.clicked.connect(self.auto_discard_defective_frames)
         culling_layout.addWidget(self.btn_cull_discard)
+
+        self.combo_cull_profile = QComboBox()
+        self.combo_cull_profile.addItem("📐 Gran Angular (Tolerante)", "wide_angle")
+        self.combo_cull_profile.addItem("⚖️ Equilibrado (Estándar)", "balanced")
+        self.combo_cull_profile.addItem("🎯 Exigente (Tracker/Telescopio)", "strict")
+        self.combo_cull_profile.setToolTip(
+            "Criterio óptico para el análisis:\n"
+            "• Gran Angular: Ignora la coma/aberración natural de las esquinas y mide trepidación en el centro.\n"
+            "• Equilibrado: Recomendado para focales medias (35mm-85mm).\n"
+            "• Exigente: Para telescopios y monturas ecuatoriales (estricto en todo el campo)."
+        )
+        self.combo_cull_profile.setStyleSheet("""
+            QComboBox {
+                background-color: #1a222d;
+                color: #b0bec5;
+                border: 1px solid #37474f;
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-size: 11px;
+            }
+        """)
+        culling_layout.addWidget(self.combo_cull_profile)
 
         self.lbl_cull_summary = QLabel("")
         self.lbl_cull_summary.setStyleSheet("font-size: 11px; color: #80cbc4; font-weight: bold;")
@@ -775,9 +797,11 @@ class StackerTab(QWidget):
         self.lbl_cull_summary.setText("🔍 Analizando calidad...")
         self.log_message(f"=== INICIANDO ANÁLISIS DE CALIDAD ESTELAR ({len(self.lights_list)} tomas) ===")
 
+        profile = self.combo_cull_profile.currentData() or "wide_angle"
         self.culling_worker = QualityCullingWorker(
             file_paths=list(self.lights_list),
             sky_mask=self.computed_mask,
+            profile_mode=profile,
             parent=self
         )
         self.culling_worker.progress_changed.connect(self._on_culling_progress)

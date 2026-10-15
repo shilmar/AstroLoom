@@ -695,10 +695,11 @@ class QualityCullingWorker(QThread):
     all_finished = Signal(list)              # List[FrameQualityResult]
     error_occurred = Signal(str)
 
-    def __init__(self, file_paths: list, sky_mask=None, parent=None):
+    def __init__(self, file_paths: list, sky_mask=None, profile_mode: str = "wide_angle", parent=None):
         super().__init__(parent)
         self.file_paths = file_paths
         self.sky_mask = sky_mask
+        self.profile_mode = profile_mode
         self._is_cancelled = False
 
     def cancel(self):
@@ -711,7 +712,8 @@ class QualityCullingWorker(QThread):
                 self.file_paths,
                 sky_mask=self.sky_mask,
                 progress_callback=lambda cur, tot, name: self.progress_changed.emit(cur, tot, name),
-                cancel_check=lambda: self._is_cancelled
+                cancel_check=lambda: self._is_cancelled,
+                profile_mode=self.profile_mode
             )
             if not self._is_cancelled:
                 self.all_finished.emit(results)

@@ -2742,10 +2742,11 @@ class DeveloperTab(QWidget):
                 m_f = cv2.resize(self.current_mask, (w_f, h_f), interpolation=cv2.INTER_LINEAR) if self.current_mask.shape[:2] != (h_f, w_f) else self.current_mask
                 mask_3d = np.repeat(m_f[..., np.newaxis], 3, axis=2)
             crop_active = False
+            self._zoom_crop_rect = None
         elif self.is_zoomed_100 and self.image_32bit is not None:
             h_f, w_f = self.image_32bit.shape[:2]
-            cw = min(w_f, self.canvas.width())
-            ch = min(h_f, self.canvas.height())
+            cw = min(w_f, max(100, self.canvas.width()))
+            ch = min(h_f, max(100, self.canvas.height()))
             
             rx, ry = self.zoom_rel_coords
             cx = int(rx * w_f)
@@ -2755,13 +2756,18 @@ class DeveloperTab(QWidget):
             y1 = max(0, min(h_f - ch, cy - ch // 2))
             x2 = x1 + cw
             y2 = y1 + ch
+            self._zoom_crop_rect = (x1, y1, x2, y2)
 
             base = self.image_32bit[y1:y2, x1:x2].copy()
             starless = self.image_starless[y1:y2, x1:x2].copy() if self.image_starless is not None else None
             stars = self.image_stars[y1:y2, x1:x2].copy() if self.image_stars is not None else None
 
             if self.current_mask is not None:
-                m_sub = self.current_mask[y1:y2, x1:x2]
+                if self.current_mask.shape[:2] != (h_f, w_f):
+                    m_f = cv2.resize(self.current_mask, (w_f, h_f), interpolation=cv2.INTER_LINEAR)
+                else:
+                    m_f = self.current_mask
+                m_sub = m_f[y1:y2, x1:x2]
                 mask_3d = np.repeat(m_sub[..., np.newaxis], 3, axis=2)
             else:
                 mask_3d = None
@@ -2770,6 +2776,7 @@ class DeveloperTab(QWidget):
             starless, stars, base = self.proxy_starless, self.proxy_stars, self.preview_proxy
             mask_3d = self.proxy_mask
             crop_active = False
+            self._zoom_crop_rect = None
 
         if base is None:
             return None, None
@@ -2939,8 +2946,22 @@ class DeveloperTab(QWidget):
         # 10. Aplicación de Capas y Máscaras Locales (Compositor Multicapa estilo Photoshop)
         if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers:
             is_full_res = (self.image_32bit is not None and stretched.shape[:2] == self.image_32bit.shape[:2])
-            st_img = self.image_stars if is_full_res else (self.proxy_stars if self.proxy_stars is not None else self.image_stars)
-            sl_img = self.image_starless if is_full_res else (self.proxy_starless if self.proxy_starless is not None else self.image_starless)
+            is_zoomed = (self.is_zoomed_100 and getattr(self, '_zoom_crop_rect', None) is not None)
+            full_shape = self.image_32bit.shape[:2] if self.image_32bit is not None else None
+
+            if is_zoomed:
+                x1, y1, x2, y2 = self._zoom_crop_rect
+                st_img = self.image_stars[y1:y2, x1:x2].copy() if self.image_stars is not None else None
+                sl_img = self.image_starless[y1:y2, x1:x2].copy() if self.image_starless is not None else None
+                crop_rect = (x1, y1, x2, y2)
+            elif is_full_res:
+                st_img = self.image_stars
+                sl_img = self.image_starless
+                crop_rect = None
+            else:
+                st_img = self.proxy_stars if self.proxy_stars is not None else self.image_stars
+                sl_img = self.proxy_starless if self.proxy_starless is not None else self.image_starless
+                crop_rect = None
             
             # Si hay capas de imagen especiales activas, preparamos las estrellas estiradas con el MTF
             # y moduladas por la intensidad estelar relativa (self.star_intensity) para el modo Screen
@@ -2959,7 +2980,9 @@ class DeveloperTab(QWidget):
                 self.mask_layers_widget.layers,
                 master_sky_mask=precomputed_mask,
                 starless_image=sl_img,
-                stars_image=st_stretched
+                stars_image=st_stretched,
+                crop_rect=crop_rect,
+                full_image_shape=full_shape
             )
 
         return np.ascontiguousarray(stretched, dtype=np.float32)
