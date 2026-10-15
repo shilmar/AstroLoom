@@ -258,9 +258,14 @@ class StackerTab(QWidget):
 
         # Barra de Control de Calidad y Cribado (Frame Culling) para Lights
         self.culling_bar = QWidget()
-        culling_layout = QHBoxLayout(self.culling_bar)
-        culling_layout.setContentsMargins(0, 2, 0, 2)
-        culling_layout.setSpacing(6)
+        culling_vbox = QVBoxLayout(self.culling_bar)
+        culling_vbox.setContentsMargins(0, 2, 0, 4)
+        culling_vbox.setSpacing(4)
+
+        # Fila 1: Botones de Acción de Cribado
+        row_cull_btns = QHBoxLayout()
+        row_cull_btns.setContentsMargins(0, 0, 0, 0)
+        row_cull_btns.setSpacing(6)
 
         self.btn_cull_analyze = QPushButton("🔍 Analizar Calidad")
         self.btn_cull_analyze.setCursor(Qt.PointingHandCursor)
@@ -278,7 +283,7 @@ class StackerTab(QWidget):
         """)
         self.btn_cull_analyze.setToolTip("Analiza FWHM, redondez de estrellas (viento/deriva) y presencia de nubes en todo el lote")
         self.btn_cull_analyze.clicked.connect(self.start_culling_analysis)
-        culling_layout.addWidget(self.btn_cull_analyze)
+        row_cull_btns.addWidget(self.btn_cull_analyze)
 
         self.btn_cull_discard = QPushButton("⚡ Auto-Descartar")
         self.btn_cull_discard.setCursor(Qt.PointingHandCursor)
@@ -296,7 +301,14 @@ class StackerTab(QWidget):
         """)
         self.btn_cull_discard.setToolTip("Desmarca automáticamente las tomas clasificadas como defectuosas o con estrellas movidas")
         self.btn_cull_discard.clicked.connect(self.auto_discard_defective_frames)
-        culling_layout.addWidget(self.btn_cull_discard)
+        row_cull_btns.addWidget(self.btn_cull_discard)
+
+        culling_vbox.addLayout(row_cull_btns)
+
+        # Fila 2: Criterio óptico y balance de tomas aptas
+        row_cull_opts = QHBoxLayout()
+        row_cull_opts.setContentsMargins(0, 0, 0, 0)
+        row_cull_opts.setSpacing(6)
 
         self.combo_cull_profile = QComboBox()
         self.combo_cull_profile.addItem("📐 Gran Angular (Tolerante)", "wide_angle")
@@ -318,12 +330,14 @@ class StackerTab(QWidget):
                 font-size: 11px;
             }
         """)
-        culling_layout.addWidget(self.combo_cull_profile)
+        row_cull_opts.addWidget(self.combo_cull_profile)
 
         self.lbl_cull_summary = QLabel("")
         self.lbl_cull_summary.setStyleSheet("font-size: 11px; color: #80cbc4; font-weight: bold;")
-        culling_layout.addWidget(self.lbl_cull_summary)
-        culling_layout.addStretch()
+        self.lbl_cull_summary.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        row_cull_opts.addWidget(self.lbl_cull_summary)
+
+        culling_vbox.addLayout(row_cull_opts)
 
         files_layout.addWidget(self.culling_bar)
         self.tabs_files.currentChanged.connect(self._on_files_tab_changed)
@@ -781,10 +795,7 @@ class StackerTab(QWidget):
             return
         active = total - len(self.excluded_lights)
         pct = (active / total) * 100.0 if total > 0 else 0
-        if not self.culling_results:
-            self.lbl_cull_summary.setText(f"Aptas: {active}/{total} ({pct:.0f}%)")
-        else:
-            self.lbl_cull_summary.setText(f"Aptas: {active}/{total} ({pct:.0f}%) | Calidad analizada")
+        self.lbl_cull_summary.setText(f"Aptas: {active}/{total} ({pct:.0f}%)")
 
     def start_culling_analysis(self):
         """Lanza el análisis paralelo de calidad estelar sobre las tomas de Lights."""
