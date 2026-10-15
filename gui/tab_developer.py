@@ -2061,35 +2061,54 @@ class DeveloperTab(QWidget):
             elif hasattr(win, "tab_startrails") and getattr(win.tab_startrails, "current_mask", None) is not None:
                 stacker_mask = win.tab_startrails.current_mask
 
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #1a1e2d;
+                color: #e0e0e0;
+                border: 1px solid #33384c;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 6px 20px 6px 10px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #0288d1;
+                color: #ffffff;
+            }
+        """)
+        act_ai = menu.addAction("🧠 Auto-Detectar Suelo con IA (1-Click)")
+        act_stacker = None
         if stacker_mask is not None:
-            menu = QMenu(self)
-            menu.setStyleSheet("""
-                QMenu {
-                    background-color: #1a1e2d;
-                    color: #e0e0e0;
-                    border: 1px solid #33384c;
-                    padding: 4px;
-                }
-                QMenu::item {
-                    padding: 6px 20px 6px 10px;
-                    border-radius: 4px;
-                }
-                QMenu::item:selected {
-                    background-color: #0288d1;
-                    color: #ffffff;
-                }
-            """)
             act_stacker = menu.addAction("📥 Usar Máscara generada en el Apilado")
-            act_file = menu.addAction("📁 Cargar Archivo de Máscara (.png, .tif, .fits)...")
+        act_file = menu.addAction("📁 Cargar Archivo de Máscara (.png, .tif, .fits)...")
 
-            pos = self.btn_load_mask.mapToGlobal(self.btn_load_mask.rect().bottomLeft())
-            selected = menu.exec(pos)
-            if selected == act_stacker:
-                self._apply_loaded_mask(stacker_mask, source_desc="Apilador (Stacker)")
-            elif selected == act_file:
-                self._load_mask_from_file()
-        else:
+        pos = self.btn_load_mask.mapToGlobal(self.btn_load_mask.rect().bottomLeft())
+        selected = menu.exec(pos)
+        if selected == act_ai:
+            self._detect_mask_ai_from_toolbar()
+        elif act_stacker and selected == act_stacker:
+            self._apply_loaded_mask(stacker_mask, source_desc="Apilador (Stacker)")
+        elif selected == act_file:
             self._load_mask_from_file()
+
+    def _detect_mask_ai_from_toolbar(self) -> None:
+        """Calcula la máscara de suelo/cielo con IA ligera directamente desde el visor del revelador."""
+        if self.image_32bit is None:
+            return
+        self.setCursor(Qt.WaitCursor)
+        self.log_message("[IA HORIZONTE] Ejecutando detección automática de cielo/suelo...")
+        QCoreApplication.processEvents()
+        try:
+            from core.ai_horizon import auto_detect_sky_mask
+            mask, method = auto_detect_sky_mask(self.image_32bit)
+            self._apply_loaded_mask(mask, source_desc=f"Auto-Detección {method}")
+        except Exception as e:
+            self.log_message(f"[ERROR IA HORIZONTE] Falló la detección: {e}")
+            QMessageBox.critical(self, "Error Detección IA", f"No se pudo completar la segmentación automática:\n{e}")
+        finally:
+            self.unsetCursor()
 
     def _load_mask_from_file(self) -> None:
         """Abre un selector de archivo para cargar una máscara desde disco."""

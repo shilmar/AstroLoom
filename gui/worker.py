@@ -722,3 +722,27 @@ class QualityCullingWorker(QThread):
                 self.error_occurred.emit(str(e))
             else:
                 self.cancelled.emit()
+
+
+class AIHorizonWorker(QThread):
+    """Hilo secundario para detección y segmentación automática de horizonte mediante IA / Algoritmo."""
+    finished_success = Signal(object, str)  # (mask_array: np.ndarray float32, method_name: str)
+    error_occurred = Signal(str)
+
+    def __init__(self, image_rgb: np.ndarray, feather_radius: int = 7, threshold: float = 0.5, parent=None):
+        super().__init__(parent)
+        self.image_rgb = image_rgb
+        self.feather_radius = feather_radius
+        self.threshold = threshold
+
+    def run(self):
+        try:
+            from core.ai_horizon import auto_detect_sky_mask
+            mask, method = auto_detect_sky_mask(
+                self.image_rgb,
+                feather_radius=self.feather_radius,
+                threshold=self.threshold
+            )
+            self.finished_success.emit(mask, method)
+        except Exception as e:
+            self.error_occurred.emit(str(e))

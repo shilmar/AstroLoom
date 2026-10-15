@@ -38,3 +38,7 @@ exportaciones/*
 samples/
 fotos_prueba/
 scratch/
+
+# Modelos de inferencia IA (pesados)
+models/*.onnx
+!models/.gitkeep

@@ -19,7 +19,7 @@ from core.masking import refine_mask_guided
 from core.stacking import load_image_as_float32
 from gui.canvas import MaskCanvas
 from gui.widgets.drop_widgets import DropListWidget
-from gui.worker import StackingWorker, QualityCullingWorker
+from gui.worker import StackingWorker, QualityCullingWorker, AIHorizonWorker
 from core.gpu_backend import is_gpu_enabled
 from core.config_manager import load_config
 from gui.theme import STYLE_RUN_IDLE, STYLE_RUN_ACTIVE, STYLE_RUN_CANCELLING
@@ -539,13 +539,30 @@ class StackerTab(QWidget):
         row_params.addWidget(self.spin_iter)
         mask_layout.addLayout(row_params)
 
+        # Botón principal 1-Click IA
+        self.btn_auto_ai_mask = QPushButton("🧠 Auto-Detectar Suelo (IA 1-Click)")
+        self.btn_auto_ai_mask.setFixedHeight(34)
+        self.btn_auto_ai_mask.setCursor(Qt.PointingHandCursor)
+        self.btn_auto_ai_mask.setStyleSheet(
+            "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #4a148c, stop:1 #7b1fa2); "
+            "color: #ffffff; font-weight: bold; font-size: 11px; border: 1px solid #ba68c8; border-radius: 4px; padding: 4px 8px; } "
+            "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6a1b9a, stop:1 #8e24aa); border-color: #e1bee7; } "
+            "QPushButton:disabled { background: #2a2035; color: #777777; border-color: #443355; }"
+        )
+        self.btn_auto_ai_mask.setToolTip("Segmentación semántica profunda instantánea: detecta y separa el suelo del cielo sin necesidad de dibujar trazos manuales.")
+        self.btn_auto_ai_mask.clicked.connect(self.start_auto_ai_mask)
+        mask_layout.addWidget(self.btn_auto_ai_mask)
+
+        # Acciones de trazos y refinado manual
         btn_mask_actions = QHBoxLayout()
         btn_mask_actions.setSpacing(6)
-        self.btn_refine = QPushButton("✨ Refinar Automática")
+        self.btn_refine = QPushButton("✏️ Refinar con Trazos")
         self.btn_refine.setStyleSheet("font-weight: bold; color: #b388ff; padding: 5px;")
+        self.btn_refine.setToolTip("Refina o ajusta la máscara usando los trazos verde (cielo) y rojo (suelo) dibujados en el visor.")
         self.btn_refine.clicked.connect(self.refine_mask)
-        self.btn_clear_m = QPushButton("🗑️ Limpiar Máscara")
-        self.btn_clear_m.setStyleSheet("font-weight: bold; color: #ff8a80;")
+        self.btn_clear_m = QPushButton("🗑️ Limpiar")
+        self.btn_clear_m.setStyleSheet("font-weight: bold; color: #ff8a80; padding: 5px;")
+        self.btn_clear_m.setToolTip("Elimina la máscara actual y los trazos de pincel para empezar de cero.")
         self.btn_clear_m.clicked.connect(self.clear_mask)
         btn_mask_actions.addWidget(self.btn_refine)
         btn_mask_actions.addWidget(self.btn_clear_m)
@@ -903,6 +920,51 @@ class StackerTab(QWidget):
         self.slider_brush.setValue(radius)
         self.slider_brush.blockSignals(False)
         self.lbl_brush.setText(f"{radius * 2} px")
+
+    def start_auto_ai_mask(self):
+        """Lanza la detección automática de cielo/suelo mediante IA Ligera o fallback."""
+        if self.canvas.orig_rgb is None:
+            if self.lights_list:
+                ref_path = self.current_ref_path or self.lights_list[0]
+                self.load_frame_to_canvas(ref_path)
+            else:
+                QMessageBox.information(self, "Aviso", "Añade primero tomas de Lights para detectar el suelo.")
+                return
+
+        if self.canvas.orig_rgb is None:
+            QMessageBox.warning(self, "Aviso", "No se pudo cargar la imagen de referencia para el análisis.")
+            return
+
+        self.btn_auto_ai_mask.setEnabled(False)
+        self.btn_auto_ai_mask.setText("⏳ Detectando suelo...")
+        self.log_message("[IA HORIZONTE] Ejecutando segmentación semántica de cielo y suelo...")
+        self.setCursor(Qt.WaitCursor)
+
+        feather = self.spin_feather.value()
+        self.ai_worker = AIHorizonWorker(
+            image_rgb=self.canvas.orig_rgb,
+            feather_radius=feather,
+            parent=self
+        )
+        self.ai_worker.finished_success.connect(self._on_ai_mask_finished)
+        self.ai_worker.error_occurred.connect(self._on_ai_mask_error)
+        self.ai_worker.start()
+
+    def _on_ai_mask_finished(self, mask: np.ndarray, method_name: str):
+        self.btn_auto_ai_mask.setEnabled(True)
+        self.btn_auto_ai_mask.setText("🧠 Auto-Detectar Suelo (IA 1-Click)")
+        self.unsetCursor()
+
+        self.computed_mask = mask
+        self.canvas.set_refined_mask(self.computed_mask)
+        self.log_message(f"✓ [IA HORIZONTE] Suelo y cielo detectados con éxito usando {method_name}.")
+
+    def _on_ai_mask_error(self, err_msg: str):
+        self.btn_auto_ai_mask.setEnabled(True)
+        self.btn_auto_ai_mask.setText("🧠 Auto-Detectar Suelo (IA 1-Click)")
+        self.unsetCursor()
+        self.log_message(f"[ERROR IA HORIZONTE] {err_msg}")
+        QMessageBox.warning(self, "Error en Detección IA", f"No se pudo completar la segmentación automática:\n{err_msg}")
 
     def refine_mask(self):
         if self.canvas.orig_rgb is None:
