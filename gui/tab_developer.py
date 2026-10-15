@@ -493,10 +493,13 @@ class DeveloperTab(QWidget):
 
         row_wb_btn = QHBoxLayout()
         self.btn_panel_pipette = QPushButton("🧪 Pipeta WB (W)")
+        self.btn_panel_pipette.setCheckable(True)
+        self.btn_panel_pipette.setCursor(Qt.PointingHandCursor)
         self.btn_panel_pipette.setStyleSheet("font-weight: bold; color: #80d8ff;")
-        self.btn_panel_pipette.setToolTip("Activa la pipeta para calibrar el balance de blancos haciendo clic sobre un fondo neutro en la imagen")
-        self.btn_panel_pipette.clicked.connect(lambda: self.btn_pipette.toggle())
+        self.btn_panel_pipette.setToolTip("Activa la pipeta para calibrar el balance de blancos haciendo clic sobre un fondo neutro en la imagen (Atajo: W)")
+        self.btn_panel_pipette.toggled.connect(self.canvas.set_eyedropper_active)
         row_wb_btn.addWidget(self.btn_panel_pipette)
+        self.btn_pipette = self.btn_panel_pipette
 
         btn_reset_wb = QPushButton("Restablecer")
         btn_reset_wb.clicked.connect(self.reset_wb)
@@ -1054,18 +1057,7 @@ class DeveloperTab(QWidget):
         sep3.setStyleSheet("color: #3b4252; margin: 4px 2px;")
         tb_layout.addWidget(sep3)
 
-        # 5. Pipeta de Balance de Blancos
-        self.btn_pipette = QPushButton("🧪 Pipeta WB (W)")
-        self.btn_pipette.setCheckable(True)
-        self.btn_pipette.setCursor(Qt.PointingHandCursor)
-        self.btn_pipette.setToolTip(
-            "Activa la pipeta para neutralizar el balance de blancos seleccionando un punto o fondo neutro en la imagen.\n"
-            "Atajo de teclado: W"
-        )
-        self.btn_pipette.toggled.connect(self.canvas.set_eyedropper_active)
-        tb_layout.addWidget(self.btn_pipette)
-
-        # 6. Lupa de Inspección Flotante
+        # 5. Lupa de Inspección Flotante
         self.btn_magnifier = QPushButton("🔎 Lupa (Z)")
         self.btn_magnifier.setCheckable(True)
         self.btn_magnifier.setCursor(Qt.PointingHandCursor)

@@ -65,6 +65,8 @@ class MaskCanvas(QWidget):
         self.layer_brush_mask: Optional[np.ndarray] = None
         self._brush_drawing: bool = False
         self._brush_hover_pos: Optional[QPoint] = None
+        self._stroke_start_mask: Optional[np.ndarray] = None
+        self._stroke_buffer: Optional[np.ndarray] = None
 
         # Parámetros del modo Zoom 1:1
         self.is_zoomed: bool = False
@@ -160,6 +162,8 @@ class MaskCanvas(QWidget):
 
     def set_active_layer_mask(self, mask: Optional[np.ndarray]) -> None:
         """Establece la máscara actual sobre la que pintará el pincel de capa."""
+        self._stroke_start_mask = None
+        self._stroke_buffer = None
         if mask is not None:
             self.layer_brush_mask = mask.copy()
             self.set_refined_mask(self.layer_brush_mask, mode="ruby")
@@ -549,6 +553,9 @@ class MaskCanvas(QWidget):
                 if self.layer_brush_mask is None or self.layer_brush_mask.shape[:2] != (h_b, w_b):
                     self.layer_brush_mask = np.zeros((h_b, w_b), dtype=np.float32)
 
+                self._stroke_start_mask = self.layer_brush_mask.copy()
+                self._stroke_buffer = np.zeros((h_b, w_b), dtype=np.float32)
+
                 _, _, scale = self.get_render_geometry()
                 native_r = max(2, int(self.layer_brush_radius / max(1e-4, scale)))
                 self._apply_brush_stamp(ipt, native_r)
@@ -675,6 +682,8 @@ class MaskCanvas(QWidget):
             if self._brush_drawing:
                 self._brush_drawing = False
                 self.last_img_pt = None
+                self._stroke_start_mask = None
+                self._stroke_buffer = None
                 if self.layer_brush_mask is not None:
                     self.layer_brush_stroke_finished.emit(self.layer_brush_mask.copy())
                 event.accept()
@@ -798,13 +807,22 @@ class MaskCanvas(QWidget):
             t = (dist[fade] - h_val) / (1.0 - h_val)
             weight[fade] = 1.0 - (3.0 * t * t - 2.0 * t * t * t)
 
-        stamp = weight * float(np.clip(self.layer_brush_flow, 0.01, 1.0))
-        sub = mask[y0:y1, x0:x1]
+        # Si no se inicializó el buffer de trazo (e.g. primer clic directo), inicializarlo
+        if self._stroke_buffer is None or self._stroke_start_mask is None:
+            self._stroke_start_mask = mask.copy()
+            self._stroke_buffer = np.zeros((h, w), dtype=np.float32)
+
+        # Acumular el perfil máximo dentro del trazo continuo para preservar dureza y opacidad
+        sub_buf = self._stroke_buffer[y0:y1, x0:x1]
+        np.maximum(sub_buf, weight, out=sub_buf)
+
+        sub_orig = self._stroke_start_mask[y0:y1, x0:x1]
+        flow = float(np.clip(self.layer_brush_flow, 0.01, 1.0))
 
         if self.layer_brush_mode == "paint":
-            sub[...] = np.clip(sub + stamp * (1.0 - sub), 0.0, 1.0)
+            mask[y0:y1, x0:x1] = np.clip(sub_orig + (sub_buf * flow) * (1.0 - sub_orig), 0.0, 1.0)
         else:
-            sub[...] = np.clip(sub - stamp, 0.0, 1.0)
+            mask[y0:y1, x0:x1] = np.clip(sub_orig - (sub_buf * flow), 0.0, 1.0)
 
     def _apply_brush_line(self, p1: QPoint, p2: QPoint, native_radius: int) -> None:
         """Traza una línea continua interpolando estampaciones para evitar huecos en movimientos rápidos."""
