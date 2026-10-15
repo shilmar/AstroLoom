@@ -1,10 +1,11 @@
 # core/mask_layers.py
 """
-core/mask_layers.py - Sistema de capas de ajuste local con máscaras (estilo Lightroom / Camera Raw).
-Permite apilar múltiples máscaras (Suelo/Cielo, Luminancia, Rango de Color) con ajustes
+core/mask_layers.py - Sistema de capas y máscaras de ajuste local.
+Permite apilar múltiples máscaras (Pincel, Suelo/Cielo, Luminancia, Rango de Color) con ajustes
 locales paramétricos independientes y conciencia de capas StarNet (Compuesta, Suelo, Fondo Starless, Estrellas).
 """
 import uuid
+import base64
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any
 import cv2
@@ -20,6 +21,7 @@ SCOPE_TARGET_STARLESS = "starless"  # Solo Fondo Starless (estrellas desacoplada
 SCOPE_TARGET_STARS = "stars"        # Solo Capa de Estrellas
 
 # Tipos de Máscara
+MASK_TYPE_BRUSH = "brush"           # Pincel interactivo con dureza y opacidad de trazo
 MASK_TYPE_GROUND = "ground"         # Máscara Suelo (invertida del cielo)
 MASK_TYPE_SKY = "sky"               # Máscara Cielo
 MASK_TYPE_LUMA = "luminance"        # Rango de Luminancia (Sombras/Medios/Luces)
@@ -32,11 +34,18 @@ class MaskLayer:
     """Representa una capa de ajuste local con su propia máscara y parámetros."""
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     name: str = "Nueva Máscara"
-    mask_type: str = MASK_TYPE_LUMA
+    mask_type: str = MASK_TYPE_BRUSH
     target_scope: str = SCOPE_TARGET_ALL
     enabled: bool = True
     inverted: bool = False
     opacity: float = 1.0  # 0.0 a 1.0
+
+    # Parámetros para máscara de Pincel interactivo
+    brush_radius: int = 35          # Radio en píxeles (5 a 250 px)
+    brush_hardness: float = 0.5     # Dureza: 0.0 (suave/difuminado) a 1.0 (borde neto)
+    brush_flow: float = 0.8         # Flujo / opacidad por pasada (0.05 a 1.00)
+    brush_mode: str = "paint"       # "paint" o "erase"
+    brush_mask: Optional[np.ndarray] = None  # Float32 2D [0.0, 1.0]
 
     # Parámetros para máscara de rango de luminancia
     luma_min: float = 0.0
@@ -54,23 +63,42 @@ class MaskLayer:
     shadows: float = 0.0            # -1.00 a +1.00 (recuperar o profundizar)
     highlights: float = 0.0         # -1.00 a +1.00 (atenuar o iluminar luces)
     saturation: float = 1.0         # 0.00x a 2.50x
-    temp: float = 0.0               # -50.0 a +50.0 (K local)
-    tint: float = 0.0               # -50.0 a +50.0 (tinte local)
+    temp: float = 0.0               # -1.0000 a +1.0000 (factor de balance cálido/frío)
+    tint: float = 0.0               # -1.0000 a +1.0000 (factor de balance verde/magenta)
 
     # Máscara rasterizada en memoria float32 [0.0, 1.0] (no serializable a JSON)
     custom_mask: Optional[np.ndarray] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serializa la capa a un diccionario excluyendo arrays pesados."""
+        """Serializa la capa a un diccionario JSON preservando la máscara de pincel."""
         d = asdict(self)
         d.pop("custom_mask", None)
+        d.pop("brush_mask", None)
+        if self.brush_mask is not None:
+            try:
+                u8 = (np.clip(self.brush_mask, 0.0, 1.0) * 255.0).astype(np.uint8)
+                ok, buf = cv2.imencode(".png", u8)
+                if ok:
+                    d["brush_mask_b64"] = base64.b64encode(buf).decode("ascii")
+            except Exception:
+                pass
         return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MaskLayer":
-        """Instancia una capa a partir de un diccionario."""
+        """Instancia una capa a partir de un diccionario JSON."""
         data_clean = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
-        return cls(**data_clean)
+        inst = cls(**data_clean)
+        b64_str = data.get("brush_mask_b64")
+        if b64_str:
+            try:
+                buf = np.frombuffer(base64.b64decode(b64_str), dtype=np.uint8)
+                dec = cv2.imdecode(buf, cv2.IMREAD_GRAYSCALE)
+                if dec is not None:
+                    inst.brush_mask = dec.astype(np.float32) / 255.0
+            except Exception:
+                pass
+        return inst
 
 
 def compute_layer_mask(
@@ -84,7 +112,15 @@ def compute_layer_mask(
     """
     h, w = base_rgb.shape[:2]
 
-    if layer.mask_type == MASK_TYPE_GROUND:
+    if layer.mask_type == MASK_TYPE_BRUSH:
+        if layer.brush_mask is not None:
+            m = layer.brush_mask.copy()
+            if m.shape[:2] != (h, w):
+                m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
+        else:
+            m = np.zeros((h, w), dtype=np.float32)
+
+    elif layer.mask_type == MASK_TYPE_GROUND:
         if master_sky_mask is not None:
             m = 1.0 - master_sky_mask
             if m.shape[:2] != (h, w):
@@ -153,7 +189,7 @@ def apply_local_adjustments_to_image(
     adj = np.clip(image_rgb, 0.0, 1.0).astype(np.float32)
 
     # 1. Balance de blancos local
-    if abs(layer.temp) > 1e-3 or abs(layer.tint) > 1e-3:
+    if abs(layer.temp) > 1e-4 or abs(layer.tint) > 1e-4:
         adj = apply_white_balance(adj, layer.temp, layer.tint)
 
     # 2. Exposición local (EV)

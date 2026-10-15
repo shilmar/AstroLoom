@@ -800,8 +800,8 @@ class DeveloperTab(QWidget):
 
         left_layout.addWidget(grp_gnd_tone)
 
-        # --- SECCIÓN 7: Capas y Máscaras Locales (Lightroom Style) ---
-        grp_masks = QGroupBox("7. Máscaras y Capas de Ajuste Local (Lightroom)")
+        # --- SECCIÓN 7: Capas y Máscaras Locales ---
+        grp_masks = QGroupBox("7. Máscaras y Capas de Ajuste Local")
         masks_layout = QVBoxLayout(grp_masks)
         masks_layout.setContentsMargins(10, 14, 10, 10)
         masks_layout.setSpacing(8)
@@ -816,6 +816,8 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.layers_changed.connect(self.update_stretch_preview)
         self.mask_layers_widget.preview_mask_requested.connect(self._on_layer_mask_preview_requested)
         self.mask_layers_widget.edit_ground_mask_requested.connect(self._open_mask_tool_from_section)
+        self.mask_layers_widget.brush_tool_toggled.connect(self._on_layer_brush_toggled)
+        self.mask_layers_widget.brush_params_changed.connect(self._on_layer_brush_params_changed)
         masks_layout.addWidget(self.mask_layers_widget)
 
         left_layout.addWidget(grp_masks)
@@ -881,6 +883,8 @@ class DeveloperTab(QWidget):
         self.canvas.crop_applied.connect(self._apply_crop)
         self.canvas.color_sampled.connect(self._on_eyedropper_color_sampled)
         self.canvas.brush_size_changed.connect(self._on_brush_size_changed)
+        self.canvas.layer_brush_stroke_finished.connect(self._on_layer_brush_stroke_finished)
+        self.canvas.layer_brush_radius_changed.connect(self.mask_layers_widget.set_brush_radius_from_canvas)
 
         splitter.addWidget(right_container)
         splitter.setStretchFactor(0, 0)
@@ -1825,6 +1829,34 @@ class DeveloperTab(QWidget):
             else:
                 self.canvas.set_refined_mask(None)
 
+    def _on_layer_brush_toggled(self, active: bool, layer: Optional[MaskLayer]) -> None:
+        """Activa o desactiva la interacción del pincel en el lienzo según la capa seleccionada."""
+        if active and layer is not None:
+            self.canvas.set_layer_brush_enabled(True)
+            self.canvas.set_layer_brush_params(
+                layer.brush_radius, layer.brush_hardness, layer.brush_flow, layer.brush_mode
+            )
+            self.canvas.set_active_layer_mask(layer.brush_mask)
+        else:
+            self.canvas.set_layer_brush_enabled(False)
+            if not self.mask_layers_widget.btn_preview_mask.isChecked():
+                if self.current_mask is not None:
+                    self.canvas.set_refined_mask(self.current_mask, mode="bicolor")
+                else:
+                    self.canvas.set_refined_mask(None)
+
+    def _on_layer_brush_params_changed(self, radius: int, hardness: float, flow: float, mode: str) -> None:
+        """Actualiza los parámetros interactivos de trazo en el lienzo."""
+        self.canvas.set_layer_brush_params(radius, hardness, flow, mode)
+
+    def _on_layer_brush_stroke_finished(self, stroke_mask: np.ndarray) -> None:
+        """Manejador ejecutado al soltar el clic izquierdo tras pintar con el pincel de capa."""
+        layer = self.mask_layers_widget.get_selected_layer()
+        if layer and layer.mask_type == "brush":
+            layer.brush_mask = stroke_mask.copy()
+            self._commit_action()
+            self.update_stretch_preview()
+
     def _on_toggle_clipping_shortcut(self) -> None:
         """Alterna los indicadores de recorte con la tecla 'J' ignorando entradas de texto activas."""
         focused = QApplication.focusWidget()
@@ -2496,7 +2528,7 @@ class DeveloperTab(QWidget):
         if abs(self.contrast_val) > 1e-4:
             stretched = adjust_contrast(stretched, self.contrast_val, pivot=None)
 
-        # 10. Aplicación de Capas y Máscaras Locales (Lightroom Style)
+        # 10. Aplicación de Capas y Máscaras Locales
         if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers:
             is_full_res = (self.image_32bit is not None and stretched.shape[:2] == self.image_32bit.shape[:2])
             st_img = self.image_stars if is_full_res else (self.proxy_stars if self.proxy_stars is not None else self.image_stars)
@@ -3535,6 +3567,11 @@ class DeveloperTab(QWidget):
             self.mask_layers_widget.blockSignals(True)
             self.mask_layers_widget.set_state(state["mask_layers"] or [])
             self.mask_layers_widget.blockSignals(False)
+            sel_layer = self.mask_layers_widget.get_selected_layer()
+            if sel_layer and sel_layer.mask_type == "brush" and sel_layer.enabled:
+                self.canvas.set_active_layer_mask(sel_layer.brush_mask)
+            elif not self.mask_layers_widget.btn_preview_mask.isChecked():
+                self.canvas.set_refined_mask(None)
 
         self.update_stretch_preview()
 

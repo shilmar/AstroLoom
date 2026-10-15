@@ -31,6 +31,8 @@ class MaskCanvas(QWidget):
     crop_rect_changed = Signal(int, int)         # (pixel_w, pixel_h)
     crop_toggled = Signal(bool)
     crop_applied = Signal()
+    layer_brush_stroke_finished = Signal(object) # np.ndarray máscara de capa tras pintar
+    layer_brush_radius_changed = Signal(int)     # Sincronización de radio con rueda
 
     def __init__(self, parent: Optional[QWidget] = None, enable_masking: bool = True):
         super().__init__(parent)
@@ -53,6 +55,16 @@ class MaskCanvas(QWidget):
         self.screen_brush_radius: int = 20
         self.last_img_pt: Optional[QPoint] = None
         self.drawing: bool = False
+
+        # Pincel interactivo de máscaras de capa (Ajuste Local con Dureza y Opacidad)
+        self.layer_brush_active: bool = False
+        self.layer_brush_radius: int = 35
+        self.layer_brush_hardness: float = 0.5
+        self.layer_brush_flow: float = 0.8
+        self.layer_brush_mode: str = "paint"   # "paint" o "erase"
+        self.layer_brush_mask: Optional[np.ndarray] = None
+        self._brush_drawing: bool = False
+        self._brush_hover_pos: Optional[QPoint] = None
 
         # Parámetros del modo Zoom 1:1
         self.is_zoomed: bool = False
@@ -122,6 +134,43 @@ class MaskCanvas(QWidget):
     def set_brush_mode(self, mode: int) -> None:
         """Establece la clase del pincel: 2 para Cielo (Verde), 1 para Suelo (Rojo)."""
         self.brush_mode = 2 if mode == 2 else 1
+
+    def set_layer_brush_enabled(self, enabled: bool) -> None:
+        """Activa o desactiva el pincel interactivo de máscaras de capa."""
+        self.layer_brush_active = enabled
+        if enabled:
+            self.crop_mode = False
+            self.eyedropper_active = False
+            self.magnifier_active = False
+            self.enable_masking = False
+            self.show_mask_overlay = True
+        else:
+            self._brush_drawing = False
+            self._brush_hover_pos = None
+            self.setCursor(Qt.ArrowCursor)
+        self.update()
+
+    def set_layer_brush_params(self, radius: int, hardness: float, flow: float, mode: str = "paint") -> None:
+        """Actualiza los parámetros interactivos del pincel de capa."""
+        self.layer_brush_radius = max(3, min(300, int(radius)))
+        self.layer_brush_hardness = float(np.clip(hardness, 0.0, 1.0))
+        self.layer_brush_flow = float(np.clip(flow, 0.01, 1.0))
+        self.layer_brush_mode = "erase" if mode == "erase" else "paint"
+        self.update()
+
+    def set_active_layer_mask(self, mask: Optional[np.ndarray]) -> None:
+        """Establece la máscara actual sobre la que pintará el pincel de capa."""
+        if mask is not None:
+            self.layer_brush_mask = mask.copy()
+            self.set_refined_mask(self.layer_brush_mask, mode="ruby")
+            self.set_mask_visible(True)
+        else:
+            self.layer_brush_mask = None
+            self.set_refined_mask(None)
+        self.update()
+
+    def get_active_layer_mask(self) -> Optional[np.ndarray]:
+        return self.layer_brush_mask
 
     def set_masking_enabled(self, enabled: bool) -> None:
         """Activa o desactiva interactivamente el modo de trazado de máscaras."""
@@ -489,6 +538,26 @@ class MaskCanvas(QWidget):
             event.accept()
             return
 
+        # Interacción de Pincel de Ajuste Local (Capas)
+        if self.layer_brush_active and event.button() == Qt.LeftButton:
+            ipt = self.widget_to_image_coords(event.position().toPoint())
+            if ipt and self.base_pixmap and not self.base_pixmap.isNull():
+                self._brush_drawing = True
+                self.last_img_pt = ipt
+                w_b = self.base_pixmap.width()
+                h_b = self.base_pixmap.height()
+                if self.layer_brush_mask is None or self.layer_brush_mask.shape[:2] != (h_b, w_b):
+                    self.layer_brush_mask = np.zeros((h_b, w_b), dtype=np.float32)
+
+                _, _, scale = self.get_render_geometry()
+                native_r = max(2, int(self.layer_brush_radius / max(1e-4, scale)))
+                self._apply_brush_stamp(ipt, native_r)
+                self.set_refined_mask(self.layer_brush_mask, mode="ruby")
+                self.set_mask_visible(True)
+                self.update()
+                event.accept()
+                return
+
         if not self.enable_masking:
             return
 
@@ -523,7 +592,29 @@ class MaskCanvas(QWidget):
                 event.accept()
                 return
 
-        # 1. Arrastre y hover sobre la cortina divisoria
+        # 1. Pincel de Capa de Ajuste Local
+        if self.layer_brush_active:
+            self._brush_hover_pos = pos
+            target_rect, _, _ = self.get_render_geometry()
+            if target_rect.contains(pos):
+                self.setCursor(Qt.BlankCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
+
+            if self._brush_drawing and self.layer_brush_mask is not None:
+                ipt = self.widget_to_image_coords(pos)
+                if ipt and self.last_img_pt:
+                    _, _, scale = self.get_render_geometry()
+                    native_r = max(2, int(self.layer_brush_radius / max(1e-4, scale)))
+                    self._apply_brush_line(self.last_img_pt, ipt, native_r)
+                    self.last_img_pt = ipt
+                    self.set_refined_mask(self.layer_brush_mask, mode="ruby")
+            self.update()
+            if self._brush_drawing:
+                event.accept()
+                return
+
+        # 2. Arrastre y hover sobre la cortina divisoria
         if self.split_view_enabled:
             target_rect, _, _ = self.get_render_geometry()
             if self.is_dragging_split:
@@ -547,7 +638,7 @@ class MaskCanvas(QWidget):
                     self.setCursor(cursor_shape)
                     event.accept()
                     return
-                elif not self.enable_masking:
+                elif not self.enable_masking and not self.layer_brush_active:
                     self.setCursor(Qt.ArrowCursor)
 
         if not self.enable_masking:
@@ -580,6 +671,15 @@ class MaskCanvas(QWidget):
         super().mouseDoubleClickEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self.layer_brush_active:
+            if self._brush_drawing:
+                self._brush_drawing = False
+                self.last_img_pt = None
+                if self.layer_brush_mask is not None:
+                    self.layer_brush_stroke_finished.emit(self.layer_brush_mask.copy())
+                event.accept()
+                return
+
         if event.button() == Qt.LeftButton and self.crop_mode:
             if self._crop_drag_mode is not None:
                 self._crop_drag_mode = None
@@ -598,6 +698,10 @@ class MaskCanvas(QWidget):
             self.last_img_pt = None
 
     def leaveEvent(self, event) -> None:
+        if self._brush_hover_pos is not None:
+            self._brush_hover_pos = None
+            self.setCursor(Qt.ArrowCursor)
+            self.update()
         if self._hover_pos is not None:
             self._hover_pos = None
             self.update()
@@ -606,7 +710,7 @@ class MaskCanvas(QWidget):
         super().leaveEvent(event)
 
     def wheelEvent(self, event) -> None:
-        """Permite escalar dinámicamente la lupa flotante o el radio del pincel de máscara con la rueda del ratón."""
+        """Permite escalar dinámicamente la lupa flotante o el radio de los pinceles con la rueda del ratón."""
         if self.magnifier_active:
             delta = event.angleDelta().y()
             if delta > 0:
@@ -614,6 +718,17 @@ class MaskCanvas(QWidget):
             elif delta < 0:
                 self.magnifier_zoom = max(1.5, round(self.magnifier_zoom - 0.5, 1))
             self.update()
+            event.accept()
+            return
+        elif self.layer_brush_active:
+            delta = event.angleDelta().y()
+            if delta != 0:
+                step = 3 if delta > 0 else -3
+                new_r = max(5, min(250, self.layer_brush_radius + step))
+                if new_r != self.layer_brush_radius:
+                    self.layer_brush_radius = new_r
+                    self.layer_brush_radius_changed.emit(new_r)
+                    self.update()
             event.accept()
             return
         elif self.enable_masking:
@@ -647,6 +762,94 @@ class MaskCanvas(QWidget):
             painter.drawLine(p1, p2)
         painter.end()
         self.update()
+
+    def _apply_brush_stamp(self, pt: QPoint, native_radius: int) -> None:
+        """Aplica una estampación radial con dureza y flujo sobre la máscara de capa activa."""
+        if self.layer_brush_mask is None:
+            return
+        cx, cy = pt.x(), pt.y()
+        mask = self.layer_brush_mask
+        h, w = mask.shape[:2]
+        r = max(2, int(native_radius))
+        x0 = max(0, cx - r)
+        x1 = min(w, cx + r + 1)
+        y0 = max(0, cy - r)
+        y1 = min(h, cy + r + 1)
+        if x0 >= x1 or y0 >= y1:
+            return
+
+        ys = np.arange(y0, y1, dtype=np.float32)[:, np.newaxis] - cy
+        xs = np.arange(x0, x1, dtype=np.float32)[np.newaxis, :] - cx
+        dist_sq = xs * xs + ys * ys
+        r_sq = float(r * r)
+
+        inside = dist_sq <= r_sq
+        if not np.any(inside):
+            return
+
+        dist = np.sqrt(dist_sq) / float(r)
+        h_val = float(np.clip(self.layer_brush_hardness, 0.0, 0.999))
+
+        weight = np.zeros_like(dist)
+        weight[dist <= h_val] = 1.0
+
+        fade = (dist > h_val) & inside
+        if np.any(fade):
+            t = (dist[fade] - h_val) / (1.0 - h_val)
+            weight[fade] = 1.0 - (3.0 * t * t - 2.0 * t * t * t)
+
+        stamp = weight * float(np.clip(self.layer_brush_flow, 0.01, 1.0))
+        sub = mask[y0:y1, x0:x1]
+
+        if self.layer_brush_mode == "paint":
+            sub[...] = np.clip(sub + stamp * (1.0 - sub), 0.0, 1.0)
+        else:
+            sub[...] = np.clip(sub - stamp, 0.0, 1.0)
+
+    def _apply_brush_line(self, p1: QPoint, p2: QPoint, native_radius: int) -> None:
+        """Traza una línea continua interpolando estampaciones para evitar huecos en movimientos rápidos."""
+        dx = p2.x() - p1.x()
+        dy = p2.y() - p1.y()
+        dist = (dx * dx + dy * dy) ** 0.5
+        step = max(1.0, float(native_radius) * 0.25)
+        steps = max(1, int(dist / step))
+        for i in range(steps + 1):
+            t = i / steps
+            cx = int(round(p1.x() + dx * t))
+            cy = int(round(p1.y() + dy * t))
+            self._apply_brush_stamp(QPoint(cx, cy), native_radius)
+
+    def _draw_layer_brush_cursor(self, painter: QPainter) -> None:
+        """Renderiza los anillos interactivos del pincel (radio exterior y núcleo de dureza) centrados en el cursor."""
+        pos = self._brush_hover_pos
+        if not pos or self.crop_mode or self.eyedropper_active or self.magnifier_active:
+            return
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        r = float(self.layer_brush_radius)
+        h = float(np.clip(self.layer_brush_hardness, 0.0, 1.0))
+        h_r = max(1.0, r * h)
+
+        is_erase = (self.layer_brush_mode == "erase")
+        color_outer = QColor(255, 75, 75, 220) if is_erase else QColor(255, 255, 255, 200)
+        color_inner = QColor(255, 120, 120, 160) if is_erase else QColor(0, 230, 255, 170)
+
+        # 1. Círculo exterior (Límite del pincel)
+        painter.setPen(QPen(color_outer, 1.25, Qt.SolidLine))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(pos, r, r)
+
+        # 2. Círculo interior punteado (Núcleo de dureza / feather)
+        if 0.05 < h < 0.98:
+            painter.setPen(QPen(color_inner, 1.0, Qt.DashLine))
+            painter.drawEllipse(pos, h_r, h_r)
+
+        # 3. Punto guía central
+        painter.setPen(QPen(color_outer, 2.5))
+        painter.drawPoint(pos)
+        painter.restore()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -845,6 +1048,10 @@ class MaskCanvas(QWidget):
         # Superposición de Recorte Interactivo (Crop Overlay)
         if self.crop_mode:
             self._draw_crop_overlay(painter)
+
+        # Anillos y cursor interactivo del Pincel de Ajuste Local
+        if self.layer_brush_active and self._brush_hover_pos is not None:
+            self._draw_layer_brush_cursor(painter)
 
     def _draw_magnifier(self, painter: QPainter) -> None:
         """Renderiza una lupa circular flotante de alta precisión centrada en la posición del cursor."""
@@ -1080,7 +1287,7 @@ class MaskCanvas(QWidget):
         """
         Genera el overlay semitransparente coloreado para la máscara calculada.
         - mode 'bicolor': Rojo para suelo (0.0), Verde para cielo (1.0).
-        - mode 'ruby': Tinte rubí/carmesí estilo Lightroom con opacidad modulada por el peso de la máscara.
+        - mode 'ruby': Tinte rubí/carmesí con opacidad modulada por el peso de la máscara.
         """
         self._mask_overlay_mode = mode
         if mask_float is None:

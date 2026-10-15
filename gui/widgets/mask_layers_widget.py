@@ -1,7 +1,7 @@
 # gui/widgets/mask_layers_widget.py
 """
-gui/widgets/mask_layers_widget.py - Panel interactivo de gestión de capas de ajuste local (Lightroom style).
-Permite crear, ordenar, editar y previsualizar múltiples máscaras de luminancia, color y suelo/cielo,
+gui/widgets/mask_layers_widget.py - Panel interactivo de gestión de capas de máscaras y ajustes locales.
+Permite crear, ordenar, editar y previsualizar múltiples máscaras (Pincel, Luminancia, Color y Suelo/Cielo),
 con ajustes locales paramétricos independientes y conciencia de capas StarNet.
 """
 from typing import Optional, List, Dict, Any, Callable
@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from core.mask_layers import (
     MaskLayer, compute_layer_mask, compute_effective_layer_mask,
-    MASK_TYPE_GROUND, MASK_TYPE_SKY, MASK_TYPE_LUMA, MASK_TYPE_COLOR, MASK_TYPE_CUSTOM,
+    MASK_TYPE_BRUSH, MASK_TYPE_GROUND, MASK_TYPE_SKY, MASK_TYPE_LUMA, MASK_TYPE_COLOR, MASK_TYPE_CUSTOM,
     SCOPE_TARGET_ALL, SCOPE_TARGET_GROUND, SCOPE_TARGET_STARLESS, SCOPE_TARGET_STARS
 )
 from gui.theme import (
@@ -34,6 +34,8 @@ class MaskLayersWidget(QWidget):
     layers_changed = Signal()                    # Emitido al modificar cualquier capa o parámetro
     preview_mask_requested = Signal(object)       # Emitido con mask (np.ndarray) o None para el lienzo
     edit_ground_mask_requested = Signal()        # Solicitud de abrir el pincel interactivo de suelo
+    brush_tool_toggled = Signal(bool, object)    # (activo, MaskLayer) para activar el pincel en el lienzo
+    brush_params_changed = Signal(int, float, float, str) # (radio, dureza, flujo, modo)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -66,7 +68,13 @@ class MaskLayersWidget(QWidget):
 
         # 1. Barra de creación rápida de máscaras
         row_create = QHBoxLayout()
-        row_create.setSpacing(6)
+        row_create.setSpacing(5)
+
+        self.btn_add_brush = QPushButton("🖌️ Pincel")
+        self.btn_add_brush.setCursor(Qt.PointingHandCursor)
+        self.btn_add_brush.setToolTip("Crea una capa con máscara pintada a mano con dureza y opacidad de trazo")
+        self.btn_add_brush.clicked.connect(lambda: self.add_new_layer(MASK_TYPE_BRUSH))
+        row_create.addWidget(self.btn_add_brush)
 
         self.btn_add_luma = QPushButton("➕ Luminancia")
         self.btn_add_luma.setCursor(Qt.PointingHandCursor)
@@ -196,11 +204,80 @@ class MaskLayersWidget(QWidget):
         row_op.addWidget(self.slider_opacity, stretch=1)
         props_layout.addLayout(row_op)
 
-        # 5. Caja dinámica de definición de máscara (Luminancia / Color / Suelo)
+        # 5. Caja dinámica de definición de máscara (Pincel / Luminancia / Color / Suelo)
         self.grp_mask_def = QGroupBox("Definición de Máscara")
         self.layout_mask_def = QVBoxLayout(self.grp_mask_def)
         self.layout_mask_def.setContentsMargins(8, 10, 8, 8)
         self.layout_mask_def.setSpacing(6)
+
+        # Sub-panel Pincel (Ajuste Local con Dureza y Opacidad)
+        self.panel_brush = QWidget()
+        brush_layout = QVBoxLayout(self.panel_brush)
+        brush_layout.setContentsMargins(0, 0, 0, 0)
+        brush_layout.setSpacing(6)
+
+        # Fila Radio / Tamaño
+        row_b_radius = QHBoxLayout()
+        row_b_radius.addWidget(QLabel("Radio (Tamaño):"))
+        self.lbl_b_radius = QLabel("35 px")
+        self.lbl_b_radius.setStyleSheet("color: #80d8ff; font-weight: bold;")
+        row_b_radius.addWidget(self.lbl_b_radius)
+        self.slider_b_radius = QSlider(Qt.Horizontal)
+        self.slider_b_radius.setRange(5, 250)
+        self.slider_b_radius.setValue(35)
+        self.slider_b_radius.valueChanged.connect(self._on_brush_param_changed)
+        row_b_radius.addWidget(self.slider_b_radius, stretch=1)
+        brush_layout.addLayout(row_b_radius)
+
+        # Fila Dureza (Hardness / Feather)
+        row_b_hard = QHBoxLayout()
+        row_b_hard.addWidget(QLabel("Dureza:"))
+        self.lbl_b_hardness = QLabel("50%")
+        self.lbl_b_hardness.setStyleSheet("color: #ffd54f; font-weight: bold;")
+        row_b_hard.addWidget(self.lbl_b_hardness)
+        self.slider_b_hardness = QSlider(Qt.Horizontal)
+        self.slider_b_hardness.setRange(0, 100)
+        self.slider_b_hardness.setValue(50)
+        self.slider_b_hardness.valueChanged.connect(self._on_brush_param_changed)
+        row_b_hard.addWidget(self.slider_b_hardness, stretch=1)
+        brush_layout.addLayout(row_b_hard)
+
+        # Fila Flujo / Opacidad por trazo
+        row_b_flow = QHBoxLayout()
+        row_b_flow.addWidget(QLabel("Flujo / Opacidad:"))
+        self.lbl_b_flow = QLabel("80%")
+        self.lbl_b_flow.setStyleSheet("color: #a5d6a7; font-weight: bold;")
+        row_b_flow.addWidget(self.lbl_b_flow)
+        self.slider_b_flow = QSlider(Qt.Horizontal)
+        self.slider_b_flow.setRange(5, 100)
+        self.slider_b_flow.setValue(80)
+        self.slider_b_flow.valueChanged.connect(self._on_brush_param_changed)
+        row_b_flow.addWidget(self.slider_b_flow, stretch=1)
+        brush_layout.addLayout(row_b_flow)
+
+        # Fila Modo de Trazo: Pintar (+) vs Borrar (-) y Limpiar
+        row_b_mode = QHBoxLayout()
+        self.btn_b_paint = QPushButton("🖌️ Pintar (+)")
+        self.btn_b_paint.setCheckable(True)
+        self.btn_b_paint.setChecked(True)
+        self.btn_b_paint.setCursor(Qt.PointingHandCursor)
+        self.btn_b_paint.clicked.connect(lambda: self._set_brush_mode("paint"))
+        row_b_mode.addWidget(self.btn_b_paint)
+
+        self.btn_b_erase = QPushButton("🧹 Borrar (-)")
+        self.btn_b_erase.setCheckable(True)
+        self.btn_b_erase.setCursor(Qt.PointingHandCursor)
+        self.btn_b_erase.clicked.connect(lambda: self._set_brush_mode("erase"))
+        row_b_mode.addWidget(self.btn_b_erase)
+
+        self.btn_b_clear = QPushButton("🗑️ Limpiar")
+        self.btn_b_clear.setCursor(Qt.PointingHandCursor)
+        self.btn_b_clear.setStyleSheet("color: #ef9a9a;")
+        self.btn_b_clear.clicked.connect(self._clear_brush_mask)
+        row_b_mode.addWidget(self.btn_b_clear)
+
+        brush_layout.addLayout(row_b_mode)
+        self.layout_mask_def.addWidget(self.panel_brush)
 
         # Sub-panel Luminancia
         self.panel_luma = QWidget()
@@ -451,37 +528,61 @@ class MaskLayersWidget(QWidget):
 
         adj_layout.addLayout(row_pair2)
 
-        # Temperatura y Tinte (WB local)
+        # Temperatura y Tinte (WB local de alta precisión)
         row_pair3 = QHBoxLayout()
         row_pair3.setSpacing(10)
 
+        # Temp WB
         col_t = QVBoxLayout()
         col_t.setSpacing(2)
         row_t_lbl = QHBoxLayout()
-        row_t_lbl.addWidget(QLabel("Temp WB:"))
-        self.lbl_adj_temp = QLabel("0.0")
-        self.lbl_adj_temp.setStyleSheet("color: #ffb74d; font-weight: bold;")
-        row_t_lbl.addWidget(self.lbl_adj_temp)
+        lbl_t_title = QLabel("Temp WB:")
+        lbl_t_title.setToolTip("Doble clic para restablecer a 0.0000")
+        lbl_t_title.mouseDoubleClickEvent = lambda e: self.spin_adj_temp.setValue(0.0)
+        row_t_lbl.addWidget(lbl_t_title)
+
+        self.spin_adj_temp = QDoubleSpinBox()
+        self.spin_adj_temp.setDecimals(4)
+        self.spin_adj_temp.setRange(-1.0000, 1.0000)
+        self.spin_adj_temp.setSingleStep(0.0050)
+        self.spin_adj_temp.setValue(0.0000)
+        self.spin_adj_temp.setFixedWidth(94)
+        self.spin_adj_temp.setStyleSheet("color: #ffd54f; font-weight: bold;")
+        self.spin_adj_temp.valueChanged.connect(self._on_spin_adj_temp_changed)
+        row_t_lbl.addWidget(self.spin_adj_temp)
         col_t.addLayout(row_t_lbl)
+
         self.slider_adj_temp = QSlider(Qt.Horizontal)
-        self.slider_adj_temp.setRange(-50, 50)
+        self.slider_adj_temp.setRange(-10000, 10000)
         self.slider_adj_temp.setValue(0)
-        self.slider_adj_temp.valueChanged.connect(self._on_adj_temp_changed)
+        self.slider_adj_temp.valueChanged.connect(self._on_slider_adj_temp_changed)
         col_t.addWidget(self.slider_adj_temp)
         row_pair3.addLayout(col_t)
 
+        # Tinte WB
         col_ti = QVBoxLayout()
         col_ti.setSpacing(2)
         row_ti_lbl = QHBoxLayout()
-        row_ti_lbl.addWidget(QLabel("Tinte WB:"))
-        self.lbl_adj_tint = QLabel("0.0")
-        self.lbl_adj_tint.setStyleSheet("color: #ce93d8; font-weight: bold;")
-        row_ti_lbl.addWidget(self.lbl_adj_tint)
+        lbl_ti_title = QLabel("Tinte WB:")
+        lbl_ti_title.setToolTip("Doble clic para restablecer a 0.0000")
+        lbl_ti_title.mouseDoubleClickEvent = lambda e: self.spin_adj_tint.setValue(0.0)
+        row_ti_lbl.addWidget(lbl_ti_title)
+
+        self.spin_adj_tint = QDoubleSpinBox()
+        self.spin_adj_tint.setDecimals(4)
+        self.spin_adj_tint.setRange(-1.0000, 1.0000)
+        self.spin_adj_tint.setSingleStep(0.0050)
+        self.spin_adj_tint.setValue(0.0000)
+        self.spin_adj_tint.setFixedWidth(94)
+        self.spin_adj_tint.setStyleSheet("color: #ce93d8; font-weight: bold;")
+        self.spin_adj_tint.valueChanged.connect(self._on_spin_adj_tint_changed)
+        row_ti_lbl.addWidget(self.spin_adj_tint)
         col_ti.addLayout(row_ti_lbl)
+
         self.slider_adj_tint = QSlider(Qt.Horizontal)
-        self.slider_adj_tint.setRange(-50, 50)
+        self.slider_adj_tint.setRange(-10000, 10000)
         self.slider_adj_tint.setValue(0)
-        self.slider_adj_tint.valueChanged.connect(self._on_adj_tint_changed)
+        self.slider_adj_tint.valueChanged.connect(self._on_slider_adj_tint_changed)
         col_ti.addWidget(self.slider_adj_tint)
         row_pair3.addLayout(col_ti)
 
@@ -507,7 +608,9 @@ class MaskLayersWidget(QWidget):
     def add_new_layer(self, mask_type: str) -> MaskLayer:
         """Crea una nueva capa del tipo indicado y la añade a la pila."""
         count = len(self.layers) + 1
-        if mask_type == MASK_TYPE_LUMA:
+        if mask_type == MASK_TYPE_BRUSH:
+            name = f"Pincel {count}"
+        elif mask_type == MASK_TYPE_LUMA:
             name = f"Luminancia {count}"
         elif mask_type == MASK_TYPE_COLOR:
             name = f"Color {count}"
@@ -539,6 +642,8 @@ class MaskLayersWidget(QWidget):
         if layer:
             d = layer.to_dict()
             new_layer = MaskLayer.from_dict(d)
+            if layer.brush_mask is not None:
+                new_layer.brush_mask = layer.brush_mask.copy()
             new_layer.name = f"{layer.name} (Copia)"
             idx = self.layers.index(layer)
             self.layers.insert(idx + 1, new_layer)
@@ -585,6 +690,7 @@ class MaskLayersWidget(QWidget):
             }.get(layer.target_scope, "Todo")
 
             icon = {
+                MASK_TYPE_BRUSH: "🖌️",
                 MASK_TYPE_LUMA: "💡",
                 MASK_TYPE_COLOR: "🎨",
                 MASK_TYPE_GROUND: "🏞️",
@@ -635,6 +741,7 @@ class MaskLayersWidget(QWidget):
         self.btn_delete.setEnabled(has_sel)
 
         if not layer:
+            self.brush_tool_toggled.emit(False, None)
             return
 
         self._updating_ui = True
@@ -655,11 +762,22 @@ class MaskLayersWidget(QWidget):
         self.lbl_opacity.setText(f"{op_pct}%")
 
         # Sub-paneles de tipo de máscara
+        self.panel_brush.setVisible(layer.mask_type == MASK_TYPE_BRUSH)
         self.panel_luma.setVisible(layer.mask_type == MASK_TYPE_LUMA)
         self.panel_color.setVisible(layer.mask_type == MASK_TYPE_COLOR)
         self.panel_ground.setVisible(layer.mask_type in (MASK_TYPE_GROUND, MASK_TYPE_SKY))
 
-        if layer.mask_type == MASK_TYPE_LUMA:
+        if layer.mask_type == MASK_TYPE_BRUSH:
+            self.slider_b_radius.setValue(layer.brush_radius)
+            self.lbl_b_radius.setText(f"{layer.brush_radius} px")
+            self.slider_b_hardness.setValue(int(round(layer.brush_hardness * 100)))
+            self.lbl_b_hardness.setText(f"{int(round(layer.brush_hardness * 100))}%")
+            self.slider_b_flow.setValue(int(round(layer.brush_flow * 100)))
+            self.lbl_b_flow.setText(f"{int(round(layer.brush_flow * 100))}%")
+            self.btn_b_paint.setChecked(layer.brush_mode == "paint")
+            self.btn_b_erase.setChecked(layer.brush_mode == "erase")
+
+        elif layer.mask_type == MASK_TYPE_LUMA:
             self.spin_luma_min.setValue(layer.luma_min)
             self.spin_luma_max.setValue(layer.luma_max)
             self.spin_luma_feather.setValue(layer.feather)
@@ -689,13 +807,22 @@ class MaskLayersWidget(QWidget):
         self.slider_adj_sat.setValue(sat_pct)
         self.lbl_adj_sat.setText(f"{layer.saturation:.2f}x")
 
-        self.slider_adj_temp.setValue(int(round(layer.temp)))
-        self.lbl_adj_temp.setText(f"{layer.temp:+.1f}")
+        # Temperatura y Tinte WB (-1.0000 a +1.0000 con 4 decimales)
+        self.spin_adj_temp.setValue(layer.temp)
+        self.slider_adj_temp.setValue(int(round(layer.temp * 10000.0)))
 
-        self.slider_adj_tint.setValue(int(round(layer.tint)))
-        self.lbl_adj_tint.setText(f"{layer.tint:+.1f}")
+        self.spin_adj_tint.setValue(layer.tint)
+        self.slider_adj_tint.setValue(int(round(layer.tint * 10000.0)))
 
         self._updating_ui = False
+
+        if layer.mask_type == MASK_TYPE_BRUSH and layer.enabled:
+            self.brush_tool_toggled.emit(True, layer)
+            self.brush_params_changed.emit(
+                layer.brush_radius, layer.brush_hardness, layer.brush_flow, layer.brush_mode
+            )
+        else:
+            self.brush_tool_toggled.emit(False, None)
 
         # Si el botón de previsualización de máscara en lienzo estaba activo, refrescarlo
         if self.btn_preview_mask.isChecked():
@@ -719,7 +846,13 @@ class MaskLayersWidget(QWidget):
                     SCOPE_TARGET_STARLESS: "Starless",
                     SCOPE_TARGET_STARS: "Estrellas",
                 }.get(layer.target_scope, "Todo")
-                icon = "💡" if layer.mask_type == MASK_TYPE_LUMA else ("🎨" if layer.mask_type == MASK_TYPE_COLOR else "🏞️")
+                icon = {
+                    MASK_TYPE_BRUSH: "🖌️",
+                    MASK_TYPE_LUMA: "💡",
+                    MASK_TYPE_COLOR: "🎨",
+                    MASK_TYPE_GROUND: "🏞️",
+                    MASK_TYPE_SKY: "🌌",
+                }.get(layer.mask_type, "📑")
                 status = "✓" if layer.enabled else "✕"
                 self.list_layers.item(row).setText(f"{status} {icon} {layer.name}  [{scope_tag}]")
 
@@ -729,6 +862,8 @@ class MaskLayersWidget(QWidget):
         if layer:
             layer.enabled = checked
             self._rebuild_list_items(select_layer_id=layer.id)
+            if layer.mask_type == MASK_TYPE_BRUSH:
+                self.brush_tool_toggled.emit(checked, layer if checked else None)
             self.layers_changed.emit()
 
     def _on_layer_invert_toggled(self, checked: bool) -> None:
@@ -756,6 +891,52 @@ class MaskLayersWidget(QWidget):
             self.lbl_opacity.setText(f"{val}%")
             self.layers_changed.emit()
 
+    # Controles de Pincel interactivo
+    def _on_brush_param_changed(self) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if layer and layer.mask_type == MASK_TYPE_BRUSH:
+            layer.brush_radius = self.slider_b_radius.value()
+            layer.brush_hardness = self.slider_b_hardness.value() / 100.0
+            layer.brush_flow = self.slider_b_flow.value() / 100.0
+            self.lbl_b_radius.setText(f"{layer.brush_radius} px")
+            self.lbl_b_hardness.setText(f"{self.slider_b_hardness.value()}%")
+            self.lbl_b_flow.setText(f"{self.slider_b_flow.value()}%")
+            self.brush_params_changed.emit(
+                layer.brush_radius, layer.brush_hardness, layer.brush_flow, layer.brush_mode
+            )
+
+    def _set_brush_mode(self, mode: str) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if layer and layer.mask_type == MASK_TYPE_BRUSH:
+            layer.brush_mode = mode
+            self.btn_b_paint.setChecked(mode == "paint")
+            self.btn_b_erase.setChecked(mode == "erase")
+            self.brush_params_changed.emit(
+                layer.brush_radius, layer.brush_hardness, layer.brush_flow, layer.brush_mode
+            )
+
+    def _clear_brush_mask(self) -> None:
+        layer = self.get_selected_layer()
+        if layer and layer.mask_type == MASK_TYPE_BRUSH:
+            layer.brush_mask = None
+            self.brush_tool_toggled.emit(True, layer)
+            if self.btn_preview_mask.isChecked():
+                self._emit_mask_preview()
+            self.layers_changed.emit()
+
+    def set_brush_radius_from_canvas(self, radius: int) -> None:
+        """Actualiza el control deslizante de radio cuando se redimensiona con la rueda del ratón."""
+        layer = self.get_selected_layer()
+        if layer and layer.mask_type == MASK_TYPE_BRUSH:
+            layer.brush_radius = radius
+            self._updating_ui = True
+            self.slider_b_radius.setValue(radius)
+            self.lbl_b_radius.setText(f"{radius} px")
+            self._updating_ui = False
+
+    # Controles de Luminancia
     def _on_luma_param_changed(self) -> None:
         if self._updating_ui: return
         layer = self.get_selected_layer()
@@ -771,6 +952,7 @@ class MaskLayersWidget(QWidget):
         self.spin_luma_min.setValue(l_min)
         self.spin_luma_max.setValue(l_max)
 
+    # Controles de Rango de Color
     def _on_hue_slider_changed(self, val: int) -> None:
         if self._updating_ui: return
         self.lbl_hue_val.setText(f"{val}°")
@@ -844,20 +1026,48 @@ class MaskLayersWidget(QWidget):
             self.lbl_adj_sat.setText(f"{layer.saturation:.2f}x")
             self.layers_changed.emit()
 
-    def _on_adj_temp_changed(self, val: int) -> None:
+    def _on_spin_adj_temp_changed(self, val: float) -> None:
         if self._updating_ui: return
+        self._updating_ui = True
+        slider_val = int(round(val * 10000.0))
+        self.slider_adj_temp.setValue(slider_val)
+        self._updating_ui = False
         layer = self.get_selected_layer()
         if layer:
             layer.temp = float(val)
-            self.lbl_adj_temp.setText(f"{layer.temp:+.1f}")
             self.layers_changed.emit()
 
-    def _on_adj_tint_changed(self, val: int) -> None:
+    def _on_slider_adj_temp_changed(self, val: int) -> None:
         if self._updating_ui: return
+        self._updating_ui = True
+        float_val = val / 10000.0
+        self.spin_adj_temp.setValue(float_val)
+        self._updating_ui = False
+        layer = self.get_selected_layer()
+        if layer:
+            layer.temp = float_val
+            self.layers_changed.emit()
+
+    def _on_spin_adj_tint_changed(self, val: float) -> None:
+        if self._updating_ui: return
+        self._updating_ui = True
+        slider_val = int(round(val * 10000.0))
+        self.slider_adj_tint.setValue(slider_val)
+        self._updating_ui = False
         layer = self.get_selected_layer()
         if layer:
             layer.tint = float(val)
-            self.lbl_adj_tint.setText(f"{layer.tint:+.1f}")
+            self.layers_changed.emit()
+
+    def _on_slider_adj_tint_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self._updating_ui = True
+        float_val = val / 10000.0
+        self.spin_adj_tint.setValue(float_val)
+        self._updating_ui = False
+        layer = self.get_selected_layer()
+        if layer:
+            layer.tint = float_val
             self.layers_changed.emit()
 
     def _reset_local_adjustments(self) -> None:
