@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.mask_layers import (
-    MaskLayer, compute_layer_mask, compute_effective_layer_mask,
+    MaskLayer, compute_layer_mask, compute_effective_layer_mask, get_canvas_below_layer,
     MASK_TYPE_BRUSH, MASK_TYPE_GROUND, MASK_TYPE_SKY, MASK_TYPE_LUMA, MASK_TYPE_COLOR, MASK_TYPE_CUSTOM,
     LAYER_KIND_ADJUSTMENT, LAYER_KIND_IMAGE,
     MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_STARS, MASK_TYPE_IMAGE_GROUND,
@@ -196,18 +196,6 @@ class MaskLayersWidget(QWidget):
 
         props_layout.addLayout(row_name_flags)
 
-        # Fila B: Ámbito de Aplicación (Target Scope)
-        row_scope = QHBoxLayout()
-        row_scope.addWidget(QLabel("Ámbito / Destino:"))
-        self.combo_target_scope = QComboBox()
-        self.combo_target_scope.addItem("Toda la Imagen (Compuesta)", SCOPE_TARGET_ALL)
-        self.combo_target_scope.addItem("Solo Suelo (Paisaje)", SCOPE_TARGET_GROUND)
-        self.combo_target_scope.addItem("Solo Fondo (Starless)", SCOPE_TARGET_STARLESS)
-        self.combo_target_scope.addItem("Solo Estrellas (Stars)", SCOPE_TARGET_STARS)
-        self.combo_target_scope.setToolTip("Define sobre qué capa o región de la imagen actúa este ajuste local")
-        self.combo_target_scope.currentIndexChanged.connect(self._on_target_scope_changed)
-        row_scope.addWidget(self.combo_target_scope, stretch=1)
-        props_layout.addLayout(row_scope)
 
         # Fila C: Opacidad de la capa
         row_op = QHBoxLayout()
@@ -815,23 +803,24 @@ class MaskLayersWidget(QWidget):
         for i, layer in enumerate(self.layers):
             if layer.mask_type == MASK_TYPE_IMAGE_STARS:
                 icon = "⭐"
-                scope_tag = "StarNet AI"
+                type_tag = "StarNet AI"
                 fg_col = QColor("#80d8ff") if layer.enabled else QColor("#455a64")
             elif layer.mask_type == MASK_TYPE_IMAGE_STARLESS:
                 icon = "🌌"
-                scope_tag = "StarNet AI"
+                type_tag = "StarNet AI"
                 fg_col = QColor("#ce93d8") if layer.enabled else QColor("#455a64")
             elif layer.mask_type == MASK_TYPE_IMAGE_GROUND:
                 icon = "🏞️"
-                scope_tag = "Paisaje Suelo"
+                type_tag = "Paisaje Suelo"
                 fg_col = QColor("#a5d6a7") if layer.enabled else QColor("#455a64")
             else:
-                scope_tag = {
-                    SCOPE_TARGET_ALL: "Compuesta",
-                    SCOPE_TARGET_GROUND: "Suelo",
-                    SCOPE_TARGET_STARLESS: "Starless",
-                    SCOPE_TARGET_STARS: "Estrellas",
-                }.get(layer.target_scope, "Todo")
+                type_tag = {
+                    MASK_TYPE_BRUSH: "Pincel",
+                    MASK_TYPE_LUMA: "Luminancia",
+                    MASK_TYPE_COLOR: "Color HSV",
+                    MASK_TYPE_GROUND: "Máscara Suelo",
+                    MASK_TYPE_SKY: "Máscara Cielo",
+                }.get(layer.mask_type, "Ajuste")
 
                 icon = {
                     MASK_TYPE_BRUSH: "🖌️",
@@ -843,7 +832,7 @@ class MaskLayersWidget(QWidget):
                 fg_col = QColor("#e0e6f0") if layer.enabled else QColor("#78909c")
 
             status = "✓" if layer.enabled else "✕"
-            txt = f"{status} {icon} {layer.name}  [{scope_tag}]"
+            txt = f"{status} {icon} {layer.name}  [{type_tag}]"
             item = QListWidgetItem(txt)
             item.setForeground(fg_col)
             if layer.is_system_layer:
@@ -901,12 +890,6 @@ class MaskLayersWidget(QWidget):
         self.chk_layer_enabled.setChecked(layer.enabled)
         self.chk_layer_invert.setChecked(layer.inverted)
         self.chk_layer_invert.setEnabled(not is_sys)
-
-        # Fila B: Scope
-        idx = self.combo_target_scope.findData(layer.target_scope)
-        if idx >= 0:
-            self.combo_target_scope.setCurrentIndex(idx)
-        self.combo_target_scope.setEnabled(not is_sys)
 
         # Fila C: Opacidad
         op_pct = int(round(layer.opacity * 100))
@@ -1005,12 +988,13 @@ class MaskLayersWidget(QWidget):
             # Actualizar texto del item en la lista sin reconstruir todo
             row = self.list_layers.currentRow()
             if row >= 0:
-                scope_tag = {
-                    SCOPE_TARGET_ALL: "Compuesta",
-                    SCOPE_TARGET_GROUND: "Suelo",
-                    SCOPE_TARGET_STARLESS: "Starless",
-                    SCOPE_TARGET_STARS: "Estrellas",
-                }.get(layer.target_scope, "Todo")
+                type_tag = {
+                    MASK_TYPE_BRUSH: "Pincel",
+                    MASK_TYPE_LUMA: "Luminancia",
+                    MASK_TYPE_COLOR: "Color HSV",
+                    MASK_TYPE_GROUND: "Máscara Suelo",
+                    MASK_TYPE_SKY: "Máscara Cielo",
+                }.get(layer.mask_type, "Ajuste")
                 icon = {
                     MASK_TYPE_BRUSH: "🖌️",
                     MASK_TYPE_LUMA: "💡",
@@ -1019,7 +1003,7 @@ class MaskLayersWidget(QWidget):
                     MASK_TYPE_SKY: "🌌",
                 }.get(layer.mask_type, "📑")
                 status = "✓" if layer.enabled else "✕"
-                self.list_layers.item(row).setText(f"{status} {icon} {layer.name}  [{scope_tag}]")
+                self.list_layers.item(row).setText(f"{status} {icon} {layer.name}  [{type_tag}]")
 
     def _on_layer_enabled_toggled(self, checked: bool) -> None:
         if self._updating_ui: return
@@ -1040,14 +1024,6 @@ class MaskLayersWidget(QWidget):
             layer.inverted = checked
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
-            self.layers_changed.emit()
-
-    def _on_target_scope_changed(self, idx: int) -> None:
-        if self._updating_ui: return
-        layer = self.get_selected_layer()
-        if layer:
-            layer.target_scope = self.combo_target_scope.currentData()
-            self._rebuild_list_items(select_layer_id=layer.id)
             self.layers_changed.emit()
 
     def _on_opacity_changed(self, val: int) -> None:
@@ -1276,8 +1252,19 @@ class MaskLayersWidget(QWidget):
         stars_img = self._stars_getter() if self._stars_getter else None
         starless_img = self._starless_getter() if self._starless_getter else None
 
+        # En el modelo de Photoshop, la máscara y ajustes se calculan sobre el estado
+        # del lienzo resultante de componer todas las capas que quedan por debajo de esta
+        canvas_below = get_canvas_below_layer(
+            base_img,
+            self.layers,
+            layer.id,
+            master_sky_mask=master_mask,
+            starless_image=starless_img,
+            stars_image=stars_img
+        )
+
         m = compute_effective_layer_mask(
-            layer, base_img,
+            layer, canvas_below,
             master_sky_mask=master_mask,
             starless_image=starless_img,
             stars_image=stars_img

@@ -243,42 +243,34 @@ def compute_effective_layer_mask(
     stars_image: Optional[np.ndarray] = None
 ) -> np.ndarray:
     """
-    Calcula la máscara final efectiva considerando su tipo, parámetros, inversión
-    y modulación según el ámbito de aplicación (Target Scope: todo, suelo, sin estrellas, estrellas).
+    Calcula la máscara final efectiva considerando su tipo, parámetros e inversión.
+    En el modelo de capas de Photoshop, el ámbito de afectación lo determina de forma
+    natural la posición de la capa en la pila (afecta y lee del lienzo que tiene debajo).
     """
     m_base = compute_layer_mask(layer, composite_image, master_sky_mask=master_sky_mask)
-    img_h, img_w = composite_image.shape[:2]
 
+    # Compatibilidad con proyectos legados que tengan un target_scope explícito distinto de 'all'
+    if layer.target_scope == SCOPE_TARGET_ALL or not layer.target_scope:
+        return m_base
+
+    img_h, img_w = composite_image.shape[:2]
     sky_m = None
     if master_sky_mask is not None:
         sky_m = master_sky_mask[..., 0] if master_sky_mask.ndim == 3 else master_sky_mask
         if sky_m.shape[:2] != (img_h, img_w):
             sky_m = cv2.resize(sky_m, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
 
-    # Modular según el ámbito de aplicación (Target Scope)
-    if layer.target_scope == SCOPE_TARGET_GROUND:
-        if sky_m is not None:
-            gnd_m = 1.0 - sky_m
-            return np.clip(m_base * gnd_m, 0.0, 1.0).astype(np.float32)
-        return m_base
-
-    elif layer.target_scope == SCOPE_TARGET_STARLESS:
-        if sky_m is not None:
-            return np.clip(m_base * sky_m, 0.0, 1.0).astype(np.float32)
-        return m_base
-
-    elif layer.target_scope == SCOPE_TARGET_STARS:
-        if stars_image is not None:
-            st = stars_image
-            if st.ndim == 3:
-                star_luma = np.mean(st, axis=2)
-            else:
-                star_luma = st
-            star_gate = _smoothstep(0.02, 0.15, star_luma)
-            if star_gate.shape[:2] != (img_h, img_w):
-                star_gate = cv2.resize(star_gate, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
-            return np.clip(m_base * star_gate, 0.0, 1.0).astype(np.float32)
-        return m_base
+    if layer.target_scope == SCOPE_TARGET_GROUND and sky_m is not None:
+        return np.clip(m_base * (1.0 - sky_m), 0.0, 1.0).astype(np.float32)
+    elif layer.target_scope == SCOPE_TARGET_STARLESS and sky_m is not None:
+        return np.clip(m_base * sky_m, 0.0, 1.0).astype(np.float32)
+    elif layer.target_scope == SCOPE_TARGET_STARS and stars_image is not None:
+        st = stars_image
+        star_luma = np.mean(st, axis=2) if st.ndim == 3 else st
+        star_gate = _smoothstep(0.02, 0.15, star_luma)
+        if star_gate.shape[:2] != (img_h, img_w):
+            star_gate = cv2.resize(star_gate, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
+        return np.clip(m_base * star_gate, 0.0, 1.0).astype(np.float32)
 
     return m_base
 
@@ -388,4 +380,40 @@ def apply_all_mask_layers(
                 canvas = apply_local_adjustments_to_image(canvas, m_eff, layer)
 
     return np.ascontiguousarray(np.clip(canvas, 0.0, 1.0), dtype=np.float32)
+
+
+def get_canvas_below_layer(
+    composite_image: np.ndarray,
+    mask_layers: List[MaskLayer],
+    target_layer_id: str,
+    master_sky_mask: Optional[np.ndarray] = None,
+    starless_image: Optional[np.ndarray] = None,
+    stars_image: Optional[np.ndarray] = None
+) -> np.ndarray:
+    """
+    Calcula el estado del lienzo directamente por debajo de la capa indicada (target_layer_id).
+    En el modelo de Photoshop, una capa evalúa su máscara (ej. Luminancia/Color) y sus ajustes
+    sobre el lienzo compuesto por todas las capas que tiene situadas por debajo en la pila.
+    """
+    if not mask_layers or not target_layer_id:
+        return composite_image
+
+    idx = next((i for i, l in enumerate(mask_layers) if l.id == target_layer_id), -1)
+    if idx < 0:
+        return composite_image
+
+    # En la lista de UI (fila 0 = TOP, fila N-1 = BOTTOM):
+    # Las capas estrictamente por debajo de 'target_layer_id' son las que tienen índice > idx
+    layers_below = mask_layers[idx + 1 :]
+    if not layers_below:
+        return composite_image
+
+    return apply_all_mask_layers(
+        composite_image,
+        layers_below,
+        master_sky_mask=master_sky_mask,
+        starless_image=starless_image,
+        stars_image=stars_image
+    )
+
 
