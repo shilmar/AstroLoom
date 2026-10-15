@@ -20,7 +20,7 @@ from core.mask_layers import (
     MaskLayer, compute_layer_mask, compute_effective_layer_mask, get_canvas_below_layer,
     MASK_TYPE_BRUSH, MASK_TYPE_GROUND, MASK_TYPE_SKY, MASK_TYPE_LUMA, MASK_TYPE_COLOR, MASK_TYPE_CUSTOM,
     LAYER_KIND_ADJUSTMENT, LAYER_KIND_IMAGE,
-    MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_STARS, MASK_TYPE_IMAGE_GROUND,
+    MASK_TYPE_IMAGE_BASE, MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_STARS, MASK_TYPE_IMAGE_GROUND,
     SCOPE_TARGET_ALL, SCOPE_TARGET_GROUND, SCOPE_TARGET_STARLESS, SCOPE_TARGET_STARS
 )
 from gui.theme import (
@@ -612,13 +612,36 @@ class MaskLayersWidget(QWidget):
     # =========================================================================
 
     def has_image_layers(self) -> bool:
-        """Indica si la lista contiene capas especiales de imagen (StarNet / Suelo)."""
+        """Indica si la lista contiene capas especiales de imagen (StarNet / Suelo / Base)."""
         return any(l.layer_kind == LAYER_KIND_IMAGE for l in self.layers)
+
+    def ensure_base_layer(self) -> None:
+        """
+        Garantiza que exista una capa base '🖼️ Fondo (Imagen Base)' al cargar una imagen.
+        Si la pila no contiene una capa base ni capas de StarNet, la añade al final ([BOTTOM]).
+        """
+        has_base_or_starnet = any(
+            l.mask_type in (MASK_TYPE_IMAGE_BASE, MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_STARS)
+            for l in self.layers
+        )
+        if not has_base_or_starnet:
+            base_layer = MaskLayer(
+                name="Fondo (Imagen Base)",
+                layer_kind=LAYER_KIND_IMAGE,
+                mask_type=MASK_TYPE_IMAGE_BASE,
+                target_scope=SCOPE_TARGET_ALL,
+                is_system_layer=True
+            )
+            self.layers.append(base_layer)
+            self._rebuild_list_items(select_layer_id=base_layer.id)
+            self.layers_changed.emit()
 
     def ensure_starnet_layers(self, has_ground: bool = False) -> None:
         """
         Asegura que las capas de imagen producidas por StarNet existan en la pila (estilo Photoshop).
-        Si no existían, las inicializa en el orden por defecto:
+        Si existía una capa base previa 'MASK_TYPE_IMAGE_BASE', se desacopla y reemplaza por
+        las capas de StarNet (preservando los ajustes locales de la base en el Fondo Starless).
+        Si no existían capas de StarNet, las inicializa en el orden por defecto:
           [TOP]    Máscaras de ajuste del usuario
                    ⭐ Capa de Estrellas
                    🏞️ Capa de Suelo (si has_ground=True)
@@ -626,8 +649,12 @@ class MaskLayersWidget(QWidget):
         Si ya existían, preserva fielmente el orden personalizado en que el usuario las haya movido.
         """
         existing_sys = {l.mask_type: l for l in self.layers if l.is_system_layer}
+        has_starnet = (MASK_TYPE_IMAGE_STARS in existing_sys or MASK_TYPE_IMAGE_STARLESS in existing_sys)
 
-        if not existing_sys:
+        if not has_starnet:
+            # Buscar si existía capa Fondo Base previa para migrar sus ajustes
+            base_l = existing_sys.get(MASK_TYPE_IMAGE_BASE)
+
             user_layers = [l for l in self.layers if not l.is_system_layer]
             stars_layer = MaskLayer(
                 name="Capa de Estrellas",
@@ -643,6 +670,17 @@ class MaskLayersWidget(QWidget):
                 target_scope=SCOPE_TARGET_STARLESS,
                 is_system_layer=True
             )
+            if base_l is not None:
+                # Traspasar posibles ajustes hechos sobre la capa base previa
+                starless_layer.exposure = base_l.exposure
+                starless_layer.contrast = base_l.contrast
+                starless_layer.shadows = base_l.shadows
+                starless_layer.highlights = base_l.highlights
+                starless_layer.saturation = base_l.saturation
+                starless_layer.temp = base_l.temp
+                starless_layer.tint = base_l.tint
+                starless_layer.opacity = base_l.opacity
+
             new_layers: List[MaskLayer] = list(user_layers)
             new_layers.append(stars_layer)
             if has_ground:
@@ -687,10 +725,13 @@ class MaskLayersWidget(QWidget):
             self.layers_changed.emit()
 
     def remove_starnet_layers(self) -> None:
-        """Elimina las capas de sistema generadas por StarNet (ej: al iniciar nueva sesión)."""
-        self.layers = [l for l in self.layers if not l.is_system_layer]
-        self._rebuild_list_items()
-        self.layers_changed.emit()
+        """Elimina las capas de sistema generadas por StarNet y restaura la capa base si hay imagen."""
+        self.layers = [l for l in self.layers if l.mask_type not in (MASK_TYPE_IMAGE_STARS, MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_GROUND)]
+        if self._image_reference_getter and self._image_reference_getter() is not None:
+            self.ensure_base_layer()
+        else:
+            self._rebuild_list_items()
+            self.layers_changed.emit()
 
     def set_starnet_stars_opacity(self, opacity: float) -> None:
         """Sincroniza la opacidad de la capa de estrellas con controles externos."""
@@ -750,6 +791,12 @@ class MaskLayersWidget(QWidget):
             layer = self.layers[idx]
             if layer.is_system_layer:
                 return  # No se permite borrar capas de sistema
+
+            # Apagar herramienta de pincel y limpiar previsualización en lienzo de la capa eliminada
+            self.brush_tool_toggled.emit(False, None)
+            self.set_preview_active(False)
+            self.preview_mask_requested.emit(None)
+
             self.layers.pop(idx)
             next_select = self.layers[idx].id if idx < len(self.layers) else (self.layers[-1].id if self.layers else None)
             self._rebuild_list_items(select_layer_id=next_select)
@@ -801,7 +848,11 @@ class MaskLayersWidget(QWidget):
 
         select_row = -1
         for i, layer in enumerate(self.layers):
-            if layer.mask_type == MASK_TYPE_IMAGE_STARS:
+            if layer.mask_type == MASK_TYPE_IMAGE_BASE:
+                icon = "🖼️"
+                type_tag = "Fondo Base"
+                fg_col = QColor("#ffd54f") if layer.enabled else QColor("#455a64")
+            elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
                 icon = "⭐"
                 type_tag = "StarNet AI"
                 fg_col = QColor("#80d8ff") if layer.enabled else QColor("#455a64")
@@ -880,6 +931,7 @@ class MaskLayersWidget(QWidget):
 
         if not layer:
             self.brush_tool_toggled.emit(False, None)
+            self.preview_mask_requested.emit(None)
             return
 
         self._updating_ui = True
@@ -962,17 +1014,20 @@ class MaskLayersWidget(QWidget):
 
         self._updating_ui = False
 
-        if layer.mask_type == MASK_TYPE_BRUSH and layer.enabled:
+        if not layer.enabled or is_sys:
+            self.brush_tool_toggled.emit(False, None)
+            self.preview_mask_requested.emit(None)
+        elif layer.mask_type == MASK_TYPE_BRUSH:
             self.brush_tool_toggled.emit(True, layer)
             self.brush_params_changed.emit(
                 layer.brush_radius, layer.brush_hardness, layer.brush_flow, layer.brush_mode
             )
+            if self.btn_preview_mask.isChecked():
+                self._emit_mask_preview()
         else:
             self.brush_tool_toggled.emit(False, None)
-
-        # Si el botón de previsualización de máscara en lienzo estaba activo, refrescarlo
-        if self.btn_preview_mask.isChecked():
-            self._emit_mask_preview()
+            if self.btn_preview_mask.isChecked():
+                self._emit_mask_preview()
 
     # =========================================================================
     # ACTUALIZACIÓN DE PARÁMETROS DE LA CAPA
@@ -1010,11 +1065,20 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if layer:
             layer.enabled = checked
+            if not checked:
+                # Al desactivar la capa, apagar de inmediato el pincel y limpiar previsualización en lienzo
+                if layer.mask_type == MASK_TYPE_BRUSH:
+                    self.brush_tool_toggled.emit(False, None)
+                self.set_preview_active(False)
+                self.preview_mask_requested.emit(None)
             self._rebuild_list_items(select_layer_id=layer.id)
-            if layer.mask_type == MASK_TYPE_BRUSH:
-                self.brush_tool_toggled.emit(checked, layer if checked else None)
+            if checked:
+                if layer.mask_type == MASK_TYPE_BRUSH:
+                    self.brush_tool_toggled.emit(True, layer)
+                elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
+                    self.starnet_visibility_changed.emit(True)
             elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
-                self.starnet_visibility_changed.emit(checked)
+                self.starnet_visibility_changed.emit(False)
             self.layers_changed.emit()
 
     def _on_layer_invert_toggled(self, checked: bool) -> None:
@@ -1067,8 +1131,8 @@ class MaskLayersWidget(QWidget):
         if layer and layer.mask_type == MASK_TYPE_BRUSH:
             layer.brush_mask = None
             self.brush_tool_toggled.emit(True, layer)
-            if self.btn_preview_mask.isChecked():
-                self._emit_mask_preview()
+            self.set_preview_active(False)
+            self.preview_mask_requested.emit(None)
             self.layers_changed.emit()
 
     def set_brush_radius_from_canvas(self, radius: int) -> None:
@@ -1239,7 +1303,11 @@ class MaskLayersWidget(QWidget):
     def _emit_mask_preview(self) -> None:
         """Calcula y envía la máscara de la capa actual para renderizado en el lienzo."""
         layer = self.get_selected_layer()
-        if not layer or not self._image_reference_getter:
+        if not layer or not layer.enabled or layer.is_system_layer or not self._image_reference_getter:
+            self.preview_mask_requested.emit(None)
+            return
+
+        if layer.mask_type == MASK_TYPE_BRUSH and (layer.brush_mask is None or np.max(layer.brush_mask) <= 1e-4):
             self.preview_mask_requested.emit(None)
             return
 
@@ -1269,7 +1337,10 @@ class MaskLayersWidget(QWidget):
             starless_image=starless_img,
             stars_image=stars_img
         )
-        self.preview_mask_requested.emit(m)
+        if m is None or np.max(m) <= 1e-4:
+            self.preview_mask_requested.emit(None)
+        else:
+            self.preview_mask_requested.emit(m)
 
     # Serialización y deserialización para proyectos y presets
     def get_state(self) -> List[Dict[str, Any]]:

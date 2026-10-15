@@ -1950,19 +1950,19 @@ class DeveloperTab(QWidget):
 
     def _on_layer_mask_preview_requested(self, mask_array: Optional[np.ndarray]) -> None:
         """Muestra u oculta la máscara de la capa seleccionada sobre el visor interactivo."""
-        if mask_array is not None:
+        if mask_array is not None and np.max(mask_array) > 1e-4:
             self.canvas.set_refined_mask(mask_array, mode="ruby")
             self.canvas.set_mask_visible(True)
         else:
             self.canvas.set_mask_visible(False)
-            if self.current_mask is not None:
+            if self.canvas.enable_masking and self.current_mask is not None:
                 self.canvas.set_refined_mask(self.current_mask, mode="bicolor")
             else:
                 self.canvas.set_refined_mask(None)
 
     def _on_layer_brush_toggled(self, active: bool, layer: Optional[MaskLayer]) -> None:
         """Activa o desactiva la interacción del pincel en el lienzo según la capa seleccionada."""
-        if active and layer is not None:
+        if active and layer is not None and getattr(layer, 'enabled', True):
             self.canvas.set_layer_brush_enabled(True)
             self.canvas.set_layer_brush_params(
                 layer.brush_radius, layer.brush_hardness, layer.brush_flow, layer.brush_mode
@@ -1970,11 +1970,23 @@ class DeveloperTab(QWidget):
             self.canvas.set_active_layer_mask(layer.brush_mask)
         else:
             self.canvas.set_layer_brush_enabled(False)
-            if not self.mask_layers_widget.btn_preview_mask.isChecked():
-                if self.current_mask is not None:
+            self.canvas.set_active_layer_mask(None)
+
+            # Limpiar overlay del lienzo si no hay previsualización válida y activa de la capa
+            sel_layer = self.mask_layers_widget.get_selected_layer() if hasattr(self, 'mask_layers_widget') else None
+            is_preview_valid = (
+                sel_layer is not None and 
+                sel_layer.enabled and 
+                not sel_layer.is_system_layer and 
+                hasattr(self.mask_layers_widget, 'btn_preview_mask') and 
+                self.mask_layers_widget.btn_preview_mask.isChecked()
+            )
+            if not is_preview_valid:
+                if self.canvas.enable_masking and self.current_mask is not None:
                     self.canvas.set_refined_mask(self.current_mask, mode="bicolor")
                 else:
                     self.canvas.set_refined_mask(None)
+                    self.canvas.set_mask_visible(False)
 
     def _on_layer_brush_params_changed(self, radius: int, hardness: float, flow: float, mode: str) -> None:
         """Actualiza los parámetros interactivos de trazo en el lienzo."""
@@ -2437,6 +2449,10 @@ class DeveloperTab(QWidget):
             else:
                 self.canvas.set_refined_mask(None)
             self._update_mask_status_ui()
+
+            # Asegurar que se crea la capa Fondo (Imagen Base) en el Gestor de Capas
+            if hasattr(self, 'mask_layers_widget'):
+                self.mask_layers_widget.ensure_base_layer()
 
             self.log_message(f"Imagen en memoria ({self.image_32bit.shape[1]}x{self.image_32bit.shape[0]} px). Vista acelerada activa.")
         except Exception as e:
@@ -3356,7 +3372,7 @@ class DeveloperTab(QWidget):
         self.active_filepath = None
 
         if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.remove_starnet_layers()
+            self.mask_layers_widget.set_state([])
 
         self.has_custom_snapshot = False
         self.snapshot_before_pixmap = None
@@ -3374,6 +3390,10 @@ class DeveloperTab(QWidget):
             self.canvas.reset_crop_rect()
             if self.canvas.crop_mode:
                 self.canvas.set_crop_mode(False)
+            self.canvas.set_layer_brush_enabled(False)
+            self.canvas.set_active_layer_mask(None)
+            self.canvas.set_refined_mask(None)
+            self.canvas.set_mask_visible(False)
             self.canvas.orig_rgb = None
             self.canvas.base_pixmap = None
             self.canvas.before_pixmap = None

@@ -33,6 +33,7 @@ MASK_TYPE_COLOR = "color"           # Rango de Color (HSV)
 MASK_TYPE_CUSTOM = "custom"         # Trazos libres / raster personalizado
 
 # Tipos Especiales de Capas de Imagen (StarNet / Pipeline)
+MASK_TYPE_IMAGE_BASE = "image_base"          # 🖼️ Fondo (Imagen Base inicial)
 MASK_TYPE_IMAGE_STARLESS = "image_starless"  # 🌌 Fondo Nebular (Starless AI)
 MASK_TYPE_IMAGE_STARS = "image_stars"        # ⭐ Capa de Estrellas (StarNet AI)
 MASK_TYPE_IMAGE_GROUND = "image_ground"      # 🏞️ Capa de Suelo / Terreno (Paisaje)
@@ -329,8 +330,8 @@ def apply_all_mask_layers(
         if not layer.enabled:
             continue
 
-        if layer.mask_type == MASK_TYPE_IMAGE_STARLESS:
-            # Capa 🌌 Fondo Starless
+        if layer.mask_type in (MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_BASE):
+            # Capa 🖼️ Fondo Base o 🌌 Fondo Starless
             has_adj = (abs(layer.temp) > 1e-4 or abs(layer.tint) > 1e-4 or 
                        abs(layer.exposure) > 1e-3 or abs(layer.contrast) > 1e-3 or 
                        abs(layer.saturation - 1.0) > 1e-3 or abs(layer.shadows) > 1e-3 or 
