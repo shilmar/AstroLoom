@@ -3,7 +3,7 @@
 gui/canvas.py - Lienzo interactivo acelerado para previsualización, zoom 100%
 y dibujo interactivo de trazos para la segmentación de cielo y suelo.
 """
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
 import cv2
 import numpy as np
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
@@ -28,6 +28,9 @@ class MaskCanvas(QWidget):
     color_sampled = Signal(float, float, float)  # (r, g, b) float32 [0.0, 1.0]
     eyedropper_toggled = Signal(bool)
     magnifier_toggled = Signal(bool)
+    crop_rect_changed = Signal(int, int)         # (pixel_w, pixel_h)
+    crop_toggled = Signal(bool)
+    crop_applied = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None, enable_masking: bool = True):
         super().__init__(parent)
@@ -75,6 +78,17 @@ class MaskCanvas(QWidget):
         # Lupa de Inspección Flotante (Floating Magnifier)
         self.magnifier_active: bool = False
         self.magnifier_zoom: float = 2.5
+
+        # Herramienta Interactiva de Recorte (Crop Tool)
+        self.crop_mode: bool = False
+        self.crop_rect_norm: QRectF = QRectF(0.0, 0.0, 1.0, 1.0)
+        self.crop_aspect_ratio: Optional[float] = None
+        self.crop_angle: float = 0.0
+        self.crop_guides: str = "thirds"  # "thirds", "grid", "none"
+        self._crop_drag_mode: Optional[str] = None
+        self._crop_drag_start_pos: Optional[QPointF] = None
+        self._crop_drag_start_rect: Optional[QRectF] = None
+        self.native_image_size: Optional[Tuple[int, int]] = None  # (width, height) reales del sensor
 
         if self.enable_masking:
             self.update_brush_cursor()
@@ -378,6 +392,29 @@ class MaskCanvas(QWidget):
 
         pos = event.position().toPoint()
 
+        # -1. Manejo prioritario del Recorte Interactivo (Crop Tool)
+        if self.crop_mode and event.button() == Qt.LeftButton:
+            pt = event.position()
+            target_rect, _, _ = self.get_render_geometry()
+            hit = self._hit_test_crop(pt)
+            if hit is not None:
+                self._crop_drag_mode = hit
+                self._crop_drag_start_pos = pt
+                self._crop_drag_start_rect = QRectF(self.crop_rect_norm)
+                event.accept()
+                return
+            elif target_rect.contains(pt):
+                self._crop_drag_mode = "new"
+                self._crop_drag_start_pos = pt
+                norm_pt = self._widget_to_norm_img(pt)
+                if norm_pt:
+                    self.crop_rect_norm = QRectF(norm_pt.x(), norm_pt.y(), 0.001, 0.001)
+                    self._crop_drag_start_rect = QRectF(self.crop_rect_norm)
+                    self._emit_crop_size()
+                    self.update()
+                event.accept()
+                return
+
         # 0. Manejo de la Pipeta de Balance de Blancos (Eyedropper)
         if self.eyedropper_active and event.button() == Qt.LeftButton:
             ipt = self.widget_to_image_coords(pos)
@@ -444,6 +481,19 @@ class MaskCanvas(QWidget):
     def mouseMoveEvent(self, event) -> None:
         pos = event.position().toPoint()
 
+        # -1. Manejo de Recorte Interactivo (Crop Tool)
+        if self.crop_mode:
+            pt = event.position()
+            if event.buttons() & Qt.LeftButton and self._crop_drag_mode is not None:
+                self._handle_crop_drag(pt)
+                event.accept()
+                return
+            else:
+                hit = self._hit_test_crop(pt)
+                self.setCursor(self._cursor_for_crop_handle(hit))
+                event.accept()
+                return
+
         # 0. Seguimiento de posición para Pipeta o Lupa Flotante
         if self.eyedropper_active or self.magnifier_active:
             self._hover_pos = pos
@@ -488,7 +538,14 @@ class MaskCanvas(QWidget):
                 self.last_img_pt = ipt
 
     def mouseDoubleClickEvent(self, event) -> None:
-        """Doble clic sobre la cortina divisoria para autocentrarla al 50%."""
+        """Doble clic sobre la cortina divisoria para autocentrarla al 50%, o sobre el marco de recorte para aplicar."""
+        if self.crop_mode and event.button() == Qt.LeftButton:
+            s = self._get_crop_screen_rect()
+            if not s.isEmpty() and s.contains(event.position()):
+                self.crop_applied.emit()
+                event.accept()
+                return
+
         if self.split_view_enabled and event.button() == Qt.LeftButton:
             pos = event.position().toPoint()
             split_coord = self._get_split_screen_coord()
@@ -500,9 +557,17 @@ class MaskCanvas(QWidget):
                     event.accept()
                     return
         super().mouseDoubleClickEvent(event)
-        super().mouseDoubleClickEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self.crop_mode:
+            if self._crop_drag_mode is not None:
+                self._crop_drag_mode = None
+                self._crop_drag_start_pos = None
+                self._crop_drag_start_rect = None
+                self._emit_crop_size()
+                self.update()
+                event.accept()
+                return
         if event.button() == Qt.LeftButton and self.is_dragging_split:
             self.is_dragging_split = False
             event.accept()
@@ -515,6 +580,8 @@ class MaskCanvas(QWidget):
         if self._hover_pos is not None:
             self._hover_pos = None
             self.update()
+        if self.crop_mode:
+            self.setCursor(Qt.ArrowCursor)
         super().leaveEvent(event)
 
     def wheelEvent(self, event) -> None:
@@ -564,8 +631,17 @@ class MaskCanvas(QWidget):
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
         painter.setRenderHint(QPainter.Antialiasing)
 
+        # MODO RECORTE CON ROTACIÓN ACTIVA (Nivelación de horizonte)
+        if self.crop_mode and abs(self.crop_angle) > 1e-3:
+            painter.save()
+            center_pt = target_rect.center()
+            painter.translate(center_pt)
+            painter.rotate(self.crop_angle)
+            painter.translate(-center_pt)
+            painter.drawPixmap(target_rect, self.base_pixmap, source_rect)
+            painter.restore()
         # MODO COMPARADOR DIVIDIDO ("ANTES / DESPUÉS")
-        if self.split_view_enabled and self.before_pixmap and not self.before_pixmap.isNull():
+        elif self.split_view_enabled and self.before_pixmap and not self.before_pixmap.isNull():
             is_horiz = (self.split_orientation == "horizontal")
 
             if is_horiz:
@@ -734,6 +810,10 @@ class MaskCanvas(QWidget):
         # Insignia interactiva de la Pipeta de Balance de Blancos
         if self.eyedropper_active:
             self._draw_eyedropper_badge(painter)
+
+        # Superposición de Recorte Interactivo (Crop Overlay)
+        if self.crop_mode:
+            self._draw_crop_overlay(painter)
 
     def _draw_magnifier(self, painter: QPainter) -> None:
         """Renderiza una lupa circular flotante de alta precisión centrada en la posición del cursor."""
@@ -1012,3 +1092,454 @@ class MaskCanvas(QWidget):
         """Método de compatibilidad para generar el QPixmap de la máscara."""
         self.set_refined_mask(mask_float)
         return self.refined_overlay
+
+    # =========================================================================
+    # HERRAMIENTA INTERACTIVA DE RECORTE (CROP TOOL)
+    # =========================================================================
+
+    def set_crop_mode(self, enabled: bool) -> None:
+        """Activa o desactiva la herramienta interactiva de recorte."""
+        if self.crop_mode != enabled:
+            self.crop_mode = enabled
+            if enabled:
+                if self.eyedropper_active:
+                    self.set_eyedropper_active(False)
+                if self.magnifier_active:
+                    self.set_magnifier_active(False)
+                if self.split_view_enabled:
+                    self.split_view_enabled = False
+                    self.split_toggled.emit(False)
+                if self.is_zoomed:
+                    self.is_zoomed = False
+                    self.zoom_center_img = None
+                    self.zoom_toggled.emit(False, 0.5, 0.5)
+                if self.crop_rect_norm.isEmpty() or self.crop_rect_norm.width() <= 0:
+                    self.crop_rect_norm = QRectF(0.0, 0.0, 1.0, 1.0)
+                if self.crop_aspect_ratio is not None and self.base_pixmap:
+                    self._enforce_aspect_ratio()
+                self._emit_crop_size()
+            else:
+                self._crop_drag_mode = None
+                self._crop_drag_start_pos = None
+                self._crop_drag_start_rect = None
+                if not self.enable_masking:
+                    self.setCursor(Qt.ArrowCursor)
+            self.crop_toggled.emit(enabled)
+            self.update()
+
+    def set_native_image_size(self, size: Optional[Tuple[int, int]]) -> None:
+        """Configura las dimensiones nativas reales (ancho, alto) de la imagen para el cálculo de píxeles."""
+        self.native_image_size = size
+        if self.crop_mode:
+            self._emit_crop_size()
+            self.update()
+
+    def set_crop_aspect_ratio(self, ratio: Optional[float]) -> None:
+        """Establece la relación de aspecto forzada (ancho / alto, ej. 16/9, 1.0) o None para libre."""
+        self.crop_aspect_ratio = ratio
+        if self.crop_mode and ratio is not None and self.base_pixmap and not self.base_pixmap.isNull():
+            self._enforce_aspect_ratio()
+            self._emit_crop_size()
+            self.update()
+
+    def set_crop_angle(self, angle: float) -> None:
+        """Establece el ángulo de rotación / nivelación en grados (-45.0 a +45.0)."""
+        self.crop_angle = float(angle)
+        self.update()
+
+    def set_crop_guides(self, guides: str) -> None:
+        """Configura el tipo de guías de composición ('thirds', 'grid', 'none')."""
+        if guides in ("thirds", "grid", "none"):
+            self.crop_guides = guides
+            self.update()
+
+    def reset_crop_rect(self) -> None:
+        """Restablece el marco de recorte al 100% de la imagen y el ángulo a 0°."""
+        self.crop_rect_norm = QRectF(0.0, 0.0, 1.0, 1.0)
+        self.crop_angle = 0.0
+        if self.crop_aspect_ratio is not None and self.base_pixmap and not self.base_pixmap.isNull():
+            self._enforce_aspect_ratio()
+        self._emit_crop_size()
+        self.update()
+
+    def get_crop_pixel_rect(self, use_native: bool = True) -> Tuple[int, int, int, int]:
+        """Calcula y retorna las coordenadas de recorte (x, y, ancho, alto) en píxeles de la imagen."""
+        if use_native and self.native_image_size:
+            iw, ih = self.native_image_size
+        elif self.base_pixmap and not self.base_pixmap.isNull():
+            iw = self.base_pixmap.width()
+            ih = self.base_pixmap.height()
+        else:
+            return 0, 0, 0, 0
+        r = self.crop_rect_norm
+        px_x = int(round(r.x() * iw))
+        px_y = int(round(r.y() * ih))
+        px_w = int(round(r.width() * iw))
+        px_h = int(round(r.height() * ih))
+
+        px_x = max(0, min(iw - 1, px_x))
+        px_y = max(0, min(ih - 1, px_y))
+        px_w = max(10, min(iw - px_x, px_w))
+        px_h = max(10, min(ih - px_y, px_h))
+        return px_x, px_y, px_w, px_h
+
+    def _get_crop_screen_rect(self) -> QRectF:
+        """Calcula el rectángulo del marco de recorte proyectado en coordenadas de pantalla del widget."""
+        if not self.base_pixmap or self.base_pixmap.isNull():
+            return QRectF()
+        target_rect, source_rect, scale = self.get_render_geometry()
+        if scale <= 0:
+            return QRectF()
+        iw = float(self.base_pixmap.width())
+        ih = float(self.base_pixmap.height())
+        px_x = self.crop_rect_norm.x() * iw
+        px_y = self.crop_rect_norm.y() * ih
+        px_w = self.crop_rect_norm.width() * iw
+        px_h = self.crop_rect_norm.height() * ih
+
+        sx = target_rect.x() + (px_x - source_rect.x()) * scale
+        sy = target_rect.y() + (px_y - source_rect.y()) * scale
+        sw = px_w * scale
+        sh = px_h * scale
+        return QRectF(sx, sy, sw, sh)
+
+    def _get_crop_handles(self, s: QRectF) -> Dict[str, QRectF]:
+        """Calcula las cajas envolventes de los 8 tiradores de recorte en pantalla."""
+        hr = 7.0
+        d = hr * 2.0
+        return {
+            "tl": QRectF(s.left() - hr, s.top() - hr, d, d),
+            "tc": QRectF(s.center().x() - hr, s.top() - hr, d, d),
+            "tr": QRectF(s.right() - hr, s.top() - hr, d, d),
+            "mr": QRectF(s.right() - hr, s.center().y() - hr, d, d),
+            "br": QRectF(s.right() - hr, s.bottom() - hr, d, d),
+            "bc": QRectF(s.center().x() - hr, s.bottom() - hr, d, d),
+            "bl": QRectF(s.left() - hr, s.bottom() - hr, d, d),
+            "ml": QRectF(s.left() - hr, s.center().y() - hr, d, d),
+        }
+
+    def _hit_test_crop(self, pt: QPointF) -> Optional[str]:
+        """Determina sobre qué parte del marco de recorte está situado el cursor."""
+        s = self._get_crop_screen_rect()
+        if s.isEmpty():
+            return None
+        handles = self._get_crop_handles(s)
+        for name, rect in handles.items():
+            if rect.adjusted(-4, -4, 4, 4).contains(pt):
+                return name
+        if s.contains(pt):
+            return "move"
+        target_rect, _, _ = self.get_render_geometry()
+        if target_rect.contains(pt):
+            return "new"
+        return None
+
+    def _cursor_for_crop_handle(self, handle: Optional[str]) -> QCursor:
+        """Retorna el cursor contextual adecuado según el tirador activo."""
+        if handle in ("tl", "br"):
+            return QCursor(Qt.SizeFDiagCursor)
+        elif handle in ("tr", "bl"):
+            return QCursor(Qt.SizeBDiagCursor)
+        elif handle in ("tc", "bc"):
+            return QCursor(Qt.SizeVerCursor)
+        elif handle in ("ml", "mr"):
+            return QCursor(Qt.SizeHorCursor)
+        elif handle == "move":
+            return QCursor(Qt.SizeAllCursor)
+        elif handle == "new":
+            return QCursor(Qt.CrossCursor)
+        return QCursor(Qt.ArrowCursor)
+
+    def _widget_to_norm_img(self, pt: QPointF) -> Optional[QPointF]:
+        """Convierte una coordenada del widget en coordenada normalizada [0.0, 1.0] de la imagen."""
+        target_rect, source_rect, scale = self.get_render_geometry()
+        if not self.base_pixmap or self.base_pixmap.isNull() or scale <= 0:
+            return None
+        iw = float(self.base_pixmap.width())
+        ih = float(self.base_pixmap.height())
+        rel_x = (pt.x() - target_rect.x()) / scale
+        rel_y = (pt.y() - target_rect.y()) / scale
+        px_x = source_rect.x() + rel_x
+        px_y = source_rect.y() + rel_y
+        nx = float(np.clip(px_x / iw, 0.0, 1.0))
+        ny = float(np.clip(px_y / ih, 0.0, 1.0))
+        return QPointF(nx, ny)
+
+    def _enforce_aspect_ratio(self, anchor: str = "center") -> None:
+        """Ajusta crop_rect_norm para satisfacer exactamente crop_aspect_ratio."""
+        if not self.crop_aspect_ratio or not self.base_pixmap or self.base_pixmap.isNull():
+            return
+        iw = float(self.base_pixmap.width())
+        ih = float(self.base_pixmap.height())
+        r_norm = self.crop_aspect_ratio * (ih / iw)
+        r = self.crop_rect_norm
+        cur_w = max(0.01, r.width())
+
+        new_w = cur_w
+        new_h = cur_w / r_norm
+        if new_h > 1.0:
+            new_h = 1.0
+            new_w = new_h * r_norm
+        if new_w > 1.0:
+            new_w = 1.0
+            new_h = new_w / r_norm
+
+        if anchor == "tl":
+            new_x = r.left()
+            new_y = r.top()
+            if new_x + new_w > 1.0:
+                new_x = 1.0 - new_w
+            if new_y + new_h > 1.0:
+                new_y = 1.0 - new_h
+        else:
+            cx = r.center().x()
+            cy = r.center().y()
+            new_x = max(0.0, min(1.0 - new_w, cx - new_w / 2.0))
+            new_y = max(0.0, min(1.0 - new_h, cy - new_h / 2.0))
+
+        self.crop_rect_norm = QRectF(new_x, new_y, new_w, new_h)
+
+    def _emit_crop_size(self) -> None:
+        """Emite la señal de cambio de resolución del recorte actual."""
+        if self.native_image_size:
+            iw, ih = self.native_image_size
+        elif self.base_pixmap and not self.base_pixmap.isNull():
+            iw = self.base_pixmap.width()
+            ih = self.base_pixmap.height()
+        else:
+            return
+        px_w = int(round(self.crop_rect_norm.width() * iw))
+        px_h = int(round(self.crop_rect_norm.height() * ih))
+        self.crop_rect_changed.emit(px_w, px_h)
+
+    def _handle_crop_drag(self, pt: QPointF) -> None:
+        """Calcula la nueva geometría del marco de recorte durante el arrastre con el ratón."""
+        if self._crop_drag_start_pos is None or self._crop_drag_start_rect is None or not self.base_pixmap:
+            return
+        target_rect, source_rect, scale = self.get_render_geometry()
+        if scale <= 0:
+            return
+
+        iw = float(self.base_pixmap.width())
+        ih = float(self.base_pixmap.height())
+        dx_norm = (pt.x() - self._crop_drag_start_pos.x()) / (scale * iw)
+        dy_norm = (pt.y() - self._crop_drag_start_pos.y()) / (scale * ih)
+
+        orig = self._crop_drag_start_rect
+
+        if self._crop_drag_mode == "move":
+            new_x = float(np.clip(orig.x() + dx_norm, 0.0, 1.0 - orig.width()))
+            new_y = float(np.clip(orig.y() + dy_norm, 0.0, 1.0 - orig.height()))
+            self.crop_rect_norm = QRectF(new_x, new_y, orig.width(), orig.height())
+            self._emit_crop_size()
+            self.update()
+            return
+
+        if self._crop_drag_mode == "new":
+            p1 = self._widget_to_norm_img(self._crop_drag_start_pos)
+            p2 = self._widget_to_norm_img(pt)
+            if p1 and p2:
+                x1, x2 = min(p1.x(), p2.x()), max(p1.x(), p2.x())
+                y1, y2 = min(p1.y(), p2.y()), max(p1.y(), p2.y())
+                w = max(0.02, x2 - x1)
+                h = max(0.02, y2 - y1)
+                self.crop_rect_norm = QRectF(x1, y1, w, h)
+                if self.crop_aspect_ratio is not None:
+                    self._enforce_aspect_ratio(anchor="tl")
+                self._emit_crop_size()
+                self.update()
+            return
+
+        # Ajuste de bordes y esquinas
+        left = orig.left()
+        right = orig.right()
+        top = orig.top()
+        bottom = orig.bottom()
+
+        if "l" in self._crop_drag_mode:
+            left = min(right - 0.02, max(0.0, orig.left() + dx_norm))
+        if "r" in self._crop_drag_mode:
+            right = max(left + 0.02, min(1.0, orig.right() + dx_norm))
+        if "t" in self._crop_drag_mode:
+            top = min(bottom - 0.02, max(0.0, orig.top() + dy_norm))
+        if "b" in self._crop_drag_mode:
+            bottom = max(top + 0.02, min(1.0, orig.bottom() + dy_norm))
+
+        new_w = right - left
+        new_h = bottom - top
+
+        # Imponer relación de aspecto fija si está configurada
+        if self.crop_aspect_ratio is not None:
+            r_norm = self.crop_aspect_ratio * (ih / iw)
+            if self._crop_drag_mode in ("ml", "mr"):
+                new_h = new_w / r_norm
+                cy = (top + bottom) / 2.0
+                top = max(0.0, cy - new_h / 2.0)
+                bottom = min(1.0, top + new_h)
+                if bottom >= 1.0:
+                    top = max(0.0, 1.0 - new_h)
+            elif self._crop_drag_mode in ("tc", "bc"):
+                new_w = new_h * r_norm
+                cx = (left + right) / 2.0
+                left = max(0.0, cx - new_w / 2.0)
+                right = min(1.0, left + new_w)
+                if right >= 1.0:
+                    left = max(0.0, 1.0 - new_w)
+            elif self._crop_drag_mode == "br":
+                new_h = new_w / r_norm
+                bottom = top + new_h
+                if bottom > 1.0:
+                    bottom = 1.0
+                    new_h = bottom - top
+                    new_w = new_h * r_norm
+                    right = left + new_w
+            elif self._crop_drag_mode == "bl":
+                new_h = new_w / r_norm
+                bottom = top + new_h
+                if bottom > 1.0:
+                    bottom = 1.0
+                    new_h = bottom - top
+                    new_w = new_h * r_norm
+                    left = right - new_w
+            elif self._crop_drag_mode == "tr":
+                new_h = new_w / r_norm
+                top = bottom - new_h
+                if top < 0.0:
+                    top = 0.0
+                    new_h = bottom - top
+                    new_w = new_h * r_norm
+                    right = left + new_w
+            elif self._crop_drag_mode == "tl":
+                new_h = new_w / r_norm
+                top = bottom - new_h
+                if top < 0.0:
+                    top = 0.0
+                    new_h = bottom - top
+                    new_w = new_h * r_norm
+                    left = right - new_w
+
+        self.crop_rect_norm = QRectF(left, top, right - left, bottom - top)
+        self._emit_crop_size()
+        self.update()
+
+    def _draw_crop_overlay(self, painter: QPainter) -> None:
+        """Renderiza las zonas oscurecidas, el marco de recorte, tiradores y guías de composición."""
+        if not self.crop_mode or not self.base_pixmap or self.base_pixmap.isNull():
+            return
+        target_rect, source_rect, scale = self.get_render_geometry()
+        if scale <= 0:
+            return
+        s = self._get_crop_screen_rect()
+        if s.isEmpty() or s.width() <= 2 or s.height() <= 2:
+            return
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # 1. Zona descartada oscurecida (4 rectángulos alrededor del área de recorte)
+        mask_color = QColor(0, 0, 0, 160)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(mask_color))
+
+        # Superior
+        if s.top() > target_rect.top():
+            painter.drawRect(QRectF(target_rect.left(), target_rect.top(), target_rect.width(), s.top() - target_rect.top()))
+        # Inferior
+        if s.bottom() < target_rect.bottom():
+            painter.drawRect(QRectF(target_rect.left(), s.bottom(), target_rect.width(), target_rect.bottom() - s.bottom()))
+        # Izquierda
+        if s.left() > target_rect.left():
+            painter.drawRect(QRectF(target_rect.left(), s.top(), s.left() - target_rect.left(), s.height()))
+        # Derecha
+        if s.right() < target_rect.right():
+            painter.drawRect(QRectF(s.right(), s.top(), target_rect.right() - s.right(), s.height()))
+
+        # 2. Guías de composición internas
+        if self.crop_guides == "thirds":
+            painter.setPen(QPen(QColor(255, 255, 255, 115), 1, Qt.SolidLine))
+            x1 = s.left() + s.width() / 3.0
+            x2 = s.left() + 2.0 * s.width() / 3.0
+            y1 = s.top() + s.height() / 3.0
+            y2 = s.top() + 2.0 * s.height() / 3.0
+            painter.drawLine(QPointF(x1, s.top()), QPointF(x1, s.bottom()))
+            painter.drawLine(QPointF(x2, s.top()), QPointF(x2, s.bottom()))
+            painter.drawLine(QPointF(s.left(), y1), QPointF(s.right(), y1))
+            painter.drawLine(QPointF(s.left(), y2), QPointF(s.right(), y2))
+        elif self.crop_guides == "grid":
+            painter.setPen(QPen(QColor(255, 255, 255, 80), 1, Qt.SolidLine))
+            for i in range(1, 6):
+                gx = s.left() + (i / 6.0) * s.width()
+                gy = s.top() + (i / 6.0) * s.height()
+                painter.drawLine(QPointF(gx, s.top()), QPointF(gx, s.bottom()))
+                painter.drawLine(QPointF(s.left(), gy), QPointF(s.right(), gy))
+
+        # 3. Borde del marco de recorte (alta visibilidad con sombra exterior)
+        painter.setPen(QPen(QColor(0, 0, 0, 180), 3))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(s)
+        painter.setPen(QPen(QColor(255, 255, 255, 240), 1.5))
+        painter.drawRect(s)
+
+        # 4. Tiradores y esquineros tipo Lightroom / Camera Raw
+        c_len = min(18.0, min(s.width(), s.height()) * 0.25)
+        c_thick = 3.0
+        pen_handle = QPen(QColor(255, 255, 255, 255), c_thick, Qt.SolidLine, Qt.SquareCap)
+        pen_shadow = QPen(QColor(0, 0, 0, 200), c_thick + 2, Qt.SolidLine, Qt.SquareCap)
+
+        def draw_corner(corner_pt: QPointF, dx: float, dy: float):
+            painter.setPen(pen_shadow)
+            painter.drawLine(corner_pt, QPointF(corner_pt.x() + dx, corner_pt.y()))
+            painter.drawLine(corner_pt, QPointF(corner_pt.x(), corner_pt.y() + dy))
+            painter.setPen(pen_handle)
+            painter.drawLine(corner_pt, QPointF(corner_pt.x() + dx, corner_pt.y()))
+            painter.drawLine(corner_pt, QPointF(corner_pt.x(), corner_pt.y() + dy))
+
+        draw_corner(QPointF(s.left(), s.top()), c_len, c_len)
+        draw_corner(QPointF(s.right(), s.top()), -c_len, c_len)
+        draw_corner(QPointF(s.left(), s.bottom()), c_len, -c_len)
+        draw_corner(QPointF(s.right(), s.bottom()), -c_len, -c_len)
+
+        def draw_edge_bar(p1: QPointF, p2: QPointF):
+            painter.setPen(pen_shadow)
+            painter.drawLine(p1, p2)
+            painter.setPen(pen_handle)
+            painter.drawLine(p1, p2)
+
+        half_len = c_len * 0.7
+        draw_edge_bar(QPointF(s.center().x() - half_len, s.top()), QPointF(s.center().x() + half_len, s.top()))
+        draw_edge_bar(QPointF(s.center().x() - half_len, s.bottom()), QPointF(s.center().x() + half_len, s.bottom()))
+        draw_edge_bar(QPointF(s.left(), s.center().y() - half_len), QPointF(s.left(), s.center().y() + half_len))
+        draw_edge_bar(QPointF(s.right(), s.center().y() - half_len), QPointF(s.right(), s.center().y() + half_len))
+
+        # 5. Píldora de resolución flotante informativa
+        if self.native_image_size:
+            iw, ih = self.native_image_size
+        else:
+            iw = self.base_pixmap.width()
+            ih = self.base_pixmap.height()
+        px_w = int(round(self.crop_rect_norm.width() * iw))
+        px_h = int(round(self.crop_rect_norm.height() * ih))
+        badge_txt = f"{px_w} × {px_h}"
+        if abs(self.crop_angle) > 1e-2:
+            badge_txt += f"  ({self.crop_angle:+.1f}°)"
+
+        font_b = painter.font()
+        font_b.setPointSize(9)
+        font_b.setBold(True)
+        painter.setFont(font_b)
+
+        badge_w = 125.0 if abs(self.crop_angle) > 1e-2 else 95.0
+        badge_h = 22.0
+        badge_x = s.center().x() - badge_w / 2.0
+        badge_y = s.bottom() - badge_h - 10.0
+        if badge_y < s.top() + 10.0:
+            badge_y = s.top() + 10.0
+        badge_rect = QRectF(badge_x, badge_y, badge_w, badge_h)
+
+        painter.setBrush(QBrush(QColor(16, 20, 28, 220)))
+        painter.setPen(QPen(QColor(80, 160, 255, 180), 1))
+        painter.drawRoundedRect(badge_rect, 4.0, 4.0)
+        painter.setPen(QColor("#80d8ff"))
+        painter.drawText(badge_rect, Qt.AlignCenter, badge_txt)
+
+        painter.restore()

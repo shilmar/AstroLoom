@@ -5,6 +5,34 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+### Añadido
+* **Herramienta Interactiva de Recorte y Nivelación de Horizonte (Crop & Leveling Tool):**
+  - Incorporada en el **Revelador / Editor** una herramienta de recorte profesional estilo Lightroom / Camera Raw accesible con el botón de la barra superior `[ ✂️ Recortar (C) ]` o el atajo global de teclado `C`.
+  - **Lienzo Interactivo con 8 Tiradores y Guías de Composición:**
+    - Tiradores en las 4 esquinas (soportes en ángulo tipo "L") y 4 barras centrales en los bordes con cursores contextuales dinámicos.
+    - Desplazamiento del marco completo arrastrando su interior o creación de nuevos encuadres haciendo clic y arrastrando fuera.
+    - Superposición de zona descartada oscurecida con máscara semitransparente de alto contraste y borde perimetral dual.
+    - Guías de composición integradas: *Regla de Tercios* y *Cuadrícula 6×6* con líneas semitransparentes.
+    - Píldora flotante en el lienzo con lectura en tiempo real de la resolución resultante en píxeles nativos del sensor (`px_w × px_h`) y ángulo de inclinación.
+  - **Relaciones de Aspecto Fijas y Asistente de Proporciones:**
+    - Presets integrados: *Libre*, *Original*, *1:1 (Cuadrado)*, *16:9 (Panorámico)*, *3:2 (Fotografía)*, *4:3 (Estándar)*, *5:4 (Gran Formato)*, *2:1 (Panorámico)*, *9:16 (Vertical)*, *2:3 (Vertical 35mm)* y *4:5 (Vertical IG)*.
+    - Botón `[ ⇄ Invertir (X) ]` (y atajo de teclado `X`) para alternar instantáneamente la orientación horizontal/vertical de la proporción elegida o del marco libre.
+  - **Nivelación de Horizonte en Tiempo Real:**
+    - Control deslizante de rotación de $-45.0^\circ$ a $+45.0^\circ$ (en pasos de $0.1^\circ$) con botón de restablecimiento rápido a `0°`.
+    - Rotación en vivo en el lienzo en tiempo real a 60 FPS mediante transformaciones GPU/QPainter con la retícula de recorte horizontal fija para alinear cordilleras, horizontes marinos o el arco galáctico.
+  - **Corte y Transformación a 32-bit de Alta Precisión:**
+    - Rotación y recorte en espacio nativo de 32-bit float (`cv2.INTER_LANCZOS4` y `BORDER_REFLECT`) para evitar degradación de señal, pérdidas de detalle o marcos negros en bordes.
+    - Si existen capas separadas de StarNet (`image_starless`, `image_stars`) o máscaras activas (`current_mask`), el recorte y rotación se aplican con congruencia milimétrica idéntica sobre todas ellas para preservar la alineación subpíxel.
+  - **Integración No Destructiva con Deshacer / Rehacer (Undo / Redo):**
+    - Aplicación de recorte mediante botón `[ ✅ Aplicar Recorte ]`, tecla `Intro / Return` o doble clic directo dentro del marco de recorte.
+    - Cancelación sin cambios con `[ ❌ Cancelar ]` o tecla `Escape`.
+    - Integrado con la pila de 50 pasos de historial (`Ctrl+Z` / `Ctrl+Y`), permitiendo restaurar la toma sin recortar en cualquier momento sin pérdida de datos.
+* **Ampliación del Rango de Balance de Blancos (Temperatura y Tinte):**
+  - Rango cuadruplicado de $\pm 0.250$ a $\pm 1.000$ (en 2000 pasos de $0.001$) en `slider_temp` y `slider_tint`.
+  - Capacidad analítica para neutralizar dominantes cromáticas severas de polución lumínica (lámparas de vapor de sodio a baja/alta presión) o intensas emisiones de *airglow* verde/rojo en cielos oscuros.
+  - Soporte de doble clic en las etiquetas de título o valor para restablecimiento instantáneo a neutro (`0.000`).
+  - Sincronización completa con la Pipeta de Balance de Blancos (`W`) adaptada al nuevo rango ensanchado.
+
 ## [0.8.0] - 2026-10-14
 
 ### Añadido

@@ -332,8 +332,8 @@ python run_app.py
 * [x] Conversión cromática matemática exacta (adaptación Bradford D65/D50 y aceleración LUT) en exportación con perfiles ICC (sRGB, Adobe RGB, ProPhoto RGB).
 * [x] Auto-reparación y robustez en arranque ante directorios inexistentes con plantilla base config.default.json.
 * [ ] Anti-parpadeo (Deflicker) y morphing temporal entre fotogramas en Startrails / Time-Lapse.
-* [ ] Herramienta interactiva de Recorte (Crop) en el Revelador / Editor con encuadre libre y proporciones fijas (1:1, 16:9, 4:3, etc.), nivelación y guías de composición.
-* [ ] Ampliación y revisión del rango de ajuste de Balance de Blancos (Temperatura y Tinte) en el Revelador (el rango actual de ±0.250 resulta insuficiente para tomas con dominantes extremas, airglow intenso o calibraciones nocturnas).
+* [x] Herramienta interactiva de Recorte (Crop) en el Revelador / Editor con encuadre libre y proporciones fijas (1:1, 16:9, 4:3, etc.), nivelación y guías de composición.
+* [x] Ampliación y revisión del rango de ajuste de Balance de Blancos (Temperatura y Tinte) en el Revelador (el rango actual de ±0.250 resulta insuficiente para tomas con dominantes extremas, airglow intenso o calibraciones nocturnas).
 * [ ] Miniaturas previas (Thumbnails) en las tablas de archivos y estimación de tiempo restante (ETA) en barra de progreso.
 ---
 

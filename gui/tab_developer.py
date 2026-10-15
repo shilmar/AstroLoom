@@ -83,8 +83,8 @@ class DeveloperTab(QWidget):
         self.dehaze_starless_val = 0.0
         
         # Parámetros del revelador
-        self.temp_val = 0.0          # -0.500 a +0.500
-        self.tint_val = 0.0          # -0.500 a +0.500
+        self.temp_val = 0.0          # -1.000 a +1.000 (precisión milimétrica)
+        self.tint_val = 0.0          # -1.000 a +1.000 (precisión milimétrica)
         self.sat_sky_val = 1.0       # 0.00x a 2.50x
         self.sat_gnd_val = 1.0       # 0.00x a 2.50x
         self.vibrance_val = 0.0      # -1.00 a +1.00
@@ -341,32 +341,48 @@ class DeveloperTab(QWidget):
         col_temp = QVBoxLayout()
         col_temp.setSpacing(4)
         row_temp_lbl = QHBoxLayout()
-        row_temp_lbl.addWidget(QLabel("Temp:"))
+        lbl_temp_title = QLabel("Temp:")
+        lbl_temp_title.setToolTip("Doble clic para restablecer Temperatura a 0.000")
+        lbl_temp_title.setCursor(Qt.PointingHandCursor)
+        row_temp_lbl.addWidget(lbl_temp_title)
         self.lbl_temp_val = QLabel("0.000")
         self.lbl_temp_val.setStyleSheet("color: #ffd54f; font-weight: bold;")
+        self.lbl_temp_val.setToolTip("Doble clic para restablecer Temperatura a 0.000")
+        self.lbl_temp_val.setCursor(Qt.PointingHandCursor)
         row_temp_lbl.addWidget(self.lbl_temp_val)
         col_temp.addLayout(row_temp_lbl)
 
         self.slider_temp = QSlider(Qt.Horizontal)
-        self.slider_temp.setRange(-250, 250)
+        self.slider_temp.setRange(-1000, 1000)
         self.slider_temp.setValue(0)
+        self.slider_temp.setToolTip("Temperatura de color (-1.000 azul/frío a +1.000 rojo/cálido). Doble clic en 'Temp:' para reiniciar")
         self.slider_temp.valueChanged.connect(self.on_temp_changed)
+        lbl_temp_title.mouseDoubleClickEvent = lambda e: self.slider_temp.setValue(0)
+        self.lbl_temp_val.mouseDoubleClickEvent = lambda e: self.slider_temp.setValue(0)
         col_temp.addWidget(self.slider_temp)
         row_wb.addLayout(col_temp)
 
         col_tint = QVBoxLayout()
         col_tint.setSpacing(4)
         row_tint_lbl = QHBoxLayout()
-        row_tint_lbl.addWidget(QLabel("Tinte:"))
+        lbl_tint_title = QLabel("Tinte:")
+        lbl_tint_title.setToolTip("Doble clic para restablecer Tinte a 0.000")
+        lbl_tint_title.setCursor(Qt.PointingHandCursor)
+        row_tint_lbl.addWidget(lbl_tint_title)
         self.lbl_tint_val = QLabel("0.000")
         self.lbl_tint_val.setStyleSheet("color: #b388ff; font-weight: bold;")
+        self.lbl_tint_val.setToolTip("Doble clic para restablecer Tinte a 0.000")
+        self.lbl_tint_val.setCursor(Qt.PointingHandCursor)
         row_tint_lbl.addWidget(self.lbl_tint_val)
         col_tint.addLayout(row_tint_lbl)
 
         self.slider_tint = QSlider(Qt.Horizontal)
-        self.slider_tint.setRange(-250, 250)
+        self.slider_tint.setRange(-1000, 1000)
         self.slider_tint.setValue(0)
+        self.slider_tint.setToolTip("Tinte de color (-1.000 verde a +1.000 magenta). Doble clic en 'Tinte:' para reiniciar")
         self.slider_tint.valueChanged.connect(self.on_tint_changed)
+        lbl_tint_title.mouseDoubleClickEvent = lambda e: self.slider_tint.setValue(0)
+        self.lbl_tint_val.mouseDoubleClickEvent = lambda e: self.slider_tint.setValue(0)
         col_tint.addWidget(self.slider_tint)
         row_wb.addLayout(col_tint)
 
@@ -734,11 +750,17 @@ class DeveloperTab(QWidget):
 
         self.canvas_toolbar = self._create_canvas_toolbar()
         right_layout.addWidget(self.canvas_toolbar)
+        self.crop_toolbar = self._create_crop_toolbar()
+        self.crop_toolbar.setVisible(False)
+        right_layout.addWidget(self.crop_toolbar)
         right_layout.addWidget(self.canvas, 1)
 
-        # Sincronización bidireccional de Pipeta y Lupa con la barra de herramientas
+        # Sincronización bidireccional de Pipeta, Lupa y Recorte con la barra de herramientas
         self.canvas.eyedropper_toggled.connect(self.btn_pipette.setChecked)
         self.canvas.magnifier_toggled.connect(self.btn_magnifier.setChecked)
+        self.canvas.crop_toggled.connect(self.btn_crop.setChecked)
+        self.canvas.crop_rect_changed.connect(self._on_crop_rect_changed)
+        self.canvas.crop_applied.connect(self._apply_crop)
         self.canvas.color_sampled.connect(self._on_eyedropper_color_sampled)
 
         splitter.addWidget(right_container)
@@ -746,6 +768,11 @@ class DeveloperTab(QWidget):
         splitter.setStretchFactor(1, 10)
         splitter.setSizes([520, 1400])
         
+        # Atajo global 'C' para alternar herramienta interactiva de Recorte
+        self.shortcut_crop = QShortcut(QKeySequence(Qt.Key_C), self)
+        self.shortcut_crop.setContext(Qt.WindowShortcut)
+        self.shortcut_crop.activated.connect(self._on_toggle_crop_shortcut)
+
         # Atajo global 'J' para alternar indicadores de recorte (Lightroom / Camera Raw style)
         self.shortcut_clipping = QShortcut(QKeySequence(Qt.Key_J), self)
         self.shortcut_clipping.setContext(Qt.WindowShortcut)
@@ -922,6 +949,25 @@ class DeveloperTab(QWidget):
         self.btn_magnifier.toggled.connect(self.canvas.set_magnifier_active)
         tb_layout.addWidget(self.btn_magnifier)
 
+        # Separador vertical
+        sep4 = QFrame()
+        sep4.setFrameShape(QFrame.VLine)
+        sep4.setFrameShadow(QFrame.Sunken)
+        sep4.setStyleSheet("color: #3b4252; margin: 4px 2px;")
+        tb_layout.addWidget(sep4)
+
+        # 7. Botón Recorte Interactivo (Crop)
+        self.btn_crop = QPushButton("✂️ Recortar (C)")
+        self.btn_crop.setCheckable(True)
+        self.btn_crop.setCursor(Qt.PointingHandCursor)
+        self.btn_crop.setToolTip(
+            "Activa la herramienta interactiva de recorte, composición y nivelación de horizonte.\n"
+            "Permite ajustar proporciones (1:1, 16:9, 3:2, etc.), rotar y recomponer con guías.\n"
+            "Atajo de teclado: C"
+        )
+        self.btn_crop.toggled.connect(self._on_toggle_crop)
+        tb_layout.addWidget(self.btn_crop)
+
         # Espaciador elástico
         tb_layout.addStretch()
 
@@ -931,6 +977,328 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.lbl_canvas_info)
 
         return toolbar
+
+    def _create_crop_toolbar(self) -> QWidget:
+        """Crea la barra de herramientas interactiva de recorte y nivelación de horizonte."""
+        toolbar = QWidget()
+        toolbar.setObjectName("crop_toolbar")
+        toolbar.setFixedHeight(40)
+
+        tb_layout = QHBoxLayout(toolbar)
+        tb_layout.setContentsMargins(10, 3, 10, 3)
+        tb_layout.setSpacing(8)
+
+        # 1. Título / Icono
+        lbl_title = QLabel("✂️ Recorte:")
+        lbl_title.setStyleSheet("font-weight: bold; color: #80d8ff; font-size: 11px;")
+        tb_layout.addWidget(lbl_title)
+
+        # 2. Selector de Proporción de Aspecto
+        lbl_prop = QLabel("Proporción:")
+        lbl_prop.setStyleSheet("color: #c0caf5; font-size: 11px;")
+        tb_layout.addWidget(lbl_prop)
+        self.combo_crop_ratio = QComboBox()
+        self.combo_crop_ratio.setToolTip("Define la relación de aspecto del marco de recorte")
+        self.combo_crop_ratio.addItems([
+            "Libre",
+            "Original",
+            "1:1 (Cuadrado)",
+            "16:9 (Panorámico)",
+            "3:2 (Fotografía)",
+            "4:3 (Estándar)",
+            "5:4 (Gran Formato)",
+            "2:1 (Panorámico 2:1)",
+            "9:16 (Vertical)",
+            "2:3 (Vertical 35mm)",
+            "4:5 (Vertical IG)",
+        ])
+        self.combo_crop_ratio.currentIndexChanged.connect(self._on_crop_ratio_changed)
+        tb_layout.addWidget(self.combo_crop_ratio)
+
+        # 3. Botón Invertir orientación de la proporción
+        self.btn_crop_flip_ratio = QPushButton("⇄ Invertir (X)")
+        self.btn_crop_flip_ratio.setToolTip("Invierte la orientación de la proporción (Horizontal ⇄ Vertical)\nAtajo: X")
+        self.btn_crop_flip_ratio.setCursor(Qt.PointingHandCursor)
+        self.btn_crop_flip_ratio.clicked.connect(self._on_crop_flip_ratio)
+        tb_layout.addWidget(self.btn_crop_flip_ratio)
+
+        # Separador vertical
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.VLine)
+        sep1.setFrameShadow(QFrame.Sunken)
+        sep1.setStyleSheet("color: #3b4252; margin: 4px 2px;")
+        tb_layout.addWidget(sep1)
+
+        # 4. Nivelación de Horizonte / Ángulo de rotación
+        lbl_ang = QLabel("📐 Ángulo:")
+        lbl_ang.setStyleSheet("color: #c0caf5; font-size: 11px;")
+        tb_layout.addWidget(lbl_ang)
+        self.slider_crop_angle = QSlider(Qt.Horizontal)
+        self.slider_crop_angle.setRange(-450, 450)  # -45.0° a +45.0°
+        self.slider_crop_angle.setValue(0)
+        self.slider_crop_angle.setFixedWidth(120)
+        self.slider_crop_angle.setToolTip("Nivela el horizonte rotando la imagen en tiempo real (-45° a +45°)")
+        self.slider_crop_angle.valueChanged.connect(self._on_crop_angle_changed)
+        tb_layout.addWidget(self.slider_crop_angle)
+
+        self.lbl_crop_angle_val = QLabel("0.0°")
+        self.lbl_crop_angle_val.setStyleSheet("color: #88c0d0; font-weight: bold; min-width: 38px; font-size: 11px;")
+        tb_layout.addWidget(self.lbl_crop_angle_val)
+
+        self.btn_crop_reset_angle = QPushButton("0°")
+        self.btn_crop_reset_angle.setFixedWidth(28)
+        self.btn_crop_reset_angle.setToolTip("Restablece el ángulo de nivelación a 0°")
+        self.btn_crop_reset_angle.setCursor(Qt.PointingHandCursor)
+        self.btn_crop_reset_angle.clicked.connect(lambda: self.slider_crop_angle.setValue(0))
+        tb_layout.addWidget(self.btn_crop_reset_angle)
+
+        # Separador vertical
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.VLine)
+        sep2.setFrameShadow(QFrame.Sunken)
+        sep2.setStyleSheet("color: #3b4252; margin: 4px 2px;")
+        tb_layout.addWidget(sep2)
+
+        # 5. Guías de composición
+        lbl_gui = QLabel("Guías:")
+        lbl_gui.setStyleSheet("color: #c0caf5; font-size: 11px;")
+        tb_layout.addWidget(lbl_gui)
+        self.combo_crop_guides = QComboBox()
+        self.combo_crop_guides.addItems([
+            "Regla de Tercios",
+            "Cuadrícula 6×6",
+            "Sin Guías"
+        ])
+        self.combo_crop_guides.currentIndexChanged.connect(self._on_crop_guides_changed)
+        tb_layout.addWidget(self.combo_crop_guides)
+
+        # 6. Etiqueta informativa de dimensiones
+        self.lbl_crop_dimensions = QLabel("0 × 0 px")
+        self.lbl_crop_dimensions.setStyleSheet("color: #ffd54f; font-weight: bold; font-size: 11px; margin-left: 4px;")
+        tb_layout.addWidget(self.lbl_crop_dimensions)
+
+        tb_layout.addStretch()
+
+        # 7. Botones de acción: Restablecer, Cancelar, Aplicar
+        self.btn_crop_reset = QPushButton("↺ Restablecer")
+        self.btn_crop_reset.setToolTip("Restablece el marco de recorte al tamaño completo de la imagen")
+        self.btn_crop_reset.setCursor(Qt.PointingHandCursor)
+        self.btn_crop_reset.clicked.connect(self._reset_crop)
+        tb_layout.addWidget(self.btn_crop_reset)
+
+        self.btn_crop_cancel = QPushButton("❌ Cancelar (Esc)")
+        self.btn_crop_cancel.setToolTip("Cancela el recorte y descarta los cambios (Esc)")
+        self.btn_crop_cancel.setCursor(Qt.PointingHandCursor)
+        self.btn_crop_cancel.clicked.connect(self._cancel_crop)
+        tb_layout.addWidget(self.btn_crop_cancel)
+
+        self.btn_crop_apply = QPushButton("✅ Aplicar Recorte (Intro)")
+        self.btn_crop_apply.setStyleSheet("""
+            QPushButton {
+                background-color: #2e7d32;
+                color: #ffffff;
+                font-weight: bold;
+                border: 1px solid #4caf50;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #388e3c;
+                border-color: #81c784;
+            }
+        """)
+        self.btn_crop_apply.setToolTip("Aplica el recorte y la nivelación permanentemente a la imagen (Enter / Intro o Doble clic)")
+        self.btn_crop_apply.setCursor(Qt.PointingHandCursor)
+        self.btn_crop_apply.clicked.connect(self._apply_crop)
+        tb_layout.addWidget(self.btn_crop_apply)
+
+        return toolbar
+
+    def _on_toggle_crop_shortcut(self) -> None:
+        """Alterna el modo de recorte con la tecla 'C' ignorando entradas de texto activas."""
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            return
+        if hasattr(self, 'btn_crop'):
+            self.btn_crop.toggle()
+
+    def _on_toggle_crop(self, enabled: bool) -> None:
+        """Activa o desactiva la barra y modo de recorte interactivo en el lienzo."""
+        if enabled and self.image_32bit is None:
+            self.btn_crop.setChecked(False)
+            self.log_message("[AVISO] Debe cargar una imagen antes de utilizar el recorte.")
+            return
+
+        if enabled:
+            if self.is_zoomed_100:
+                self.btn_toggle_zoom.setChecked(False)
+            if self.canvas.eyedropper_active:
+                self.btn_pipette.setChecked(False)
+            if self.canvas.magnifier_active:
+                self.btn_magnifier.setChecked(False)
+
+        self.canvas.set_crop_mode(enabled)
+        self.crop_toolbar.setVisible(enabled)
+
+        if enabled:
+            h, w = self.image_32bit.shape[:2]
+            self.canvas.set_native_image_size((w, h))
+            self.canvas._emit_crop_size()
+            self.log_message("✂️ Modo Recorte activado. Ajusta el marco, nivela el horizonte o presiona Intro para aplicar.")
+        else:
+            self.canvas.reset_crop_rect()
+            if hasattr(self, 'slider_crop_angle'):
+                self.slider_crop_angle.setValue(0)
+
+    def _on_crop_ratio_changed(self, idx: int) -> None:
+        """Ajusta la relación de aspecto forzada en el lienzo según la selección del combo."""
+        ratio_map = {
+            0: None,
+            1: (self.image_32bit.shape[1] / float(self.image_32bit.shape[0])) if self.image_32bit is not None else None,
+            2: 1.0,
+            3: 16.0 / 9.0,
+            4: 3.0 / 2.0,
+            5: 4.0 / 3.0,
+            6: 5.0 / 4.0,
+            7: 2.0,
+            8: 9.0 / 16.0,
+            9: 2.0 / 3.0,
+            10: 4.0 / 5.0,
+        }
+        ratio = ratio_map.get(idx, None)
+        self.canvas.set_crop_aspect_ratio(ratio)
+
+    def _on_crop_flip_ratio(self) -> None:
+        """Invierte la orientación de la proporción actual (Horizontal ⇄ Vertical)."""
+        idx = self.combo_crop_ratio.currentIndex()
+        flip_pairs = {3: 8, 8: 3, 4: 9, 9: 4, 5: 10, 10: 5}
+        if idx in flip_pairs:
+            self.combo_crop_ratio.setCurrentIndex(flip_pairs[idx])
+            return
+
+        cur_ratio = self.canvas.crop_aspect_ratio
+        if cur_ratio is not None and cur_ratio > 0:
+            self.canvas.set_crop_aspect_ratio(1.0 / cur_ratio)
+        else:
+            r = self.canvas.crop_rect_norm
+            cx, cy = r.center().x(), r.center().y()
+            ih = float(self.image_32bit.shape[0]) if self.image_32bit is not None else 1.0
+            iw = float(self.image_32bit.shape[1]) if self.image_32bit is not None else 1.0
+            new_w = min(1.0, r.height() * (ih / iw))
+            new_h = min(1.0, r.width() * (iw / ih))
+            new_x = max(0.0, min(1.0 - new_w, cx - new_w / 2.0))
+            new_y = max(0.0, min(1.0 - new_h, cy - new_h / 2.0))
+            from PySide6.QtCore import QRectF
+            self.canvas.crop_rect_norm = QRectF(new_x, new_y, new_w, new_h)
+            self.canvas._emit_crop_size()
+            self.canvas.update()
+
+    def _on_crop_angle_changed(self, val: int) -> None:
+        """Actualiza el ángulo de nivelación en tiempo real."""
+        angle = val / 10.0
+        self.lbl_crop_angle_val.setText(f"{angle:+.1f}°" if abs(angle) > 1e-2 else "0.0°")
+        self.canvas.set_crop_angle(angle)
+
+    def _on_crop_guides_changed(self, idx: int) -> None:
+        """Alterna las guías de composición."""
+        guides = ["thirds", "grid", "none"][idx] if idx < 3 else "thirds"
+        self.canvas.set_crop_guides(guides)
+
+    def _on_crop_rect_changed(self, px_w: int, px_h: int) -> None:
+        """Muestra la resolución resultante en la barra de herramientas."""
+        mp = (px_w * px_h) / 1e6
+        self.lbl_crop_dimensions.setText(f"{px_w} × {px_h} px ({mp:.1f} MP)")
+
+    def _reset_crop(self) -> None:
+        """Restablece el marco de recorte al 100% y el ángulo a 0°."""
+        if hasattr(self, 'slider_crop_angle'):
+            self.slider_crop_angle.setValue(0)
+        if hasattr(self, 'combo_crop_ratio'):
+            self.combo_crop_ratio.setCurrentIndex(0)
+        self.canvas.reset_crop_rect()
+
+    def _cancel_crop(self) -> None:
+        """Cancela el modo de recorte sin aplicar ningún cambio."""
+        self.btn_crop.setChecked(False)
+        self.log_message("Recorte cancelado.")
+
+    def _apply_crop(self) -> None:
+        """Aplica permanentemente el recorte y la nivelación a la imagen en memoria con Undo/Redo."""
+        if self.image_32bit is None:
+            self.btn_crop.setChecked(False)
+            return
+
+        orig_h, orig_w = self.image_32bit.shape[:2]
+        angle = self.canvas.crop_angle
+        norm = self.canvas.crop_rect_norm
+
+        no_angle = abs(angle) < 1e-3
+        full_frame = (norm.x() <= 0.002 and norm.y() <= 0.002 and 
+                      norm.width() >= 0.996 and norm.height() >= 0.996)
+        if no_angle and full_frame:
+            self.log_message("El marco abarca el 100% de la toma sin rotación. Sin cambios.")
+            self.btn_crop.setChecked(False)
+            return
+
+        # Registrar estado previo en la pila de deshacer (Undo)
+        undo_item = {
+            "type": "crop",
+            "image_32bit": self.image_32bit.copy(),
+            "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
+            "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
+            "current_mask": self.current_mask.copy() if self.current_mask is not None else None,
+        }
+        self.undo_stack.append(undo_item)
+        if len(self.undo_stack) > self.MAX_UNDO_STEPS:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+
+        # Transformación rotación y corte
+        def rotate_and_crop(arr: np.ndarray, is_mask: bool = False) -> np.ndarray:
+            h, w = arr.shape[:2]
+            if not no_angle:
+                center = (w / 2.0, h / 2.0)
+                rot_mat = cv2.getRotationMatrix2D(center, -angle, 1.0)
+                interp = cv2.INTER_LINEAR if is_mask else cv2.INTER_LANCZOS4
+                arr = cv2.warpAffine(arr, rot_mat, (w, h), flags=interp, borderMode=cv2.BORDER_REFLECT)
+
+            px_x = int(round(norm.x() * w))
+            px_y = int(round(norm.y() * h))
+            px_w = int(round(norm.width() * w))
+            px_h = int(round(norm.height() * h))
+            px_x = max(0, min(w - 1, px_x))
+            px_y = max(0, min(h - 1, px_y))
+            px_w = max(10, min(w - px_x, px_w))
+            px_h = max(10, min(h - px_y, px_h))
+            return np.ascontiguousarray(arr[px_y:px_y + px_h, px_x:px_x + px_w], dtype=np.float32)
+
+        self.image_32bit = rotate_and_crop(self.image_32bit)
+        if self.image_starless is not None:
+            self.image_starless = rotate_and_crop(self.image_starless)
+        if self.image_stars is not None:
+            self.image_stars = rotate_and_crop(self.image_stars)
+        if self.current_mask is not None:
+            self.current_mask = rotate_and_crop(self.current_mask, is_mask=True)
+
+        self.btn_crop.setChecked(False)
+        if hasattr(self, 'slider_crop_angle'):
+            self.slider_crop_angle.setValue(0)
+        self.canvas.reset_crop_rect()
+
+        new_h, new_w = self.image_32bit.shape[:2]
+        self.canvas.set_native_image_size((new_w, new_h))
+        self._generate_preview_proxy()
+        self.snapshot_before_pixmap = None
+        self.has_custom_snapshot = False
+        self._generate_before_reference()
+        self.update_stretch_preview()
+        self._update_canvas_info_label()
+        self._last_committed_state = self._capture_state()
+        self._update_undo_redo_buttons()
+
+        ang_info = f" con rotación {angle:+.1f}°" if not no_angle else ""
+        self.log_message(f"✅ Recorte aplicado{ang_info}: {orig_w}x{orig_h} → {new_w}x{new_h} px. (Deshacer con Ctrl+Z)")
 
     def _on_toggle_clipping_shortcut(self) -> None:
         """Alterna los indicadores de recorte con la tecla 'J' ignorando entradas de texto activas."""
@@ -993,9 +1361,9 @@ class DeveloperTab(QWidget):
         calc_temp = gain_r - gain_b
         calc_tint = 2.0 * (1.0 - gain_g)
 
-        # Rango del slider (-250 a +250 con paso 0.001)
-        clamped_temp = float(np.clip(calc_temp, -0.250, 0.250))
-        clamped_tint = float(np.clip(calc_tint, -0.250, 0.250))
+        # Rango del slider (-1000 a +1000 con paso 0.001)
+        clamped_temp = float(np.clip(calc_temp, -1.000, 1.000))
+        clamped_tint = float(np.clip(calc_tint, -1.000, 1.000))
 
         temp_int = int(round(clamped_temp * 1000.0))
         tint_int = int(round(clamped_tint * 1000.0))
@@ -1120,8 +1488,31 @@ class DeveloperTab(QWidget):
         self.lbl_canvas_info.setText(f"{w}x{h} px ({mp:.1f} MP) | {zoom_txt}{split_txt}")
 
     def keyPressEvent(self, event) -> None:
-        """Captura directa de teclas 'J', 'Y' y 'Shift+Y' como mecanismo redundante de alta fiabilidad."""
-        if event.key() == Qt.Key_J:
+        """Captura directa de teclas rápidas 'J', 'Y', 'Shift+Y', 'C' y controles de recorte."""
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            super().keyPressEvent(event)
+            return
+
+        if self.canvas.crop_mode:
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                self._apply_crop()
+                event.accept()
+                return
+            elif event.key() == Qt.Key_Escape:
+                self._cancel_crop()
+                event.accept()
+                return
+            elif event.key() == Qt.Key_X:
+                self._on_crop_flip_ratio()
+                event.accept()
+                return
+
+        if event.key() == Qt.Key_C:
+            self._on_toggle_crop_shortcut()
+            event.accept()
+            return
+        elif event.key() == Qt.Key_J:
             self._on_toggle_clipping_shortcut()
             event.accept()
             return
@@ -1163,6 +1554,35 @@ class DeveloperTab(QWidget):
                 background-color: #161620;
                 color: #4c566a;
                 border-color: #2e3440;
+            }
+            #crop_toolbar {
+                background-color: #12141d;
+                border-bottom: 1px solid #282a36;
+            }
+            #crop_toolbar QLabel {
+                color: #d8dee9;
+                font-size: 11px;
+            }
+            #crop_toolbar QComboBox {
+                background-color: #1e1e2c;
+                border: 1px solid #3b4252;
+                border-radius: 4px;
+                padding: 2px 8px;
+                color: #eceff4;
+                font-size: 11px;
+            }
+            #crop_toolbar QPushButton {
+                background-color: #1e1e2c;
+                border: 1px solid #3b4252;
+                border-radius: 4px;
+                padding: 3px 8px;
+                color: #eceff4;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            #crop_toolbar QPushButton:hover {
+                background-color: #2e3440;
+                border-color: #88c0d0;
             }
             QGroupBox {
                 font-weight: bold;
@@ -1364,6 +1784,7 @@ class DeveloperTab(QWidget):
                 raw_img = np.nan_to_num(raw_img, nan=0.0, posinf=1.0, neginf=0.0)
 
             self.image_32bit = np.clip(raw_img, 0.0, 1.0).astype(np.float32)
+            self.canvas.set_native_image_size((self.image_32bit.shape[1], self.image_32bit.shape[0]))
             self._generate_preview_proxy()
             self.apply_auto_mtf()
             self.initial_bp = self.spin_bp.value()
@@ -1877,6 +2298,7 @@ class DeveloperTab(QWidget):
     def on_bg_extraction_success(self, corrected_img: np.ndarray):
         self._set_ai_processing_state(False)
         self.image_32bit = np.ascontiguousarray(corrected_img, dtype=np.float32)
+        self.canvas.set_native_image_size((self.image_32bit.shape[1], self.image_32bit.shape[0]))
         
         self.image_starless = None
         self.image_stars = None
@@ -2204,6 +2626,10 @@ class DeveloperTab(QWidget):
             self._update_undo_redo_buttons()
 
         if hasattr(self, 'canvas') and self.canvas is not None:
+            self.canvas.set_native_image_size(None)
+            self.canvas.reset_crop_rect()
+            if self.canvas.crop_mode:
+                self.canvas.set_crop_mode(False)
             self.canvas.orig_rgb = None
             self.canvas.base_pixmap = None
             self.canvas.before_pixmap = None
@@ -2215,6 +2641,13 @@ class DeveloperTab(QWidget):
             if hasattr(self.canvas, 'refined_overlay'):
                 self.canvas.refined_overlay = None
             self.canvas.update()
+
+        if hasattr(self, 'btn_crop'):
+            self.btn_crop.blockSignals(True)
+            self.btn_crop.setChecked(False)
+            self.btn_crop.blockSignals(False)
+        if hasattr(self, 'crop_toolbar'):
+            self.crop_toolbar.setVisible(False)
 
         if hasattr(self, 'btn_split_view'):
             self.btn_split_view.blockSignals(True)
@@ -2334,33 +2767,81 @@ class DeveloperTab(QWidget):
             self._update_undo_redo_buttons()
 
     def undo(self):
-        """Deshace el último ajuste paramétrico realizado (Ctrl+Z)."""
+        """Deshace el último ajuste paramétrico o recorte realizado (Ctrl+Z)."""
         if not self.undo_stack or self._is_undoing_or_redoing:
             return
         self._is_undoing_or_redoing = True
         try:
-            current = self._capture_state()
-            self.redo_stack.append(current)
             target = self.undo_stack.pop()
-            self._restore_state(target)
-            self._last_committed_state = target
-            self.log_message(f"↺ Deshacer aplicado ({len(self.undo_stack)} pasos restantes)")
+            if target.get("type") == "crop":
+                redo_item = {
+                    "type": "crop",
+                    "image_32bit": self.image_32bit.copy(),
+                    "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
+                    "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
+                    "current_mask": self.current_mask.copy() if self.current_mask is not None else None,
+                }
+                self.redo_stack.append(redo_item)
+                self.image_32bit = target["image_32bit"]
+                self.image_starless = target["image_starless"]
+                self.image_stars = target["image_stars"]
+                self.current_mask = target["current_mask"]
+
+                self.snapshot_before_pixmap = None
+                self.has_custom_snapshot = False
+                h, w = self.image_32bit.shape[:2]
+                self.canvas.set_native_image_size((w, h))
+                self._generate_preview_proxy()
+                self._generate_before_reference()
+                self.update_stretch_preview()
+                self._update_canvas_info_label()
+                self.log_message(f"↺ Deshacer recorte: Restaurada imagen original ({w}x{h} px)")
+            else:
+                current = self._capture_state()
+                self.redo_stack.append(current)
+                self._restore_state(target)
+                self._last_committed_state = target
+                self.log_message(f"↺ Deshacer aplicado ({len(self.undo_stack)} pasos restantes)")
         finally:
             self._is_undoing_or_redoing = False
             self._update_undo_redo_buttons()
 
     def redo(self):
-        """Rehace el ajuste paramétrico previamente deshecho (Ctrl+Y / Ctrl+Shift+Z)."""
+        """Rehace el ajuste paramétrico o recorte previamente deshecho (Ctrl+Y / Ctrl+Shift+Z)."""
         if not self.redo_stack or self._is_undoing_or_redoing:
             return
         self._is_undoing_or_redoing = True
         try:
-            current = self._capture_state()
-            self.undo_stack.append(current)
             target = self.redo_stack.pop()
-            self._restore_state(target)
-            self._last_committed_state = target
-            self.log_message(f"↻ Rehacer aplicado ({len(self.redo_stack)} pasos por rehacer)")
+            if target.get("type") == "crop":
+                undo_item = {
+                    "type": "crop",
+                    "image_32bit": self.image_32bit.copy(),
+                    "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
+                    "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
+                    "current_mask": self.current_mask.copy() if self.current_mask is not None else None,
+                }
+                self.undo_stack.append(undo_item)
+                self.image_32bit = target["image_32bit"]
+                self.image_starless = target["image_starless"]
+                self.image_stars = target["image_stars"]
+                self.current_mask = target["current_mask"]
+
+                self.snapshot_before_pixmap = None
+                self.has_custom_snapshot = False
+                h, w = self.image_32bit.shape[:2]
+                self.canvas.set_native_image_size((w, h))
+                self._generate_preview_proxy()
+                self._generate_before_reference()
+                self.update_stretch_preview()
+                self._update_canvas_info_label()
+                self.log_message(f"↻ Rehacer recorte: Recorte restaurado ({w}x{h} px)")
+            else:
+                current = self._capture_state()
+                self.undo_stack.append(current)
+                self._restore_state(target)
+                self._last_committed_state = target
+                self.log_message(f"↻ Rehacer aplicado ({len(self.redo_stack)} pasos por rehacer)")
         finally:
             self._is_undoing_or_redoing = False
             self._update_undo_redo_buttons()
@@ -2497,13 +2978,17 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'btn_undo'):
             self.btn_undo.setEnabled(has_undo)
             if has_undo:
-                self.btn_undo.setToolTip(f"Deshacer último ajuste (Ctrl+Z) — {len(self.undo_stack)} pasos en historial")
+                last_type = self.undo_stack[-1].get("type", "param")
+                desc = "recorte" if last_type == "crop" else "ajuste"
+                self.btn_undo.setToolTip(f"Deshacer último {desc} (Ctrl+Z) — {len(self.undo_stack)} pasos en historial")
             else:
                 self.btn_undo.setToolTip("Deshacer (Ctrl+Z) — Sin acciones para deshacer")
 
         if hasattr(self, 'btn_redo'):
             self.btn_redo.setEnabled(has_redo)
             if has_redo:
-                self.btn_redo.setToolTip(f"Rehacer ajuste (Ctrl+Y / Ctrl+Shift+Z) — {len(self.redo_stack)} pasos disponibles")
+                next_type = self.redo_stack[-1].get("type", "param")
+                desc = "recorte" if next_type == "crop" else "ajuste"
+                self.btn_redo.setToolTip(f"Rehacer {desc} (Ctrl+Y / Ctrl+Shift+Z) — {len(self.redo_stack)} pasos disponibles")
             else:
                 self.btn_redo.setToolTip("Rehacer (Ctrl+Y) — Sin acciones para rehacer")
