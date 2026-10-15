@@ -1,6 +1,7 @@
 # gui/tab_developer.py
 import os
 import gc
+import time
 import cv2
 import numpy as np
 import tifffile
@@ -48,6 +49,7 @@ from core.stretch import (
     apply_luma_vs_sat_curve,
     realce_multiescala_ondiculas
 )
+from core.masking import refine_mask_guided
 from gui.widgets.curve_widget import CurveWidget
 from gui.canvas import MaskCanvas
 from gui.worker import GraXpertWorker, StarNetWorker
@@ -729,6 +731,19 @@ class DeveloperTab(QWidget):
         gnd_tone_layout.setContentsMargins(10, 14, 10, 10)
         gnd_tone_layout.setSpacing(8)
 
+        # Acceso y estado de la Máscara de Suelo
+        row_mask_status = QHBoxLayout()
+        self.lbl_gnd_mask_status = QLabel("⚠️ Sin máscara de suelo activa")
+        self.lbl_gnd_mask_status.setStyleSheet("color: #ffb74d; font-size: 11px;")
+        row_mask_status.addWidget(self.lbl_gnd_mask_status, stretch=1)
+
+        self.btn_edit_ground_mask = QPushButton("🖌️ Crear / Editar Máscara...")
+        self.btn_edit_ground_mask.setCursor(Qt.PointingHandCursor)
+        self.btn_edit_ground_mask.setToolTip("Abre la herramienta de trazado interactivo de máscara en el visor (Atajo: M)")
+        self.btn_edit_ground_mask.clicked.connect(self._open_mask_tool_from_section)
+        row_mask_status.addWidget(self.btn_edit_ground_mask)
+        gnd_tone_layout.addLayout(row_mask_status)
+
         row_gnd_ev = QHBoxLayout()
         row_gnd_ev.addWidget(QLabel("Exposición Suelo:"))
         self.lbl_gnd_ev = QLabel("0.00 EV")
@@ -831,21 +846,30 @@ class DeveloperTab(QWidget):
         self.crop_toolbar = self._create_crop_toolbar()
         self.crop_toolbar.setVisible(False)
         right_layout.addWidget(self.crop_toolbar)
+        self.mask_toolbar = self._create_mask_toolbar()
+        self.mask_toolbar.setVisible(False)
+        right_layout.addWidget(self.mask_toolbar)
         right_layout.addWidget(self.canvas, 1)
 
-        # Sincronización bidireccional de Pipeta, Lupa y Recorte con la barra de herramientas
+        # Sincronización bidireccional de Pipeta, Lupa, Recorte y Pincel con la barra de herramientas
         self.canvas.eyedropper_toggled.connect(self.btn_pipette.setChecked)
         self.canvas.magnifier_toggled.connect(self.btn_magnifier.setChecked)
         self.canvas.crop_toggled.connect(self.btn_crop.setChecked)
         self.canvas.crop_rect_changed.connect(self._on_crop_rect_changed)
         self.canvas.crop_applied.connect(self._apply_crop)
         self.canvas.color_sampled.connect(self._on_eyedropper_color_sampled)
+        self.canvas.brush_size_changed.connect(self._on_brush_size_changed)
 
         splitter.addWidget(right_container)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 10)
         splitter.setSizes([520, 1400])
         
+        # Atajo global 'M' para alternar herramienta interactiva de Máscara de Suelo
+        self.shortcut_mask = QShortcut(QKeySequence(Qt.Key_M), self)
+        self.shortcut_mask.setContext(Qt.WindowShortcut)
+        self.shortcut_mask.activated.connect(self._on_toggle_mask_shortcut)
+
         # Atajo global 'C' para alternar herramienta interactiva de Recorte
         self.shortcut_crop = QShortcut(QKeySequence(Qt.Key_C), self)
         self.shortcut_crop.setContext(Qt.WindowShortcut)
@@ -1045,6 +1069,25 @@ class DeveloperTab(QWidget):
         )
         self.btn_crop.toggled.connect(self._on_toggle_crop)
         tb_layout.addWidget(self.btn_crop)
+
+        # Separador vertical
+        sep5 = QFrame()
+        sep5.setFrameShape(QFrame.VLine)
+        sep5.setFrameShadow(QFrame.Sunken)
+        sep5.setStyleSheet("color: #3b4252; margin: 4px 2px;")
+        tb_layout.addWidget(sep5)
+
+        # 8. Botón Máscara Suelo Interactivo
+        self.btn_mask_tool = QPushButton("🖌️ Máscara Suelo (M)")
+        self.btn_mask_tool.setCheckable(True)
+        self.btn_mask_tool.setCursor(Qt.PointingHandCursor)
+        self.btn_mask_tool.setToolTip(
+            "Activa la herramienta interactiva de trazado y segmentación inteligente de cielo y suelo.\n"
+            "Dibuja trazos verdes sobre el cielo y rojos sobre el suelo para generar la máscara guiada.\n"
+            "Atajo de teclado: M"
+        )
+        self.btn_mask_tool.toggled.connect(self._on_toggle_mask_tool)
+        tb_layout.addWidget(self.btn_mask_tool)
 
         # Espaciador elástico
         tb_layout.addStretch()
@@ -1378,6 +1421,377 @@ class DeveloperTab(QWidget):
         ang_info = f" con rotación {angle:+.1f}°" if not no_angle else ""
         self.log_message(f"✅ Recorte aplicado{ang_info}: {orig_w}x{orig_h} → {new_w}x{new_h} px. (Deshacer con Ctrl+Z)")
 
+    def _create_mask_toolbar(self) -> QWidget:
+        """Crea la barra de herramientas interactiva para dibujar semillas y refinar la máscara de suelo."""
+        toolbar = QWidget()
+        toolbar.setObjectName("mask_toolbar")
+        toolbar.setFixedHeight(40)
+
+        tb_layout = QHBoxLayout(toolbar)
+        tb_layout.setContentsMargins(10, 3, 10, 3)
+        tb_layout.setSpacing(8)
+
+        # 1. Título / Icono
+        lbl_title = QLabel("🖌️ Máscara Suelo:")
+        lbl_title.setStyleSheet("font-weight: bold; color: #80d8ff; font-size: 11px;")
+        tb_layout.addWidget(lbl_title)
+
+        # 2. Selector de Clase de Pincel (Cielo vs Suelo)
+        self.btn_brush_sky = QPushButton("🟢 Cielo (Verde)")
+        self.btn_brush_sky.setCheckable(True)
+        self.btn_brush_sky.setChecked(True)
+        self.btn_brush_sky.setCursor(Qt.PointingHandCursor)
+        self.btn_brush_sky.setStyleSheet("""
+            QPushButton {
+                background-color: #1a2e22;
+                color: #a5d6a7;
+                border: 1px solid #2e7d32;
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton:checked {
+                background-color: #2e7d32;
+                color: #ffffff;
+                border-color: #66bb6a;
+            }
+        """)
+        self.btn_brush_sky.setToolTip("Pinta semillas de CIELO (trazo verde)")
+        tb_layout.addWidget(self.btn_brush_sky)
+
+        self.btn_brush_gnd = QPushButton("🔴 Suelo (Rojo)")
+        self.btn_brush_gnd.setCheckable(True)
+        self.btn_brush_gnd.setCursor(Qt.PointingHandCursor)
+        self.btn_brush_gnd.setStyleSheet("""
+            QPushButton {
+                background-color: #2e1a1a;
+                color: #ef9a9a;
+                border: 1px solid #c62828;
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton:checked {
+                background-color: #c62828;
+                color: #ffffff;
+                border-color: #ef5350;
+            }
+        """)
+        self.btn_brush_gnd.setToolTip("Pinta semillas de SUELO (trazo rojo)")
+        tb_layout.addWidget(self.btn_brush_gnd)
+
+        # Grupo exclusivo para los botones de pincel
+        self.brush_group = QButtonGroup(self)
+        self.brush_group.addButton(self.btn_brush_sky, 2)
+        self.brush_group.addButton(self.btn_brush_gnd, 1)
+        self.brush_group.idClicked.connect(self._on_brush_mode_changed)
+
+        # Separador vertical
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.VLine)
+        sep1.setFrameShadow(QFrame.Sunken)
+        sep1.setStyleSheet("color: #3b4252; margin: 4px 2px;")
+        tb_layout.addWidget(sep1)
+
+        # 3. Radio del pincel
+        lbl_r = QLabel("Pincel:")
+        lbl_r.setStyleSheet("color: #c0caf5; font-size: 11px;")
+        tb_layout.addWidget(lbl_r)
+
+        self.slider_mask_brush = QSlider(Qt.Horizontal)
+        self.slider_mask_brush.setRange(5, 120)
+        self.slider_mask_brush.setValue(20)
+        self.slider_mask_brush.setFixedWidth(90)
+        self.slider_mask_brush.setToolTip("Tamaño del pincel en píxeles de pantalla (o usa la rueda del ratón)")
+        self.slider_mask_brush.valueChanged.connect(self._on_slider_brush_changed)
+        tb_layout.addWidget(self.slider_mask_brush)
+
+        self.lbl_mask_brush_val = QLabel("20 px")
+        self.lbl_mask_brush_val.setStyleSheet("color: #88c0d0; font-weight: bold; min-width: 38px; font-size: 11px;")
+        tb_layout.addWidget(self.lbl_mask_brush_val)
+
+        # Separador vertical
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.VLine)
+        sep2.setFrameShadow(QFrame.Sunken)
+        sep2.setStyleSheet("color: #3b4252; margin: 4px 2px;")
+        tb_layout.addWidget(sep2)
+
+        # 4. Parámetros de refinamiento (Feather e Iterations)
+        lbl_f = QLabel("Borde:")
+        lbl_f.setStyleSheet("color: #c0caf5; font-size: 11px;")
+        tb_layout.addWidget(lbl_f)
+
+        self.spin_mask_feather = QSpinBox()
+        self.spin_mask_feather.setRange(1, 45)
+        self.spin_mask_feather.setValue(7)
+        self.spin_mask_feather.setSuffix(" px")
+        self.spin_mask_feather.setFixedWidth(66)
+        self.spin_mask_feather.setToolTip("Radio de suavizado / transición gaussiana en el perímetro del horizonte")
+        tb_layout.addWidget(self.spin_mask_feather)
+
+        lbl_it = QLabel("Pasos:")
+        lbl_it.setStyleSheet("color: #c0caf5; font-size: 11px;")
+        tb_layout.addWidget(lbl_it)
+
+        self.spin_mask_iters = QSpinBox()
+        self.spin_mask_iters.setRange(1, 10)
+        self.spin_mask_iters.setValue(3)
+        self.spin_mask_iters.setFixedWidth(46)
+        self.spin_mask_iters.setToolTip("Número de iteraciones del algoritmo de segmentación GrabCut")
+        tb_layout.addWidget(self.spin_mask_iters)
+
+        # Separador vertical
+        sep3 = QFrame()
+        sep3.setFrameShape(QFrame.VLine)
+        sep3.setFrameShadow(QFrame.Sunken)
+        sep3.setStyleSheet("color: #3b4252; margin: 4px 2px;")
+        tb_layout.addWidget(sep3)
+
+        # 5. Generar Máscara
+        self.btn_generate_mask = QPushButton("✨ Generar Máscara (Intro)")
+        self.btn_generate_mask.setCursor(Qt.PointingHandCursor)
+        self.btn_generate_mask.setStyleSheet("""
+            QPushButton {
+                background-color: #00796b;
+                color: #ffffff;
+                font-weight: bold;
+                border: 1px solid #26a69a;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #00897b;
+                border-color: #4db6ac;
+            }
+            QPushButton:pressed {
+                background-color: #004d40;
+            }
+        """)
+        self.btn_generate_mask.setToolTip("Calcula la máscara optimizada con GrabCut asistido por luminancia y preservación de siluetas finas (Intro)")
+        self.btn_generate_mask.clicked.connect(self._compute_mask_from_scribbles)
+        tb_layout.addWidget(self.btn_generate_mask)
+
+        # 6. Ver / Ocultar Máscara Overlay
+        self.btn_mask_overlay_toggle = QPushButton("👁️ Ver Máscara")
+        self.btn_mask_overlay_toggle.setCheckable(True)
+        self.btn_mask_overlay_toggle.setChecked(True)
+        self.btn_mask_overlay_toggle.setCursor(Qt.PointingHandCursor)
+        self.btn_mask_overlay_toggle.setToolTip("Muestra u oculta la superposición semitransparente (Verde=Cielo, Rojo=Suelo)")
+        self.btn_mask_overlay_toggle.toggled.connect(self.canvas.set_mask_visible)
+        tb_layout.addWidget(self.btn_mask_overlay_toggle)
+
+        # 7. Limpiar Trazos
+        self.btn_clear_scribbles = QPushButton("🗑️ Limpiar Trazos")
+        self.btn_clear_scribbles.setCursor(Qt.PointingHandCursor)
+        self.btn_clear_scribbles.setToolTip("Borra los trazos dibujados sin eliminar la máscara actual calculada")
+        self.btn_clear_scribbles.clicked.connect(self._clear_scribbles)
+        tb_layout.addWidget(self.btn_clear_scribbles)
+
+        # 8. Quitar / Eliminar Máscara
+        self.btn_delete_mask = QPushButton("❌ Quitar Máscara")
+        self.btn_delete_mask.setCursor(Qt.PointingHandCursor)
+        self.btn_delete_mask.setToolTip("Elimina la máscara activa por completo de la imagen")
+        self.btn_delete_mask.clicked.connect(self._delete_mask)
+        tb_layout.addWidget(self.btn_delete_mask)
+
+        tb_layout.addStretch()
+
+        # 9. Botón Finalizar / Cerrar
+        self.btn_mask_done = QPushButton("✅ Listo (Esc)")
+        self.btn_mask_done.setCursor(Qt.PointingHandCursor)
+        self.btn_mask_done.setStyleSheet("""
+            QPushButton {
+                background-color: #2e7d32;
+                color: #ffffff;
+                font-weight: bold;
+                border: 1px solid #4caf50;
+                border-radius: 4px;
+                padding: 3px 12px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #388e3c;
+                border-color: #81c784;
+            }
+        """)
+        self.btn_mask_done.setToolTip("Cierra el modo de trazado de máscara y vuelve al visor estándar (Esc)")
+        self.btn_mask_done.clicked.connect(lambda: self.btn_mask_tool.setChecked(False))
+        tb_layout.addWidget(self.btn_mask_done)
+
+        return toolbar
+
+    def _on_toggle_mask_shortcut(self) -> None:
+        """Alterna el modo de trazado de máscara con la tecla 'M' ignorando entradas de texto activas."""
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            return
+        if hasattr(self, 'btn_mask_tool'):
+            self.btn_mask_tool.toggle()
+
+    def _on_toggle_mask_tool(self, enabled: bool) -> None:
+        """Activa o desactiva la barra y modo de trazado interactivo de máscara en el lienzo."""
+        if enabled and self.image_32bit is None:
+            self.btn_mask_tool.setChecked(False)
+            self.log_message("[AVISO] Debe cargar una imagen antes de utilizar el trazador de máscaras.")
+            return
+
+        self.mask_toolbar.setVisible(enabled)
+
+        if enabled:
+            # Desactivar herramientas excluyentes si estuvieran activas
+            if hasattr(self, 'btn_crop') and self.btn_crop.isChecked():
+                self.btn_crop.setChecked(False)
+            if hasattr(self, 'btn_pipette') and self.btn_pipette.isChecked():
+                self.btn_pipette.setChecked(False)
+            if hasattr(self, 'btn_magnifier') and self.btn_magnifier.isChecked():
+                self.btn_magnifier.setChecked(False)
+            if self.canvas.split_view_enabled:
+                self.btn_split_view.setChecked(False)
+
+            self.canvas.set_masking_enabled(True)
+            self.canvas.set_brush_mode(2 if self.btn_brush_sky.isChecked() else 1)
+            self.canvas.set_brush_radius(self.slider_mask_brush.value())
+            self.log_message("[MÁSCARA] Modo de trazado activo: dibuja trazos verdes en el CIELO y rojos en el SUELO.")
+        else:
+            self.canvas.set_masking_enabled(False)
+            self.log_message("[MÁSCARA] Modo de trazado cerrado.")
+
+    def _on_brush_mode_changed(self, btn_id: int) -> None:
+        """Actualiza la clase de semilla seleccionada (2 = Cielo, 1 = Suelo)."""
+        self.canvas.set_brush_mode(btn_id)
+
+    def _on_slider_brush_changed(self, val: int) -> None:
+        """Actualiza el radio del pincel al mover el deslizador."""
+        self.lbl_mask_brush_val.setText(f"{val} px")
+        self.canvas.set_brush_radius(val)
+
+    def _on_brush_size_changed(self, val: int) -> None:
+        """Actualiza el deslizador cuando el usuario cambia el tamaño con la rueda del ratón."""
+        if hasattr(self, 'slider_mask_brush'):
+            self.slider_mask_brush.blockSignals(True)
+            self.slider_mask_brush.setValue(val)
+            self.slider_mask_brush.blockSignals(False)
+            self.lbl_mask_brush_val.setText(f"{val} px")
+
+    def _open_mask_tool_from_section(self) -> None:
+        """Abre y activa la herramienta de máscara desde el botón de la Sección 6."""
+        if hasattr(self, 'btn_mask_tool'):
+            if not self.btn_mask_tool.isChecked():
+                self.btn_mask_tool.setChecked(True)
+            else:
+                self.canvas.set_masking_enabled(True)
+
+    def _compute_mask_from_scribbles(self) -> None:
+        """Calcula la segmentación continua cielo/suelo mediante GrabCut y fotometría guiada."""
+        if self.image_32bit is None:
+            QMessageBox.warning(self, "Aviso", "Abre primero una toma en el revelador.")
+            return
+
+        scribbles = self.canvas.get_scribbles_matrix()
+        if scribbles is None or not (np.any(scribbles == 1) and np.any(scribbles == 2)):
+            QMessageBox.warning(
+                self, 
+                "Trazos insuficientes", 
+                "Debes pintar al menos un trazo verde (🟢 Cielo) y un trazo rojo (🔴 Suelo) sobre la imagen."
+            )
+            return
+
+        self.log_message("[MÁSCARA] Iniciando segmentación inteligente de cielo y suelo...")
+        self.setCursor(Qt.WaitCursor)
+        QCoreApplication.processEvents()
+
+        old_m = self.current_mask.copy() if self.current_mask is not None else None
+        t0 = time.perf_counter()
+
+        try:
+            h, w = self.image_32bit.shape[:2]
+            sh, sw = scribbles.shape[:2]
+            if (sh, sw) != (h, w):
+                scribbles_full = cv2.resize(scribbles, (w, h), interpolation=cv2.INTER_NEAREST)
+            else:
+                scribbles_full = scribbles
+
+            feather = self.spin_mask_feather.value()
+            iters = self.spin_mask_iters.value()
+
+            new_mask = refine_mask_guided(
+                self.image_32bit,
+                scribbles_full,
+                feather_radius=feather,
+                iterations=iters
+            )
+
+            self.current_mask = new_mask
+            self.canvas.set_refined_mask(self.current_mask)
+            self._generate_preview_proxy()
+            self.update_stretch_preview()
+            self._update_mask_status_ui()
+            self._record_mask_action(old_m, self.current_mask, "Generar Máscara")
+
+            elapsed = time.perf_counter() - t0
+            self.log_message(f"✓ [MÁSCARA FINALIZADA] Máscara cielo/suelo calculada en {elapsed:.2f} s ({w}x{h} px, Borde: {feather}px, Pasos: {iters}).")
+        except Exception as e:
+            self.log_message(f"[ERROR MÁSCARA] Fallo al generar la máscara: {e}")
+            QMessageBox.critical(self, "Error de Segmentación", f"No se pudo generar la máscara:\n{e}")
+        finally:
+            self.unsetCursor()
+
+    def _clear_scribbles(self) -> None:
+        """Borra únicamente los trazos dibujados sin eliminar la máscara actual."""
+        self.canvas.clear_scribbles()
+        self.log_message("[MÁSCARA] Trazos de semillas eliminados del visor.")
+
+    def _delete_mask(self) -> None:
+        """Elimina completamente la máscara de cielo/suelo y actualiza el revelador."""
+        if self.current_mask is None:
+            return
+        old_m = self.current_mask.copy()
+        self.current_mask = None
+        self.canvas.clear_scribbles()
+        self.canvas.set_refined_mask(None)
+        self._generate_preview_proxy()
+        self.update_stretch_preview()
+        self._update_mask_status_ui()
+        self._record_mask_action(old_m, None, "Eliminar Máscara")
+        self.log_message("[MÁSCARA] Máscara de suelo eliminada.")
+
+    def _update_mask_status_ui(self) -> None:
+        """Actualiza el indicador visual de presencia de máscara en la Sección 6 y botones."""
+        if not hasattr(self, 'lbl_gnd_mask_status'):
+            return
+        if self.current_mask is not None:
+            self.lbl_gnd_mask_status.setText("✓ Máscara de suelo activa")
+            self.lbl_gnd_mask_status.setStyleSheet("color: #a5d6a7; font-size: 11px; font-weight: bold;")
+            if hasattr(self, 'btn_edit_ground_mask'):
+                self.btn_edit_ground_mask.setText("🖌️ Editar Máscara...")
+            if hasattr(self, 'btn_delete_mask'):
+                self.btn_delete_mask.setEnabled(True)
+        else:
+            self.lbl_gnd_mask_status.setText("⚠️ Sin máscara de suelo activa")
+            self.lbl_gnd_mask_status.setStyleSheet("color: #ffb74d; font-size: 11px;")
+            if hasattr(self, 'btn_edit_ground_mask'):
+                self.btn_edit_ground_mask.setText("🖌️ Crear Máscara Suelo...")
+            if hasattr(self, 'btn_delete_mask'):
+                self.btn_delete_mask.setEnabled(False)
+
+    def _record_mask_action(self, old_mask: Optional[np.ndarray], new_mask: Optional[np.ndarray], action_name: str = "Máscara") -> None:
+        """Registra una acción de máscara en el historial de Deshacer / Rehacer."""
+        undo_item = {
+            "type": "mask",
+            "name": action_name,
+            "old_mask": old_mask.copy() if old_mask is not None else None,
+            "new_mask": new_mask.copy() if new_mask is not None else None,
+        }
+        self.undo_stack.append(undo_item)
+        if len(self.undo_stack) > self.MAX_UNDO_STEPS:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+        self._update_undo_redo_buttons()
+
     def _on_toggle_clipping_shortcut(self) -> None:
         """Alterna los indicadores de recorte con la tecla 'J' ignorando entradas de texto activas."""
         focused = QApplication.focusWidget()
@@ -1566,11 +1980,22 @@ class DeveloperTab(QWidget):
         self.lbl_canvas_info.setText(f"{w}x{h} px ({mp:.1f} MP) | {zoom_txt}{split_txt}")
 
     def keyPressEvent(self, event) -> None:
-        """Captura directa de teclas rápidas 'J', 'Y', 'Shift+Y', 'C' y controles de recorte."""
+        """Captura directa de teclas rápidas 'M', 'J', 'Y', 'Shift+Y', 'C' y controles interactivos."""
         focused = QApplication.focusWidget()
         if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
             super().keyPressEvent(event)
             return
+
+        if hasattr(self, 'canvas') and self.canvas.enable_masking:
+            if event.key() == Qt.Key_Escape:
+                if hasattr(self, 'btn_mask_tool'):
+                    self.btn_mask_tool.setChecked(False)
+                event.accept()
+                return
+            elif event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                self._compute_mask_from_scribbles()
+                event.accept()
+                return
 
         if self.canvas.crop_mode:
             if event.key() in (Qt.Key_Return, Qt.Key_Enter):
@@ -1586,7 +2011,11 @@ class DeveloperTab(QWidget):
                 event.accept()
                 return
 
-        if event.key() == Qt.Key_C:
+        if event.key() == Qt.Key_M:
+            self._on_toggle_mask_shortcut()
+            event.accept()
+            return
+        elif event.key() == Qt.Key_C:
             self._on_toggle_crop_shortcut()
             event.accept()
             return
@@ -1659,6 +2088,35 @@ class DeveloperTab(QWidget):
                 font-weight: bold;
             }}
             #crop_toolbar QPushButton:hover {{
+                background-color: #282e42;
+                border-color: {TEXT_CYAN};
+            }}
+            #mask_toolbar {{
+                background-color: #10121a;
+                border-bottom: 1px solid {BORDER_BASE};
+            }}
+            #mask_toolbar QLabel {{
+                color: {TEXT_SECONDARY};
+                font-size: 11px;
+            }}
+            #mask_toolbar QSpinBox {{
+                background-color: #1e2230;
+                border: 1px solid #33384c;
+                border-radius: 4px;
+                padding: 2px 4px;
+                color: {TEXT_PRIMARY};
+                font-size: 11px;
+            }}
+            #mask_toolbar QPushButton {{
+                background-color: #1e2230;
+                border: 1px solid #33384c;
+                border-radius: 4px;
+                padding: 3px 8px;
+                color: {TEXT_PRIMARY};
+                font-size: 11px;
+                font-weight: bold;
+            }}
+            #mask_toolbar QPushButton:hover {{
                 background-color: #282e42;
                 border-color: {TEXT_CYAN};
             }}
@@ -1777,6 +2235,12 @@ class DeveloperTab(QWidget):
             self.redo_stack.clear()
             self._last_committed_state = self._capture_state()
             self._update_undo_redo_buttons()
+
+            if self.current_mask is not None:
+                self.canvas.set_refined_mask(self.current_mask)
+            else:
+                self.canvas.set_refined_mask(None)
+            self._update_mask_status_ui()
 
             self.log_message(f"Imagen en memoria ({self.image_32bit.shape[1]}x{self.image_32bit.shape[0]} px). Vista acelerada activa.")
         except Exception as e:
@@ -2606,6 +3070,9 @@ class DeveloperTab(QWidget):
         for w in widgets_to_block:
             w.blockSignals(False)
 
+        if hasattr(self, '_update_mask_status_ui'):
+            self._update_mask_status_ui()
+
         if hasattr(self, '_commit_action'):
             self._commit_action()
             
@@ -2808,7 +3275,22 @@ class DeveloperTab(QWidget):
                 self._generate_before_reference()
                 self.update_stretch_preview()
                 self._update_canvas_info_label()
+                self._update_mask_status_ui()
                 self.log_message(f"↺ Deshacer recorte: Restaurada imagen original ({w}x{h} px)")
+            elif target.get("type") == "mask":
+                redo_item = {
+                    "type": "mask",
+                    "name": target.get("name", "Máscara"),
+                    "old_mask": target.get("old_mask").copy() if target.get("old_mask") is not None else None,
+                    "new_mask": target.get("new_mask").copy() if target.get("new_mask") is not None else None,
+                }
+                self.redo_stack.append(redo_item)
+                self.current_mask = target.get("old_mask")
+                self.canvas.set_refined_mask(self.current_mask)
+                self._generate_preview_proxy()
+                self.update_stretch_preview()
+                self._update_mask_status_ui()
+                self.log_message("↺ Deshacer: Cambio de máscara revertido")
             else:
                 current = self._capture_state()
                 self.redo_stack.append(current)
@@ -2848,7 +3330,22 @@ class DeveloperTab(QWidget):
                 self._generate_before_reference()
                 self.update_stretch_preview()
                 self._update_canvas_info_label()
+                self._update_mask_status_ui()
                 self.log_message(f"↻ Rehacer recorte: Recorte restaurado ({w}x{h} px)")
+            elif target.get("type") == "mask":
+                undo_item = {
+                    "type": "mask",
+                    "name": target.get("name", "Máscara"),
+                    "old_mask": self.current_mask.copy() if self.current_mask is not None else None,
+                    "new_mask": target["new_mask"].copy() if target.get("new_mask") is not None else None,
+                }
+                self.undo_stack.append(undo_item)
+                self.current_mask = target.get("new_mask")
+                self.canvas.set_refined_mask(self.current_mask)
+                self._generate_preview_proxy()
+                self.update_stretch_preview()
+                self._update_mask_status_ui()
+                self.log_message("↻ Rehacer: Cambio de máscara restablecido")
             else:
                 current = self._capture_state()
                 self.undo_stack.append(current)

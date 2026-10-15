@@ -119,3 +119,113 @@ def refine_mask_guided(
         mask_final = mask_full
 
     return np.clip(mask_final, 0.0, 1.0).astype(np.float32)
+
+
+def _smoothstep(edge0: float, edge1: float, x: np.ndarray) -> np.ndarray:
+    """Función de interpolación suave Hermite cúbica (smoothstep) acotada en [0, 1]."""
+    diff = max(1e-6, edge1 - edge0)
+    t = np.clip((x - edge0) / diff, 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def generate_luminance_mask(
+    image_rgb: np.ndarray,
+    luma_min: float = 0.0,
+    luma_max: float = 1.0,
+    feather: float = 0.08,
+    invert: bool = False
+) -> np.ndarray:
+    """
+    Genera una máscara continua de rango de luminancia tonal (Luces, Medios, Sombras).
+    
+    Parámetros:
+        image_rgb (np.ndarray): Imagen base RGB o monocroma float32 en [0.0, 1.0].
+        luma_min (float): Umbral inferior de luminancia (0.0 a 1.0).
+        luma_max (float): Umbral superior de luminancia (0.0 a 1.0).
+        feather (float): Ancho de la transición suave en los extremos.
+        invert (bool): Si es True, invierte la máscara (1.0 - máscara).
+
+    Retorna:
+        np.ndarray: Máscara continua float32 2D con valores en [0.0, 1.0].
+    """
+    if image_rgb.ndim == 3:
+        # Ponderación fotométrica Rec.709 para luminancia perceptual exacta
+        luma = (
+            0.2126 * image_rgb[..., 0] + 
+            0.7152 * image_rgb[..., 1] + 
+            0.0722 * image_rgb[..., 2]
+        ).astype(np.float32)
+    else:
+        luma = np.clip(image_rgb, 0.0, 1.0).astype(np.float32)
+
+    f = max(1e-4, float(feather))
+    l_min = float(min(luma_min, luma_max))
+    l_max = float(max(luma_min, luma_max))
+
+    # Transición en el umbral inferior (fade-in)
+    low_ramp = _smoothstep(l_min - f, l_min, luma) if l_min > 0.0 else np.ones_like(luma)
+
+    # Transición en el umbral superior (fade-out)
+    high_ramp = (1.0 - _smoothstep(l_max, l_max + f, luma)) if l_max < 1.0 else np.ones_like(luma)
+
+    mask = np.clip(low_ramp * high_ramp, 0.0, 1.0)
+
+    if invert:
+        mask = 1.0 - mask
+
+    return mask.astype(np.float32)
+
+
+def generate_color_range_mask(
+    image_rgb: np.ndarray,
+    target_hue_deg: float,
+    hue_tolerance_deg: float = 30.0,
+    min_saturation: float = 0.08,
+    feather: float = 0.08,
+    invert: bool = False
+) -> np.ndarray:
+    """
+    Genera una máscara continua de rango cromático en el espacio HSV.
+    Aísla bandas espectrales específicas (H-Alfa, OIII, polución lumínica de sodio, etc.).
+
+    Parámetros:
+        image_rgb (np.ndarray): Imagen base RGB float32 normalizada [0.0, 1.0].
+        target_hue_deg (float): Matiz objetivo en grados (0.0 a 360.0).
+        hue_tolerance_deg (float): Tolerancia angular alrededor del matiz objetivo.
+        min_saturation (float): Umbral mínimo de saturación para evitar ruido neutro.
+        feather (float): Suavizado de la transición angular y cromática.
+        invert (bool): Si es True, invierte la máscara.
+
+    Retorna:
+        np.ndarray: Máscara continua float32 2D con valores en [0.0, 1.0].
+    """
+    if image_rgb.ndim != 3:
+        return np.ones(image_rgb.shape[:2], dtype=np.float32)
+
+    img_clipped = np.clip(image_rgb, 0.0, 1.0).astype(np.float32)
+    hsv = cv2.cvtColor(img_clipped, cv2.COLOR_RGB2HSV)
+    h_channel = hsv[..., 0]  # En OpenCV float32, Hue está en [0.0, 360.0]
+    s_channel = hsv[..., 1]  # Saturation en [0.0, 1.0]
+
+    # Diferencia angular circular más corta en el círculo cromático [0, 360]
+    target_h = float(target_hue_deg) % 360.0
+    tol = max(1.0, float(hue_tolerance_deg))
+    f = max(0.01, float(feather))
+
+    diff = np.abs(h_channel - target_h)
+    angular_dist = np.minimum(diff, 360.0 - diff)
+
+    # Rampa de tolerancia angular
+    fade_deg = f * 45.0
+    hue_mask = 1.0 - _smoothstep(tol, tol + fade_deg, angular_dist)
+
+    # Rampa de corte por saturación para excluir estrellas blancas y fondo neutro
+    s_min = max(0.01, float(min_saturation))
+    sat_ramp = _smoothstep(max(0.0, s_min - f * 0.15), s_min, s_channel)
+
+    mask = np.clip(hue_mask * sat_ramp, 0.0, 1.0)
+
+    if invert:
+        mask = 1.0 - mask
+
+    return mask.astype(np.float32)

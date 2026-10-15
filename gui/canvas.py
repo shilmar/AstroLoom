@@ -119,6 +119,40 @@ class MaskCanvas(QWidget):
         if self.enable_masking:
             self.update_brush_cursor()
 
+    def set_brush_mode(self, mode: int) -> None:
+        """Establece la clase del pincel: 2 para Cielo (Verde), 1 para Suelo (Rojo)."""
+        self.brush_mode = 2 if mode == 2 else 1
+
+    def set_masking_enabled(self, enabled: bool) -> None:
+        """Activa o desactiva interactivamente el modo de trazado de máscaras."""
+        if self.enable_masking != enabled:
+            self.enable_masking = enabled
+            if enabled:
+                # Asegurar inicialización de la capa de trazos adaptada al tamaño actual
+                if self.base_pixmap and not self.base_pixmap.isNull():
+                    w = self.base_pixmap.width()
+                    h = self.base_pixmap.height()
+                    if self.scribble_pixmap is None or self.scribble_pixmap.size() != self.base_pixmap.size():
+                        self.scribble_pixmap = QPixmap(w, h)
+                        self.scribble_pixmap.fill(Qt.transparent)
+                # Desactivar herramientas excluyentes
+                if self.crop_mode:
+                    self.set_crop_mode(False)
+                if self.eyedropper_active:
+                    self.set_eyedropper_active(False)
+                if self.magnifier_active:
+                    self.set_magnifier_active(False)
+                self.update_brush_cursor()
+            else:
+                self.setCursor(Qt.ArrowCursor)
+            self.update()
+
+    def clear_scribbles(self) -> None:
+        """Borra todos los trazos dibujados por el usuario sin alterar la máscara calculada."""
+        if self.scribble_pixmap and not self.scribble_pixmap.isNull():
+            self.scribble_pixmap.fill(Qt.transparent)
+            self.update()
+
     def set_mask_visible(self, visible: bool) -> None:
         """Activa o desactiva la visibilidad del overlay de la máscara refinada."""
         self.show_mask_overlay = visible
@@ -128,19 +162,6 @@ class MaskCanvas(QWidget):
         """Activa o desactiva la visualización de los trazos pintados."""
         self.show_scribbles = visible
         self.update()
-
-    def wheelEvent(self, event) -> None:
-        """Permite escalar el diámetro del pincel directamente con la rueda del ratón."""
-        if not self.enable_masking:
-            return
-        delta = event.angleDelta().y()
-        if delta != 0:
-            step = 3 if delta > 0 else -3
-            new_r = max(5, min(120, self.screen_brush_radius + step))
-            if new_r != self.screen_brush_radius:
-                self.set_brush_radius(new_r)
-                self.brush_size_changed.emit(self.screen_brush_radius)
-            event.accept()
 
     def load_image(self, rgb_float: np.ndarray, display_stretched: Optional[np.ndarray] = None) -> None:
         """
@@ -585,7 +606,7 @@ class MaskCanvas(QWidget):
         super().leaveEvent(event)
 
     def wheelEvent(self, event) -> None:
-        """Permite ajustar dinámicamente el factor de aumento de la lupa flotante con la rueda del ratón."""
+        """Permite escalar dinámicamente la lupa flotante o el radio del pincel de máscara con la rueda del ratón."""
         if self.magnifier_active:
             delta = event.angleDelta().y()
             if delta > 0:
@@ -595,6 +616,16 @@ class MaskCanvas(QWidget):
             self.update()
             event.accept()
             return
+        elif self.enable_masking:
+            delta = event.angleDelta().y()
+            if delta != 0:
+                step = 3 if delta > 0 else -3
+                new_r = max(5, min(120, self.screen_brush_radius + step))
+                if new_r != self.screen_brush_radius:
+                    self.set_brush_radius(new_r)
+                    self.brush_size_changed.emit(self.screen_brush_radius)
+                event.accept()
+                return
         super().wheelEvent(event)
 
     def paint_on_scribble(self, p1: QPoint, p2: QPoint) -> None:
