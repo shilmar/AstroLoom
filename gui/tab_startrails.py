@@ -16,14 +16,14 @@ import tifffile
 import numpy as np
 import cv2
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal, QCoreApplication
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QPushButton, QFileDialog, QMessageBox, QSlider, QRadioButton,
     QButtonGroup, QComboBox, QCheckBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QProgressBar, QTextEdit, QScrollArea,
-    QSplitter, QFrame, QSizePolicy
+    QSplitter, QFrame, QSizePolicy, QProgressDialog
 )
 
 from core.stacking import load_image_as_float32
@@ -454,12 +454,36 @@ class StartrailsTab(QWidget):
         gnd_sub_layout.addLayout(row_gnd_mode)
 
         # Máscara de horizonte
+        self.btn_ai_mask = QPushButton("🧠 Auto-Detectar Suelo (IA)")
+        self.btn_ai_mask.setCursor(Qt.PointingHandCursor)
+        self.btn_ai_mask.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6a1b9a, stop:1 #8e24aa);
+                color: #ffffff;
+                font-weight: bold;
+                border-radius: 4px;
+                padding: 6px 12px;
+                border: 1px solid #ba68c8;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #7b1fa2, stop:1 #9c27b0);
+                border-color: #ce93d8;
+            }
+            QPushButton:pressed {
+                background-color: #4a148c;
+            }
+        """)
+        self.btn_ai_mask.setToolTip("Segmenta automáticamente el horizonte con IA ligera U²-Net y Guided Filter sobre la toma de referencia")
+        self.btn_ai_mask.clicked.connect(self._on_ai_mask_clicked)
+        gnd_sub_layout.addWidget(self.btn_ai_mask)
+
         row_mask_btns = QHBoxLayout()
-        self.btn_load_mask = QPushButton("📁 Cargar Máscara...")
+        self.btn_load_mask = QPushButton("📁 Cargar...")
         self.btn_load_mask.setToolTip("Carga un archivo PNG, TIFF o FITS con la máscara de cielo/suelo")
         self.btn_load_mask.clicked.connect(self._on_load_mask_clicked)
 
-        self.btn_import_stacker_mask = QPushButton("🖌️ Usar Máscara del Apilador")
+        self.btn_import_stacker_mask = QPushButton("🖌️ Del Apilador")
         self.btn_import_stacker_mask.setStyleSheet("color: #ffcc80;")
         self.btn_import_stacker_mask.setToolTip("Importa con un solo clic la máscara de horizonte calculada en la Pestaña 1")
         self.btn_import_stacker_mask.clicked.connect(self._on_import_stacker_mask_clicked)
@@ -809,6 +833,106 @@ class StartrailsTab(QWidget):
         self.lbl_darks_count.setText("0 darks")
         self.lbl_darks_count.setStyleSheet("color: #90a4ae; font-size: 11px;")
         self.log("Darks descartados.")
+
+    def _on_ai_mask_clicked(self) -> None:
+        """Detección automática de cielo/suelo mediante IA Ligera U²-Net para Startrails."""
+        if not self.files_list:
+            QMessageBox.information(self, "Aviso", "Añade primero tomas a la serie para detectar el suelo.")
+            return
+
+        ref_img = self.canvas.orig_rgb
+        if ref_img is None:
+            ref_idx = min(self.ref_idx, len(self.files_list) - 1)
+            ref_path = self.files_list[ref_idx]
+            try:
+                ref_img = load_image_as_float32(ref_path)
+                self.canvas.load_image(ref_img)
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"No se pudo cargar la toma de referencia:\n{e}")
+                return
+
+        from core.ai_horizon import is_ai_model_available
+        if not is_ai_model_available():
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Modelo de IA no encontrado")
+            msg.setText(
+                "El modelo de IA para detección semántica precisa de suelo (skyseg.onnx, ~167 MB) no se encuentra en la carpeta 'models/'.\n\n"
+                "¿Deseas descargarlo ahora automáticamente o prefieres usar el método algorítmico rápido?"
+            )
+            btn_download = msg.addButton("📥 Descargar IA (~167 MB)", QMessageBox.AcceptRole)
+            btn_algo = msg.addButton("⚡ Usar Algorítmico", QMessageBox.ActionRole)
+            btn_cancel = msg.addButton("Cancelar", QMessageBox.RejectRole)
+            msg.setDefaultButton(btn_download)
+            msg.exec()
+
+            clicked = msg.clickedButton()
+            if clicked == btn_download:
+                self._start_model_download_startrails()
+                return
+            elif clicked == btn_algo:
+                self._run_ai_mask_startrails(force_algorithmic=True)
+                return
+            else:
+                return
+
+        self._run_ai_mask_startrails(force_algorithmic=False)
+
+    def _start_model_download_startrails(self):
+        """Descarga asistida del modelo ONNX con diálogo de progreso para Startrails."""
+        progress = QProgressDialog("Conectando con el servidor de modelos...", "Cancelar", 0, 100, self)
+        progress.setWindowTitle("Descarga de Modelo IA (AstroLoom)")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.setAutoClose(True)
+
+        from gui.worker import ModelDownloadWorker
+        self.download_worker = ModelDownloadWorker(parent=self)
+
+        def on_prog(pct, d_mb, t_mb):
+            progress.setValue(pct)
+            progress.setLabelText(f"Descargando modelo de IA (skyseg.onnx)...\n{d_mb:.1f} MB de {t_mb:.1f} MB ({pct}%)")
+
+        def on_finished(path):
+            progress.close()
+            self.log(f"✓ [IA HORIZONTE] Modelo descargado e instalado en: {os.path.basename(path)}")
+            self._run_ai_mask_startrails(force_algorithmic=False)
+
+        def on_error(err):
+            progress.close()
+            self.log(f"[ERROR DESCARGA] {err}")
+            QMessageBox.warning(self, "Error en Descarga", f"No se pudo descargar el modelo:\n{err}\n\nSe usará el método algorítmico.")
+            self._run_ai_mask_startrails(force_algorithmic=True)
+
+        def on_cancel():
+            self.download_worker.cancel()
+            self.log("[IA HORIZONTE] Descarga cancelada por el usuario.")
+
+        self.download_worker.progress_changed.connect(on_prog)
+        self.download_worker.finished_success.connect(on_finished)
+        self.download_worker.error_occurred.connect(on_error)
+        progress.canceled.connect(on_cancel)
+
+        self.download_worker.start()
+
+    def _run_ai_mask_startrails(self, force_algorithmic: bool = False):
+        self.setCursor(Qt.WaitCursor)
+        self.log("[IA HORIZONTE] Ejecutando detección de cielo/suelo...")
+        QCoreApplication.processEvents()
+        try:
+            from core.ai_horizon import auto_detect_sky_mask
+            ref_img = self.canvas.orig_rgb
+            mask, method = auto_detect_sky_mask(ref_img, force_algorithmic=force_algorithmic)
+            self.current_mask = (mask * 255.0).astype(np.uint8)
+            self.chk_show_mask.setChecked(True)
+            self._update_mask_status_label()
+            self._update_canvas_mask_overlay()
+            self.log(f"✓ Máscara de horizonte calculada con éxito ({method}).")
+        except Exception as e:
+            self.log(f"[ERROR IA HORIZONTE] Falló la detección: {e}")
+            QMessageBox.critical(self, "Error Detección IA", f"No se pudo completar la segmentación automática:\n{e}")
+        finally:
+            self.unsetCursor()
 
     def _on_load_mask_clicked(self) -> None:
         """Permite al usuario seleccionar un archivo de imagen con la máscara de horizonte."""

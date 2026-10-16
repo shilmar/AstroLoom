@@ -36,6 +36,7 @@ class MaskLayersWidget(QWidget):
     layers_changed = Signal()                    # Emitido al modificar cualquier capa o parámetro
     preview_mask_requested = Signal(object)       # Emitido con mask (np.ndarray) o None para el lienzo
     edit_ground_mask_requested = Signal()        # Solicitud de abrir el pincel interactivo de suelo
+    ai_ground_mask_requested = Signal()          # Solicitud de auto-detección de horizonte con IA
     brush_tool_toggled = Signal(bool, object)    # (activo, MaskLayer) para activar el pincel en el lienzo
     brush_params_changed = Signal(int, float, float, str) # (radio, dureza, flujo, modo)
     starnet_opacity_changed = Signal(float)       # (opacidad 0.0 - 1.0) para sincronizar con slider_stars de StarNet
@@ -437,6 +438,27 @@ class MaskLayersWidget(QWidget):
         self.lbl_gnd_desc = QLabel("Vinculada a la máscara de segmentación de suelo.")
         self.lbl_gnd_desc.setStyleSheet("color: #a5d6a7; font-size: 11px; font-style: italic;")
         row_gnd_info.addWidget(self.lbl_gnd_desc, stretch=1)
+
+        self.btn_ai_gnd_mask = QPushButton("🧠 Detección IA")
+        self.btn_ai_gnd_mask.setCursor(Qt.PointingHandCursor)
+        self.btn_ai_gnd_mask.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6a1b9a, stop:1 #8e24aa);
+                color: #ffffff;
+                font-weight: bold;
+                border-radius: 4px;
+                padding: 4px 8px;
+                border: 1px solid #ba68c8;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #7b1fa2, stop:1 #9c27b0);
+                border-color: #ce93d8;
+            }
+        """)
+        self.btn_ai_gnd_mask.setToolTip("Detecta automáticamente el horizonte con IA ligera U²-Net (1-Click)")
+        self.btn_ai_gnd_mask.clicked.connect(self.ai_ground_mask_requested.emit)
+        row_gnd_info.addWidget(self.btn_ai_gnd_mask)
 
         self.btn_edit_gnd_mask = QPushButton("🖌️ Pintar Trazos...")
         self.btn_edit_gnd_mask.setCursor(Qt.PointingHandCursor)

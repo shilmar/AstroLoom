@@ -969,6 +969,7 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.layers_changed.connect(self.update_stretch_preview)
         self.mask_layers_widget.preview_mask_requested.connect(self._on_layer_mask_preview_requested)
         self.mask_layers_widget.edit_ground_mask_requested.connect(self._open_mask_tool_from_section)
+        self.mask_layers_widget.ai_ground_mask_requested.connect(self._detect_mask_ai_from_toolbar)
         self.mask_layers_widget.brush_tool_toggled.connect(self._on_layer_brush_toggled)
         self.mask_layers_widget.brush_params_changed.connect(self._on_layer_brush_params_changed)
         self.mask_layers_widget.starnet_opacity_changed.connect(self._on_mask_layer_starnet_opacity)
@@ -1024,11 +1025,39 @@ class DeveloperTab(QWidget):
 
         # Botón Exportar siempre fijado al pie del panel izquierdo
         self.btn_export = QPushButton("💾 EXPORTAR IMAGEN REVELADA...")
-        self.btn_export.setFixedHeight(44)
+        self.btn_export.setFixedHeight(40)
         self.btn_export.setCursor(Qt.PointingHandCursor)
         self.btn_export.setStyleSheet(STYLE_RUN_IDLE)
         self.btn_export.clicked.connect(self.export_image)
         left_container_layout.addWidget(self.btn_export, 0)
+
+        self.btn_export_psd = QPushButton("📑 EXPORTAR A PHOTOSHOP (PSD)...")
+        self.btn_export_psd.setFixedHeight(34)
+        self.btn_export_psd.setCursor(Qt.PointingHandCursor)
+        self.btn_export_psd.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1a237e, stop:1 #283593);
+                color: #82b1ff;
+                font-weight: bold;
+                border: 1px solid #3d5afe;
+                border-radius: 4px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #283593, stop:1 #3949ab);
+                color: #ffffff;
+                border-color: #536dfe;
+            }
+            QPushButton:pressed {
+                background-color: #0d47a1;
+            }
+        """)
+        self.btn_export_psd.setToolTip(
+            "Exporta el proyecto como archivo nativo de Adobe Photoshop (.psd) de 16 bits.\n"
+            "Incluye por separado las capas de Imagen Base, Fondo Starless, Estrellas (Add), Suelo y Máscara de Horizonte."
+        )
+        self.btn_export_psd.clicked.connect(self.export_psd_dialog)
+        left_container_layout.addWidget(self.btn_export_psd, 0)
 
         # Registro de Actividad compacto
         self.lbl_log_title = QLabel(tr("developer.activity_log", "Registro de Actividad:"))
@@ -1286,6 +1315,31 @@ class DeveloperTab(QWidget):
         )
         self.btn_mask_tool.toggled.connect(self._on_toggle_mask_tool)
         tb_layout.addWidget(self.btn_mask_tool)
+
+        # 8b. Botón Detección Automática con IA Ligera (1-Click)
+        self.btn_top_ai_mask = QPushButton("🧠 Máscara IA")
+        self.btn_top_ai_mask.setCursor(Qt.PointingHandCursor)
+        self.btn_top_ai_mask.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6a1b9a, stop:1 #8e24aa);
+                color: #ffffff;
+                font-weight: bold;
+                border: 1px solid #ba68c8;
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #7b1fa2, stop:1 #9c27b0);
+                border-color: #ce93d8;
+            }
+            QPushButton:pressed {
+                background-color: #4a148c;
+            }
+        """)
+        self.btn_top_ai_mask.setToolTip("Detección y segmentación automática de cielo y suelo mediante IA ligera U²-Net (1-Click)")
+        self.btn_top_ai_mask.clicked.connect(self._detect_mask_ai_from_toolbar)
+        tb_layout.addWidget(self.btn_top_ai_mask)
 
         # Espaciador elástico
         tb_layout.addStretch()
@@ -1801,10 +1855,33 @@ class DeveloperTab(QWidget):
         sep3.setFrameShape(QFrame.VLine)
         sep3.setFrameShadow(QFrame.Sunken)
         sep3.setStyleSheet("color: #3b4252; margin: 4px 2px;")
-        tb_layout.addWidget(sep3)
+        # 5a. Detección Automática con IA Ligera
+        self.btn_ai_mask = QPushButton("🧠 Máscara IA")
+        self.btn_ai_mask.setCursor(Qt.PointingHandCursor)
+        self.btn_ai_mask.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6a1b9a, stop:1 #8e24aa);
+                color: #ffffff;
+                font-weight: bold;
+                border: 1px solid #ba68c8;
+                border-radius: 4px;
+                padding: 3px 12px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #7b1fa2, stop:1 #9c27b0);
+                border-color: #ce93d8;
+            }
+            QPushButton:pressed {
+                background-color: #4a148c;
+            }
+        """)
+        self.btn_ai_mask.setToolTip("Detecta automáticamente el horizonte y suelo mediante IA ligera U²-Net con 1 solo clic")
+        self.btn_ai_mask.clicked.connect(self._detect_mask_ai_from_toolbar)
+        tb_layout.addWidget(self.btn_ai_mask)
 
-        # 5. Generar Máscara
-        self.btn_generate_mask = QPushButton("✨ Generar Máscara (Intro)")
+        # 5b. Generar Máscara desde trazos
+        self.btn_generate_mask = QPushButton("✨ Generar (Intro)")
         self.btn_generate_mask.setCursor(Qt.PointingHandCursor)
         self.btn_generate_mask.setStyleSheet("""
             QPushButton {
@@ -1813,7 +1890,7 @@ class DeveloperTab(QWidget):
                 font-weight: bold;
                 border: 1px solid #26a69a;
                 border-radius: 4px;
-                padding: 3px 10px;
+                padding: 3px 8px;
                 font-size: 11px;
             }
             QPushButton:hover {
@@ -1828,8 +1905,8 @@ class DeveloperTab(QWidget):
         self.btn_generate_mask.clicked.connect(self._compute_mask_from_scribbles)
         tb_layout.addWidget(self.btn_generate_mask)
 
-        # 5b. Cargar Máscara (del Apilado o desde Archivo)
-        self.btn_load_mask = QPushButton("📂 Cargar Máscara...")
+        # 5c. Cargar Máscara (del Apilado o desde Archivo)
+        self.btn_load_mask = QPushButton("📂 Cargar...")
         self.btn_load_mask.setCursor(Qt.PointingHandCursor)
         self.btn_load_mask.setStyleSheet("""
             QPushButton {
@@ -1838,7 +1915,7 @@ class DeveloperTab(QWidget):
                 font-weight: bold;
                 border: 1px solid #0288d1;
                 border-radius: 4px;
-                padding: 3px 10px;
+                padding: 3px 8px;
                 font-size: 11px;
             }
             QPushButton:hover {
@@ -1854,7 +1931,7 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.btn_load_mask)
 
         # 6. Ver / Ocultar Máscara Overlay
-        self.btn_mask_overlay_toggle = QPushButton("👁️ Ver Máscara")
+        self.btn_mask_overlay_toggle = QPushButton("👁️ Ver")
         self.btn_mask_overlay_toggle.setCheckable(True)
         self.btn_mask_overlay_toggle.setChecked(True)
         self.btn_mask_overlay_toggle.setCursor(Qt.PointingHandCursor)
@@ -1863,14 +1940,14 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.btn_mask_overlay_toggle)
 
         # 7. Limpiar Trazos
-        self.btn_clear_scribbles = QPushButton("🗑️ Limpiar Trazos")
+        self.btn_clear_scribbles = QPushButton("🗑️ Trazos")
         self.btn_clear_scribbles.setCursor(Qt.PointingHandCursor)
         self.btn_clear_scribbles.setToolTip("Borra los trazos dibujados sin eliminar la máscara actual calculada")
         self.btn_clear_scribbles.clicked.connect(self._clear_scribbles)
         tb_layout.addWidget(self.btn_clear_scribbles)
 
         # 8. Quitar / Eliminar Máscara
-        self.btn_delete_mask = QPushButton("❌ Quitar Máscara")
+        self.btn_delete_mask = QPushButton("❌ Quitar")
         self.btn_delete_mask.setCursor(Qt.PointingHandCursor)
         self.btn_delete_mask.setToolTip("Elimina la máscara activa por completo de la imagen")
         self.btn_delete_mask.clicked.connect(self._delete_mask)
@@ -3650,25 +3727,38 @@ class DeveloperTab(QWidget):
         else:
             self.unsetCursor()
 
-    def export_image(self):
+    def export_psd_dialog(self):
+        """Abre el diálogo de exportación configurado directamente en formato Photoshop por capas."""
+        if self.image_32bit is None:
+            QMessageBox.warning(self, "Aviso", "Abre o procesa primero una toma en el revelador.")
+            return
+        self.export_image(force_format="psd")
+
+    def export_image(self, force_format: Optional[str] = None):
         if self.image_32bit is None:
             return
 
         filtros = (
             "TIFF 16-bit (*.tif *.tiff);;"
             "TIFF 32-bit Float (*.tif *.tiff);;"
+            "Photoshop por Capas (*.psd);;"
             "JPEG (*.jpg *.jpeg)"
         )
-        filtro_por_defecto = "TIFF 16-bit (*.tif *.tiff)"
+        if force_format == "psd":
+            filtro_por_defecto = "Photoshop por Capas (*.psd)"
+            default_filename = "revelado_capas.psd"
+        else:
+            filtro_por_defecto = "TIFF 16-bit (*.tif *.tiff)"
+            default_filename = "revelado_final.tif"
         
         cfg = load_config()
         default_dir = cfg.get("export_dir", os.getcwd())
         os.makedirs(default_dir, exist_ok=True)
-        default_path = os.path.join(default_dir, "revelado_final.tif")
+        default_path = os.path.join(default_dir, default_filename)
 
         p, selected_filter = QFileDialog.getSaveFileName(
             self, 
-            "Exportar Revelado", 
+            "Exportar a Photoshop por Capas" if force_format == "psd" else "Exportar Revelado", 
             default_path, 
             filtros, 
             selectedFilter=filtro_por_defecto
@@ -3697,6 +3787,7 @@ class DeveloperTab(QWidget):
             full_base, _ = self._compose_active_base(for_export=True)
 
             full_mask = None
+            clean_m = None
             if self.current_mask is not None:
                 clean_m = np.squeeze(self.current_mask)
                 if clean_m.ndim > 2:
@@ -3715,7 +3806,38 @@ class DeveloperTab(QWidget):
             processed = self._apply_pipeline_on_image(full_base, precomputed_mask=full_mask)
 
             ext = os.path.splitext(p)[1].lower()
-            if ext in ['.jpg', '.jpeg']:
+            if ext == '.psd' or "Photoshop" in selected_filter:
+                from core.psd_export import export_developer_psd
+                adj_layers = self.mask_layers_widget.layers if hasattr(self, 'mask_layers_widget') else None
+                ok, desc, n_layers = export_developer_psd(
+                    p,
+                    composite_image=processed,
+                    base_image=full_base,
+                    starless_image=self.image_starless,
+                    stars_image=self.image_stars,
+                    sky_mask=clean_m if self.current_mask is not None else None,
+                    adjustment_layers=adj_layers,
+                    depth=16,
+                    log_fn=self.log_message
+                )
+                if not ok:
+                    raise RuntimeError(desc)
+                self.log_message(f"Imagen PSD guardada en: {os.path.basename(p)} ({desc})")
+                QMessageBox.information(
+                    self, "Exportación a Photoshop (PSD)",
+                    f"Archivo PSD multicapa guardado con éxito:\n{p}\n\n"
+                    f"Capas generadas: {n_layers} (16-bit por canal)\n"
+                    f"Resolución: {w_full}x{h_full} px\n\n"
+                    f"Se han preservado de forma independiente:\n"
+                    f"• Resultado final compuesto\n"
+                    f"• Imagen base original\n"
+                    f"• Fondo Starless (si existe)\n"
+                    f"• Estrellas en modo Linear Dodge / Add (si existen)\n"
+                    f"• Suelo y cielo aislados por máscara de horizonte (si existe)\n"
+                    f"• Máscara de horizonte de referencia en escala de grises"
+                )
+                return
+            elif ext in ['.jpg', '.jpeg']:
                 bgr8 = cv2.cvtColor((np.clip(processed, 0.0, 1.0) * 255.0).astype(np.uint8), cv2.COLOR_RGB2BGR)
                 cv2.imwrite(p, bgr8, [cv2.IMWRITE_JPEG_QUALITY, 96])
                 desc = "JPEG 8-bit"
