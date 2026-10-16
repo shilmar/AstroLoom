@@ -212,6 +212,28 @@ class MaskCanvas(QWidget):
             self.scribble_pixmap.fill(Qt.transparent)
             self.update()
 
+    def clear_mask(self) -> None:
+        """Borra la máscara calculada y elimina el overlay de visualización."""
+        self.last_mask_array = None
+        self.refined_overlay = None
+        self.update()
+
+    def clear_all_masking(self) -> None:
+        """Elimina la máscara calculada y todos los trazos dibujados."""
+        self.clear_scribbles()
+        self.clear_mask()
+
+    def clear_image(self) -> None:
+        """Limpia la imagen del lienzo, liberando pixmaps y overlays asociados."""
+        self.orig_rgb = None
+        self._cached_display_u8 = None
+        self.base_pixmap = None
+        self.before_pixmap = None
+        self.clipping_overlay = None
+        self.clear_all_masking()
+        self.scribble_pixmap = None
+        self.update()
+
     def set_mask_visible(self, visible: bool) -> None:
         """Activa o desactiva la visibilidad del overlay de la máscara refinada."""
         self.show_mask_overlay = visible

@@ -731,16 +731,16 @@ class StartrailsTab(QWidget):
         self.current_preview_img = None
         self.final_startrail_img = None
         self.raw_startrail_img = None
-        self.canvas.orig_rgb = None
-        self.canvas.base_pixmap = None
-        self.canvas.update()
+        self.current_mask = None
+        self._update_mask_status_label()
+        self.canvas.clear_image()
         self.timelapse_custom_path = None
         self.last_timelapse_path = None
         self.btn_play_timelapse.setEnabled(False)
         self.btn_apply_color_live.setEnabled(False)
         self.lbl_tl_path.setText("Destino: Automático (junto a las tomas)")
         self.lbl_tl_path.setStyleSheet("color: #90a4ae; font-size: 10px;")
-        self.log("Lista de tomas vaciada.")
+        self.log("Lista de tomas vaciada y máscara reiniciada.")
 
     def _refresh_table(self) -> None:
         """Actualiza la tabla con los archivos cargados."""

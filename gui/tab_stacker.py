@@ -696,8 +696,12 @@ class StackerTab(QWidget):
                         self.load_frame_to_canvas(self.lights_list[0])
                     else:
                         self.current_ref_path = None
-                        self.canvas.base_pixmap = None
-                        self.canvas.update()
+                        self.clear_mask()
+                        self.canvas.clear_image()
+                elif not self.lights_list:
+                    self.current_ref_path = None
+                    self.clear_mask()
+                    self.canvas.clear_image()
                 self._refresh_list_view("Lights")
             elif tab_name == "Darks":
                 self._refresh_list_view("Darks")
@@ -776,9 +780,9 @@ class StackerTab(QWidget):
             if hasattr(self, 'lbl_cull_summary'):
                 self.lbl_cull_summary.setText("")
             self.current_ref_path = None
-            self.canvas.base_pixmap = None
-            self.canvas.update()
-            self.log_message("Lista de Lights vaciada.")
+            self.clear_mask()
+            self.canvas.clear_image()
+            self.log_message("Lista de Lights vaciada y máscara reiniciada.")
         elif idx == 1:
             self.darks_list.clear()
             self.list_darks.clear()
@@ -1067,9 +1071,12 @@ class StackerTab(QWidget):
     def clear_mask(self):
         """Elimina todos los trazos y la máscara calculada para empezar de cero."""
         self.computed_mask = None
-        if self.canvas.scribble_pixmap:
-            self.canvas.scribble_pixmap.fill(Qt.transparent)
-        self.canvas.refined_overlay = None
+        if hasattr(self.canvas, 'clear_all_masking'):
+            self.canvas.clear_all_masking()
+        else:
+            if self.canvas.scribble_pixmap:
+                self.canvas.scribble_pixmap.fill(Qt.transparent)
+            self.canvas.set_refined_mask(None)
         self.canvas.update()
         self.log_message("Máscara y trazos eliminados por completo.")
 
@@ -1138,6 +1145,9 @@ class StackerTab(QWidget):
 
         try:
             data, loaded_mask = self.project_mgr.load(p)
+
+            self.clear_mask()
+            self.canvas.clear_image()
 
             self.lights_list.clear()
             self.darks_list.clear()
@@ -1245,9 +1255,7 @@ class StackerTab(QWidget):
         self.session_title_changed.emit("")
 
         self.clear_mask()
-        self.canvas.orig_rgb = None
-        self.canvas.base_pixmap = None
-        self.canvas.update()
+        self.canvas.clear_image()
 
         self.combo_mode.setCurrentIndex(0)
         self.combo_ground.setCurrentIndex(0)
