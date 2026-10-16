@@ -89,6 +89,7 @@ class MaskCanvas(QWidget):
 
         # Pipeta de Balance de Blancos (Eyedropper)
         self.eyedropper_active: bool = False
+        self.last_sampled_coords: Optional[tuple[float, float]] = None
 
         # Lupa de Inspección Flotante (Floating Magnifier)
         self.magnifier_active: bool = False
@@ -530,6 +531,7 @@ class MaskCanvas(QWidget):
                 y2 = min(h, iy + 3)
                 patch = self.orig_rgb[y1:y2, x1:x2]
                 r, g, b = np.mean(patch, axis=(0, 1))[:3]
+                self.last_sampled_coords = (float(ix) / float(max(1, w)), float(iy) / float(max(1, h)))
                 self.color_sampled.emit(float(r), float(g), float(b))
                 self.set_eyedropper_active(False)
             event.accept()

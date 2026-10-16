@@ -29,7 +29,8 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QSizePolicy,
     QMenu,
-    QProgressDialog
+    QProgressDialog,
+    QCheckBox
 )
 from PySide6.QtCore import Qt, QCoreApplication, QTimer
 from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap, QColor, QFont, QCursor
@@ -53,6 +54,12 @@ from core.stretch import (
     apply_hue_vs_sat_curve,
     apply_luma_vs_sat_curve,
     realce_multiescala_ondiculas
+)
+from core.light_pollution import (
+    compute_light_pollution_dome,
+    apply_parametric_light_pollution,
+    estimate_light_pollution_center,
+    LP_PRESET_TINTS
 )
 from core.masking import refine_mask_guided
 from core.mask_layers import (
@@ -105,7 +112,17 @@ class DeveloperTab(QWidget):
         self.multiescala_estructura = 0.0   # -1.0 a +1.0
         self.multiescala_fondo = 0.0        # 0.0 a 1.0
 
-        self.lp_reduction = 0.0  # Rango 0.0 a 1.0
+        # Parámetros de Reducción Paramétrica de Contaminación Lumínica (Cúpula de Luz 2D)
+        self.lp_reduction: float = 0.0              # 0.0 a 1.0 (0% a 100%)
+        self.lp_center_x: float = 0.50              # Centro horizontal [0.0, 1.0]
+        self.lp_center_y: float = 0.90              # Centro vertical (horizonte) [0.0, 1.0]
+        self.lp_width: float = 0.60                 # Ancho horizontal de la cúpula
+        self.lp_height: float = 0.45                # Alto vertical de la cúpula
+        self.lp_tint_type: str = "sodium"           # "sodium", "warm_led", "cold_led", "neutral", "custom"
+        self.lp_custom_tint: tuple = (1.0, 0.68, 0.22)
+        self.lp_tint_strength: float = 0.50         # Grado de neutralización cromática (0.0 a 1.0)
+        self.lp_mode: str = "attenuate"             # "attenuate" o "subtractive"
+        self.lp_legacy_1d: bool = False             # Compatibilidad con rampa 1D
         self.clarity_starless_val = 0.0
         self.dehaze_starless_val = 0.0
         
@@ -295,7 +312,7 @@ class DeveloperTab(QWidget):
         self.sec_gradients = CollapsibleSection(
             "⚡ Calibración y Gradientes (GraXpert AI)",
             is_expanded=False,
-            on_reset=lambda: self.slider_lp.setValue(0)
+            on_reset=self.reset_gradients
         )
         w_bg = QWidget()
         layout_bg = QVBoxLayout(w_bg)
@@ -337,6 +354,178 @@ class DeveloperTab(QWidget):
         self.slider_lp.valueChanged.connect(self.on_lp_changed)
         row_lp.addWidget(self.slider_lp, stretch=1)
         layout_bg.addLayout(row_lp)
+
+        # Botonera de herramientas de Cúpula 2D
+        row_lp_tools = QHBoxLayout()
+        row_lp_tools.setSpacing(4)
+        self.btn_lp_expand = QPushButton("⚙️ Cúpula 2D")
+        self.btn_lp_expand.setCheckable(True)
+        self.btn_lp_expand.setChecked(False)
+        self.btn_lp_expand.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
+            "QPushButton:checked { background: #3b4252; color: #ffd54f; border: 1px solid #ffd54f; }"
+        )
+        self.btn_lp_expand.setToolTip("Despliega los controles analíticos avanzados de posición 2D, forma y tinte cromático de la cúpula.")
+        self.btn_lp_expand.toggled.connect(self._on_toggle_lp_expand)
+        row_lp_tools.addWidget(self.btn_lp_expand)
+
+        self.btn_lp_auto = QPushButton("⚡ Auto-Detectar")
+        self.btn_lp_auto.setStyleSheet("font-size: 11px; padding: 4px; font-weight: bold; color: #80d8ff;")
+        self.btn_lp_auto.setToolTip("Analiza el resplandor difuso del cielo y sitúa automáticamente el centro de la cúpula urbana.")
+        self.btn_lp_auto.clicked.connect(self.auto_detect_lp_center)
+        row_lp_tools.addWidget(self.btn_lp_auto)
+
+        self.btn_lp_center_pipette = QPushButton("🎯 Pinchar Centro")
+        self.btn_lp_center_pipette.setCheckable(True)
+        self.btn_lp_center_pipette.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
+            "QPushButton:checked { background: #3b4252; color: #ffd54f; border: 1px solid #ffd54f; }"
+        )
+        self.btn_lp_center_pipette.setToolTip("Activa la pipeta interactiva en el lienzo para situar el foco de la cúpula de polución con un clic.")
+        self.btn_lp_center_pipette.toggled.connect(self._on_toggle_lp_center_pipette)
+        row_lp_tools.addWidget(self.btn_lp_center_pipette)
+        layout_bg.addLayout(row_lp_tools)
+
+        # Contenedor desplegable de parámetros 2D
+        self.w_lp_params = QWidget()
+        self.w_lp_params.setVisible(False)
+        self.w_lp_params.setStyleSheet("background-color: #1e2129; border-radius: 6px;")
+        layout_lp_params = QVBoxLayout(self.w_lp_params)
+        layout_lp_params.setContentsMargins(8, 6, 8, 8)
+        layout_lp_params.setSpacing(6)
+
+        # Fila 1: Centro X y Centro Y
+        row_lp_c = QHBoxLayout()
+        row_lp_c.setSpacing(8)
+
+        col_cx = QHBoxLayout()
+        col_cx.addWidget(QLabel("Centro X:"))
+        self.spin_lp_cx = QDoubleSpinBox()
+        self.spin_lp_cx.setRange(0.0, 1.0)
+        self.spin_lp_cx.setSingleStep(0.01)
+        self.spin_lp_cx.setDecimals(2)
+        self.spin_lp_cx.setValue(0.50)
+        self.spin_lp_cx.setFixedWidth(54)
+        self.spin_lp_cx.valueChanged.connect(self.on_spin_lp_cx_changed)
+        col_cx.addWidget(self.spin_lp_cx)
+        self.slider_lp_cx = QSlider(Qt.Horizontal)
+        self.slider_lp_cx.setRange(0, 100)
+        self.slider_lp_cx.setValue(50)
+        self.slider_lp_cx.valueChanged.connect(self.on_slider_lp_cx_changed)
+        col_cx.addWidget(self.slider_lp_cx, stretch=1)
+        row_lp_c.addLayout(col_cx)
+
+        col_cy = QHBoxLayout()
+        col_cy.addWidget(QLabel("Centro Y:"))
+        self.spin_lp_cy = QDoubleSpinBox()
+        self.spin_lp_cy.setRange(0.0, 1.0)
+        self.spin_lp_cy.setSingleStep(0.01)
+        self.spin_lp_cy.setDecimals(2)
+        self.spin_lp_cy.setValue(0.90)
+        self.spin_lp_cy.setFixedWidth(54)
+        self.spin_lp_cy.valueChanged.connect(self.on_spin_lp_cy_changed)
+        col_cy.addWidget(self.spin_lp_cy)
+        self.slider_lp_cy = QSlider(Qt.Horizontal)
+        self.slider_lp_cy.setRange(0, 100)
+        self.slider_lp_cy.setValue(90)
+        self.slider_lp_cy.valueChanged.connect(self.on_slider_lp_cy_changed)
+        col_cy.addWidget(self.slider_lp_cy, stretch=1)
+        row_lp_c.addLayout(col_cy)
+        layout_lp_params.addLayout(row_lp_c)
+
+        # Fila 2: Ancho W y Alto H
+        row_lp_wh = QHBoxLayout()
+        row_lp_wh.setSpacing(8)
+
+        col_w = QHBoxLayout()
+        col_w.addWidget(QLabel("Ancho:"))
+        self.spin_lp_w = QDoubleSpinBox()
+        self.spin_lp_w.setRange(0.05, 2.00)
+        self.spin_lp_w.setSingleStep(0.05)
+        self.spin_lp_w.setDecimals(2)
+        self.spin_lp_w.setValue(0.60)
+        self.spin_lp_w.setFixedWidth(54)
+        self.spin_lp_w.valueChanged.connect(self.on_spin_lp_w_changed)
+        col_w.addWidget(self.spin_lp_w)
+        self.slider_lp_w = QSlider(Qt.Horizontal)
+        self.slider_lp_w.setRange(5, 200)
+        self.slider_lp_w.setValue(60)
+        self.slider_lp_w.valueChanged.connect(self.on_slider_lp_w_changed)
+        col_w.addWidget(self.slider_lp_w, stretch=1)
+        row_lp_wh.addLayout(col_w)
+
+        col_h = QHBoxLayout()
+        col_h.addWidget(QLabel("Alto:"))
+        self.spin_lp_h = QDoubleSpinBox()
+        self.spin_lp_h.setRange(0.05, 1.50)
+        self.spin_lp_h.setSingleStep(0.05)
+        self.spin_lp_h.setDecimals(2)
+        self.spin_lp_h.setValue(0.45)
+        self.spin_lp_h.setFixedWidth(54)
+        self.spin_lp_h.valueChanged.connect(self.on_spin_lp_h_changed)
+        col_h.addWidget(self.spin_lp_h)
+        self.slider_lp_h = QSlider(Qt.Horizontal)
+        self.slider_lp_h.setRange(5, 150)
+        self.slider_lp_h.setValue(45)
+        self.slider_lp_h.valueChanged.connect(self.on_slider_lp_h_changed)
+        col_h.addWidget(self.slider_lp_h, stretch=1)
+        row_lp_wh.addLayout(col_h)
+        layout_lp_params.addLayout(row_lp_wh)
+
+        # Fila 3: Tinte cromático y botón cuentagotas de color
+        row_lp_tint = QHBoxLayout()
+        row_lp_tint.addWidget(QLabel("Tinte:"))
+        self.combo_lp_tint = QComboBox()
+        self.combo_lp_tint.addItem("Vapor de Sodio (Ámbar)", "sodium")
+        self.combo_lp_tint.addItem("LED Urbano Cálido", "warm_led")
+        self.combo_lp_tint.addItem("LED Frío / Mercurio", "cold_led")
+        self.combo_lp_tint.addItem("Atenuación Neutra", "neutral")
+        self.combo_lp_tint.addItem("Personalizado", "custom")
+        self.combo_lp_tint.currentIndexChanged.connect(self._on_lp_tint_combo_changed)
+        row_lp_tint.addWidget(self.combo_lp_tint, stretch=1)
+
+        self.btn_lp_color_pipette = QPushButton("🎨 Muestrear Color")
+        self.btn_lp_color_pipette.setCheckable(True)
+        self.btn_lp_color_pipette.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
+            "QPushButton:checked { background: #3b4252; color: #ffd54f; border: 1px solid #ffd54f; }"
+        )
+        self.btn_lp_color_pipette.setToolTip("Muestrea el tinte cromático exacto pinchando sobre el resplandor de la cúpula en el lienzo.")
+        self.btn_lp_color_pipette.toggled.connect(self._on_toggle_lp_color_pipette)
+        row_lp_tint.addWidget(self.btn_lp_color_pipette)
+        layout_lp_params.addLayout(row_lp_tint)
+
+        # Fila 4: Neutralización cromática
+        row_lp_strength = QHBoxLayout()
+        row_lp_strength.addWidget(QLabel("Neutralización:"))
+        self.lbl_lp_tint_strength = QLabel("50%")
+        self.lbl_lp_tint_strength.setStyleSheet("color: #ffd54f; font-weight: bold;")
+        self.lbl_lp_tint_strength.setFixedWidth(34)
+        row_lp_strength.addWidget(self.lbl_lp_tint_strength)
+        self.slider_lp_tint_strength = QSlider(Qt.Horizontal)
+        self.slider_lp_tint_strength.setRange(0, 100)
+        self.slider_lp_tint_strength.setValue(50)
+        self.slider_lp_tint_strength.valueChanged.connect(self._on_lp_tint_strength_changed)
+        row_lp_strength.addWidget(self.slider_lp_tint_strength, stretch=1)
+        layout_lp_params.addLayout(row_lp_strength)
+
+        # Fila 5: Modo de reducción y Compatibilidad 1D
+        row_lp_mode = QHBoxLayout()
+        row_lp_mode.addWidget(QLabel("Modo:"))
+        self.combo_lp_mode = QComboBox()
+        self.combo_lp_mode.addItem("Atenuación Suave", "attenuate")
+        self.combo_lp_mode.addItem("Sustracción Física", "subtractive")
+        self.combo_lp_mode.currentIndexChanged.connect(self._on_lp_mode_combo_changed)
+        row_lp_mode.addWidget(self.combo_lp_mode, stretch=1)
+
+        self.chk_lp_legacy_1d = QCheckBox("Rampa 1D Clásica")
+        self.chk_lp_legacy_1d.setToolTip("Utiliza el degradado vertical 1D anterior en lugar de la cúpula paramétrica 2D.")
+        self.chk_lp_legacy_1d.setChecked(False)
+        self.chk_lp_legacy_1d.toggled.connect(self._on_lp_legacy_1d_toggled)
+        row_lp_mode.addWidget(self.chk_lp_legacy_1d)
+        layout_lp_params.addLayout(row_lp_mode)
+
+        layout_bg.addWidget(self.w_lp_params)
 
         self.sec_gradients.set_content_widget(w_bg)
         left_layout.addWidget(self.sec_gradients)
@@ -1008,7 +1197,7 @@ class DeveloperTab(QWidget):
         self.btn_panel_pipette.setCursor(Qt.PointingHandCursor)
         self.btn_panel_pipette.setStyleSheet("font-weight: bold; color: #80d8ff;")
         self.btn_panel_pipette.setToolTip("Activa la pipeta para calibrar el balance de blancos haciendo clic sobre un fondo neutro en la imagen (Atajo: W)")
-        self.btn_panel_pipette.toggled.connect(self.canvas.set_eyedropper_active)
+        self.btn_panel_pipette.toggled.connect(self._on_toggle_wb_pipette)
         row_wb_btn.addWidget(self.btn_panel_pipette)
         self.btn_pipette = self.btn_panel_pipette
 
@@ -2704,8 +2893,33 @@ class DeveloperTab(QWidget):
             self.btn_ghs_pipette.setChecked(active)
             self.btn_ghs_pipette.blockSignals(False)
 
+        if hasattr(self, 'btn_lp_center_pipette') and self.btn_lp_center_pipette.isChecked() != active and getattr(self, '_eyedropper_target', 'wb') == 'lp_center':
+            self.btn_lp_center_pipette.blockSignals(True)
+            self.btn_lp_center_pipette.setChecked(active)
+            self.btn_lp_center_pipette.blockSignals(False)
+
+        if hasattr(self, 'btn_lp_color_pipette') and self.btn_lp_color_pipette.isChecked() != active and getattr(self, '_eyedropper_target', 'wb') == 'lp_color':
+            self.btn_lp_color_pipette.blockSignals(True)
+            self.btn_lp_color_pipette.setChecked(active)
+            self.btn_lp_color_pipette.blockSignals(False)
+
         if not active:
             self._eyedropper_target = 'wb'
+
+    def _on_toggle_wb_pipette(self, active: bool) -> None:
+        """Alterna el cuentagotas para Balance de Blancos asegurando exclusión mutua."""
+        if active:
+            self._eyedropper_target = 'wb'
+            if hasattr(self, 'btn_ghs_pipette') and self.btn_ghs_pipette.isChecked():
+                self.btn_ghs_pipette.setChecked(False)
+            if hasattr(self, 'btn_lp_center_pipette') and self.btn_lp_center_pipette.isChecked():
+                self.btn_lp_center_pipette.setChecked(False)
+            if hasattr(self, 'btn_lp_color_pipette') and self.btn_lp_color_pipette.isChecked():
+                self.btn_lp_color_pipette.setChecked(False)
+            self.canvas.set_eyedropper_active(True)
+        else:
+            if getattr(self, '_eyedropper_target', 'wb') == 'wb':
+                self.canvas.set_eyedropper_active(False)
 
     def _on_toggle_ghs_pipette(self, active: bool) -> None:
         """Alterna el cuentagotas interactivo para capturar el Punto de Simetría (SP) de GHS en el lienzo."""
@@ -2713,14 +2927,50 @@ class DeveloperTab(QWidget):
             self._eyedropper_target = 'ghs_sp'
             if hasattr(self, 'btn_pipette') and self.btn_pipette.isChecked():
                 self.btn_pipette.setChecked(False)
+            if hasattr(self, 'btn_lp_center_pipette') and self.btn_lp_center_pipette.isChecked():
+                self.btn_lp_center_pipette.setChecked(False)
+            if hasattr(self, 'btn_lp_color_pipette') and self.btn_lp_color_pipette.isChecked():
+                self.btn_lp_color_pipette.setChecked(False)
             self.canvas.set_eyedropper_active(True)
         else:
             if getattr(self, '_eyedropper_target', 'wb') == 'ghs_sp':
                 self.canvas.set_eyedropper_active(False)
                 self._eyedropper_target = 'wb'
 
+    def _on_toggle_lp_center_pipette(self, active: bool) -> None:
+        """Alterna el cuentagotas interactivo para capturar el Centro de la Cúpula 2D en el lienzo."""
+        if active:
+            self._eyedropper_target = 'lp_center'
+            if hasattr(self, 'btn_pipette') and self.btn_pipette.isChecked():
+                self.btn_pipette.setChecked(False)
+            if hasattr(self, 'btn_ghs_pipette') and self.btn_ghs_pipette.isChecked():
+                self.btn_ghs_pipette.setChecked(False)
+            if hasattr(self, 'btn_lp_color_pipette') and self.btn_lp_color_pipette.isChecked():
+                self.btn_lp_color_pipette.setChecked(False)
+            self.canvas.set_eyedropper_active(True)
+        else:
+            if getattr(self, '_eyedropper_target', 'wb') == 'lp_center':
+                self.canvas.set_eyedropper_active(False)
+                self._eyedropper_target = 'wb'
+
+    def _on_toggle_lp_color_pipette(self, active: bool) -> None:
+        """Alterna el cuentagotas interactivo para capturar el Tinte Cromático de la Cúpula 2D en el lienzo."""
+        if active:
+            self._eyedropper_target = 'lp_color'
+            if hasattr(self, 'btn_pipette') and self.btn_pipette.isChecked():
+                self.btn_pipette.setChecked(False)
+            if hasattr(self, 'btn_ghs_pipette') and self.btn_ghs_pipette.isChecked():
+                self.btn_ghs_pipette.setChecked(False)
+            if hasattr(self, 'btn_lp_center_pipette') and self.btn_lp_center_pipette.isChecked():
+                self.btn_lp_center_pipette.setChecked(False)
+            self.canvas.set_eyedropper_active(True)
+        else:
+            if getattr(self, '_eyedropper_target', 'wb') == 'lp_color':
+                self.canvas.set_eyedropper_active(False)
+                self._eyedropper_target = 'wb'
+
     def _on_eyedropper_color_sampled(self, r: float, g: float, b: float) -> None:
-        """Procesa la muestra del cuentagotas para Balance de Blancos o Punto de Simetría GHS."""
+        """Procesa la muestra del cuentagotas para Balance de Blancos, GHS SP o Cúpula de Polución 2D."""
         if getattr(self, '_eyedropper_target', 'wb') == 'ghs_sp':
             # Muestra para Punto de Simetría (SP) en GHS
             sample_lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
@@ -2739,6 +2989,63 @@ class DeveloperTab(QWidget):
             self._eyedropper_target = 'wb'
             self.log_message(
                 f"[GHS] Cuentagotas SP: muestra RGB=({r:.3f}, {g:.3f}, {b:.3f}) ➜ SP fijado en {sp_val:.5f}"
+            )
+            self.update_stretch_preview()
+            self._commit_action()
+            return
+
+        if getattr(self, '_eyedropper_target', 'wb') == 'lp_center':
+            coords = getattr(self.canvas, 'last_sampled_coords', None)
+            if coords is not None:
+                cx, cy = coords
+            else:
+                cx, cy = 0.50, 0.90
+            cx = float(np.clip(cx, 0.0, 1.0))
+            cy = float(np.clip(cy, 0.0, 1.0))
+            self.lp_center_x = cx
+            self.lp_center_y = cy
+            if hasattr(self, 'spin_lp_cx'):
+                self.spin_lp_cx.blockSignals(True)
+                self.spin_lp_cx.setValue(cx)
+                self.spin_lp_cx.blockSignals(False)
+            if hasattr(self, 'slider_lp_cx'):
+                self.slider_lp_cx.blockSignals(True)
+                self.slider_lp_cx.setValue(int(round(cx * 100.0)))
+                self.slider_lp_cx.blockSignals(False)
+            if hasattr(self, 'spin_lp_cy'):
+                self.spin_lp_cy.blockSignals(True)
+                self.spin_lp_cy.setValue(cy)
+                self.spin_lp_cy.blockSignals(False)
+            if hasattr(self, 'slider_lp_cy'):
+                self.slider_lp_cy.blockSignals(True)
+                self.slider_lp_cy.setValue(int(round(cy * 100.0)))
+                self.slider_lp_cy.blockSignals(False)
+            if hasattr(self, 'btn_lp_center_pipette'):
+                self.btn_lp_center_pipette.setChecked(False)
+            self._eyedropper_target = 'wb'
+            self.log_message(
+                f"[Cúpula 2D] Centro seleccionado en el lienzo: X={cx:.2f}, Y={cy:.2f}"
+            )
+            self.update_stretch_preview()
+            self._commit_action()
+            return
+
+        if getattr(self, '_eyedropper_target', 'wb') == 'lp_color':
+            max_c = max(1e-4, max(r, g, b))
+            tint = (float(r / max_c), float(g / max_c), float(b / max_c))
+            self.lp_custom_tint = tint
+            self.lp_tint_type = "custom"
+            if hasattr(self, 'combo_lp_tint'):
+                idx = self.combo_lp_tint.findData("custom")
+                if idx >= 0:
+                    self.combo_lp_tint.blockSignals(True)
+                    self.combo_lp_tint.setCurrentIndex(idx)
+                    self.combo_lp_tint.blockSignals(False)
+            if hasattr(self, 'btn_lp_color_pipette'):
+                self.btn_lp_color_pipette.setChecked(False)
+            self._eyedropper_target = 'wb'
+            self.log_message(
+                f"[Cúpula 2D] Tinte muestreado: RGB=({r:.3f}, {g:.3f}, {b:.3f}) ➜ Normalizado=({tint[0]:.2f}, {tint[1]:.2f}, {tint[2]:.2f})"
             )
             self.update_stretch_preview()
             self._commit_action()
@@ -3353,10 +3660,23 @@ class DeveloperTab(QWidget):
         if abs(self.vibrance_val) > 1e-4:
             img = adjust_vibrance(img, self.vibrance_val)
 
-        # 4. Atenuación de Cúpula de Luz
+        # 4. Reducción Paramétrica 2D de Cúpula de Contaminación Lumínica
         if self.lp_reduction > 1e-4:
             mask_2d = precomputed_mask[..., 0] if precomputed_mask is not None else None
-            img = apply_light_pollution_gradient(img, strength=self.lp_reduction, height_ratio=0.50, sky_mask=mask_2d)
+            tint_rgb = LP_PRESET_TINTS.get(self.lp_tint_type, getattr(self, 'lp_custom_tint', (1.0, 0.68, 0.22)))
+            img = apply_parametric_light_pollution(
+                img,
+                strength=self.lp_reduction,
+                center_x=self.lp_center_x,
+                center_y=self.lp_center_y,
+                width=self.lp_width,
+                height=self.lp_height,
+                tint_rgb=tint_rgb,
+                tint_strength=self.lp_tint_strength,
+                sky_mask=mask_2d,
+                mode=self.lp_mode,
+                legacy_1d=self.lp_legacy_1d
+            )
 
         # 5. Ajuste Tonal Diferencial para el Suelo
         if precomputed_mask is not None:
@@ -4105,6 +4425,220 @@ class DeveloperTab(QWidget):
         self.lbl_lp.setText(f"{val}%")
         self.update_stretch_preview()
 
+    def _on_toggle_lp_expand(self, checked: bool):
+        if hasattr(self, 'w_lp_params'):
+            self.w_lp_params.setVisible(checked)
+
+    def auto_detect_lp_center(self):
+        """Detecta automáticamente la ubicación más probable de la cúpula de polución urbana en el horizonte."""
+        img = self.preview_proxy if self.preview_proxy is not None else self.image_32bit
+        if img is None:
+            return
+
+        mask_2d = None
+        if self.current_mask is not None:
+            m = np.squeeze(self.current_mask)
+            if m.ndim == 2:
+                mask_2d = m
+            elif m.ndim == 3:
+                mask_2d = m[..., 0]
+
+        cx, cy = estimate_light_pollution_center(img, sky_mask=mask_2d)
+        self.lp_center_x = cx
+        self.lp_center_y = cy
+
+        if hasattr(self, 'spin_lp_cx'):
+            self.spin_lp_cx.blockSignals(True)
+            self.spin_lp_cx.setValue(cx)
+            self.spin_lp_cx.blockSignals(False)
+        if hasattr(self, 'slider_lp_cx'):
+            self.slider_lp_cx.blockSignals(True)
+            self.slider_lp_cx.setValue(int(round(cx * 100.0)))
+            self.slider_lp_cx.blockSignals(False)
+
+        if hasattr(self, 'spin_lp_cy'):
+            self.spin_lp_cy.blockSignals(True)
+            self.spin_lp_cy.setValue(cy)
+            self.spin_lp_cy.blockSignals(False)
+        if hasattr(self, 'slider_lp_cy'):
+            self.slider_lp_cy.blockSignals(True)
+            self.slider_lp_cy.setValue(int(round(cy * 100.0)))
+            self.slider_lp_cy.blockSignals(False)
+
+        if hasattr(self, 'btn_lp_expand') and not self.btn_lp_expand.isChecked():
+            self.btn_lp_expand.setChecked(True)
+
+        self.log_message(f"[Cúpula 2D] Centro detectado automáticamente: X={cx:.2f}, Y={cy:.2f}")
+        self.update_stretch_preview()
+        self._commit_action()
+
+    def on_spin_lp_cx_changed(self, val: float):
+        self.lp_center_x = float(val)
+        if hasattr(self, 'slider_lp_cx'):
+            self.slider_lp_cx.blockSignals(True)
+            self.slider_lp_cx.setValue(int(round(val * 100.0)))
+            self.slider_lp_cx.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_slider_lp_cx_changed(self, val: int):
+        cx = val / 100.0
+        self.lp_center_x = cx
+        if hasattr(self, 'spin_lp_cx'):
+            self.spin_lp_cx.blockSignals(True)
+            self.spin_lp_cx.setValue(cx)
+            self.spin_lp_cx.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_spin_lp_cy_changed(self, val: float):
+        self.lp_center_y = float(val)
+        if hasattr(self, 'slider_lp_cy'):
+            self.slider_lp_cy.blockSignals(True)
+            self.slider_lp_cy.setValue(int(round(val * 100.0)))
+            self.slider_lp_cy.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_slider_lp_cy_changed(self, val: int):
+        cy = val / 100.0
+        self.lp_center_y = cy
+        if hasattr(self, 'spin_lp_cy'):
+            self.spin_lp_cy.blockSignals(True)
+            self.spin_lp_cy.setValue(cy)
+            self.spin_lp_cy.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_spin_lp_w_changed(self, val: float):
+        self.lp_width = float(val)
+        if hasattr(self, 'slider_lp_w'):
+            self.slider_lp_w.blockSignals(True)
+            self.slider_lp_w.setValue(int(round(val * 100.0)))
+            self.slider_lp_w.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_slider_lp_w_changed(self, val: int):
+        w = val / 100.0
+        self.lp_width = w
+        if hasattr(self, 'spin_lp_w'):
+            self.spin_lp_w.blockSignals(True)
+            self.spin_lp_w.setValue(w)
+            self.spin_lp_w.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_spin_lp_h_changed(self, val: float):
+        self.lp_height = float(val)
+        if hasattr(self, 'slider_lp_h'):
+            self.slider_lp_h.blockSignals(True)
+            self.slider_lp_h.setValue(int(round(val * 100.0)))
+            self.slider_lp_h.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_slider_lp_h_changed(self, val: int):
+        h = val / 100.0
+        self.lp_height = h
+        if hasattr(self, 'spin_lp_h'):
+            self.spin_lp_h.blockSignals(True)
+            self.spin_lp_h.setValue(h)
+            self.spin_lp_h.blockSignals(False)
+        self.update_stretch_preview()
+
+    def _on_lp_tint_combo_changed(self, idx: int):
+        tint_type = self.combo_lp_tint.currentData()
+        self.lp_tint_type = tint_type
+        self.update_stretch_preview()
+        self._commit_action()
+
+    def _on_lp_tint_strength_changed(self, val: int):
+        self.lp_tint_strength = val / 100.0
+        if hasattr(self, 'lbl_lp_tint_strength'):
+            self.lbl_lp_tint_strength.setText(f"{val}%")
+        self.update_stretch_preview()
+
+    def _on_lp_mode_combo_changed(self, idx: int):
+        mode = self.combo_lp_mode.currentData()
+        self.lp_mode = mode
+        self.update_stretch_preview()
+        self._commit_action()
+
+    def _on_lp_legacy_1d_toggled(self, checked: bool):
+        self.lp_legacy_1d = checked
+        self.update_stretch_preview()
+        self._commit_action()
+
+    def reset_gradients(self):
+        """Restablece los parámetros de eliminación de gradientes y cúpula de polución 2D."""
+        self.slider_lp.setValue(0)
+        self.lp_reduction = 0.0
+        self.lbl_lp.setText("0%")
+        self.lp_center_x = 0.50
+        self.lp_center_y = 0.90
+        self.lp_width = 0.60
+        self.lp_height = 0.45
+        self.lp_tint_type = "sodium"
+        self.lp_custom_tint = (1.0, 0.68, 0.22)
+        self.lp_tint_strength = 0.50
+        self.lp_mode = "attenuate"
+        self.lp_legacy_1d = False
+
+        if hasattr(self, 'slider_lp_cx'):
+            self.slider_lp_cx.blockSignals(True)
+            self.slider_lp_cx.setValue(50)
+            self.slider_lp_cx.blockSignals(False)
+        if hasattr(self, 'spin_lp_cx'):
+            self.spin_lp_cx.blockSignals(True)
+            self.spin_lp_cx.setValue(0.50)
+            self.spin_lp_cx.blockSignals(False)
+
+        if hasattr(self, 'slider_lp_cy'):
+            self.slider_lp_cy.blockSignals(True)
+            self.slider_lp_cy.setValue(90)
+            self.slider_lp_cy.blockSignals(False)
+        if hasattr(self, 'spin_lp_cy'):
+            self.spin_lp_cy.blockSignals(True)
+            self.spin_lp_cy.setValue(0.90)
+            self.spin_lp_cy.blockSignals(False)
+
+        if hasattr(self, 'slider_lp_w'):
+            self.slider_lp_w.blockSignals(True)
+            self.slider_lp_w.setValue(60)
+            self.slider_lp_w.blockSignals(False)
+        if hasattr(self, 'spin_lp_w'):
+            self.spin_lp_w.blockSignals(True)
+            self.spin_lp_w.setValue(0.60)
+            self.spin_lp_w.blockSignals(False)
+
+        if hasattr(self, 'slider_lp_h'):
+            self.slider_lp_h.blockSignals(True)
+            self.slider_lp_h.setValue(45)
+            self.slider_lp_h.blockSignals(False)
+        if hasattr(self, 'spin_lp_h'):
+            self.spin_lp_h.blockSignals(True)
+            self.spin_lp_h.setValue(0.45)
+            self.spin_lp_h.blockSignals(False)
+
+        if hasattr(self, 'combo_lp_tint'):
+            self.combo_lp_tint.blockSignals(True)
+            self.combo_lp_tint.setCurrentIndex(0)
+            self.combo_lp_tint.blockSignals(False)
+
+        if hasattr(self, 'slider_lp_tint_strength'):
+            self.slider_lp_tint_strength.blockSignals(True)
+            self.slider_lp_tint_strength.setValue(50)
+            self.slider_lp_tint_strength.blockSignals(False)
+        if hasattr(self, 'lbl_lp_tint_strength'):
+            self.lbl_lp_tint_strength.setText("50%")
+
+        if hasattr(self, 'combo_lp_mode'):
+            self.combo_lp_mode.blockSignals(True)
+            self.combo_lp_mode.setCurrentIndex(0)
+            self.combo_lp_mode.blockSignals(False)
+
+        if hasattr(self, 'chk_lp_legacy_1d'):
+            self.chk_lp_legacy_1d.blockSignals(True)
+            self.chk_lp_legacy_1d.setChecked(False)
+            self.chk_lp_legacy_1d.blockSignals(False)
+
+        self.update_stretch_preview()
+        self._commit_action()
+
     def on_contrast_starless_changed(self, val: int):
         self.contrast_starless_val = val / 100.0
         self.lbl_contrast_starless.setText(f"{self.contrast_starless_val:+.2f}")
@@ -4533,6 +5067,15 @@ class DeveloperTab(QWidget):
     def reset_all_parameters(self):
         """Devuelve todos los controles y variables del revelador a su estado neutro original."""
         self.lp_reduction = 0.0
+        self.lp_center_x = 0.50
+        self.lp_center_y = 0.90
+        self.lp_width = 0.60
+        self.lp_height = 0.45
+        self.lp_tint_type = "sodium"
+        self.lp_custom_tint = (1.0, 0.68, 0.22)
+        self.lp_tint_strength = 0.50
+        self.lp_mode = "attenuate"
+        self.lp_legacy_1d = False
         self.clarity_starless_val = 0.0
         self.dehaze_starless_val = 0.0
         self.multiescala_estructura = 0.0
@@ -4552,7 +5095,12 @@ class DeveloperTab(QWidget):
         self.gnd_bp_val = 0.0
 
         widgets_to_block = [
-            self.slider_lp, self.slider_stars, self.slider_contrast_starless,
+            self.slider_lp, self.slider_lp_cx, self.spin_lp_cx,
+            self.slider_lp_cy, self.spin_lp_cy, self.slider_lp_w,
+            self.spin_lp_w, self.slider_lp_h, self.spin_lp_h,
+            self.slider_lp_tint_strength, self.combo_lp_tint,
+            self.combo_lp_mode, self.chk_lp_legacy_1d,
+            self.slider_stars, self.slider_contrast_starless,
             self.slider_clarity, self.slider_dehaze, self.slider_ond_est,
             self.slider_ond_bg, self.slider_denoise, 
             self.slider_temp, self.slider_tint, self.slider_sat_sky,
@@ -4566,6 +5114,20 @@ class DeveloperTab(QWidget):
 
         self.slider_lp.setValue(0)
         self.lbl_lp.setText("0%")
+        if hasattr(self, 'slider_lp_cx'):
+            self.slider_lp_cx.setValue(50)
+            self.spin_lp_cx.setValue(0.50)
+            self.slider_lp_cy.setValue(90)
+            self.spin_lp_cy.setValue(0.90)
+            self.slider_lp_w.setValue(60)
+            self.spin_lp_w.setValue(0.60)
+            self.slider_lp_h.setValue(45)
+            self.spin_lp_h.setValue(0.45)
+            self.combo_lp_tint.setCurrentIndex(0)
+            self.slider_lp_tint_strength.setValue(50)
+            self.lbl_lp_tint_strength.setText("50%")
+            self.combo_lp_mode.setCurrentIndex(0)
+            self.chk_lp_legacy_1d.setChecked(False)
 
         self.combo_layer.setCurrentIndex(0)
 
@@ -4772,7 +5334,9 @@ class DeveloperTab(QWidget):
     def _connect_undo_triggers(self):
         """Conecta los eventos de finalización de interacción para registrar acciones en el historial."""
         all_sliders = [
-            self.slider_lp, self.slider_stars, self.slider_contrast_starless,
+            self.slider_lp, self.slider_lp_cx, self.slider_lp_cy,
+            self.slider_lp_w, self.slider_lp_h, self.slider_lp_tint_strength,
+            self.slider_stars, self.slider_contrast_starless,
             self.slider_clarity, self.slider_dehaze, self.slider_ond_est,
             self.slider_ond_bg, self.slider_denoise, 
             self.slider_temp, self.slider_tint, self.slider_sat_sky,
@@ -4793,6 +5357,13 @@ class DeveloperTab(QWidget):
         self.spin_ghs_hp.editingFinished.connect(self._commit_action)
         self.spin_ghs_lp.editingFinished.connect(self._commit_action)
         self.spin_ghs_bp.editingFinished.connect(self._commit_action)
+        self.spin_lp_cx.editingFinished.connect(self._commit_action)
+        self.spin_lp_cy.editingFinished.connect(self._commit_action)
+        self.spin_lp_w.editingFinished.connect(self._commit_action)
+        self.spin_lp_h.editingFinished.connect(self._commit_action)
+        self.combo_lp_tint.activated.connect(lambda _: self._commit_action())
+        self.combo_lp_mode.activated.connect(lambda _: self._commit_action())
+        self.chk_lp_legacy_1d.toggled.connect(lambda _: self._commit_action())
         self.spin_temp.editingFinished.connect(self._commit_action)
         self.spin_tint.editingFinished.connect(self._commit_action)
         self.combo_layer.activated.connect(lambda _: self._commit_action())
@@ -4812,6 +5383,15 @@ class DeveloperTab(QWidget):
             "ghs_lp_val": float(self.spin_ghs_lp.value()) if hasattr(self, 'spin_ghs_lp') else 0.0,
             "ghs_bp_val": float(self.spin_ghs_bp.value()) if hasattr(self, 'spin_ghs_bp') else 0.0,
             "lp_val": self.slider_lp.value(),
+            "lp_cx": float(self.spin_lp_cx.value()) if hasattr(self, 'spin_lp_cx') else 0.50,
+            "lp_cy": float(self.spin_lp_cy.value()) if hasattr(self, 'spin_lp_cy') else 0.90,
+            "lp_w": float(self.spin_lp_w.value()) if hasattr(self, 'spin_lp_w') else 0.60,
+            "lp_h": float(self.spin_lp_h.value()) if hasattr(self, 'spin_lp_h') else 0.45,
+            "lp_tint_idx": self.combo_lp_tint.currentIndex() if hasattr(self, 'combo_lp_tint') else 0,
+            "lp_custom_tint": getattr(self, 'lp_custom_tint', (1.0, 0.68, 0.22)),
+            "lp_tint_strength": self.slider_lp_tint_strength.value() if hasattr(self, 'slider_lp_tint_strength') else 50,
+            "lp_mode_idx": self.combo_lp_mode.currentIndex() if hasattr(self, 'combo_lp_mode') else 0,
+            "lp_legacy_1d": self.chk_lp_legacy_1d.isChecked() if hasattr(self, 'chk_lp_legacy_1d') else False,
             "layer_idx": self.combo_layer.currentIndex(),
             "stars_val": self.slider_stars.value(),
             "contrast_starless_val": self.slider_contrast_starless.value(),
@@ -4980,7 +5560,12 @@ class DeveloperTab(QWidget):
             return
 
         widgets_to_block = [
-            self.slider_lp, self.slider_stars, self.slider_contrast_starless,
+            self.slider_lp, self.slider_lp_cx, self.spin_lp_cx,
+            self.slider_lp_cy, self.spin_lp_cy, self.slider_lp_w,
+            self.spin_lp_w, self.slider_lp_h, self.spin_lp_h,
+            self.slider_lp_tint_strength, self.combo_lp_tint,
+            self.combo_lp_mode, self.chk_lp_legacy_1d,
+            self.slider_stars, self.slider_contrast_starless,
             self.slider_clarity, self.slider_dehaze, self.slider_ond_est,
             self.slider_ond_bg, self.slider_denoise, 
             self.slider_temp, self.slider_tint, self.spin_temp, self.spin_tint,
@@ -5032,6 +5617,46 @@ class DeveloperTab(QWidget):
             self.slider_lp.setValue(state["lp_val"])
             self.lp_reduction = state["lp_val"] / 100.0
             self.lbl_lp.setText(f"{state['lp_val']}%")
+
+        if "lp_cx" in state and hasattr(self, 'spin_lp_cx'):
+            self.spin_lp_cx.setValue(state["lp_cx"])
+            self.slider_lp_cx.setValue(int(round(state["lp_cx"] * 100.0)))
+            self.lp_center_x = state["lp_cx"]
+
+        if "lp_cy" in state and hasattr(self, 'spin_lp_cy'):
+            self.spin_lp_cy.setValue(state["lp_cy"])
+            self.slider_lp_cy.setValue(int(round(state["lp_cy"] * 100.0)))
+            self.lp_center_y = state["lp_cy"]
+
+        if "lp_w" in state and hasattr(self, 'spin_lp_w'):
+            self.spin_lp_w.setValue(state["lp_w"])
+            self.slider_lp_w.setValue(int(round(state["lp_w"] * 100.0)))
+            self.lp_width = state["lp_w"]
+
+        if "lp_h" in state and hasattr(self, 'spin_lp_h'):
+            self.spin_lp_h.setValue(state["lp_h"])
+            self.slider_lp_h.setValue(int(round(state["lp_h"] * 100.0)))
+            self.lp_height = state["lp_h"]
+
+        if "lp_tint_idx" in state and hasattr(self, 'combo_lp_tint'):
+            self.combo_lp_tint.setCurrentIndex(state["lp_tint_idx"])
+            self.lp_tint_type = self.combo_lp_tint.currentData()
+
+        if "lp_custom_tint" in state:
+            self.lp_custom_tint = state["lp_custom_tint"]
+
+        if "lp_tint_strength" in state and hasattr(self, 'slider_lp_tint_strength'):
+            self.slider_lp_tint_strength.setValue(state["lp_tint_strength"])
+            self.lp_tint_strength = state["lp_tint_strength"] / 100.0
+            self.lbl_lp_tint_strength.setText(f"{state['lp_tint_strength']}%")
+
+        if "lp_mode_idx" in state and hasattr(self, 'combo_lp_mode'):
+            self.combo_lp_mode.setCurrentIndex(state["lp_mode_idx"])
+            self.lp_mode = self.combo_lp_mode.currentData()
+
+        if "lp_legacy_1d" in state and hasattr(self, 'chk_lp_legacy_1d'):
+            self.chk_lp_legacy_1d.setChecked(state["lp_legacy_1d"])
+            self.lp_legacy_1d = state["lp_legacy_1d"]
 
         if "layer_idx" in state:
             self.combo_layer.setCurrentIndex(state["layer_idx"])
