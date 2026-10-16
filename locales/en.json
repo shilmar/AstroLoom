@@ -5,9 +5,9 @@
     "version": "1.0"
   },
   "app": {
-    "title": "AstroLoom - Astrophotography & Nightscape Suite (v0.8.4)",
+    "title": "AstroLoom - Astrophotography & Nightscape Suite (v0.8.5)",
     "ready": "Ready to process",
-    "engine_badge": "⚡ AstroLoom Engine v0.8.4",
+    "engine_badge": "⚡ AstroLoom Engine v0.8.5",
     "ram_monitor": "🧠 RAM: {pct}% ({used:.1f} / {total:.1f} GB)",
     "language": "Language",
     "tabs": {
@@ -45,6 +45,7 @@
       "stretch": "📈 Tonal Stretch & Contrast",
       "curves": "📈 Interactive Tone Curve (RGB / Saturation)",
       "starnet": "⭐ StarNet++ AI — Star Separation",
+      "deconv": "🔬 Optical Deconvolution & Sharpening (R-L)",
       "wb": "🌡️ White Balance & Calibration",
       "color": "🎨 Color & Saturation",
       "ground_tone": "🏞️ Landscape Ground Tone Adjustment",

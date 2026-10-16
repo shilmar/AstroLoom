@@ -17,6 +17,7 @@ Este manual ha sido redactado pensando en fotógrafos y aficionados: **sin fórm
    - [Sección 3: Estirado No Lineal (MTF vs GHS)](#sección-3-estirado-no-lineal-mtf-vs-ghs)
    - [Sección 4: Curvas Tonales (Contraste S-Curve)](#sección-4-curvas-tonales)
    - [Sección 5: StarNet++ y Fondo Nebular (Claridad, Ondículas y Glow Orton)](#sección-5-starnet-y-fondo-nebular)
+   - [Sección 5b: Deconvolución Óptica y Enfoque (Richardson-Lucy)](#sección-5b-deconvolución-óptica-y-enfoque-richardson-lucy)
    - [Sección 6: Balance de Blancos y Calibración](#sección-6-balance-de-blancos-y-calibración)
    - [Sección 7: Color, Saturación e Intensidad de Nebulosa](#sección-7-color-saturación-e-intensidad-de-nebulosa)
    - [Sección 8: Tono y Exposición del Suelo](#sección-8-tono-y-exposición-del-suelo)
@@ -215,6 +216,22 @@ Emula los prestigiosos filtros físicos de difusión estelar (como *Kenko Pro1D 
   * *Luz Suave (Soft Light):* Resplandor aterciopelado con cero oscurecimiento.
   * *Aditivo (Additive):* Energía lumínica directa para una atmósfera nocturna brillante y romántica.
 * *Nota:* Disponible de forma contextual al seleccionar la capa **⭐ Estrellas** en el Gestor de Capas o en el revelado general. Protege el horizonte y suelo terrestre mediante la máscara de cielo para no generar halos en luces terrestres ni relieve.
+
+---
+
+### Sección 5b: Deconvolución Óptica y Enfoque (Richardson-Lucy)
+Restaura la resolución óptica y nitidez perdida debido a la difracción de la lente, desenfoque atmosférico (*seeing*) o aberraciones de coma/guiado, aflojando los discos estelares y recuperando micro-contraste en filamentos de polvo y nebulosa.
+
+* **🎯 Estimar PSF Automática de Estrellas:** Analiza automáticamente las estrellas aisladas y no saturadas de la imagen para inferir el perfil empírico de la función de dispersión de punto (PSF), determinando con precisión subpíxel el diámetro FWHM y la relación de aspecto/elipticidad.
+* **Iteraciones (R-L):** Número de ciclos del algoritmo iterativo de Richardson-Lucy (0 = Desactivado, 1 a 40). Valores entre 10 y 25 proporcionan la máxima nitidez sin introducir grano.
+* **FWHM (px):** Ancho a media altura de la PSF modelada (1.0 a 8.0 px). Si se calculó automáticamente con el botón de estimación, se ajusta al valor óptico exacto de tus estrellas.
+* **⚙️ Opciones Avanzadas:**
+  * **Antianillos (Halos):** Factor de deringing local que calcula un suelo de protección en el entorno de las estrellas más brillantes, eliminando completamente los halos oscuros de Gibbs ("donuts").
+  * **Amortiguación Ruido:** Regularización bayesiana basada en la dispersión MAD (*Median Absolute Deviation*) de las altas frecuencias del sensor. Amortigua las iteraciones en áreas suaves de cielo oscuro para que el ruido de fondo no explote.
+  * **Aspecto (Elipticidad) y Ángulo (°):** Modela estrellas elongadas por coma en bordes del encuadre o deriva de seguimiento/trípode fijo.
+  * **Perfil PSF:** Permite alternar entre el modelo astrofísico **Moffat 2D** ($\beta=4.5$, recomendado para estrellas reales) y el perfil clásico **Gaussiano 2D**.
+  * **Ámbito:** Permite enfocar *Toda la Imagen*, *Solo Estrellas* o *Solo Fondo / Nebulosa*.
+  * **Solo Luminancia (Preservar color):** Aplica la deconvolución en el canal de luminancia perceptual (ITU-R BT.709) y recompone los canales de color multiplicativamente, garantizando cero aberración cromática o alteración de tonos en las estrellas.
 
 ---
 

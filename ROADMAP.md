@@ -14,10 +14,10 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 | **P4** | **Cribado Previo de Tomas y Calidad (Frame Culling)** | Apilador | Nebulb / Siril | 4.5 / 10 | 8.5 / 10 | ✅ Completado |
 | **P5** | **Sustracción de Domo Asimétrico de Polución 2D** | Revelador | Sequator / Nebulb | 4.5 / 10 | 8.0 / 10 | ✅ Completado |
 | **P6** | **Efecto Orton Cósmico y Glow de Polvo** | Revelador | Nebulb / Photoshop | 2.5 / 10 | 6.5 / 10 | ✅ Completado |
-| **P7** | **Sub-stacking / Ventana Deslizante para Time-Lapse** | Startrails / Apilador | Sequator | 5.0 / 10 | 7.0 / 10 | ⏳ Pendiente |
+| **P7** | **Sub-stacking / Ventana Deslizante para Time-Lapse** | Startrails / Apilador | Sequator | 5.0 / 10 | 7.0 / 10 | ✅ Completado |
 | **P8** | **Detección Automática de Suelo con IA Ligera** | Máscaras | Nebulb | 6.5 / 10 | 9.0 / 10 | ✅ Completado |
 | **P9** | **Reducción de Distorsión Óptica en Esquinas** | Apilador | Sequator | 7.5 / 10 | 8.5 / 10 | 🔍 En estudio |
-| **P10** | **Deconvolución Estelar (Richardson-Lucy / FWHM)** | Revelador | PixInsight / Siril | 7.0 / 10 | 8.0 / 10 | 🔍 En estudio |
+| **P10** | **Deconvolución Estelar (Richardson-Lucy / FWHM)** | Revelador | PixInsight / Siril | 7.0 / 10 | 8.0 / 10 | ✅ Completado |
 | **P11** | **Persistencia Avanzada de Configuración** | Sistema | - | 3.0 / 10 | 5.0 / 10 | ⏳ Pendiente |
 
 ---
@@ -111,11 +111,15 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 * **Impacto:** **6.5 / 10** *(Acabado cosmético artístico muy cotizado).*
 * **Dificultad / Coste:** **2.5 / 10** *(Baja: Capa de mezcla nativa directa en el nuevo gestor de capas de AstroLoom).*
 
-#### 🔹 4.5 Deconvolución Estelar Regularizada (*Richardson-Lucy / PSF Estimator*)
+#### 🔹 4.5 Deconvolución Estelar Regularizada (*Richardson-Lucy / PSF Estimator*) - ✅ Completado
 * **Herramientas de referencia:** PixInsight, Siril.
-* **Descripción técnica:** Modelado de la función de dispersión de punto (PSF) del tren óptico y des-convolución iterativa con regularización wavelet para afinar discos estelares y restaurar micro-contraste en nebulosidades y detalles finos de polvo.
+* **Implementación:** Módulo `core/deconvolution.py` integrado en `gui/tab_developer.py`:
+  - Modelado matemático de PSF sintética analítica: perfiles Moffat 2D ($\beta \approx 4.5$) y Gaussiano 2D con control subpíxel de FWHM (1.0 a 8.0 px), relación de aspecto/elipticidad (1.0 a 2.5) y ángulo de orientación de coma ($-90^\circ$ a $+90^\circ$).
+  - Estimador empírico automático de PSF (`estimate_psf_from_stars`): aislamiento morfológico top-hat de estrellas de fondo, filtrado de saturadas/ruido, cálculo fraccional subpíxel del FWHM e inferencia de relación de aspecto.
+  - Algoritmo iterativo de Richardson-Lucy (R-L) con regularización: desacoplo de luminancia perceptual ITU-R BT.709 para preservación espectral estricta del color de las estrellas, soporte local antianillos (*Local Deringing Support*) para erradicar halos negros ("donuts") y amortiguación bayesiana del ruido de fondo (*Bayesian Noise Damping* vía estimación MAD).
+  - Ámbitos de aplicación selectivos (Toda la imagen, Solo Estrellas o Solo Fondo/Nebulosa) y protección automática del suelo en paisajes nocturnos.
 * **Impacto:** **8.0 / 10** *(Máximo detalle analítico para fotógrafos avanzados).*
-* **Dificultad / Coste:** **7.0 / 10** *(Alta: Algoritmo iterativo computacionalmente intensivo con control de artefactos de anillo/Gibbs).*
+* **Dificultad / Coste:** **7.0 / 10** *(Alta: Algoritmo iterativo con control estricto de artefactos de anillo y estabilidad cromática).*
 
 ---
 

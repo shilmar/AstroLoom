@@ -5,6 +5,35 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-10-16
+
+### Añadido
+* **Deconvolución Óptica Regularizada (Richardson-Lucy / Estimador PSF) [P10]:**
+  - **Motor Numérico Especializado (`core/deconvolution.py`):**
+    - Modelado analítico de PSF con perfiles astrofísicos **Moffat 2D** ($\beta \approx 4.5$) y Gaussiano 2D, con soporte para FWHM subpíxel, relación de aspecto/elipticidad ($1.00\times$ a $2.50\times$) y ángulo de orientación de coma ($-90^\circ$ a $+90^\circ$).
+    - **Estimador Empírico Automático de PSF (`estimate_psf_from_stars`):** Detección estadística y aislamiento morfológico Top-Hat de estrellas no saturadas con medición subpíxel por interpolación fraccional de cortes ortogonales.
+    - **Deconvolución Iterativa Richardson-Lucy (R-L):** Desacoplo en el espacio de Luminancia Perceptual (ITU-R BT.709) con propagación cromática multiplicativa, garantizando estricta preservación de los tonos estelares sin aberraciones de color.
+    - **Soporte Local Antianillos (*Local Deringing Support*):** Máscara perimetral dilatada de núcleos estelares brillantes que erradica halos oscuros ("donuts").
+    - **Amortiguación Bayesiana de Ruido (*Bayesian Noise Damping*):** Estimación MAD de alta frecuencia del sensor para atenuar actualizaciones en cielo oscuro y evitar grano.
+    - **Ámbitos de Aplicación:** *Toda la Imagen*, *Solo Estrellas* o *Solo Fondo / Nebulosa*.
+  - **Sección Dedicada en el Revelador (`gui/tab_developer.py`):**
+    - Acordeón colapsable con botón de estimación automática de PSF, barra de iteraciones (0 a 40), barra de FWHM (1.0 a 8.0 px) y desplegable `⚙️` para deringing, damping, elipticidad, ángulo y modelo.
+    - Integración completa en el pipeline no destructivo (previsualización en vivo, Zoom 1:1, comparador Antes/Después, Deshacer/Rehacer y exportación de alta resolución a TIFF, FITS y PSD).
+* **Apilado de Ventana Deslizante para Vídeo Time-Lapse (Sub-stacking / Rolling Stacker) [P7]:**
+  - **Pipeline Temporal por Lotes Deslizantes (`core/substacking.py`):**
+    - Aceleración masiva de SNR ($\sqrt{W}$ de ganancia por fotograma) en time-lapses nocturnos de intervalómetro.
+    - Pre-cálculo de homografías adyacentes encadenadas en $O(N)$ y buffer FIFO en memoria RAM $O(W)$.
+    - Modos de ventana deslizante continua (paso = 1) o bloques fijos no solapados, con ponderación temporal gaussiana, triangular o uniforme.
+    - **Tratamiento Dual de Suelo Libre de Fantasmas:** Promedio temporal estático de bajo ruido para trípode fijo o ancla central para cámaras con deriva, con pre-neutralización de suelo en tomas individuales y corrección de máscara invertida deformada para erradicar árboles fantasma (*ghost trees*).
+    - **Aceleración Multihilo:** Paralelización completa en CPU de extracción de descriptores ORB y deformación geométrica Lanczos, con escalado a resolución de vídeo de destino durante el almacenamiento en caché para una fluidez total.
+    - Exportación directa a vídeo `.mp4` (1080p, 4K) y secuencias TIFF/PNG con previsualización interactiva fotograma a fotograma en el Apilador.
+
+### Modificado
+* **Salto de Versión:**
+  - Actualización a **v0.8.5** en `gui/main_window.py`, `gui/tab_settings.py`, `locales/es.json` y `locales/en.json`.
+  - Actualización del estado de tareas en `ROADMAP.md` marcando P7 y P10 como completados.
+  - Actualización del manual en `MANUAL_DE_USUARIO.md` con la guía de uso de la Deconvolución Óptica.
+
 ## [0.8.4] - 2026-10-16
 
 ### Añadido

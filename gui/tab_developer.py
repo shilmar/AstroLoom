@@ -66,6 +66,12 @@ from core.orton import (
     ORTON_PRESET_TINTS
 )
 from core.star_diffusion import apply_star_diffusion
+from core.deconvolution import (
+    generate_moffat_psf,
+    generate_gaussian_psf,
+    estimate_psf_from_stars,
+    richardson_lucy_deconvolve
+)
 from core.masking import refine_mask_guided
 from core.mask_layers import (
     MaskLayer, apply_all_mask_layers,
@@ -144,6 +150,20 @@ class DeveloperTab(QWidget):
         self.star_diff_threshold: float = 0.45      # Umbral relativo de magnitud estelar (0.15 a 0.85)
         self.star_diff_color_boost: float = 0.50    # Saturación cromática espectral (0.0 a 1.0)
         self.star_diff_mode: str = "screen"         # "screen", "soft_light", "additive"
+
+        # Parámetros de Deconvolución Óptica y Enfoque (Richardson-Lucy regularizado)
+        self.deconv_iterations: int = 0             # 0 = Desactivado, 1 a 40 iteraciones
+        self.deconv_fwhm: float = 3.00              # FWHM de la PSF en píxeles (1.0 a 8.0)
+        self.deconv_model: str = "moffat"           # "moffat" o "gaussian"
+        self.deconv_beta: float = 4.5               # Pendiente de alas Moffat (1.5 a 8.0)
+        self.deconv_aspect_ratio: float = 1.00      # Relación de aspecto (1.00 a 2.50)
+        self.deconv_angle_deg: float = 0.0          # Orientación de la elipse (-90.0 a +90.0)
+        self.deconv_deringing: float = 0.008        # Protección de anillos oscuros (0.000 a 0.040)
+        self.deconv_damping: float = 0.25           # Amortiguación bayesiana de ruido (0.00 a 1.00)
+        self.deconv_luma_only: bool = True          # Deconvolución solo en Luminancia
+        self.deconv_scope: str = "all"              # "all", "stars_only", "background_only"
+        self._cached_psf: Optional[np.ndarray] = None
+        self._cached_psf_key: tuple = ()
 
         self.clarity_starless_val = 0.0
         self.dehaze_starless_val = 0.0
@@ -1372,6 +1392,186 @@ class DeveloperTab(QWidget):
         left_layout.addWidget(self.sec_starnet)
         self._set_starnet_tools_enabled(False)
 
+        # --- SECCIÓN 5b: Deconvolución Óptica y Enfoque (Richardson-Lucy) ---
+        self.sec_deconv = CollapsibleSection(
+            "🔬 Deconvolución Óptica y Enfoque (R-L)",
+            is_expanded=False,
+            on_reset=self.reset_deconv
+        )
+        w_deconv = QWidget()
+        deconv_layout = QVBoxLayout(w_deconv)
+        deconv_layout.setContentsMargins(6, 4, 6, 6)
+        deconv_layout.setSpacing(6)
+
+        # 1. Botón de Estimación Automática de PSF y Estado
+        self.btn_auto_psf = QPushButton("🎯 Estimar PSF Automática de Estrellas")
+        self.btn_auto_psf.setToolTip("Analiza estrellas aisladas no saturadas de la imagen para determinar el diámetro FWHM y relación de aspecto de la PSF.")
+        self.btn_auto_psf.setStyleSheet(
+            "QPushButton { font-weight: bold; padding: 6px; background: #1c2836; border: 1px solid #1e88e5; border-radius: 4px; color: #90caf9; }"
+            "QPushButton:hover { background: #22374e; border-color: #42a5f5; }"
+        )
+        self.btn_auto_psf.setCursor(Qt.PointingHandCursor)
+        self.btn_auto_psf.clicked.connect(self.on_auto_detect_psf_clicked)
+        deconv_layout.addWidget(self.btn_auto_psf)
+
+        self.lbl_psf_status = QLabel("PSF: Moffat 2D (FWHM: 3.0 px | Aspecto: 1.00)")
+        self.lbl_psf_status.setStyleSheet("color: #90caf9; font-size: 11px; padding-left: 2px;")
+        deconv_layout.addWidget(self.lbl_psf_status)
+
+        # 2. Control Principal: Iteraciones R-L
+        row_iter = QHBoxLayout()
+        row_iter.addWidget(self._make_resettable_label(QLabel("Iteraciones (R-L):"), lambda: self.slider_deconv_iter.setValue(0), "0 (Desactivado)"))
+        self.lbl_deconv_iter = QLabel("0 (Off)")
+        self.lbl_deconv_iter.setStyleSheet("color: #4fc3f7; font-weight: bold;")
+        self.lbl_deconv_iter.setFixedWidth(52)
+        row_iter.addWidget(self.lbl_deconv_iter)
+        self.slider_deconv_iter = QSlider(Qt.Horizontal)
+        self.slider_deconv_iter.setRange(0, 40)
+        self.slider_deconv_iter.setValue(0)
+        self.slider_deconv_iter.valueChanged.connect(self.on_deconv_iterations_changed)
+        row_iter.addWidget(self.slider_deconv_iter, stretch=1)
+
+        self.btn_deconv_expand = QPushButton("⚙️")
+        self.btn_deconv_expand.setCheckable(True)
+        self.btn_deconv_expand.setChecked(False)
+        self.btn_deconv_expand.setToolTip("Despliega controles avanzados de FWHM, antianillos (deringing), amortiguación de ruido, elipticidad y ámbito.")
+        self.btn_deconv_expand.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 2px 6px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
+            "QPushButton:checked { background: #1976d2; color: #e3f2fd; border: 1px solid #42a5f5; }"
+        )
+        self.btn_deconv_expand.toggled.connect(self._on_toggle_deconv_expand)
+        row_iter.addWidget(self.btn_deconv_expand)
+        deconv_layout.addLayout(row_iter)
+
+        # 3. Control Principal: FWHM
+        row_fwhm = QHBoxLayout()
+        row_fwhm.addWidget(self._make_resettable_label(QLabel("FWHM (px):"), lambda: self.slider_deconv_fwhm.setValue(30), "3.0 px"))
+        self.lbl_deconv_fwhm = QLabel("3.0 px")
+        self.lbl_deconv_fwhm.setStyleSheet("color: #ffe082; font-weight: bold;")
+        self.lbl_deconv_fwhm.setFixedWidth(52)
+        row_fwhm.addWidget(self.lbl_deconv_fwhm)
+        self.slider_deconv_fwhm = QSlider(Qt.Horizontal)
+        self.slider_deconv_fwhm.setRange(10, 80)
+        self.slider_deconv_fwhm.setValue(30)
+        self.slider_deconv_fwhm.valueChanged.connect(self.on_deconv_fwhm_changed)
+        row_fwhm.addWidget(self.slider_deconv_fwhm, stretch=1)
+        deconv_layout.addLayout(row_fwhm)
+
+        # 4. Panel Avanzado Desplegable (⚙️)
+        self.w_deconv_advanced = QWidget()
+        self.w_deconv_advanced.setVisible(False)
+        w_dadv_layout = QVBoxLayout(self.w_deconv_advanced)
+        w_dadv_layout.setContentsMargins(0, 4, 0, 2)
+        w_dadv_layout.setSpacing(6)
+
+        # Fila Deringing y Damping
+        row_der_damp = QHBoxLayout()
+        row_der_damp.setSpacing(10)
+
+        col_der = QVBoxLayout()
+        col_der.setSpacing(2)
+        row_der_lbl = QHBoxLayout()
+        row_der_lbl.addWidget(self._make_resettable_label(QLabel("Antianillos:"), lambda: self.slider_deconv_deringing.setValue(8), "0.008"))
+        self.lbl_deconv_deringing = QLabel("0.008")
+        self.lbl_deconv_deringing.setStyleSheet("color: #80cbc4; font-weight: bold;")
+        row_der_lbl.addWidget(self.lbl_deconv_deringing)
+        col_der.addLayout(row_der_lbl)
+        self.slider_deconv_deringing = QSlider(Qt.Horizontal)
+        self.slider_deconv_deringing.setRange(0, 40)
+        self.slider_deconv_deringing.setValue(8)
+        self.slider_deconv_deringing.valueChanged.connect(self.on_deconv_deringing_changed)
+        col_der.addWidget(self.slider_deconv_deringing)
+        row_der_damp.addLayout(col_der)
+
+        col_damp = QVBoxLayout()
+        col_damp.setSpacing(2)
+        row_damp_lbl = QHBoxLayout()
+        row_damp_lbl.addWidget(self._make_resettable_label(QLabel("Amortiguación:"), lambda: self.slider_deconv_damping.setValue(25), "25%"))
+        self.lbl_deconv_damping = QLabel("25%")
+        self.lbl_deconv_damping.setStyleSheet("color: #80cbc4; font-weight: bold;")
+        row_damp_lbl.addWidget(self.lbl_deconv_damping)
+        col_damp.addLayout(row_damp_lbl)
+        self.slider_deconv_damping = QSlider(Qt.Horizontal)
+        self.slider_deconv_damping.setRange(0, 100)
+        self.slider_deconv_damping.setValue(25)
+        self.slider_deconv_damping.valueChanged.connect(self.on_deconv_damping_changed)
+        col_damp.addWidget(self.slider_deconv_damping)
+        row_der_damp.addLayout(col_damp)
+        w_dadv_layout.addLayout(row_der_damp)
+
+        # Fila Aspect Ratio y Ángulo
+        row_asp_ang = QHBoxLayout()
+        row_asp_ang.setSpacing(10)
+
+        col_asp = QVBoxLayout()
+        col_asp.setSpacing(2)
+        row_asp_lbl = QHBoxLayout()
+        row_asp_lbl.addWidget(self._make_resettable_label(QLabel("Aspecto:"), lambda: self.slider_deconv_aspect.setValue(100), "1.00x"))
+        self.lbl_deconv_aspect = QLabel("1.00x")
+        self.lbl_deconv_aspect.setStyleSheet("color: #ce93d8; font-weight: bold;")
+        row_asp_lbl.addWidget(self.lbl_deconv_aspect)
+        col_asp.addLayout(row_asp_lbl)
+        self.slider_deconv_aspect = QSlider(Qt.Horizontal)
+        self.slider_deconv_aspect.setRange(100, 250)
+        self.slider_deconv_aspect.setValue(100)
+        self.slider_deconv_aspect.valueChanged.connect(self.on_deconv_aspect_changed)
+        col_asp.addWidget(self.slider_deconv_aspect)
+        row_asp_ang.addLayout(col_asp)
+
+        col_ang = QVBoxLayout()
+        col_ang.setSpacing(2)
+        row_ang_lbl = QHBoxLayout()
+        row_ang_lbl.addWidget(self._make_resettable_label(QLabel("Ángulo (°):"), lambda: self.slider_deconv_angle.setValue(0), "0°"))
+        self.lbl_deconv_angle = QLabel("0°")
+        self.lbl_deconv_angle.setStyleSheet("color: #ce93d8; font-weight: bold;")
+        row_ang_lbl.addWidget(self.lbl_deconv_angle)
+        col_ang.addLayout(row_ang_lbl)
+        self.slider_deconv_angle = QSlider(Qt.Horizontal)
+        self.slider_deconv_angle.setRange(-90, 90)
+        self.slider_deconv_angle.setValue(0)
+        self.slider_deconv_angle.valueChanged.connect(self.on_deconv_angle_changed)
+        col_ang.addWidget(self.slider_deconv_angle)
+        row_asp_ang.addLayout(col_ang)
+        w_dadv_layout.addLayout(row_asp_ang)
+
+        # Fila Modelo PSF y Ámbito de Aplicación
+        row_mod_scp = QHBoxLayout()
+        row_mod_scp.setSpacing(10)
+
+        col_mod = QVBoxLayout()
+        col_mod.setSpacing(2)
+        col_mod.addWidget(QLabel("Perfil PSF:"))
+        self.combo_deconv_model = QComboBox()
+        self.combo_deconv_model.addItem("Moffat 2D (Astrofísica)", "moffat")
+        self.combo_deconv_model.addItem("Gaussiana 2D", "gaussian")
+        self.combo_deconv_model.currentIndexChanged.connect(self._on_deconv_model_changed)
+        col_mod.addWidget(self.combo_deconv_model)
+        row_mod_scp.addLayout(col_mod)
+
+        col_scp = QVBoxLayout()
+        col_scp.setSpacing(2)
+        col_scp.addWidget(QLabel("Ámbito:"))
+        self.combo_deconv_scope = QComboBox()
+        self.combo_deconv_scope.addItem("Toda la Imagen", "all")
+        self.combo_deconv_scope.addItem("Solo Estrellas", "stars_only")
+        self.combo_deconv_scope.addItem("Solo Fondo / Nebulosa", "background_only")
+        self.combo_deconv_scope.currentIndexChanged.connect(self._on_deconv_scope_changed)
+        col_scp.addWidget(self.combo_deconv_scope)
+        row_mod_scp.addLayout(col_scp)
+        w_dadv_layout.addLayout(row_mod_scp)
+
+        # Checkbox Solo Luminancia
+        self.chk_deconv_luma_only = QCheckBox("Solo Luminancia (Preservar color espectral)")
+        self.chk_deconv_luma_only.setChecked(True)
+        self.chk_deconv_luma_only.toggled.connect(self._on_deconv_luma_only_toggled)
+        self.chk_deconv_luma_only.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        w_dadv_layout.addWidget(self.chk_deconv_luma_only)
+
+        deconv_layout.addWidget(self.w_deconv_advanced)
+
+        self.sec_deconv.set_content_widget(w_deconv)
+        left_layout.addWidget(self.sec_deconv)
+
         # --- SECCIÓN 6: Balance de Blancos (Precisión Fina) ---
         self.sec_wb = CollapsibleSection(
             "🌡️ Balance de Blancos y Calibración",
@@ -2105,6 +2305,8 @@ class DeveloperTab(QWidget):
             self.sec_curves.set_title(tr("developer.sections.curves", "📈 Curva Tonal Interactiva (RGB / Saturación)"))
         if hasattr(self, 'sec_starnet'):
             self.sec_starnet.set_title(tr("developer.sections.starnet", "⭐ StarNet++ AI — Desacoplo de Estrellas"))
+        if hasattr(self, 'sec_deconv'):
+            self.sec_deconv.set_title(tr("developer.sections.deconv", "🔬 Deconvolución Óptica y Enfoque (R-L)"))
         if hasattr(self, 'sec_wb'):
             self.sec_wb.set_title(tr("developer.sections.wb", "🌡️ Balance de Blancos y Calibración"))
         if hasattr(self, 'sec_color'):
@@ -4253,6 +4455,36 @@ class DeveloperTab(QWidget):
         if abs(self.contrast_val) > 1e-4:
             stretched = adjust_contrast(stretched, self.contrast_val, pivot=None)
 
+        # 9a. Deconvolución Óptica Regularizada (Richardson-Lucy / PSF)
+        if getattr(self, "deconv_iterations", 0) > 0:
+            psf_kernel = self._get_current_deconv_psf()
+            star_mask = None
+            if self.deconv_scope in ["stars_only", "background_only"]:
+                if hasattr(self, 'image_stars') and self.image_stars is not None:
+                    st_ref = self.image_stars if stretched.shape[:2] == self.image_stars.shape[:2] else self.proxy_stars
+                    if st_ref is not None:
+                        star_mask = (np.mean(st_ref, axis=2) > 0.05).astype(np.float32)
+                if star_mask is None:
+                    gray_s = cv2.cvtColor(stretched, cv2.COLOR_RGB2GRAY) if (stretched.ndim == 3 and stretched.shape[2] == 3) else stretched
+                    k_th = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+                    tophat = cv2.morphologyEx(gray_s, cv2.MORPH_TOPHAT, k_th)
+                    star_mask = (tophat > 0.02).astype(np.float32)
+
+            deconvolved = richardson_lucy_deconvolve(
+                stretched,
+                psf_kernel=psf_kernel,
+                iterations=self.deconv_iterations,
+                deringing=self.deconv_deringing,
+                damping=self.deconv_damping,
+                luminance_only=self.deconv_luma_only,
+                star_mask=star_mask,
+                target_scope=self.deconv_scope
+            )
+            if precomputed_mask is not None:
+                stretched = (deconvolved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+            else:
+                stretched = deconvolved
+
         # 9b. Efecto Orton y Resplandor de Polvo Galáctico (si no se está usando capa starless desacoplada)
         has_active_starless = (self.image_starless is not None and hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.has_image_layers())
         if self.orton_strength > 1e-4 and not has_active_starless:
@@ -4538,6 +4770,247 @@ class DeveloperTab(QWidget):
     def _on_toggle_star_diff_expand(self, checked: bool):
         if hasattr(self, 'w_star_diff_advanced'):
             self.w_star_diff_advanced.setVisible(checked)
+
+    # =========================================================================
+    # GESTIÓN Y EVENTOS DE DECONVOLUCIÓN ÓPTICA REGULARIZADA (RICHARDSON-LUCY)
+    # =========================================================================
+    def _get_current_deconv_psf(self) -> np.ndarray:
+        """Devuelve el kernel PSF actual, utilizándolo desde la caché si los parámetros no han cambiado."""
+        key = (
+            self.deconv_model,
+            round(self.deconv_fwhm, 2),
+            round(self.deconv_beta, 2),
+            round(self.deconv_aspect_ratio, 2),
+            round(self.deconv_angle_deg, 1)
+        )
+        if self._cached_psf is not None and self._cached_psf_key == key:
+            return self._cached_psf
+
+        if self.deconv_model == "gaussian":
+            psf = generate_gaussian_psf(
+                fwhm=self.deconv_fwhm,
+                aspect_ratio=self.deconv_aspect_ratio,
+                angle_deg=self.deconv_angle_deg
+            )
+        else:
+            psf = generate_moffat_psf(
+                fwhm=self.deconv_fwhm,
+                beta=self.deconv_beta,
+                aspect_ratio=self.deconv_aspect_ratio,
+                angle_deg=self.deconv_angle_deg
+            )
+
+        self._cached_psf = psf
+        self._cached_psf_key = key
+        return psf
+
+    def on_auto_detect_psf_clicked(self):
+        """Analiza estrellas en la imagen para estimar automáticamente FWHM y relación de aspecto."""
+        img_target = None
+        if self.image_32bit is not None:
+            img_target = self.image_32bit
+        elif self.preview_proxy is not None:
+            img_target = self.preview_proxy
+
+        if img_target is None:
+            QMessageBox.information(
+                self,
+                "Deconvolución",
+                "Carga primero una imagen para poder estimar la PSF óptica de las estrellas."
+            )
+            return
+
+        sky_mask_2d = None
+        if self.current_mask is not None:
+            sky_mask_2d = self.current_mask
+
+        self.lbl_psf_status.setText("Analizando estrellas aisladas...")
+        QApplication.processEvents()
+
+        try:
+            psf_kernel, stats = estimate_psf_from_stars(
+                img_target,
+                sky_mask=sky_mask_2d,
+                max_stars=60
+            )
+
+            est_fwhm = stats.get("fwhm", 3.0)
+            est_aspect = stats.get("aspect_ratio", 1.0)
+            stars_sampled = stats.get("stars_sampled", 0)
+            is_fallback = stats.get("fallback", False)
+
+            # Actualizar controles
+            self.deconv_fwhm = float(est_fwhm)
+            self.deconv_aspect_ratio = float(est_aspect)
+            self._cached_psf = None
+            self._cached_psf_key = ()
+
+            if hasattr(self, 'slider_deconv_fwhm'):
+                self.slider_deconv_fwhm.blockSignals(True)
+                self.slider_deconv_fwhm.setValue(int(np.clip(est_fwhm * 10.0, 10, 80)))
+                self.slider_deconv_fwhm.blockSignals(False)
+                self.lbl_deconv_fwhm.setText(f"{est_fwhm:.1f} px")
+
+            if hasattr(self, 'slider_deconv_aspect'):
+                self.slider_deconv_aspect.blockSignals(True)
+                self.slider_deconv_aspect.setValue(int(np.clip(est_aspect * 100.0, 100, 250)))
+                self.slider_deconv_aspect.blockSignals(False)
+                self.lbl_deconv_aspect.setText(f"{est_aspect:.2f}x")
+
+            status_txt = f"PSF: Moffat 2D ({stars_sampled} estrellas | FWHM: {est_fwhm:.2f} px | Aspecto: {est_aspect:.2f}x)"
+            if is_fallback:
+                status_txt += " [Ajuste estándar]"
+            self.lbl_psf_status.setText(status_txt)
+
+            self.log_message(
+                f"[DECONV] PSF estimada automáticamente: {stars_sampled} estrellas analizadas -> "
+                f"FWHM = {est_fwhm:.2f} px, Aspecto = {est_aspect:.2f}x"
+            )
+
+            if self.deconv_iterations > 0:
+                self.update_stretch_preview()
+
+            self._commit_action()
+
+        except Exception as e:
+            self.log_message(f"[ERROR] Error al estimar PSF: {str(e)}")
+            self.lbl_psf_status.setText("Error al estimar PSF")
+
+    def on_deconv_iterations_changed(self, val: int):
+        self.deconv_iterations = int(val)
+        txt = f"{val}" if val > 0 else "0 (Off)"
+        self.lbl_deconv_iter.setText(txt)
+        self.update_stretch_preview()
+
+    def on_deconv_fwhm_changed(self, val: int):
+        fwhm = val / 10.0
+        self.deconv_fwhm = float(fwhm)
+        self.lbl_deconv_fwhm.setText(f"{fwhm:.1f} px")
+        self._cached_psf = None
+        self._cached_psf_key = ()
+        if self.deconv_iterations > 0:
+            self.update_stretch_preview()
+
+    def on_deconv_deringing_changed(self, val: int):
+        der = val / 1000.0
+        self.deconv_deringing = float(der)
+        self.lbl_deconv_deringing.setText(f"{der:.3f}")
+        if self.deconv_iterations > 0:
+            self.update_stretch_preview()
+
+    def on_deconv_damping_changed(self, val: int):
+        damp = val / 100.0
+        self.deconv_damping = float(damp)
+        self.lbl_deconv_damping.setText(f"{val}%")
+        if self.deconv_iterations > 0:
+            self.update_stretch_preview()
+
+    def on_deconv_aspect_changed(self, val: int):
+        aspect = val / 100.0
+        self.deconv_aspect_ratio = float(aspect)
+        self.lbl_deconv_aspect.setText(f"{aspect:.2f}x")
+        self._cached_psf = None
+        self._cached_psf_key = ()
+        if self.deconv_iterations > 0:
+            self.update_stretch_preview()
+
+    def on_deconv_angle_changed(self, val: int):
+        angle = float(val)
+        self.deconv_angle_deg = angle
+        self.lbl_deconv_angle.setText(f"{val}°")
+        self._cached_psf = None
+        self._cached_psf_key = ()
+        if self.deconv_iterations > 0:
+            self.update_stretch_preview()
+
+    def _on_deconv_model_changed(self, idx: int):
+        model = self.combo_deconv_model.itemData(idx) or ("moffat" if idx == 0 else "gaussian")
+        self.deconv_model = model
+        self._cached_psf = None
+        self._cached_psf_key = ()
+        if self.deconv_iterations > 0:
+            self.update_stretch_preview()
+        self._commit_action()
+
+    def _on_deconv_scope_changed(self, idx: int):
+        scope = self.combo_deconv_scope.itemData(idx) or "all"
+        self.deconv_scope = scope
+        if self.deconv_iterations > 0:
+            self.update_stretch_preview()
+        self._commit_action()
+
+    def _on_deconv_luma_only_toggled(self, checked: bool):
+        self.deconv_luma_only = bool(checked)
+        if self.deconv_iterations > 0:
+            self.update_stretch_preview()
+        self._commit_action()
+
+    def _on_toggle_deconv_expand(self, checked: bool):
+        if hasattr(self, 'w_deconv_advanced'):
+            self.w_deconv_advanced.setVisible(checked)
+
+    def reset_deconv(self):
+        """Restablece los parámetros de deconvolución a sus valores neutros por defecto."""
+        self.deconv_iterations = 0
+        self.deconv_fwhm = 3.0
+        self.deconv_model = "moffat"
+        self.deconv_beta = 4.5
+        self.deconv_aspect_ratio = 1.0
+        self.deconv_angle_deg = 0.0
+        self.deconv_deringing = 0.008
+        self.deconv_damping = 0.25
+        self.deconv_luma_only = True
+        self.deconv_scope = "all"
+        self._cached_psf = None
+        self._cached_psf_key = ()
+
+        widgets_to_block = [
+            getattr(self, 'slider_deconv_iter', None),
+            getattr(self, 'slider_deconv_fwhm', None),
+            getattr(self, 'slider_deconv_deringing', None),
+            getattr(self, 'slider_deconv_damping', None),
+            getattr(self, 'slider_deconv_aspect', None),
+            getattr(self, 'slider_deconv_angle', None),
+            getattr(self, 'combo_deconv_model', None),
+            getattr(self, 'combo_deconv_scope', None),
+            getattr(self, 'chk_deconv_luma_only', None),
+        ]
+        for w in widgets_to_block:
+            if w is not None:
+                w.blockSignals(True)
+
+        if hasattr(self, 'slider_deconv_iter'):
+            self.slider_deconv_iter.setValue(0)
+            self.lbl_deconv_iter.setText("0 (Off)")
+        if hasattr(self, 'slider_deconv_fwhm'):
+            self.slider_deconv_fwhm.setValue(30)
+            self.lbl_deconv_fwhm.setText("3.0 px")
+        if hasattr(self, 'slider_deconv_deringing'):
+            self.slider_deconv_deringing.setValue(8)
+            self.lbl_deconv_deringing.setText("0.008")
+        if hasattr(self, 'slider_deconv_damping'):
+            self.slider_deconv_damping.setValue(25)
+            self.lbl_deconv_damping.setText("25%")
+        if hasattr(self, 'slider_deconv_aspect'):
+            self.slider_deconv_aspect.setValue(100)
+            self.lbl_deconv_aspect.setText("1.00x")
+        if hasattr(self, 'slider_deconv_angle'):
+            self.slider_deconv_angle.setValue(0)
+            self.lbl_deconv_angle.setText("0°")
+        if hasattr(self, 'combo_deconv_model'):
+            self.combo_deconv_model.setCurrentIndex(0)
+        if hasattr(self, 'combo_deconv_scope'):
+            self.combo_deconv_scope.setCurrentIndex(0)
+        if hasattr(self, 'chk_deconv_luma_only'):
+            self.chk_deconv_luma_only.setChecked(True)
+        if hasattr(self, 'lbl_psf_status'):
+            self.lbl_psf_status.setText("PSF: Moffat 2D (FWHM: 3.0 px | Aspecto: 1.00)")
+
+        for w in widgets_to_block:
+            if w is not None:
+                w.blockSignals(False)
+
+        self.update_stretch_preview()
 
     def _on_mask_widget_stars_diff_strength(self, val: int):
         if hasattr(self, 'slider_star_diff') and self.slider_star_diff.value() != val:
@@ -5877,6 +6350,18 @@ class DeveloperTab(QWidget):
         self.star_diff_threshold = 0.45
         self.star_diff_color_boost = 0.50
         self.star_diff_mode = "screen"
+        self.deconv_iterations = 0
+        self.deconv_fwhm = 3.0
+        self.deconv_model = "moffat"
+        self.deconv_beta = 4.5
+        self.deconv_aspect_ratio = 1.0
+        self.deconv_angle_deg = 0.0
+        self.deconv_deringing = 0.008
+        self.deconv_damping = 0.25
+        self.deconv_luma_only = True
+        self.deconv_scope = "all"
+        self._cached_psf = None
+        self._cached_psf_key = ()
         self.clarity_starless_val = 0.0
         self.dehaze_starless_val = 0.0
         self.multiescala_estructura = 0.0
@@ -5911,6 +6396,15 @@ class DeveloperTab(QWidget):
             getattr(self, 'slider_star_diff_threshold', None),
             getattr(self, 'slider_star_diff_color', None),
             getattr(self, 'combo_star_diff_mode', None),
+            getattr(self, 'slider_deconv_iter', None),
+            getattr(self, 'slider_deconv_fwhm', None),
+            getattr(self, 'slider_deconv_deringing', None),
+            getattr(self, 'slider_deconv_damping', None),
+            getattr(self, 'slider_deconv_aspect', None),
+            getattr(self, 'slider_deconv_angle', None),
+            getattr(self, 'combo_deconv_model', None),
+            getattr(self, 'combo_deconv_scope', None),
+            getattr(self, 'chk_deconv_luma_only', None),
             self.slider_temp, self.slider_tint, self.slider_sat_sky,
             self.slider_sat_gnd, self.slider_vibrance, self.slider_contrast,
             self.combo_layer, self.spin_bp, self.slider_bp,
@@ -5966,6 +6460,33 @@ class DeveloperTab(QWidget):
             self.lbl_star_diff_color.setText("50%")
         if hasattr(self, 'combo_star_diff_mode'):
             self.combo_star_diff_mode.setCurrentIndex(0)
+
+        if hasattr(self, 'slider_deconv_iter'):
+            self.slider_deconv_iter.setValue(0)
+            self.lbl_deconv_iter.setText("0 (Off)")
+        if hasattr(self, 'slider_deconv_fwhm'):
+            self.slider_deconv_fwhm.setValue(30)
+            self.lbl_deconv_fwhm.setText("3.0 px")
+        if hasattr(self, 'slider_deconv_deringing'):
+            self.slider_deconv_deringing.setValue(8)
+            self.lbl_deconv_deringing.setText("0.008")
+        if hasattr(self, 'slider_deconv_damping'):
+            self.slider_deconv_damping.setValue(25)
+            self.lbl_deconv_damping.setText("25%")
+        if hasattr(self, 'slider_deconv_aspect'):
+            self.slider_deconv_aspect.setValue(100)
+            self.lbl_deconv_aspect.setText("1.00x")
+        if hasattr(self, 'slider_deconv_angle'):
+            self.slider_deconv_angle.setValue(0)
+            self.lbl_deconv_angle.setText("0°")
+        if hasattr(self, 'combo_deconv_model'):
+            self.combo_deconv_model.setCurrentIndex(0)
+        if hasattr(self, 'combo_deconv_scope'):
+            self.combo_deconv_scope.setCurrentIndex(0)
+        if hasattr(self, 'chk_deconv_luma_only'):
+            self.chk_deconv_luma_only.setChecked(True)
+        if hasattr(self, 'lbl_psf_status'):
+            self.lbl_psf_status.setText("PSF: Moffat 2D (FWHM: 3.0 px | Aspecto: 1.00)")
 
         self.combo_layer.setCurrentIndex(0)
 
@@ -6182,6 +6703,12 @@ class DeveloperTab(QWidget):
             getattr(self, 'slider_star_diff_radius', None),
             getattr(self, 'slider_star_diff_threshold', None),
             getattr(self, 'slider_star_diff_color', None),
+            getattr(self, 'slider_deconv_iter', None),
+            getattr(self, 'slider_deconv_fwhm', None),
+            getattr(self, 'slider_deconv_deringing', None),
+            getattr(self, 'slider_deconv_damping', None),
+            getattr(self, 'slider_deconv_aspect', None),
+            getattr(self, 'slider_deconv_angle', None),
             self.slider_temp, self.slider_tint, self.slider_sat_sky,
             self.slider_sat_gnd, self.slider_vibrance, self.slider_contrast,
             self.slider_bp, self.slider_mtf,
@@ -6212,6 +6739,12 @@ class DeveloperTab(QWidget):
         self.combo_orton_mode.activated.connect(lambda _: self._commit_action())
         if hasattr(self, 'combo_star_diff_mode'):
             self.combo_star_diff_mode.activated.connect(lambda _: self._commit_action())
+        if hasattr(self, 'combo_deconv_model'):
+            self.combo_deconv_model.activated.connect(lambda _: self._commit_action())
+        if hasattr(self, 'combo_deconv_scope'):
+            self.combo_deconv_scope.activated.connect(lambda _: self._commit_action())
+        if hasattr(self, 'chk_deconv_luma_only'):
+            self.chk_deconv_luma_only.toggled.connect(lambda _: self._commit_action())
         self.spin_temp.editingFinished.connect(self._commit_action)
         self.spin_tint.editingFinished.connect(self._commit_action)
         self.combo_layer.activated.connect(lambda _: self._commit_action())
@@ -6250,6 +6783,15 @@ class DeveloperTab(QWidget):
             "star_diff_threshold": self.slider_star_diff_threshold.value() if hasattr(self, 'slider_star_diff_threshold') else 45,
             "star_diff_color": self.slider_star_diff_color.value() if hasattr(self, 'slider_star_diff_color') else 50,
             "star_diff_mode_idx": self.combo_star_diff_mode.currentIndex() if hasattr(self, 'combo_star_diff_mode') else 0,
+            "deconv_iterations": self.slider_deconv_iter.value() if hasattr(self, 'slider_deconv_iter') else 0,
+            "deconv_fwhm": self.slider_deconv_fwhm.value() if hasattr(self, 'slider_deconv_fwhm') else 30,
+            "deconv_deringing": self.slider_deconv_deringing.value() if hasattr(self, 'slider_deconv_deringing') else 8,
+            "deconv_damping": self.slider_deconv_damping.value() if hasattr(self, 'slider_deconv_damping') else 25,
+            "deconv_aspect": self.slider_deconv_aspect.value() if hasattr(self, 'slider_deconv_aspect') else 100,
+            "deconv_angle": self.slider_deconv_angle.value() if hasattr(self, 'slider_deconv_angle') else 0,
+            "deconv_model_idx": self.combo_deconv_model.currentIndex() if hasattr(self, 'combo_deconv_model') else 0,
+            "deconv_scope_idx": self.combo_deconv_scope.currentIndex() if hasattr(self, 'combo_deconv_scope') else 0,
+            "deconv_luma_only": self.chk_deconv_luma_only.isChecked() if hasattr(self, 'chk_deconv_luma_only') else True,
             "layer_idx": self.combo_layer.currentIndex(),
             "stars_val": self.slider_stars.value(),
             "contrast_starless_val": self.slider_contrast_starless.value(),
@@ -6433,6 +6975,15 @@ class DeveloperTab(QWidget):
             getattr(self, 'slider_star_diff_threshold', None),
             getattr(self, 'slider_star_diff_color', None),
             getattr(self, 'combo_star_diff_mode', None),
+            getattr(self, 'slider_deconv_iter', None),
+            getattr(self, 'slider_deconv_fwhm', None),
+            getattr(self, 'slider_deconv_deringing', None),
+            getattr(self, 'slider_deconv_damping', None),
+            getattr(self, 'slider_deconv_aspect', None),
+            getattr(self, 'slider_deconv_angle', None),
+            getattr(self, 'combo_deconv_model', None),
+            getattr(self, 'combo_deconv_scope', None),
+            getattr(self, 'chk_deconv_luma_only', None),
             self.slider_temp, self.slider_tint, self.spin_temp, self.spin_tint,
             self.slider_sat_sky, self.slider_sat_gnd, self.slider_vibrance,
             self.slider_contrast, self.combo_layer, self.spin_bp, self.slider_bp,
@@ -6572,6 +7123,49 @@ class DeveloperTab(QWidget):
             modes = ["screen", "soft_light", "additive"]
             idx = state["star_diff_mode_idx"]
             self.star_diff_mode = modes[idx] if 0 <= idx < len(modes) else "screen"
+
+        if "deconv_iterations" in state and hasattr(self, 'slider_deconv_iter'):
+            self.slider_deconv_iter.setValue(state["deconv_iterations"])
+            self.deconv_iterations = int(state["deconv_iterations"])
+            txt = f"{self.deconv_iterations}" if self.deconv_iterations > 0 else "0 (Off)"
+            self.lbl_deconv_iter.setText(txt)
+
+        if "deconv_fwhm" in state and hasattr(self, 'slider_deconv_fwhm'):
+            self.slider_deconv_fwhm.setValue(state["deconv_fwhm"])
+            self.deconv_fwhm = float(state["deconv_fwhm"]) / 10.0
+            self.lbl_deconv_fwhm.setText(f"{self.deconv_fwhm:.1f} px")
+
+        if "deconv_deringing" in state and hasattr(self, 'slider_deconv_deringing'):
+            self.slider_deconv_deringing.setValue(state["deconv_deringing"])
+            self.deconv_deringing = float(state["deconv_deringing"]) / 1000.0
+            self.lbl_deconv_deringing.setText(f"{self.deconv_deringing:.3f}")
+
+        if "deconv_damping" in state and hasattr(self, 'slider_deconv_damping'):
+            self.slider_deconv_damping.setValue(state["deconv_damping"])
+            self.deconv_damping = float(state["deconv_damping"]) / 100.0
+            self.lbl_deconv_damping.setText(f"{state['deconv_damping']}%")
+
+        if "deconv_aspect" in state and hasattr(self, 'slider_deconv_aspect'):
+            self.slider_deconv_aspect.setValue(state["deconv_aspect"])
+            self.deconv_aspect_ratio = float(state["deconv_aspect"]) / 100.0
+            self.lbl_deconv_aspect.setText(f"{self.deconv_aspect_ratio:.2f}x")
+
+        if "deconv_angle" in state and hasattr(self, 'slider_deconv_angle'):
+            self.slider_deconv_angle.setValue(state["deconv_angle"])
+            self.deconv_angle_deg = float(state["deconv_angle"])
+            self.lbl_deconv_angle.setText(f"{state['deconv_angle']}°")
+
+        if "deconv_model_idx" in state and hasattr(self, 'combo_deconv_model'):
+            self.combo_deconv_model.setCurrentIndex(state["deconv_model_idx"])
+            self.deconv_model = self.combo_deconv_model.itemData(state["deconv_model_idx"]) or "moffat"
+
+        if "deconv_scope_idx" in state and hasattr(self, 'combo_deconv_scope'):
+            self.combo_deconv_scope.setCurrentIndex(state["deconv_scope_idx"])
+            self.deconv_scope = self.combo_deconv_scope.itemData(state["deconv_scope_idx"]) or "all"
+
+        if "deconv_luma_only" in state and hasattr(self, 'chk_deconv_luma_only'):
+            self.chk_deconv_luma_only.setChecked(state["deconv_luma_only"])
+            self.deconv_luma_only = bool(state["deconv_luma_only"])
 
         if "layer_idx" in state:
             self.combo_layer.setCurrentIndex(state["layer_idx"])
