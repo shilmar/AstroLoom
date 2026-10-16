@@ -129,6 +129,12 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 ---
 
 ## ✅ Tareas Recientemente Completadas
+- **Filtro Difusor Digital y Realce de Constelaciones (v0.8.4 - P1):** Aislamiento selectivo de estrellas prominentes (Top-Hat), preservación de fondo estelar, recuperación cromática espectral y modos de mezcla no destructivos (*Trama, Luz Suave, Aditivo*).
+- **Estirado Hiperbólico Generalizado - GHS (v0.8.4 - P2):** Transformación tonal hiperbólica con punto de simetría (SP), factor de estirado (D) y protección de núcleos estelares (HP) con modos de Luminancia y RGB enlazado.
+- **Reducción Paramétrica 2D de Contaminación Lumínica Terrestre (v0.8.4 - P5):** Sustracción de cúpulas lumínicas asimétricas urbanas en el horizonte mediante modelo elíptico 2D con ajuste de centro, anchura, altura y tinte de vapor de sodio.
+- **Efecto Orton Astronómico y Glow de Polvo Galáctico (v0.8.4 - P6):** Resplandor etéreo y suave enfocado selectivamente en nubes moleculares y bandas galácticas sin oscurecer estrellas.
+- **Control Directo de Overlay de Máscara y Pipeta Muestreadora de Color (v0.8.4):** Botón de visualización rápida en barra superior con respuesta verde/oscura sincronizada, ocultación automática de trazos al generar y pipeta interactiva en capas de color HSV.
+- **Manual de Usuario Completo (v0.8.4):** Documentación exhaustiva en `MANUAL_DE_USUARIO.md` explicando cada módulo, flujo de trabajo y parámetros del Revelador.
 - **Detección Automática de Suelo con IA Ligera (v0.8.3 - P8):** Inferencia local U²-Net en ONNX Runtime con refinado subpíxel por Filtro Guiado (Guided Filter), descarga asistida interactiva y fallback algorítmico continuo sin conexión.
 - **Tratamiento Anti-Ghosting de Árboles en Horizonte (v0.8.3 - P3):** Algoritmo Min-Horizon de proyección percentil inferior sobre zona de seguridad dilatada perimetral que elimina ramas transparentes en el apilado dual.
 - **Cribado Previo Inteligente de Tomas y Calidad Estelar (v0.8.3 - P4):** Inspección óptica multihilo de FWHM, excentricidad y densidad estelar con calibración estratificada para grandes angulares, semáforo visual de puntuación y auto-descarte de tomas movidas o nubladas.

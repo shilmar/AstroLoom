@@ -5,6 +5,8 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-10-16
+
 ### Añadido
 * **Control Rápido y Ergonomía de Superposición de Máscara de Suelo:**
   - **Botón `👁️ Ver Máscara` en la Barra Superior:** Ubicado directamente en la barra de herramientas del lienzo del Revelador junto a `🧠 Máscara IA` y `🖌️ Máscara Suelo (M)`, permitiendo encender o apagar la superposición coloreada de cielo/suelo en cualquier momento sin tener que abrir la herramienta secundaria de trazado.
@@ -33,6 +35,12 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
   - Sustracción de cúpulas lumínicas urbanas en el horizonte mediante modelo elíptico 2D con ajuste de centro, anchura, altura y tinte de vapor de sodio.
 * **Estirado Hiperbólico Generalizado (GHS) [P2]:**
   - Transformación hiperbólica con punto de simetría (SP), factor de estirado (D) y protección de núcleos estelares (HP) con modos de Luminancia y RGB enlazado.
+
+### Modificado
+* **Salto de Versión:**
+  - Actualización a **v0.8.4** en `gui/main_window.py`, `gui/tab_settings.py`, `locales/es.json` y `locales/en.json`.
+
+## [0.8.3] - 2026-10-16
 
 ### Añadido
 * **Detección Automática de Suelo y Horizonte con IA Ligera (1-Click Sky/Ground) [P8]:**
