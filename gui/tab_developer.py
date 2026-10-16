@@ -37,6 +37,9 @@ from core.stacking import load_image_as_float32
 from core.stretch import (
     calculate_mtf_params, 
     manual_stretch, 
+    compute_ghs_lut,
+    apply_ghs_stretch,
+    estimate_ghs_params,
     apply_white_balance, 
     adjust_saturation_dual, 
     extract_background_polynomial,
@@ -129,6 +132,17 @@ class DeveloperTab(QWidget):
         self.initial_mtf: float = 0.1
         self.has_custom_snapshot: bool = False
         self.snapshot_before_pixmap: Optional[QPixmap] = None
+
+        # Parámetros de Estirado (MTF vs GHS)
+        self.stretch_mode: str = "mtf"       # "mtf" o "ghs"
+        self.ghs_color_mode: str = "luma"    # "luma" o "rgb"
+        self.ghs_sp: float = 0.02000         # Punto de simetría (SP)
+        self.ghs_d: float = 5.00             # Factor de estirado (D)
+        self.ghs_b: float = 2.00             # Parámetro de forma (b)
+        self.ghs_hp: float = 0.00            # Protección de altas luces / estrellas (HP)
+        self.ghs_lp: float = 0.00            # Protección de sombras (LP)
+        self.ghs_bp: float = 0.00000         # Punto negro para GHS (BP)
+        self._eyedropper_target: str = "wb"  # "wb" o "ghs_sp"
 
         # Historial de Deshacer / Rehacer (Undo / Redo)
         self.MAX_UNDO_STEPS = 50
@@ -327,7 +341,7 @@ class DeveloperTab(QWidget):
         self.sec_gradients.set_content_widget(w_bg)
         left_layout.addWidget(self.sec_gradients)
 
-        # --- SECCIÓN 3: Estirado Tonal y Contraste (MTF) ---
+        # --- SECCIÓN 3: Estirado Tonal y Contraste (MTF / GHS) ---
         self.sec_stretch = CollapsibleSection(
             "📈 Estirado Tonal y Contraste",
             is_expanded=True,
@@ -338,17 +352,55 @@ class DeveloperTab(QWidget):
         stretch_layout.setContentsMargins(6, 4, 6, 6)
         stretch_layout.setSpacing(8)
 
+        # 3.1 Selector de Modo de Estirado: MTF vs GHS
+        row_stretch_mode = QHBoxLayout()
+        row_stretch_mode.setSpacing(4)
+
+        self.btn_mode_mtf = QPushButton("📊 MTF Clásico")
+        self.btn_mode_mtf.setCheckable(True)
+        self.btn_mode_mtf.setChecked(True)
+        self.btn_mode_mtf.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
+            "QPushButton:checked { background: #3b4252; color: #80d8ff; border: 1px solid #80d8ff; }"
+        )
+        self.btn_mode_mtf.setToolTip("Estirado estándar por Función de Transferencia de Medios Tonos (MTF).")
+        self.btn_mode_mtf.clicked.connect(lambda: self._set_stretch_mode("mtf"))
+
+        self.btn_mode_ghs = QPushButton("📈 GHS Hiperbólico")
+        self.btn_mode_ghs.setCheckable(True)
+        self.btn_mode_ghs.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
+            "QPushButton:checked { background: #3b4252; color: #ffb74d; border: 1px solid #ffb74d; }"
+        )
+        self.btn_mode_ghs.setToolTip("Estirado Hiperbólico Generalizado (Payne & Cranfield).\nControl quirúrgico de contraste en el fondo sin quemar estrellas ni núcleos.")
+        self.btn_mode_ghs.clicked.connect(lambda: self._set_stretch_mode("ghs"))
+
+        self.grp_stretch_mode = QButtonGroup(self)
+        self.grp_stretch_mode.setExclusive(True)
+        self.grp_stretch_mode.addButton(self.btn_mode_mtf)
+        self.grp_stretch_mode.addButton(self.btn_mode_ghs)
+
+        row_stretch_mode.addWidget(self.btn_mode_mtf)
+        row_stretch_mode.addWidget(self.btn_mode_ghs)
+        stretch_layout.addLayout(row_stretch_mode)
+
+        # 3.2 Contenedor MTF
+        self.w_mtf_container = QWidget()
+        mtf_layout = QVBoxLayout(self.w_mtf_container)
+        mtf_layout.setContentsMargins(0, 0, 0, 0)
+        mtf_layout.setSpacing(6)
+
         btn_row_mtf = QHBoxLayout()
         btn_auto_mtf = QPushButton("⚡ Auto-Estirado MTF")
         btn_auto_mtf.setStyleSheet("font-weight: bold; color: #80d8ff;")
         btn_auto_mtf.clicked.connect(self.apply_auto_mtf)
-        btn_reset_tone = QPushButton("Restablecer Tono")
+        btn_reset_tone = QPushButton("Restablecer MTF")
         btn_reset_tone.clicked.connect(self.reset_sliders)
         btn_row_mtf.addWidget(btn_auto_mtf)
         btn_row_mtf.addWidget(btn_reset_tone)
-        stretch_layout.addLayout(btn_row_mtf)
+        mtf_layout.addLayout(btn_row_mtf)
 
-        # Emparejamiento 3.2: Punto Negro (izq) y Medios Tonos (der)
+        # Emparejamiento: Punto Negro (izq) y Medios Tonos (der)
         row_spins = QHBoxLayout()
         row_spins.setSpacing(14)
 
@@ -373,7 +425,7 @@ class DeveloperTab(QWidget):
         self.spin_mtf.valueChanged.connect(self.on_spin_mtf_changed)
         col_mtf_lbl.addWidget(self.spin_mtf)
         row_spins.addLayout(col_mtf_lbl)
-        stretch_layout.addLayout(row_spins)
+        mtf_layout.addLayout(row_spins)
 
         row_sliders = QHBoxLayout()
         row_sliders.setSpacing(14)
@@ -388,8 +440,192 @@ class DeveloperTab(QWidget):
         self.slider_mtf.setValue(400)
         self.slider_mtf.valueChanged.connect(self.on_slider_mtf_changed)
         row_sliders.addWidget(self.slider_mtf)
-        stretch_layout.addLayout(row_sliders)
+        mtf_layout.addLayout(row_sliders)
 
+        stretch_layout.addWidget(self.w_mtf_container)
+
+        # 3.3 Contenedor GHS (Hiperbólico Generalizado)
+        self.w_ghs_container = QWidget()
+        self.w_ghs_container.setVisible(False)
+        ghs_layout = QVBoxLayout(self.w_ghs_container)
+        ghs_layout.setContentsMargins(0, 0, 0, 0)
+        ghs_layout.setSpacing(6)
+
+        # Botonera superior GHS: Auto-GHS, Cuentagotas SP, Restablecer GHS
+        btn_row_ghs = QHBoxLayout()
+        self.btn_auto_ghs = QPushButton("⚡ Auto-GHS")
+        self.btn_auto_ghs.setStyleSheet("font-weight: bold; color: #ffb74d;")
+        self.btn_auto_ghs.clicked.connect(self.apply_auto_ghs)
+        self.btn_auto_ghs.setToolTip("Calcula y aplica automáticamente los parámetros óptimos de GHS según el histograma")
+
+        self.btn_ghs_pipette = QPushButton("🎯 Cuentagotas SP")
+        self.btn_ghs_pipette.setCheckable(True)
+        self.btn_ghs_pipette.setCursor(Qt.PointingHandCursor)
+        self.btn_ghs_pipette.setStyleSheet("font-weight: bold; color: #80d8ff;")
+        self.btn_ghs_pipette.setToolTip("Haz clic aquí y luego pincha en el fondo de cielo o estructura del lienzo para centrar el Punto de Simetría (SP)")
+        self.btn_ghs_pipette.toggled.connect(self._on_toggle_ghs_pipette)
+
+        self.btn_reset_ghs = QPushButton("Restablecer")
+        self.btn_reset_ghs.clicked.connect(self.reset_ghs)
+
+        btn_row_ghs.addWidget(self.btn_auto_ghs)
+        btn_row_ghs.addWidget(self.btn_ghs_pipette)
+        btn_row_ghs.addWidget(self.btn_reset_ghs)
+        ghs_layout.addLayout(btn_row_ghs)
+
+        # Selector de Modo de Color GHS: Luminancia vs RGB
+        row_ghs_color = QHBoxLayout()
+        row_ghs_color.setSpacing(4)
+        self.btn_ghs_luma = QPushButton("💡 Luminancia (Color)")
+        self.btn_ghs_luma.setCheckable(True)
+        self.btn_ghs_luma.setChecked(True)
+        self.btn_ghs_luma.setStyleSheet(
+            "QPushButton { font-size: 10px; padding: 3px; font-weight: bold; border-radius: 3px; background: #262933; color: #cfd8dc; }"
+            "QPushButton:checked { background: #3b4252; color: #80d8ff; border: 1px solid #80d8ff; }"
+        )
+        self.btn_ghs_luma.setToolTip("Preserva la saturación natural y matices estirando solo la luminancia Rec.709")
+        self.btn_ghs_luma.clicked.connect(lambda: self._set_ghs_color_mode("luma"))
+
+        self.btn_ghs_rgb = QPushButton("🎨 RGB Enlazado")
+        self.btn_ghs_rgb.setCheckable(True)
+        self.btn_ghs_rgb.setStyleSheet(
+            "QPushButton { font-size: 10px; padding: 3px; font-weight: bold; border-radius: 3px; background: #262933; color: #cfd8dc; }"
+            "QPushButton:checked { background: #3b4252; color: #00e676; border: 1px solid #00e676; }"
+        )
+        self.btn_ghs_rgb.setToolTip("Aplica la curva GHS uniformemente sobre los canales R, G y B")
+        self.btn_ghs_rgb.clicked.connect(lambda: self._set_ghs_color_mode("rgb"))
+
+        self.grp_ghs_color = QButtonGroup(self)
+        self.grp_ghs_color.setExclusive(True)
+        self.grp_ghs_color.addButton(self.btn_ghs_luma)
+        self.grp_ghs_color.addButton(self.btn_ghs_rgb)
+        row_ghs_color.addWidget(self.btn_ghs_luma)
+        row_ghs_color.addWidget(self.btn_ghs_rgb)
+        ghs_layout.addLayout(row_ghs_color)
+
+        # Fila SP: Punto de Simetría
+        row_sp = QHBoxLayout()
+        row_sp.addWidget(self._make_resettable_label(QLabel("P. Simetría (SP):"), lambda: self.spin_ghs_sp.setValue(0.02000), "0.02000"))
+        self.spin_ghs_sp = QDoubleSpinBox()
+        self.spin_ghs_sp.setDecimals(5)
+        self.spin_ghs_sp.setRange(0.00000, 1.00000)
+        self.spin_ghs_sp.setSingleStep(0.00050)
+        self.spin_ghs_sp.setValue(0.02000)
+        self.spin_ghs_sp.valueChanged.connect(self.on_spin_ghs_sp_changed)
+        row_sp.addWidget(self.spin_ghs_sp)
+        ghs_layout.addLayout(row_sp)
+
+        self.slider_ghs_sp = QSlider(Qt.Horizontal)
+        self.slider_ghs_sp.setRange(0, 10000)
+        self.slider_ghs_sp.setValue(200)
+        self.slider_ghs_sp.valueChanged.connect(self.on_slider_ghs_sp_changed)
+        ghs_layout.addWidget(self.slider_ghs_sp)
+
+        # Fila D y b: Factor de Estirado e Intensidad Local
+        row_db_spins = QHBoxLayout()
+        row_db_spins.setSpacing(10)
+
+        col_d = QHBoxLayout()
+        col_d.addWidget(self._make_resettable_label(QLabel("Factor D:"), lambda: self.spin_ghs_d.setValue(5.00), "5.00"))
+        self.spin_ghs_d = QDoubleSpinBox()
+        self.spin_ghs_d.setDecimals(2)
+        self.spin_ghs_d.setRange(0.00, 20.00)
+        self.spin_ghs_d.setSingleStep(0.10)
+        self.spin_ghs_d.setValue(5.00)
+        self.spin_ghs_d.valueChanged.connect(self.on_spin_ghs_d_changed)
+        col_d.addWidget(self.spin_ghs_d)
+        row_db_spins.addLayout(col_d)
+
+        col_b = QHBoxLayout()
+        col_b.addWidget(self._make_resettable_label(QLabel("Forma (b):"), lambda: self.spin_ghs_b.setValue(2.00), "2.00"))
+        self.spin_ghs_b = QDoubleSpinBox()
+        self.spin_ghs_b.setDecimals(2)
+        self.spin_ghs_b.setRange(0.00, 15.00)
+        self.spin_ghs_b.setSingleStep(0.10)
+        self.spin_ghs_b.setValue(2.00)
+        self.spin_ghs_b.valueChanged.connect(self.on_spin_ghs_b_changed)
+        col_b.addWidget(self.spin_ghs_b)
+        row_db_spins.addLayout(col_b)
+        ghs_layout.addLayout(row_db_spins)
+
+        row_db_sliders = QHBoxLayout()
+        row_db_sliders.setSpacing(10)
+        self.slider_ghs_d = QSlider(Qt.Horizontal)
+        self.slider_ghs_d.setRange(0, 2000)
+        self.slider_ghs_d.setValue(500)
+        self.slider_ghs_d.valueChanged.connect(self.on_slider_ghs_d_changed)
+        row_db_sliders.addWidget(self.slider_ghs_d)
+
+        self.slider_ghs_b = QSlider(Qt.Horizontal)
+        self.slider_ghs_b.setRange(0, 1500)
+        self.slider_ghs_b.setValue(200)
+        self.slider_ghs_b.valueChanged.connect(self.on_slider_ghs_b_changed)
+        row_db_sliders.addWidget(self.slider_ghs_b)
+        ghs_layout.addLayout(row_db_sliders)
+
+        # Fila HP (Protección de Estrellas) y LP (Protección de Sombras)
+        row_prot_spins = QHBoxLayout()
+        row_prot_spins.setSpacing(10)
+
+        col_hp = QHBoxLayout()
+        col_hp.addWidget(self._make_resettable_label(QLabel("Prot. Estrellas (HP):"), lambda: self.spin_ghs_hp.setValue(0.00), "0.00"))
+        self.spin_ghs_hp = QDoubleSpinBox()
+        self.spin_ghs_hp.setDecimals(2)
+        self.spin_ghs_hp.setRange(0.00, 1.00)
+        self.spin_ghs_hp.setSingleStep(0.02)
+        self.spin_ghs_hp.setValue(0.00)
+        self.spin_ghs_hp.valueChanged.connect(self.on_spin_ghs_hp_changed)
+        col_hp.addWidget(self.spin_ghs_hp)
+        row_prot_spins.addLayout(col_hp)
+
+        col_lp = QHBoxLayout()
+        col_lp.addWidget(self._make_resettable_label(QLabel("Prot. Sombras (LP):"), lambda: self.spin_ghs_lp.setValue(0.00), "0.00"))
+        self.spin_ghs_lp = QDoubleSpinBox()
+        self.spin_ghs_lp.setDecimals(2)
+        self.spin_ghs_lp.setRange(0.00, 1.00)
+        self.spin_ghs_lp.setSingleStep(0.02)
+        self.spin_ghs_lp.setValue(0.00)
+        self.spin_ghs_lp.valueChanged.connect(self.on_spin_ghs_lp_changed)
+        col_lp.addWidget(self.spin_ghs_lp)
+        row_prot_spins.addLayout(col_lp)
+        ghs_layout.addLayout(row_prot_spins)
+
+        row_prot_sliders = QHBoxLayout()
+        row_prot_sliders.setSpacing(10)
+        self.slider_ghs_hp = QSlider(Qt.Horizontal)
+        self.slider_ghs_hp.setRange(0, 1000)
+        self.slider_ghs_hp.setValue(0)
+        self.slider_ghs_hp.valueChanged.connect(self.on_slider_ghs_hp_changed)
+        row_prot_sliders.addWidget(self.slider_ghs_hp)
+
+        self.slider_ghs_lp = QSlider(Qt.Horizontal)
+        self.slider_ghs_lp.setRange(0, 1000)
+        self.slider_ghs_lp.setValue(0)
+        self.slider_ghs_lp.valueChanged.connect(self.on_slider_ghs_lp_changed)
+        row_prot_sliders.addWidget(self.slider_ghs_lp)
+        ghs_layout.addLayout(row_prot_sliders)
+
+        # Fila Punto Negro GHS (BP)
+        row_ghs_bp = QHBoxLayout()
+        row_ghs_bp.addWidget(self._make_resettable_label(QLabel("P. Negro GHS (BP):"), lambda: self.spin_ghs_bp.setValue(0.00000), "0.00000"))
+        self.spin_ghs_bp = QDoubleSpinBox()
+        self.spin_ghs_bp.setDecimals(5)
+        self.spin_ghs_bp.setRange(0.00000, 0.20000)
+        self.spin_ghs_bp.setSingleStep(0.00010)
+        self.spin_ghs_bp.setValue(0.00000)
+        self.spin_ghs_bp.valueChanged.connect(self.on_spin_ghs_bp_changed)
+        row_ghs_bp.addWidget(self.spin_ghs_bp)
+        ghs_layout.addLayout(row_ghs_bp)
+
+        self.slider_ghs_bp = QSlider(Qt.Horizontal)
+        self.slider_ghs_bp.setRange(0, 2000)
+        self.slider_ghs_bp.setValue(0)
+        self.slider_ghs_bp.valueChanged.connect(self.on_slider_ghs_bp_changed)
+        ghs_layout.addWidget(self.slider_ghs_bp)
+
+        stretch_layout.addWidget(self.w_ghs_container)
+
+        # 3.4 Contraste General (común para MTF y GHS)
         row_cnt = QHBoxLayout()
         row_cnt.addWidget(self._make_resettable_label(QLabel("Contraste:"), lambda: self.slider_contrast.setValue(0), "0.00"))
         self.lbl_contrast = QLabel("0.00")
@@ -1088,7 +1324,7 @@ class DeveloperTab(QWidget):
         right_layout.addWidget(self.canvas, 1)
 
         # Sincronización bidireccional de Pipeta, Lupa, Recorte y Pincel con la barra de herramientas
-        self.canvas.eyedropper_toggled.connect(self.btn_pipette.setChecked)
+        self.canvas.eyedropper_toggled.connect(self._on_canvas_eyedropper_toggled)
         self.canvas.magnifier_toggled.connect(self.btn_magnifier.setChecked)
         self.canvas.crop_toggled.connect(self.btn_crop.setChecked)
         self.canvas.crop_rect_changed.connect(self._on_crop_rect_changed)
@@ -2456,8 +2692,58 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'btn_magnifier'):
             self.btn_magnifier.toggle()
 
+    def _on_canvas_eyedropper_toggled(self, active: bool) -> None:
+        """Sincroniza el estado del cuentagotas con los botones de la interfaz."""
+        if hasattr(self, 'btn_pipette') and self.btn_pipette.isChecked() != active and getattr(self, '_eyedropper_target', 'wb') == 'wb':
+            self.btn_pipette.blockSignals(True)
+            self.btn_pipette.setChecked(active)
+            self.btn_pipette.blockSignals(False)
+
+        if hasattr(self, 'btn_ghs_pipette') and self.btn_ghs_pipette.isChecked() != active and getattr(self, '_eyedropper_target', 'wb') == 'ghs_sp':
+            self.btn_ghs_pipette.blockSignals(True)
+            self.btn_ghs_pipette.setChecked(active)
+            self.btn_ghs_pipette.blockSignals(False)
+
+        if not active:
+            self._eyedropper_target = 'wb'
+
+    def _on_toggle_ghs_pipette(self, active: bool) -> None:
+        """Alterna el cuentagotas interactivo para capturar el Punto de Simetría (SP) de GHS en el lienzo."""
+        if active:
+            self._eyedropper_target = 'ghs_sp'
+            if hasattr(self, 'btn_pipette') and self.btn_pipette.isChecked():
+                self.btn_pipette.setChecked(False)
+            self.canvas.set_eyedropper_active(True)
+        else:
+            if getattr(self, '_eyedropper_target', 'wb') == 'ghs_sp':
+                self.canvas.set_eyedropper_active(False)
+                self._eyedropper_target = 'wb'
+
     def _on_eyedropper_color_sampled(self, r: float, g: float, b: float) -> None:
-        """Calcula analíticamente los factores de balance de blancos para neutralizar la muestra seleccionada."""
+        """Procesa la muestra del cuentagotas para Balance de Blancos o Punto de Simetría GHS."""
+        if getattr(self, '_eyedropper_target', 'wb') == 'ghs_sp':
+            # Muestra para Punto de Simetría (SP) en GHS
+            sample_lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+            sp_val = float(np.clip(sample_lum, 0.00001, 0.99999))
+            if hasattr(self, 'spin_ghs_sp'):
+                self.spin_ghs_sp.blockSignals(True)
+                self.spin_ghs_sp.setValue(sp_val)
+                self.spin_ghs_sp.blockSignals(False)
+            if hasattr(self, 'slider_ghs_sp'):
+                slider_val = int(np.clip(sp_val * 10000.0, 0, 10000))
+                self.slider_ghs_sp.blockSignals(True)
+                self.slider_ghs_sp.setValue(slider_val)
+                self.slider_ghs_sp.blockSignals(False)
+            if hasattr(self, 'btn_ghs_pipette'):
+                self.btn_ghs_pipette.setChecked(False)
+            self._eyedropper_target = 'wb'
+            self.log_message(
+                f"[GHS] Cuentagotas SP: muestra RGB=({r:.3f}, {g:.3f}, {b:.3f}) ➜ SP fijado en {sp_val:.5f}"
+            )
+            self.update_stretch_preview()
+            self._commit_action()
+            return
+
         r = max(1e-5, float(r))
         g = max(1e-5, float(g))
         b = max(1e-5, float(b))
@@ -2545,6 +2831,14 @@ class DeveloperTab(QWidget):
             self.canvas.set_before_pixmap(self.snapshot_before_pixmap)
             self.initial_bp = self.spin_bp.value()
             self.initial_mtf = self.spin_mtf.value()
+            self.initial_stretch_mode = getattr(self, "stretch_mode", "mtf")
+            self.initial_ghs_sp = self.spin_ghs_sp.value() if hasattr(self, 'spin_ghs_sp') else 0.02
+            self.initial_ghs_d = self.spin_ghs_d.value() if hasattr(self, 'spin_ghs_d') else 5.0
+            self.initial_ghs_b = self.spin_ghs_b.value() if hasattr(self, 'spin_ghs_b') else 2.0
+            self.initial_ghs_hp = self.spin_ghs_hp.value() if hasattr(self, 'spin_ghs_hp') else 0.0
+            self.initial_ghs_lp = self.spin_ghs_lp.value() if hasattr(self, 'spin_ghs_lp') else 0.0
+            self.initial_ghs_bp = self.spin_ghs_bp.value() if hasattr(self, 'spin_ghs_bp') else 0.0
+            self.initial_ghs_color_mode = getattr(self, "ghs_color_mode", "luma")
             self.has_custom_snapshot = True
             self.log_message("[CANVAS] Estado actual fijado como nueva referencia de 'Antes'.")
             if not self.btn_split_view.isChecked():
@@ -2580,7 +2874,19 @@ class DeveloperTab(QWidget):
 
         base_to_render, _ = self._compose_active_base(for_export=False)
         if base_to_render is not None:
-            stretched_init = manual_stretch(base_to_render, black_point=bp, midtone=mtf)
+            if getattr(self, "initial_stretch_mode", "mtf") == "ghs":
+                stretched_init = apply_ghs_stretch(
+                    base_to_render,
+                    sp=getattr(self, "initial_ghs_sp", 0.02),
+                    d=getattr(self, "initial_ghs_d", 5.0),
+                    b=getattr(self, "initial_ghs_b", 2.0),
+                    hp=getattr(self, "initial_ghs_hp", 0.0),
+                    lp=getattr(self, "initial_ghs_lp", 0.0),
+                    bp=getattr(self, "initial_ghs_bp", 0.0),
+                    color_mode=getattr(self, "initial_ghs_color_mode", "luma")
+                )
+            else:
+                stretched_init = manual_stretch(base_to_render, black_point=bp, midtone=mtf)
             disp = (np.clip(stretched_init, 0.0, 1.0) * 255.0).astype(np.uint8)
             h, w = disp.shape[:2]
             disp_c = np.ascontiguousarray(disp, dtype=np.uint8)
@@ -3077,10 +3383,22 @@ class DeveloperTab(QWidget):
 
                 img = (img * precomputed_mask) + (gnd_part * (1.0 - precomputed_mask))
 
-        # 6. Estirado MTF
-        bp_val = self.spin_bp.value()
-        m_val = self.spin_mtf.value()
-        stretched = manual_stretch(img, black_point=bp_val, midtone=m_val)
+        # 6. Estirado Tonal (MTF o GHS)
+        if getattr(self, "stretch_mode", "mtf") == "ghs":
+            stretched = apply_ghs_stretch(
+                img,
+                sp=self.spin_ghs_sp.value(),
+                d=self.spin_ghs_d.value(),
+                b=self.spin_ghs_b.value(),
+                hp=self.spin_ghs_hp.value(),
+                lp=self.spin_ghs_lp.value(),
+                bp=self.spin_ghs_bp.value(),
+                color_mode=getattr(self, "ghs_color_mode", "luma")
+            )
+        else:
+            bp_val = self.spin_bp.value()
+            m_val = self.spin_mtf.value()
+            stretched = manual_stretch(img, black_point=bp_val, midtone=m_val)
 
         # 7. Curvas Tonales (LUT RGB)
         if not self.curve_widget.is_identity("rgb"):
@@ -3146,10 +3464,25 @@ class DeveloperTab(QWidget):
             # Si hay capas de imagen especiales activas, preparamos las estrellas estiradas con el MTF
             # y moduladas por la intensidad estelar relativa (self.star_intensity) para el modo Screen
             if st_img is not None and self.mask_layers_widget.has_image_layers():
-                st_stretched = np.clip(
-                    manual_stretch(st_img, black_point=0.0, midtone=self.spin_mtf.value()) * self.star_intensity,
-                    0.0, 1.0
-                )
+                if getattr(self, "stretch_mode", "mtf") == "ghs":
+                    st_stretched = np.clip(
+                        apply_ghs_stretch(
+                            st_img,
+                            sp=self.spin_ghs_sp.value(),
+                            d=self.spin_ghs_d.value(),
+                            b=self.spin_ghs_b.value(),
+                            hp=self.spin_ghs_hp.value(),
+                            lp=self.spin_ghs_lp.value(),
+                            bp=0.0,
+                            color_mode="rgb"
+                        ) * self.star_intensity,
+                        0.0, 1.0
+                    )
+                else:
+                    st_stretched = np.clip(
+                        manual_stretch(st_img, black_point=0.0, midtone=self.spin_mtf.value()) * self.star_intensity,
+                        0.0, 1.0
+                    )
             elif st_img is not None:
                 st_stretched = np.clip(st_img * self.star_intensity, 0.0, 1.0)
             else:
@@ -3173,7 +3506,19 @@ class DeveloperTab(QWidget):
             return
 
         if self.view_layer_mode == 2:
-            stretched = manual_stretch(base_to_render, black_point=self.spin_bp.value(), midtone=self.spin_mtf.value())
+            if getattr(self, "stretch_mode", "mtf") == "ghs":
+                stretched = apply_ghs_stretch(
+                    base_to_render,
+                    sp=self.spin_ghs_sp.value(),
+                    d=self.spin_ghs_d.value(),
+                    b=self.spin_ghs_b.value(),
+                    hp=self.spin_ghs_hp.value(),
+                    lp=self.spin_ghs_lp.value(),
+                    bp=self.spin_ghs_bp.value(),
+                    color_mode=getattr(self, "ghs_color_mode", "luma")
+                )
+            else:
+                stretched = manual_stretch(base_to_render, black_point=self.spin_bp.value(), midtone=self.spin_mtf.value())
         else:
             stretched = self._apply_pipeline_on_image(base_to_render, precomputed_mask=active_mask)
 
@@ -3182,7 +3527,19 @@ class DeveloperTab(QWidget):
 
             # Sincronización del comparador Antes / Después en modo Zoom 1:1
             if self.is_zoomed_100 and self.canvas.split_view_enabled:
-                stretched_before = manual_stretch(base_to_render, black_point=self.initial_bp, midtone=self.initial_mtf)
+                if getattr(self, "initial_stretch_mode", "mtf") == "ghs":
+                    stretched_before = apply_ghs_stretch(
+                        base_to_render,
+                        sp=getattr(self, "initial_ghs_sp", 0.02),
+                        d=getattr(self, "initial_ghs_d", 5.0),
+                        b=getattr(self, "initial_ghs_b", 2.0),
+                        hp=getattr(self, "initial_ghs_hp", 0.0),
+                        lp=getattr(self, "initial_ghs_lp", 0.0),
+                        bp=getattr(self, "initial_ghs_bp", 0.0),
+                        color_mode=getattr(self, "initial_ghs_color_mode", "luma")
+                    )
+                else:
+                    stretched_before = manual_stretch(base_to_render, black_point=self.initial_bp, midtone=self.initial_mtf)
                 disp_b = (np.clip(stretched_before, 0.0, 1.0) * 255.0).astype(np.uint8)
                 h_b, w_b = disp_b.shape[:2]
                 disp_bc = np.ascontiguousarray(disp_b, dtype=np.uint8)
@@ -3463,6 +3820,208 @@ class DeveloperTab(QWidget):
         self.spin_mtf.blockSignals(False)
         self.slider_mtf.blockSignals(False)
 
+    def _set_stretch_mode(self, mode: str):
+        """Alterna el modo de estirado entre MTF clásico y GHS hiperbólico."""
+        if mode not in ("mtf", "ghs"):
+            return
+        self.stretch_mode = mode
+        if hasattr(self, 'btn_mode_mtf'):
+            self.btn_mode_mtf.blockSignals(True)
+            self.btn_mode_mtf.setChecked(mode == "mtf")
+            self.btn_mode_mtf.blockSignals(False)
+        if hasattr(self, 'btn_mode_ghs'):
+            self.btn_mode_ghs.blockSignals(True)
+            self.btn_mode_ghs.setChecked(mode == "ghs")
+            self.btn_mode_ghs.blockSignals(False)
+
+        if hasattr(self, 'w_mtf_container'):
+            self.w_mtf_container.setVisible(mode == "mtf")
+        if hasattr(self, 'w_ghs_container'):
+            self.w_ghs_container.setVisible(mode == "ghs")
+
+        self.update_stretch_preview()
+        self._commit_action()
+
+    def _set_ghs_color_mode(self, mode: str):
+        """Alterna el modo de color de GHS entre Luminancia y RGB Enlazado."""
+        if mode not in ("luma", "rgb"):
+            return
+        self.ghs_color_mode = mode
+        if hasattr(self, 'btn_ghs_luma'):
+            self.btn_ghs_luma.blockSignals(True)
+            self.btn_ghs_luma.setChecked(mode == "luma")
+            self.btn_ghs_luma.blockSignals(False)
+        if hasattr(self, 'btn_ghs_rgb'):
+            self.btn_ghs_rgb.blockSignals(True)
+            self.btn_ghs_rgb.setChecked(mode == "rgb")
+            self.btn_ghs_rgb.blockSignals(False)
+
+        self.update_stretch_preview()
+        self._commit_action()
+
+    def on_slider_ghs_sp_changed(self, val: int):
+        sp = val / 10000.0
+        self.spin_ghs_sp.blockSignals(True)
+        self.spin_ghs_sp.setValue(sp)
+        self.spin_ghs_sp.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_spin_ghs_sp_changed(self, val: float):
+        slider_val = int(np.clip(val * 10000.0, 0, 10000))
+        self.slider_ghs_sp.blockSignals(True)
+        self.slider_ghs_sp.setValue(slider_val)
+        self.slider_ghs_sp.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_slider_ghs_d_changed(self, val: int):
+        d = val / 100.0
+        self.spin_ghs_d.blockSignals(True)
+        self.spin_ghs_d.setValue(d)
+        self.spin_ghs_d.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_spin_ghs_d_changed(self, val: float):
+        slider_val = int(np.clip(val * 100.0, 0, 2000))
+        self.slider_ghs_d.blockSignals(True)
+        self.slider_ghs_d.setValue(slider_val)
+        self.slider_ghs_d.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_slider_ghs_b_changed(self, val: int):
+        b = val / 100.0
+        self.spin_ghs_b.blockSignals(True)
+        self.spin_ghs_b.setValue(b)
+        self.spin_ghs_b.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_spin_ghs_b_changed(self, val: float):
+        slider_val = int(np.clip(val * 100.0, 0, 1500))
+        self.slider_ghs_b.blockSignals(True)
+        self.slider_ghs_b.setValue(slider_val)
+        self.slider_ghs_b.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_slider_ghs_hp_changed(self, val: int):
+        hp = val / 1000.0
+        self.spin_ghs_hp.blockSignals(True)
+        self.spin_ghs_hp.setValue(hp)
+        self.spin_ghs_hp.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_spin_ghs_hp_changed(self, val: float):
+        slider_val = int(np.clip(val * 1000.0, 0, 1000))
+        self.slider_ghs_hp.blockSignals(True)
+        self.slider_ghs_hp.setValue(slider_val)
+        self.slider_ghs_hp.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_slider_ghs_lp_changed(self, val: int):
+        lp = val / 1000.0
+        self.spin_ghs_lp.blockSignals(True)
+        self.spin_ghs_lp.setValue(lp)
+        self.spin_ghs_lp.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_spin_ghs_lp_changed(self, val: float):
+        slider_val = int(np.clip(val * 1000.0, 0, 1000))
+        self.slider_ghs_lp.blockSignals(True)
+        self.slider_ghs_lp.setValue(slider_val)
+        self.slider_ghs_lp.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_slider_ghs_bp_changed(self, val: int):
+        bp = (val / 2000.0) * 0.20
+        self.spin_ghs_bp.blockSignals(True)
+        self.spin_ghs_bp.setValue(bp)
+        self.spin_ghs_bp.blockSignals(False)
+        self.update_stretch_preview()
+
+    def on_spin_ghs_bp_changed(self, val: float):
+        slider_val = int(np.clip((val / 0.20) * 2000.0, 0, 2000))
+        self.slider_ghs_bp.blockSignals(True)
+        self.slider_ghs_bp.setValue(slider_val)
+        self.slider_ghs_bp.blockSignals(False)
+        self.update_stretch_preview()
+
+    def apply_auto_ghs(self):
+        """Calcula y aplica parámetros óptimos de GHS según el histograma de la imagen base."""
+        target = self.preview_proxy if self.preview_proxy is not None else self.image_32bit
+        if target is None:
+            return
+
+        params = estimate_ghs_params(target, target_background=0.18)
+
+        widgets_to_block = [
+            self.spin_ghs_sp, self.slider_ghs_sp,
+            self.spin_ghs_d, self.slider_ghs_d,
+            self.spin_ghs_b, self.slider_ghs_b,
+            self.spin_ghs_hp, self.slider_ghs_hp,
+            self.spin_ghs_lp, self.slider_ghs_lp,
+            self.spin_ghs_bp, self.slider_ghs_bp
+        ]
+        for w in widgets_to_block:
+            w.blockSignals(True)
+
+        self.spin_ghs_sp.setValue(params["sp"])
+        self.slider_ghs_sp.setValue(int(np.clip(params["sp"] * 10000.0, 0, 10000)))
+
+        self.spin_ghs_d.setValue(params["d"])
+        self.slider_ghs_d.setValue(int(np.clip(params["d"] * 100.0, 0, 2000)))
+
+        self.spin_ghs_b.setValue(params["b"])
+        self.slider_ghs_b.setValue(int(np.clip(params["b"] * 100.0, 0, 1500)))
+
+        self.spin_ghs_hp.setValue(params["hp"])
+        self.slider_ghs_hp.setValue(int(np.clip(params["hp"] * 1000.0, 0, 1000)))
+
+        self.spin_ghs_lp.setValue(params["lp"])
+        self.slider_ghs_lp.setValue(int(np.clip(params["lp"] * 1000.0, 0, 1000)))
+
+        self.spin_ghs_bp.setValue(params["bp"])
+        self.slider_ghs_bp.setValue(int(np.clip((params["bp"] / 0.20) * 2000.0, 0, 2000)))
+
+        for w in widgets_to_block:
+            w.blockSignals(False)
+
+        self.log_message(
+            f"[GHS] Auto-GHS aplicado: SP={params['sp']:.5f}, D={params['d']:.2f}, b={params['b']:.2f}, "
+            f"BP={params['bp']:.5f}, HP={params['hp']:.2f}"
+        )
+        self.update_stretch_preview()
+        self._commit_action()
+
+    def reset_ghs(self):
+        """Restablece los parámetros de GHS a sus valores predeterminados."""
+        widgets_to_block = [
+            self.spin_ghs_sp, self.slider_ghs_sp,
+            self.spin_ghs_d, self.slider_ghs_d,
+            self.spin_ghs_b, self.slider_ghs_b,
+            self.spin_ghs_hp, self.slider_ghs_hp,
+            self.spin_ghs_lp, self.slider_ghs_lp,
+            self.spin_ghs_bp, self.slider_ghs_bp
+        ]
+        for w in widgets_to_block:
+            w.blockSignals(True)
+
+        self.spin_ghs_sp.setValue(0.02000)
+        self.slider_ghs_sp.setValue(200)
+        self.spin_ghs_d.setValue(5.00)
+        self.slider_ghs_d.setValue(500)
+        self.spin_ghs_b.setValue(2.00)
+        self.slider_ghs_b.setValue(200)
+        self.spin_ghs_hp.setValue(0.00)
+        self.slider_ghs_hp.setValue(0)
+        self.spin_ghs_lp.setValue(0.00)
+        self.slider_ghs_lp.setValue(0)
+        self.spin_ghs_bp.setValue(0.00000)
+        self.slider_ghs_bp.setValue(0)
+
+        for w in widgets_to_block:
+            w.blockSignals(False)
+
+        self.update_stretch_preview()
+        self._commit_action()
+
     def reset_sliders(self):
         self.slider_contrast.blockSignals(True)
         self.slider_contrast.setValue(0)
@@ -3470,10 +4029,13 @@ class DeveloperTab(QWidget):
         self.lbl_contrast.setText("0.00")
         self.slider_contrast.blockSignals(False)
 
-        if self.image_32bit is not None:
-            self.apply_auto_mtf()
+        if getattr(self, "stretch_mode", "mtf") == "ghs":
+            self.reset_ghs()
         else:
-            self.sync_controls(0.0, 0.10)
+            if self.image_32bit is not None:
+                self.apply_auto_mtf()
+            else:
+                self.sync_controls(0.0, 0.10)
             
     def on_canvas_zoom_toggled(self, is_zoomed: bool, rel_x: float, rel_y: float):
         self.is_zoomed_100 = is_zoomed
@@ -3864,12 +4426,27 @@ class DeveloperTab(QWidget):
                         apply_mask_layers=False
                     )
 
-                    # Estirar la capa de estrellas directamente desde self.image_stars con MTF
+                    # Estirar la capa de estrellas directamente desde self.image_stars con MTF o GHS
                     st_img = self.image_stars.copy()
-                    st_stretched = np.clip(
-                        manual_stretch(st_img, black_point=0.0, midtone=self.spin_mtf.value()) * self.star_intensity,
-                        0.0, 1.0
-                    )
+                    if getattr(self, "stretch_mode", "mtf") == "ghs":
+                        st_stretched = np.clip(
+                            apply_ghs_stretch(
+                                st_img,
+                                sp=self.spin_ghs_sp.value(),
+                                d=self.spin_ghs_d.value(),
+                                b=self.spin_ghs_b.value(),
+                                hp=self.spin_ghs_hp.value(),
+                                lp=self.spin_ghs_lp.value(),
+                                bp=0.0,
+                                color_mode="rgb"
+                            ) * self.star_intensity,
+                            0.0, 1.0
+                        )
+                    else:
+                        st_stretched = np.clip(
+                            manual_stretch(st_img, black_point=0.0, midtone=self.spin_mtf.value()) * self.star_intensity,
+                            0.0, 1.0
+                        )
 
                     # Aplicar ajustes cromáticos propios de la capa de estrellas si están definidos
                     if hasattr(self, 'mask_layers_widget'):
@@ -4201,6 +4778,8 @@ class DeveloperTab(QWidget):
             self.slider_temp, self.slider_tint, self.slider_sat_sky,
             self.slider_sat_gnd, self.slider_vibrance, self.slider_contrast,
             self.slider_bp, self.slider_mtf,
+            self.slider_ghs_sp, self.slider_ghs_d, self.slider_ghs_b,
+            self.slider_ghs_hp, self.slider_ghs_lp, self.slider_ghs_bp,
             self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp,
         ]
         for s in all_sliders:
@@ -4208,6 +4787,12 @@ class DeveloperTab(QWidget):
 
         self.spin_bp.editingFinished.connect(self._commit_action)
         self.spin_mtf.editingFinished.connect(self._commit_action)
+        self.spin_ghs_sp.editingFinished.connect(self._commit_action)
+        self.spin_ghs_d.editingFinished.connect(self._commit_action)
+        self.spin_ghs_b.editingFinished.connect(self._commit_action)
+        self.spin_ghs_hp.editingFinished.connect(self._commit_action)
+        self.spin_ghs_lp.editingFinished.connect(self._commit_action)
+        self.spin_ghs_bp.editingFinished.connect(self._commit_action)
         self.spin_temp.editingFinished.connect(self._commit_action)
         self.spin_tint.editingFinished.connect(self._commit_action)
         self.combo_layer.activated.connect(lambda _: self._commit_action())
@@ -4218,6 +4803,14 @@ class DeveloperTab(QWidget):
     def _capture_state(self) -> dict:
         """Captura una instantánea paramétrica ligera (~1 KB) de todos los ajustes del revelador."""
         return {
+            "stretch_mode": getattr(self, "stretch_mode", "mtf"),
+            "ghs_color_mode": getattr(self, "ghs_color_mode", "luma"),
+            "ghs_sp_val": float(self.spin_ghs_sp.value()) if hasattr(self, 'spin_ghs_sp') else 0.02,
+            "ghs_d_val": float(self.spin_ghs_d.value()) if hasattr(self, 'spin_ghs_d') else 5.0,
+            "ghs_b_val": float(self.spin_ghs_b.value()) if hasattr(self, 'spin_ghs_b') else 2.0,
+            "ghs_hp_val": float(self.spin_ghs_hp.value()) if hasattr(self, 'spin_ghs_hp') else 0.0,
+            "ghs_lp_val": float(self.spin_ghs_lp.value()) if hasattr(self, 'spin_ghs_lp') else 0.0,
+            "ghs_bp_val": float(self.spin_ghs_bp.value()) if hasattr(self, 'spin_ghs_bp') else 0.0,
             "lp_val": self.slider_lp.value(),
             "layer_idx": self.combo_layer.currentIndex(),
             "stars_val": self.slider_stars.value(),
@@ -4394,10 +4987,46 @@ class DeveloperTab(QWidget):
             self.slider_sat_sky, self.slider_sat_gnd, self.slider_vibrance,
             self.slider_contrast, self.combo_layer, self.spin_bp, self.slider_bp,
             self.spin_mtf, self.slider_mtf,
+            self.spin_ghs_sp, self.slider_ghs_sp,
+            self.spin_ghs_d, self.slider_ghs_d,
+            self.spin_ghs_b, self.slider_ghs_b,
+            self.spin_ghs_hp, self.slider_ghs_hp,
+            self.spin_ghs_lp, self.slider_ghs_lp,
+            self.spin_ghs_bp, self.slider_ghs_bp,
             self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp,
         ]
         for w in widgets_to_block:
             w.blockSignals(True)
+
+        if "stretch_mode" in state:
+            self._set_stretch_mode(state["stretch_mode"])
+
+        if "ghs_color_mode" in state:
+            self._set_ghs_color_mode(state["ghs_color_mode"])
+
+        if "ghs_sp_val" in state and hasattr(self, 'spin_ghs_sp'):
+            self.spin_ghs_sp.setValue(state["ghs_sp_val"])
+            self.slider_ghs_sp.setValue(int(np.clip(state["ghs_sp_val"] * 10000.0, 0, 10000)))
+
+        if "ghs_d_val" in state and hasattr(self, 'spin_ghs_d'):
+            self.spin_ghs_d.setValue(state["ghs_d_val"])
+            self.slider_ghs_d.setValue(int(np.clip(state["ghs_d_val"] * 100.0, 0, 2000)))
+
+        if "ghs_b_val" in state and hasattr(self, 'spin_ghs_b'):
+            self.spin_ghs_b.setValue(state["ghs_b_val"])
+            self.slider_ghs_b.setValue(int(np.clip(state["ghs_b_val"] * 100.0, 0, 1500)))
+
+        if "ghs_hp_val" in state and hasattr(self, 'spin_ghs_hp'):
+            self.spin_ghs_hp.setValue(state["ghs_hp_val"])
+            self.slider_ghs_hp.setValue(int(np.clip(state["ghs_hp_val"] * 1000.0, 0, 1000)))
+
+        if "ghs_lp_val" in state and hasattr(self, 'spin_ghs_lp'):
+            self.spin_ghs_lp.setValue(state["ghs_lp_val"])
+            self.slider_ghs_lp.setValue(int(np.clip(state["ghs_lp_val"] * 1000.0, 0, 1000)))
+
+        if "ghs_bp_val" in state and hasattr(self, 'spin_ghs_bp'):
+            self.spin_ghs_bp.setValue(state["ghs_bp_val"])
+            self.slider_ghs_bp.setValue(int(np.clip((state["ghs_bp_val"] / 0.20) * 2000.0, 0, 2000)))
 
         if "lp_val" in state:
             self.slider_lp.setValue(state["lp_val"])

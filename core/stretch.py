@@ -1,7 +1,8 @@
 # core/stretch.py
 import numpy as np
+import cv2
 
-import cv2  
+from core.ghs import compute_ghs_lut, apply_ghs_stretch, estimate_ghs_params
 
 def adjust_saturation_dual(
     img_rgb: np.ndarray, 
