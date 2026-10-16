@@ -3014,7 +3014,12 @@ class DeveloperTab(QWidget):
         else:
             return stars, mask_3d
 
-    def _apply_pipeline_on_image(self, target_img: np.ndarray, precomputed_mask: np.ndarray = None) -> np.ndarray:
+    def _apply_pipeline_on_image(
+        self,
+        target_img: np.ndarray,
+        precomputed_mask: Optional[np.ndarray] = None,
+        apply_mask_layers: bool = True
+    ) -> np.ndarray:
         if target_img is None:
             return None
 
@@ -3119,7 +3124,7 @@ class DeveloperTab(QWidget):
             stretched = adjust_contrast(stretched, self.contrast_val, pivot=None)
 
         # 10. Aplicación de Capas y Máscaras Locales (Compositor Multicapa estilo Photoshop)
-        if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers:
+        if apply_mask_layers and hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers:
             is_full_res = (self.image_32bit is not None and stretched.shape[:2] == self.image_32bit.shape[:2])
             is_zoomed = (self.is_zoomed_100 and getattr(self, '_zoom_crop_rect', None) is not None)
             full_shape = self.image_32bit.shape[:2] if self.image_32bit is not None else None
@@ -3825,16 +3830,24 @@ class DeveloperTab(QWidget):
 
                 self.log_message("[PSD] Preparando capas reveladas y estiradas en 16-bit...")
 
-                # 1. Base estirada completa (balance, MTF y curvas globales aplicadas)
-                stretched_base = self._apply_pipeline_on_image(full_base, precomputed_mask=None)
+                # 1. Base estirada completa (imagen base original desarrollada sin capas superpuestas)
+                stretched_base = self._apply_pipeline_on_image(
+                    self.image_32bit, 
+                    precomputed_mask=None, 
+                    apply_mask_layers=False
+                )
 
-                # 2. Suelo desarrollado (con ajustes diferenciales de suelo/EV/sombras)
+                # 2. Suelo desarrollado (con ajustes diferenciales de suelo/EV/sombras sin capas superpuestas)
                 ground_dev = None
                 if clean_m is not None and full_mask is not None:
                     zero_mask = np.zeros_like(full_mask)
-                    ground_dev = self._apply_pipeline_on_image(full_base, precomputed_mask=zero_mask)
+                    ground_dev = self._apply_pipeline_on_image(
+                        self.image_32bit, 
+                        precomputed_mask=zero_mask, 
+                        apply_mask_layers=False
+                    )
 
-                # 3. Capas StarNet desacopladas (Starless estirado y Estrellas estiradas)
+                # 3. Capas StarNet desacopladas (Starless puro estirado y Estrellas estiradas)
                 stretched_starless = None
                 stretched_stars = None
                 if self.image_starless is not None:
@@ -3844,15 +3857,36 @@ class DeveloperTab(QWidget):
                         mask_3d=full_mask,
                         is_full_res=True
                     )
-                    # Estirar el fondo starless con el pipeline de revelado
+                    # Estirar el fondo starless con el pipeline de revelado SIN añadir estrellas ni capas
                     stretched_starless = self._apply_pipeline_on_image(
                         starless_full,
-                        precomputed_mask=full_mask if full_mask is not None else None
+                        precomputed_mask=full_mask if full_mask is not None else None,
+                        apply_mask_layers=False
                     )
-                    # Estrellas desacopladas estiradas en modo Linear Dodge / Add:
-                    # sky_with_stars - starless = stars
-                    sky_factor = clean_m[..., np.newaxis] if clean_m is not None else 1.0
-                    stretched_stars = np.clip((stretched_base - stretched_starless) * sky_factor, 0.0, 1.0)
+
+                    # Estirar la capa de estrellas directamente desde self.image_stars con MTF
+                    st_img = self.image_stars.copy()
+                    st_stretched = np.clip(
+                        manual_stretch(st_img, black_point=0.0, midtone=self.spin_mtf.value()) * self.star_intensity,
+                        0.0, 1.0
+                    )
+
+                    # Aplicar ajustes cromáticos propios de la capa de estrellas si están definidos
+                    if hasattr(self, 'mask_layers_widget'):
+                        stars_layer = next((l for l in self.mask_layers_widget.layers if getattr(l, 'mask_type', '') == 'image_stars'), None)
+                        if stars_layer is not None:
+                            has_adj = (abs(stars_layer.temp) > 1e-4 or abs(stars_layer.tint) > 1e-4 or 
+                                       abs(stars_layer.exposure) > 1e-3 or abs(stars_layer.contrast) > 1e-3 or 
+                                       abs(stars_layer.saturation - 1.0) > 1e-3)
+                            if has_adj:
+                                from core.mask_layers import apply_local_adjustments_to_image
+                                st_stretched = apply_local_adjustments_to_image(st_stretched, np.ones((h_full, w_full), dtype=np.float32), stars_layer)
+
+                    # Restringir estrellas al cielo si hay máscara de horizonte (para anular cualquier residuo en el suelo)
+                    if clean_m is not None:
+                        st_stretched = st_stretched * clean_m[..., np.newaxis]
+
+                    stretched_stars = np.ascontiguousarray(st_stretched, dtype=np.float32)
 
                 # Obtener bytes del perfil de color ICC seleccionado en configuración
                 target_cs = normalize_colorspace_name(get_config_val("icc_profile", "srgb"))
@@ -3883,8 +3917,8 @@ class DeveloperTab(QWidget):
                     f"Estructura del proyecto en Photoshop:\n"
                     f"• 00 - Revelado Final (Referencia oculta para comparar)\n"
                     f"• 04 - Suelo / Paisaje (con Máscara de Capa nativa vinculada)\n"
-                    f"• 03 - Estrellas (Modo Linear Dodge / Añadir)\n"
-                    f"• 02 - Fondo Starless (Cielo nebular estirado)\n"
+                    f"• 03 - Estrellas (Modo Trama / Screen)\n"
+                    f"• 02 - Fondo Starless (Paisaje completo sin estrellas)\n"
                     f"• 01 - Imagen Base Revelada\n"
                     f"• Perfil de color ICC incrustado ({target_cs.upper()})"
                 )
