@@ -189,21 +189,22 @@ def export_developer_psd(
         visible=True
     ))
 
-    # 2. Capa Fondo Nebular (Starless AI) si está disponible
-    # Se exporta a encuadre completo (mostrando el terreno y el cielo sin estrellas, idéntico al visor del revelador)
+    # 2. Capa Fondo Nebular (Starless AI) si está disponible (con máscara de cielo nativa vinculada si existe)
     if starless_image is not None:
         layer_records.append(_build_layer_record(
             name="02 - Fondo Starless",
             rgb=starless_image,
+            layer_mask=clean_mask,
             blend=psd_enums.BlendMode.normal,
             visible=True
         ))
 
-    # 3. Capa de Estrellas (Stars) con modo Trama (Screen) para recomposición natural no destructiva
+    # 3. Capa de Estrellas (Stars) con modo Trama (Screen) y máscara de cielo nativa vinculada
     if stars_image is not None:
         layer_records.append(_build_layer_record(
             name="03 - Estrellas (Trama / Screen)",
             rgb=stars_image,
+            layer_mask=clean_mask,
             blend=psd_enums.BlendMode.screen,
             visible=True
         ))

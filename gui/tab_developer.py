@@ -3916,9 +3916,9 @@ class DeveloperTab(QWidget):
                     f"Resolución: {w_full}x{h_full} px\n\n"
                     f"Estructura del proyecto en Photoshop:\n"
                     f"• 00 - Revelado Final (Referencia oculta para comparar)\n"
-                    f"• 04 - Suelo / Paisaje (con Máscara de Capa nativa vinculada)\n"
-                    f"• 03 - Estrellas (Modo Trama / Screen)\n"
-                    f"• 02 - Fondo Starless (Paisaje completo sin estrellas)\n"
+                    f"• 04 - Suelo / Paisaje (con Máscara de Capa nativa de suelo)\n"
+                    f"• 03 - Estrellas (con Máscara de Capa nativa de cielo, modo Trama)\n"
+                    f"• 02 - Fondo Starless (con Máscara de Capa nativa de cielo)\n"
                     f"• 01 - Imagen Base Revelada\n"
                     f"• Perfil de color ICC incrustado ({target_cs.upper()})"
                 )
