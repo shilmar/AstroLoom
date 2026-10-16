@@ -54,13 +54,13 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 * **Impacto:** **8.0 / 10** *(Resuelve el escenario más habitual en astrofotografía de paisaje).*
 * **Dificultad / Coste:** **4.0 / 10** *(Media: Operaciones morfológicas de dilatación de contorno combinadas con rechazo percentil inferior).*
 
-#### 🔹 2.3 Apilado de Ventana Deslizante para Vídeo Time-Lapse (*Sub-stacking / Rolling Stacker*)
+#### 🔹 2.3 Apilado de Ventana Deslizante para Vídeo Time-Lapse (*Sub-stacking / Rolling Stacker*) [COMPLETADO]
 * **Herramientas de referencia:** Sequator.
 * **Descripción técnica:** Procesamiento por lotes temporales deslizantes (ej. tomas 1–5, 2–6, 3–7... o bloques de $N$ fotos) a partir de una secuencia continua de intervalómetro:
-  - Genera fotogramas de vídeo time-lapse donde cada cuadro goza de la reducción de ruido y rango dinámico de un apilado, manteniendo a la vez el movimiento fluido del cielo.
-  - Generación directa de archivo de vídeo `.mp4` estabilizado en alta resolución (1080p, 4K).
+  - Genera fotogramas de vídeo time-lapse donde cada cuadro goza de la reducción de ruido ($\sqrt{W}$ de ganancia en SNR) y rango dinámico de un apilado, manteniendo a la vez el movimiento fluido del cielo.
+  - Pre-cálculo lineal $O(N)$ de homografías adyacentes, buffer FIFO en RAM $O(W)$, ponderación temporal gaussiana/uniforme y streaming directo a vídeo `.mp4` estabilizado en alta resolución (1080p, 4K).
 * **Impacto:** **7.0 / 10** *(Herramienta diferencial para creadores de time-lapse nocturno).*
-* **Dificultad / Coste:** **5.0 / 10** *(Media: Orquestación en bucle sobre el pipeline actual de apilado en `core/stacking.py`).*
+* **Dificultad / Coste:** **5.0 / 10** *(Completado con éxito).*
 
 ---
 
@@ -129,6 +129,7 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 ---
 
 ## ✅ Tareas Recientemente Completadas
+- **Apilado de Ventana Deslizante para Vídeo Time-Lapse (*Sub-stacking / Rolling Stacker* - v0.8.5):** Pipeline completo en `core/substacking.py` y `Módulo 1: Apilador` para time-lapse nocturno. Homografías encadenadas $O(N)$, buffer FIFO en RAM $O(W)$, ponderación temporal gaussiana/uniforme/triangular, tratamiento dual de suelo (promedio temporal de bajo ruido en trípode fijo o ancla central), fusión anti-ghosting de árboles y exportación a MP4 (1080p/4K) con previsualización en vivo.
 - **Filtro Difusor Digital y Realce de Constelaciones (v0.8.4 - P1):** Aislamiento selectivo de estrellas prominentes (Top-Hat), preservación de fondo estelar, recuperación cromática espectral y modos de mezcla no destructivos (*Trama, Luz Suave, Aditivo*).
 - **Estirado Hiperbólico Generalizado - GHS (v0.8.4 - P2):** Transformación tonal hiperbólica con punto de simetría (SP), factor de estirado (D) y protección de núcleos estelares (HP) con modos de Luminancia y RGB enlazado.
 - **Reducción Paramétrica 2D de Contaminación Lumínica Terrestre (v0.8.4 - P5):** Sustracción de cúpulas lumínicas asimétricas urbanas en el horizonte mediante modelo elíptico 2D con ajuste de centro, anchura, altura y tinte de vapor de sodio.

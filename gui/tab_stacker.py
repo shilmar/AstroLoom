@@ -19,7 +19,7 @@ from core.masking import refine_mask_guided
 from core.stacking import load_image_as_float32
 from gui.canvas import MaskCanvas
 from gui.widgets.drop_widgets import DropListWidget
-from gui.worker import StackingWorker, QualityCullingWorker, AIHorizonWorker, ModelDownloadWorker
+from gui.worker import StackingWorker, SubstackingWorker, QualityCullingWorker, AIHorizonWorker, ModelDownloadWorker
 from core.gpu_backend import is_gpu_enabled
 from core.config_manager import load_config
 from gui.theme import STYLE_RUN_IDLE, STYLE_RUN_ACTIVE, STYLE_RUN_CANCELLING
@@ -359,13 +359,29 @@ class StackerTab(QWidget):
 
         left_layout.addWidget(self.grp_files)
 
-        # SECCIÓN 3: Parámetros de Integración
-        self.grp_settings = QGroupBox("3. Parámetros de Integración")
+        # SECCIÓN 3: Parámetros de Integración / Salida
+        self.grp_settings = QGroupBox("3. Parámetros de Integración / Salida")
         set_layout = QVBoxLayout(self.grp_settings)
         set_layout.setContentsMargins(10, 14, 10, 10)
         set_layout.setSpacing(8)
 
-        row_mode = QHBoxLayout()
+        # Selector de Tipo de Salida: Imagen Fija vs Vídeo Time-Lapse
+        row_out_type = QHBoxLayout()
+        row_out_type.setSpacing(10)
+        self.rb_out_single = QRadioButton("📷 Imagen Fija")
+        self.rb_out_single.setChecked(True)
+        self.rb_out_single.setStyleSheet("color: #80d8ff; font-weight: bold;")
+        self.rb_out_video = QRadioButton("🎬 Vídeo Time-Lapse (Sub-stacking)")
+        self.rb_out_video.setStyleSheet("color: #b388ff; font-weight: bold;")
+        self.rb_out_single.toggled.connect(self._on_stack_type_toggled)
+        row_out_type.addWidget(self.rb_out_single)
+        row_out_type.addWidget(self.rb_out_video)
+        set_layout.addLayout(row_out_type)
+
+        # Modo de Captura (Imagen Fija)
+        self.row_mode_widget = QWidget()
+        row_mode = QHBoxLayout(self.row_mode_widget)
+        row_mode.setContentsMargins(0, 0, 0, 0)
         lbl_mode = QLabel("Modo de Captura:")
         lbl_mode.setMinimumWidth(140)
         self.combo_mode = QComboBox()
@@ -373,10 +389,12 @@ class StackerTab(QWidget):
         self.combo_mode.currentIndexChanged.connect(self._on_capture_mode_changed)
         row_mode.addWidget(lbl_mode)
         row_mode.addWidget(self.combo_mode)
-        set_layout.addLayout(row_mode)
+        set_layout.addWidget(self.row_mode_widget)
 
-        # Tratamiento del Suelo
-        row_ground = QHBoxLayout()
+        # Tratamiento del Suelo (Imagen Fija)
+        self.row_ground_widget = QWidget()
+        row_ground = QHBoxLayout(self.row_ground_widget)
+        row_ground.setContentsMargins(0, 0, 0, 0)
         lbl_ground = QLabel("Tratamiento del Suelo:")
         lbl_ground.setMinimumWidth(140)
         self.combo_ground = QComboBox()
@@ -387,9 +405,101 @@ class StackerTab(QWidget):
         ])
         row_ground.addWidget(lbl_ground)
         row_ground.addWidget(self.combo_ground)
-        set_layout.addLayout(row_ground)
+        set_layout.addWidget(self.row_ground_widget)
 
-        # Sub-bloque Anti-Ghosting de Árboles en Horizonte (Min-Horizon)
+        # Contenedor de Configuración para Vídeo Time-Lapse (Sub-stacking)
+        self.box_substack_settings = QWidget()
+        sub_layout = QVBoxLayout(self.box_substack_settings)
+        sub_layout.setContentsMargins(0, 4, 0, 4)
+        sub_layout.setSpacing(6)
+
+        # 1. Ventana Deslizante (W)
+        row_w = QHBoxLayout()
+        lbl_w = QLabel("Ventana Deslizante (W):")
+        lbl_w.setStyleSheet("color: #e0e0e0; font-size: 11px;")
+        self.lbl_sub_w_val = QLabel("5 tomas (+2.2x SNR, +1.2 EV)")
+        self.lbl_sub_w_val.setStyleSheet("color: #ffd54f; font-weight: bold; font-size: 11px;")
+        row_w.addWidget(lbl_w)
+        row_w.addWidget(self.lbl_sub_w_val)
+        sub_layout.addLayout(row_w)
+
+        self.slider_sub_w = QSlider(Qt.Horizontal)
+        self.slider_sub_w.setRange(3, 15)
+        self.slider_sub_w.setSingleStep(2)
+        self.slider_sub_w.setPageStep(2)
+        self.slider_sub_w.setValue(5)
+        self.slider_sub_w.valueChanged.connect(self._on_sub_w_slider_changed)
+        sub_layout.addWidget(self.slider_sub_w)
+
+        # 2. Paso Temporal (Stride) & Ponderación
+        row_sp = QHBoxLayout()
+        row_sp.setSpacing(6)
+        lbl_stride = QLabel("Paso:")
+        lbl_stride.setStyleSheet("color: #90a4ae; font-size: 11px;")
+        self.combo_sub_stride = QComboBox()
+        self.combo_sub_stride.addItem("1 toma (Vídeo fluido 24/30 fps)", 1)
+        self.combo_sub_stride.addItem("W tomas (Bloques acelerados)", 0)
+        self.combo_sub_stride.setToolTip("1 toma genera un cuadro por cada foto disparada; W tomas divide la secuencia en bloques no solapados.")
+        row_sp.addWidget(lbl_stride)
+        row_sp.addWidget(self.combo_sub_stride, stretch=1)
+        sub_layout.addLayout(row_sp)
+
+        row_wmode = QHBoxLayout()
+        lbl_wmode = QLabel("Ponderación:")
+        lbl_wmode.setStyleSheet("color: #90a4ae; font-size: 11px;")
+        self.combo_sub_weight = QComboBox()
+        self.combo_sub_weight.addItem("Gaussiana (Máxima Nitidez Temporal)", "gaussian")
+        self.combo_sub_weight.addItem("Uniforme (Media Aritmética)", "uniform")
+        self.combo_sub_weight.addItem("Triangular (Decaimiento Lineal)", "triangular")
+        self.combo_sub_weight.setToolTip("Gaussiana pondera con mayor fuerza el fotograma central para preservar estrellas fugaces y nitidez fina.")
+        row_wmode.addWidget(lbl_wmode)
+        row_wmode.addWidget(self.combo_sub_weight, stretch=1)
+        sub_layout.addLayout(row_wmode)
+
+        # 3. Tratamiento de Suelo en Vídeo
+        row_s_gnd = QHBoxLayout()
+        lbl_s_gnd = QLabel("Suelo en Vídeo:")
+        lbl_s_gnd.setStyleSheet("color: #90a4ae; font-size: 11px;")
+        self.combo_sub_ground = QComboBox()
+        self.combo_sub_ground.addItem("Suelo Limpio Apilado (Trípode fijo)", "temporal_average")
+        self.combo_sub_ground.addItem("Suelo Toma Central (Slider / Movimiento)", "static_anchor")
+        self.combo_sub_ground.setToolTip("En trípode fijo, el promedio temporal del suelo reduce radicalmente el ruido en las sombras del paisaje sin mover el horizonte.")
+        row_s_gnd.addWidget(lbl_s_gnd)
+        row_s_gnd.addWidget(self.combo_sub_ground, stretch=1)
+        sub_layout.addLayout(row_s_gnd)
+
+        # 4. Formato de Vídeo (Resolución & FPS)
+        row_vid = QHBoxLayout()
+        row_vid.setSpacing(6)
+        lbl_res = QLabel("Resolución:")
+        lbl_res.setStyleSheet("color: #90a4ae; font-size: 11px;")
+        self.combo_sub_res = QComboBox()
+        self.combo_sub_res.addItem("1080p Full HD", "1080p")
+        self.combo_sub_res.addItem("4K UHD", "4k")
+        self.combo_sub_res.addItem("Original", "original")
+
+        lbl_fps = QLabel("FPS:")
+        lbl_fps.setStyleSheet("color: #90a4ae; font-size: 11px;")
+        self.combo_sub_fps = QComboBox()
+        self.combo_sub_fps.addItems(["24", "25", "30", "60"])
+        self.combo_sub_fps.setCurrentText("24")
+
+        row_vid.addWidget(lbl_res)
+        row_vid.addWidget(self.combo_sub_res)
+        row_vid.addWidget(lbl_fps)
+        row_vid.addWidget(self.combo_sub_fps)
+        sub_layout.addLayout(row_vid)
+
+        # 5. Casilla de exportación de cuadros
+        self.chk_sub_save_frames = QCheckBox("💾 Guardar también secuencia de imágenes (JPEG)")
+        self.chk_sub_save_frames.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        self.chk_sub_save_frames.setChecked(False)
+        sub_layout.addWidget(self.chk_sub_save_frames)
+
+        self.box_substack_settings.setVisible(False)
+        set_layout.addWidget(self.box_substack_settings)
+
+        # Sub-bloque Anti-Ghosting de Árboles en Horizonte (Min-Horizon) - Compartido
         self.box_anti_ghosting = QWidget()
         ag_layout = QVBoxLayout(self.box_anti_ghosting)
         ag_layout.setContentsMargins(0, 4, 0, 4)
@@ -435,7 +545,10 @@ class StackerTab(QWidget):
         )
         set_layout.addWidget(self.box_anti_ghosting)
 
-        row_kappa = QHBoxLayout()
+        # Factor Kappa (Imagen Fija)
+        self.row_kappa_widget = QWidget()
+        row_kappa = QHBoxLayout(self.row_kappa_widget)
+        row_kappa.setContentsMargins(0, 0, 0, 0)
         row_kappa.addWidget(QLabel("Factor Kappa (MAD Rejection):"))
         self.spin_kappa = QDoubleSpinBox()
         self.spin_kappa.setRange(0.5, 5.0)
@@ -443,7 +556,7 @@ class StackerTab(QWidget):
         self.spin_kappa.setSingleStep(0.1)
         self.spin_kappa.setFixedWidth(75)
         row_kappa.addWidget(self.spin_kappa)
-        set_layout.addLayout(row_kappa)
+        set_layout.addWidget(self.row_kappa_widget)
 
         left_layout.addWidget(self.grp_settings)
 
@@ -632,6 +745,31 @@ class StackerTab(QWidget):
             self.box_anti_ghosting.setEnabled(is_fixed)
         if not is_fixed:
             self.log_message("[MODO] Star Tracker activado: apilado restringido al cielo en movimiento.")
+
+    def _on_sub_w_slider_changed(self, val: int):
+        if val % 2 == 0:
+            val += 1
+            self.slider_sub_w.setValue(val)
+        snr = np.sqrt(val)
+        ev = np.log2(snr)
+        self.lbl_sub_w_val.setText(f"{val} tomas (+{snr:.1f}x SNR, +{ev:.1f} EV)")
+
+    def _on_stack_type_toggled(self, checked: bool):
+        is_video = self.rb_out_video.isChecked()
+        self.box_substack_settings.setVisible(is_video)
+        if hasattr(self, 'row_kappa_widget'):
+            self.row_kappa_widget.setVisible(not is_video)
+        if hasattr(self, 'row_ground_widget'):
+            self.row_ground_widget.setVisible(not is_video)
+        if hasattr(self, 'row_mode_widget'):
+            self.row_mode_widget.setVisible(not is_video)
+
+        if is_video:
+            self.btn_run.setText("🎬 GENERAR VÍDEO TIME-LAPSE (SUB-STACKING)")
+            self.log_message("[MODO] Activado Apilado de Ventana Deslizante (Vídeo Time-Lapse).")
+        else:
+            self.btn_run.setText("🚀 INICIAR APILADO DUAL")
+            self.log_message("[MODO] Activado Apilado Estático (1 Imagen Compuesta).")
 
     def _on_files_tab_changed(self, idx: int):
         """Muestra la barra de análisis de calidad únicamente en la pestaña de Lights."""
@@ -1267,6 +1405,8 @@ class StackerTab(QWidget):
         self.chk_anti_ghosting.setChecked(True)
         self.spin_ag_radius.setValue(12)
         self.combo_ag_sens.setCurrentIndex(0)
+        if hasattr(self, 'rb_out_single'):
+            self.rb_out_single.setChecked(True)
 
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("%p%")
@@ -1448,11 +1588,131 @@ class StackerTab(QWidget):
         self.grp_mask.setEnabled(not busy)
 
     def _on_btn_run_clicked(self):
-        """Alterna entre iniciar el apilado o cancelarlo según el estado del worker."""
+        """Alterna entre iniciar el apilado/time-lapse o cancelarlo según el estado del worker."""
         if self.worker is not None and self.worker.isRunning():
             self.cancel_stacking()
         else:
-            self.start_stacking()
+            if hasattr(self, 'rb_out_video') and self.rb_out_video.isChecked():
+                self.start_substacking()
+            else:
+                self.start_stacking()
+
+    def start_substacking(self):
+        active_lights = [p for p in self.lights_list if p not in self.excluded_lights]
+        if len(active_lights) < 2:
+            QMessageBox.warning(
+                self, "Aviso",
+                f"Añade al menos 2 tomas de luz (Lights) activas para generar el vídeo time-lapse.\n"
+                f"(Activas: {len(active_lights)} / Total: {len(self.lights_list)})"
+            )
+            return
+
+        w_val = self.slider_sub_w.value()
+        if w_val % 2 == 0:
+            w_val += 1
+
+        app_cfg = load_config()
+        first_dir = os.path.dirname(active_lights[0]) if active_lights else os.getcwd()
+        default_video_dir = app_cfg.get("timelapse_dir", first_dir)
+        default_video_file = os.path.join(default_video_dir, "timelapse_substack.mp4")
+
+        out_path, _ = QFileDialog.getSaveFileName(
+            self, "Guardar Vídeo Time-Lapse Sub-Stacking", default_video_file, "Vídeo MP4 (*.mp4)"
+        )
+        if not out_path:
+            return
+
+        self._stack_start_time = time.perf_counter()
+
+        self._set_ui_busy(True)
+        self.btn_run.setEnabled(True)
+        self.btn_run.setText("🛑 CANCELAR TIME-LAPSE")
+        self.btn_run.setStyleSheet(STYLE_RUN_ACTIVE)
+
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("Iniciando Sub-Stacking... %p%")
+
+        stride_choice = self.combo_sub_stride.currentData()
+        stride = 1 if stride_choice == 1 else w_val
+
+        save_frames = self.chk_sub_save_frames.isChecked()
+        frames_dir = os.path.splitext(out_path)[0] + "_frames" if save_frames else None
+
+        cfg = {
+            "files": active_lights,
+            "output_video_path": out_path,
+            "window_size": w_val,
+            "stride": stride,
+            "weighting": self.combo_sub_weight.currentData() or "gaussian",
+            "ground_mode": self.combo_sub_ground.currentData() or "temporal_average",
+            "mask": self.computed_mask,
+            "use_anti_ghosting": self.chk_anti_ghosting.isChecked(),
+            "ag_radius": self.spin_ag_radius.value(),
+            "ag_sensitivity": self.combo_ag_sens.currentData() or 0.5,
+            "darks": self.darks_list,
+            "flats": self.flats_list,
+            "bias": self.bias_list,
+            "video_fps": float(self.combo_sub_fps.currentText()),
+            "video_resolution": self.combo_sub_res.currentData() or "1080p",
+            "save_frames": save_frames,
+            "frames_dir": frames_dir,
+            "cpu_workers": int(app_cfg.get("cpu_workers", max(1, (os.cpu_count() or 4) - 1)))
+        }
+
+        self.worker = SubstackingWorker(cfg)
+        self.worker.progress_changed.connect(self.on_progress_changed)
+        self.worker.status_changed.connect(self.log_message)
+        self.worker.frame_rendered.connect(self._on_sub_frame_rendered)
+        self.worker.finished_success.connect(self.on_substack_success)
+        self.worker.error_occurred.connect(self.on_stack_error)
+        self.worker.cancelled.connect(self.on_stack_cancelled)
+        self.worker.start()
+
+    def _on_sub_frame_rendered(self, idx: int, frame_rgb: np.ndarray):
+        """Actualiza la vista previa del canvas en tiempo real mientras se genera el vídeo."""
+        try:
+            self.canvas.set_image(frame_rgb)
+        except Exception:
+            pass
+
+    def on_substack_success(self, video_path: str, stats: dict):
+        self._reset_run_button()
+
+        if hasattr(self, '_stack_start_time') and self._stack_start_time is not None:
+            elapsed = time.perf_counter() - self._stack_start_time
+            mins = int(elapsed // 60)
+            secs = elapsed % 60
+            time_str = f"{mins}m {secs:.1f}s" if mins > 0 else f"{secs:.2f}s"
+            self.log_message(f"[COMPLETADO] Tiempo total de generación de vídeo: {time_str}")
+            self._stack_start_time = None
+
+        total_frames = stats.get("total_frames", 0)
+        res = stats.get("resolution", "")
+        fps = stats.get("fps", 24)
+
+        self.log_message(f"[COMPLETADO] Vídeo Time-Lapse exportado: {video_path}")
+        self.log_message(f"             Total fotogramas: {total_frames} | Res: {res} | FPS: {fps}")
+
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Vídeo Time-Lapse Generado")
+        msg_box.setText(
+            f"🎬 ¡Vídeo Time-Lapse completado con éxito!\n\n"
+            f"• Archivo: {os.path.basename(video_path)}\n"
+            f"• Fotogramas: {total_frames}\n"
+            f"• Resolución: {res} @ {fps} fps\n\n"
+            f"Guardado en:\n{video_path}"
+        )
+        btn_open_folder = msg_box.addButton("Abrir Carpeta", QMessageBox.ActionRole)
+        msg_box.addButton(QMessageBox.Ok)
+        msg_box.exec()
+
+        if msg_box.clickedButton() == btn_open_folder:
+            import subprocess
+            if os.name == 'nt':
+                subprocess.Popen(['explorer', '/select,', os.path.normpath(video_path)])
+            else:
+                folder = os.path.dirname(os.path.abspath(video_path))
+                subprocess.Popen(['xdg-open', folder])
 
     def cancel_stacking(self):
         """Solicita la detención inmediata del proceso."""
@@ -1465,9 +1725,12 @@ class StackerTab(QWidget):
             self.worker.cancel()
 
     def _reset_run_button(self):
-        """Devuelve el botón a su apariencia y comportamiento normal."""
+        """Devuelve el botón a su apariencia y comportamiento normal según el modo activo."""
         self.btn_run.setEnabled(True)
-        self.btn_run.setText("🚀 INICIAR APILADO DUAL")
+        if hasattr(self, 'rb_out_video') and self.rb_out_video.isChecked():
+            self.btn_run.setText("🎬 GENERAR VÍDEO TIME-LAPSE (SUB-STACKING)")
+        else:
+            self.btn_run.setText("🚀 INICIAR APILADO DUAL")
         self.btn_run.setStyleSheet(STYLE_RUN_IDLE)
         self._set_ui_busy(False)
         

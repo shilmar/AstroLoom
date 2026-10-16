@@ -77,14 +77,23 @@ El apilador combina múltiples tomas cortas para emular una única exposición u
 * **🏞️ Suelo (Foreground):** Una o varias tomas fijas enfocadas y expuestas especialmente para el paisaje terrestre.
 
 ### Opciones Clave del Apilador
-* **Método de Alineación:**
-  * *Triángulos / K-NN (Recomendado):* Detecta patrones estelares y rota/alinea cada fotograma con precisión subpíxel.
-  * *Transformación Afín / Homografía:* Corrige distorsiones ópticas ligeras entre fotogramas.
-* **Rechazo de Artefactos (Sigma-Clipping):**
+* **Tipo de Salida:**
+  * **📷 Imagen Fija (Compuesto único):** Apila todas las tomas del lote en un archivo final TIFF de 32 bits de rango dinámico superior, ideal para fotografía fija y posterior revelado.
+  * **🎬 Vídeo Time-Lapse (Sub-stacking / Ventana Deslizante):** Genera un vídeo continuo `.mp4` en alta definición (1080p, 4K) donde cada fotograma es el resultado de apilar una ventana móvil de tomas consecutivas ($W$). Logra un time-lapse nocturno con la nitidez y limpieza de ruido de una toma de estudio, manteniendo la rotación fluida y natural del cielo estrellado.
+* **Parámetros de Vídeo Time-Lapse (Sub-stacking):**
+  * *Ventana Deslizante ($W$):* De 3 a 15 tomas (por defecto: 5 tomas). Muestra en directo la ganancia de señal/ruido ($+2.2\times$ SNR, $+1.2\text{ EV}$).
+  * *Paso ($Stride$):* Paso 1 (vídeo completo y fluido a 24/30 FPS) o Paso $W$ (bloques discretos acelerados).
+  * *Ponderación Temporal:* Gaussiana (máxima nitidez temporal y fidelidad a fenómenos efímeros), Uniforme (máxima reducción de ruido térmico) o Triangular.
+  * *Suelo en Vídeo:* Suelo Limpio Apilado (para trípode fijo, erradica el ruido en sombras terrestres) o Suelo de Toma Central (para paneos y sliders motorizados).
+  * *Exportación:* Generación directa en contenedor MP4 y casilla para exportar la secuencia completa de imágenes individuales JPEG.
+* **Método de Alineación y Registro Estelar:**
+  * Detección automática de patrones estelares (ORB/AKAZE) y refinamiento subpíxel por flujo óptico (*Lucas-Kanade*).
+  * En modo vídeo, precomputa la cadena de homografías adyacentes en tiempo lineal $O(N)$ con consumo acotado de memoria RAM $O(W)$.
+* **Rechazo de Artefactos (Sigma-Clipping / MAD):**
   * Elimina automáticamente las rayas dejadas por satélites (Starlink), estrellas fugaces y aviones que crucen por el encuadre.
-* **Detección de Horizonte por IA:**
-  * Pulsa **"Generar Máscara IA"**: el sistema aísla el cielo del suelo automáticamente para que el suelo no se emborrone mientras se alinean las estrellas del cielo.
-* **Botón "Revelar en Editor ➔":** Una vez terminado el apilado, transfiere la imagen de 32 bits directamente a la mesa de revelado.
+* **Detección de Horizonte por IA y Anti-Ghosting:**
+  * Pulsa **"Auto-Detectar Suelo (IA 1-Click)"** o dibuja trazos con el pincel. El algoritmo Min-Horizon garantiza que la vegetación y ramas de árboles no generen dobles bordes translúcidos (*ghosting*).
+* **Botón "Revelar en Editor ➔":** Una vez terminado el apilado estático, transfiere la imagen de 32 bits directamente a la mesa de revelado.
 
 ---
 

@@ -783,4 +783,79 @@ class ModelDownloadWorker(QThread):
                 self.error_occurred.emit(str(e))
             else:
                 self.cancelled.emit()
+
+
+class SubstackingWorker(QThread):
+    """
+    Hilo secundario para la generación de vídeo Time-Lapse mediante
+    Apilado de Ventana Deslizante (Rolling Stacker / Sub-stacking).
+    """
+    progress_changed = Signal(int)
+    status_changed = Signal(str)
+    frame_rendered = Signal(int, object)   # (frame_idx: int, frame_rgb: np.ndarray float32)
+    finished_success = Signal(str, dict)   # (output_video_path: str, stats: dict)
+    error_occurred = Signal(str)
+    cancelled = Signal()
+
+    def __init__(self, config: dict, parent=None):
+        super().__init__(parent)
+        self.config = config
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
+        self.status_changed.emit("Cancelando sub-stacking y cerrando vídeo...")
+
+    def is_cancelled(self) -> bool:
+        return self._is_cancelled
+
+    def run(self):
+        try:
+            from core.substacking import run_rolling_substack
+
+            video_path, stats = run_rolling_substack(
+                files=self.config.get("files", []),
+                output_video_path=self.config["output_video_path"],
+                window_size=self.config.get("window_size", 5),
+                stride=self.config.get("stride", 1),
+                weighting=self.config.get("weighting", "gaussian"),
+                ground_mode=self.config.get("ground_mode", "temporal_average"),
+                mask=self.config.get("mask"),
+                use_anti_ghosting=self.config.get("use_anti_ghosting", True),
+                ag_radius=self.config.get("ag_radius", 25),
+                ag_sensitivity=self.config.get("ag_sensitivity", 0.5),
+                dark_files=self.config.get("darks"),
+                flat_files=self.config.get("flats"),
+                bias_files=self.config.get("bias"),
+                video_fps=float(self.config.get("video_fps", 24.0)),
+                video_resolution=self.config.get("video_resolution", "1080p"),
+                save_frames=bool(self.config.get("save_frames", False)),
+                frames_dir=self.config.get("frames_dir"),
+                cpu_workers=int(self.config.get("cpu_workers", max(1, (os.cpu_count() or 4) - 1))),
+                progress_callback=self._on_progress,
+                frame_preview_callback=self._on_frame,
+                abort_flag=self.is_cancelled
+            )
+
+            if not self._is_cancelled:
+                self.finished_success.emit(video_path, stats)
+            else:
+                self.cancelled.emit()
+        except InterruptedError:
+            self.cancelled.emit()
+        except Exception as e:
+            if not self._is_cancelled:
+                self.error_occurred.emit(str(e))
+            else:
+                self.cancelled.emit()
+
+    def _on_progress(self, pct: int, msg: str):
+        if not self._is_cancelled:
+            self.progress_changed.emit(pct)
+            self.status_changed.emit(msg)
+
+    def _on_frame(self, idx: int, frame_rgb: np.ndarray):
+        if not self._is_cancelled:
+            self.frame_rendered.emit(idx, frame_rgb)
+
 
