@@ -234,8 +234,19 @@ Cuando realizamos una fotografía de paisaje nocturno, el suelo terrestre suele 
 ### Sección 9: Gestor de Capas, Máscaras IA y Exportación PSD
 El compositor multicapa de AstroLoom funciona de manera análoga a Adobe Photoshop o PixInsight, pero automatizado para astrofotografía.
 
+* **Control y Visualización Rápida de Máscara:**
+  * **Botón `👁️ Ver Máscara` en la Barra Superior:** Ubicado directamente junto a `🧠 Máscara IA` y `🖌️ Máscara Suelo (M)`. Permite activar u ocultar la superposición en cualquier momento con un solo clic, sin necesidad de desplegar menús ni sub-barras.
+  * **Indicador Visual Dinámico:** Cambia a **Verde Brillante (`👁️ Máscara Visible`)** cuando la superposición está proyectándose en pantalla, y a tono oscuro cuando está oculta. Sincronizado en tiempo real con la barra secundaria de trazado.
+  * **Generación Limpia por Trazos:** Al calcular la máscara desde trazos (`✨ Generar`), los trazos gruesos de semillas se ocultan automáticamente, dejando visible la máscara refinada calculada.
+
 * **Máscaras con Inteligencia Artificial:**
   * Pulsa **"Generar Máscara IA"**: el modelo neuronal detecta árboles, montañas, personas y arquitectura, creando un recorte limpio sin halos ni bordes blancos entre el cielo y la tierra.
+
+* **Máscaras de Rango de Color (HSV) con Pipeta Muestreadora:**
+  * **🎯 Muestrear Color en Imagen:** En las capas de tipo Color, activa la pipeta interactiva y pincha directamente sobre el lienzo (nebulosas de emisión H-Alfa, OIII, cúpulas de sodio o airglow).
+  * El sistema calcula de forma instantánea el Matiz (Hue de 0° a 360°) y el umbral de saturación mínima a partir de la muestra en pantalla, activando automáticamente la previsualización de la máscara en rojo rubí.
+  * También dispones de presets astronómicos rápidos: 🔴 H-Alfa (0°), 🔵 OIII (190°), 🟠 Sodio (38°) y 🟢 Airglow (115°).
+
 * **Herramientas de Pincel:**
   * Pinta manualmente en pantalla para añadir o quitar zonas de ajuste local con control de tamaño y suavizado de borde (*feather*).
 * **Capas Nativas:**

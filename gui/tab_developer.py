@@ -181,7 +181,8 @@ class DeveloperTab(QWidget):
         self.ghs_hp: float = 0.00            # Protección de altas luces / estrellas (HP)
         self.ghs_lp: float = 0.00            # Protección de sombras (LP)
         self.ghs_bp: float = 0.00000         # Punto negro para GHS (BP)
-        self._eyedropper_target: str = "wb"  # "wb" o "ghs_sp"
+        self._eyedropper_target: str = "wb"  # "wb", "ghs_sp", "lp_center", "lp_color", "mask_color"
+        self._mask_source_name: str = ""     # Origen de la máscara de suelo ("IA", "Trazos", "Archivo")
 
         # Historial de Deshacer / Rehacer (Undo / Redo)
         self.MAX_UNDO_STEPS = 50
@@ -1652,6 +1653,7 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.ai_ground_mask_requested.connect(self._detect_mask_ai_from_toolbar)
         self.mask_layers_widget.brush_tool_toggled.connect(self._on_layer_brush_toggled)
         self.mask_layers_widget.brush_params_changed.connect(self._on_layer_brush_params_changed)
+        self.mask_layers_widget.color_eyedropper_requested.connect(self._on_layer_color_sample_requested)
         self.mask_layers_widget.starnet_opacity_changed.connect(self._on_mask_layer_starnet_opacity)
         self.mask_layers_widget.starnet_visibility_changed.connect(self._on_mask_layer_starnet_visibility)
         self.mask_layers_widget.ground_ev_changed.connect(self._on_mask_widget_gnd_ev)
@@ -2043,6 +2045,36 @@ class DeveloperTab(QWidget):
         self.btn_top_ai_mask.clicked.connect(self._detect_mask_ai_from_toolbar)
         tb_layout.addWidget(self.btn_top_ai_mask)
 
+        # 8c. Botón Visualización Rápida de Máscara de Suelo (Overlay)
+        self.btn_top_mask_overlay = QPushButton("👁️ Ver Máscara")
+        self.btn_top_mask_overlay.setCheckable(True)
+        self.btn_top_mask_overlay.setEnabled(False)
+        self.btn_top_mask_overlay.setCursor(Qt.PointingHandCursor)
+        self.btn_top_mask_overlay.setStyleSheet("""
+            QPushButton {
+                background-color: #262933;
+                color: #a0a0a0;
+                border: 1px solid #3b4252;
+                font-weight: normal;
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #3b4252;
+                border-color: #88c0d0;
+                color: #eceff4;
+            }
+            QPushButton:disabled {
+                color: #4c566a;
+                background-color: #1a1c23;
+                border: 1px solid #2a2e39;
+            }
+        """)
+        self.btn_top_mask_overlay.setToolTip("Muestra u oculta la superposición de la máscara de cielo y suelo en el visor.")
+        self.btn_top_mask_overlay.toggled.connect(self._on_top_mask_overlay_toggled)
+        tb_layout.addWidget(self.btn_top_mask_overlay)
+
         # Espaciador elástico
         tb_layout.addStretch()
 
@@ -2107,6 +2139,8 @@ class DeveloperTab(QWidget):
             self.btn_crop.setText("✂️ " + tr("developer.toolbar.crop", "Recortar (C)"))
         if hasattr(self, 'btn_mask_tool'):
             self.btn_mask_tool.setText("🖌️ " + tr("developer.toolbar.ground_mask", "Máscara Suelo (M)"))
+        if hasattr(self, '_update_mask_status_ui'):
+            self._update_mask_status_ui()
 
     def _create_crop_toolbar(self) -> QWidget:
         """Crea la barra de herramientas interactiva de recorte y nivelación de horizonte."""
@@ -2635,10 +2669,31 @@ class DeveloperTab(QWidget):
         # 6. Ver / Ocultar Máscara Overlay
         self.btn_mask_overlay_toggle = QPushButton("👁️ Ver")
         self.btn_mask_overlay_toggle.setCheckable(True)
-        self.btn_mask_overlay_toggle.setChecked(True)
+        self.btn_mask_overlay_toggle.setChecked(False)
+        self.btn_mask_overlay_toggle.setEnabled(False)
         self.btn_mask_overlay_toggle.setCursor(Qt.PointingHandCursor)
+        self.btn_mask_overlay_toggle.setStyleSheet("""
+            QPushButton {
+                background-color: #262933;
+                color: #a0a0a0;
+                border: 1px solid #3b4252;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #3b4252;
+                border-color: #88c0d0;
+                color: #eceff4;
+            }
+            QPushButton:disabled {
+                color: #4c566a;
+                background-color: #1a1c23;
+                border: 1px solid #2a2e39;
+            }
+        """)
         self.btn_mask_overlay_toggle.setToolTip("Muestra u oculta la superposición semitransparente (Verde=Cielo, Rojo=Suelo)")
-        self.btn_mask_overlay_toggle.toggled.connect(self.canvas.set_mask_visible)
+        self.btn_mask_overlay_toggle.toggled.connect(self._on_top_mask_overlay_toggled)
         tb_layout.addWidget(self.btn_mask_overlay_toggle)
 
         # 7. Limpiar Trazos
@@ -2793,7 +2848,11 @@ class DeveloperTab(QWidget):
             )
 
             self.current_mask = new_mask
-            self.canvas.set_refined_mask(self.current_mask)
+            self._mask_source_name = "Trazos"
+            self.canvas.set_refined_mask(self.current_mask, mode="bicolor")
+            self.canvas.set_scribbles_visible(False)
+            self.canvas.set_mask_visible(True)
+            self._set_mask_overlay_ui_state(True)
             self._generate_preview_proxy()
             self.update_stretch_preview()
             self._update_mask_status_ui()
@@ -2818,13 +2877,96 @@ class DeveloperTab(QWidget):
             return
         old_m = self.current_mask.copy()
         self.current_mask = None
+        self._mask_source_name = ""
         self.canvas.clear_scribbles()
         self.canvas.set_refined_mask(None)
+        self.canvas.set_mask_visible(False)
+        self._set_mask_overlay_ui_state(False)
         self._generate_preview_proxy()
         self.update_stretch_preview()
         self._update_mask_status_ui()
         self._record_mask_action(old_m, None, "Eliminar Máscara")
         self.log_message("[MÁSCARA] Máscara de suelo eliminada.")
+
+    def _set_mask_overlay_ui_state(self, visible: bool) -> None:
+        """Actualiza el estado visual, textos y colores de los botones de alternancia de máscara."""
+        has_mask = (self.current_mask is not None)
+        is_active = has_mask and visible
+
+        qss_active = """
+            QPushButton {
+                background-color: #2e7d32;
+                color: #ffffff;
+                font-weight: bold;
+                border: 1px solid #81c784;
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #388e3c;
+                border-color: #a5d6a7;
+            }
+        """
+        qss_inactive = """
+            QPushButton {
+                background-color: #262933;
+                color: #a0a0a0;
+                border: 1px solid #3b4252;
+                font-weight: normal;
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #3b4252;
+                border-color: #88c0d0;
+                color: #eceff4;
+            }
+            QPushButton:disabled {
+                color: #4c566a;
+                background-color: #1a1c23;
+                border: 1px solid #2a2e39;
+            }
+        """
+
+        if hasattr(self, 'btn_top_mask_overlay'):
+            self.btn_top_mask_overlay.setEnabled(has_mask)
+            self.btn_top_mask_overlay.blockSignals(True)
+            self.btn_top_mask_overlay.setChecked(is_active)
+            self.btn_top_mask_overlay.blockSignals(False)
+            self.btn_top_mask_overlay.setStyleSheet(qss_active if is_active else qss_inactive)
+            if is_active:
+                self.btn_top_mask_overlay.setText("👁️ Máscara Visible")
+                src = f" ({self._mask_source_name})" if self._mask_source_name else ""
+                self.btn_top_mask_overlay.setToolTip(f"Ocultar superposición de la máscara{src}. La máscara sigue activa internamente.")
+            else:
+                self.btn_top_mask_overlay.setText("👁️ Ver Máscara")
+                if has_mask:
+                    src = f" ({self._mask_source_name})" if self._mask_source_name else ""
+                    self.btn_top_mask_overlay.setToolTip(f"Mostrar superposición de la máscara{src} sobre la imagen.")
+                else:
+                    self.btn_top_mask_overlay.setToolTip("No hay máscara activa de cielo/suelo calculada.")
+
+        if hasattr(self, 'btn_mask_overlay_toggle'):
+            self.btn_mask_overlay_toggle.setEnabled(has_mask)
+            self.btn_mask_overlay_toggle.blockSignals(True)
+            self.btn_mask_overlay_toggle.setChecked(is_active)
+            self.btn_mask_overlay_toggle.blockSignals(False)
+            self.btn_mask_overlay_toggle.setStyleSheet(qss_active if is_active else qss_inactive)
+            self.btn_mask_overlay_toggle.setText("👁️ Visible" if is_active else "👁️ Ver")
+
+    def _on_top_mask_overlay_toggled(self, checked: bool) -> None:
+        """Alterna la visibilidad del overlay de la máscara cielo/suelo en el visor interactivo."""
+        if self.current_mask is None:
+            self._set_mask_overlay_ui_state(False)
+            return
+
+        if checked:
+            self.canvas.set_refined_mask(self.current_mask, mode="bicolor")
+        self.canvas.set_mask_visible(checked)
+        self._set_mask_overlay_ui_state(checked)
+        self.log_message(f"[MÁSCARA] Visualización de máscara {'activada' if checked else 'oculta'}.")
 
     def _load_mask_from_toolbar(self) -> None:
         """Permite cargar una máscara de cielo/suelo previamente generada en el apilado o desde archivo."""
@@ -2997,12 +3139,11 @@ class DeveloperTab(QWidget):
 
         old_m = self.current_mask.copy() if self.current_mask is not None else None
         self.current_mask = np.ascontiguousarray(np.clip(mask, 0.0, 1.0), dtype=np.float32)
-        self.canvas.set_refined_mask(self.current_mask)
+        self._mask_source_name = source_desc
+        self.canvas.set_refined_mask(self.current_mask, mode="bicolor")
+        self.canvas.set_scribbles_visible(False)
         self.canvas.set_mask_visible(True)
-        if hasattr(self, 'btn_mask_overlay_toggle'):
-            self.btn_mask_overlay_toggle.blockSignals(True)
-            self.btn_mask_overlay_toggle.setChecked(True)
-            self.btn_mask_overlay_toggle.blockSignals(False)
+        self._set_mask_overlay_ui_state(True)
 
         self._generate_preview_proxy()
         self.update_stretch_preview()
@@ -3015,17 +3156,23 @@ class DeveloperTab(QWidget):
         """Actualiza el indicador visual de presencia de máscara en la Sección 8 y botones."""
         if hasattr(self, 'sec_gnd_tone'):
             if self.current_mask is not None:
-                self.sec_gnd_tone.set_status_badge("● Suelo Activo", "#a5d6a7")
+                source_label = f"● Suelo ({self._mask_source_name})" if self._mask_source_name else "● Suelo Activo"
+                self.sec_gnd_tone.set_status_badge(source_label, "#a5d6a7")
             else:
                 self.sec_gnd_tone.set_status_badge("")
 
         if hasattr(self, 'mask_layers_widget') and self.image_starless is not None:
             self.mask_layers_widget.ensure_starnet_layers(has_ground=(self.current_mask is not None))
 
+        is_mask_present = (self.current_mask is not None)
+        is_visible = (getattr(self.canvas, 'show_mask_overlay', False) and is_mask_present)
+        self._set_mask_overlay_ui_state(is_visible)
+
         if not hasattr(self, 'lbl_gnd_mask_status'):
             return
-        if self.current_mask is not None:
-            self.lbl_gnd_mask_status.setText("✓ Máscara de suelo activa")
+        if is_mask_present:
+            desc = f"✓ Máscara de suelo activa ({self._mask_source_name})" if self._mask_source_name else "✓ Máscara de suelo activa"
+            self.lbl_gnd_mask_status.setText(desc)
             self.lbl_gnd_mask_status.setStyleSheet("color: #a5d6a7; font-size: 11px; font-weight: bold;")
             if hasattr(self, 'btn_edit_ground_mask'):
                 self.btn_edit_ground_mask.setText("🖌️ Editar Máscara...")
@@ -3180,6 +3327,9 @@ class DeveloperTab(QWidget):
             self.btn_lp_color_pipette.setChecked(active)
             self.btn_lp_color_pipette.blockSignals(False)
 
+        if hasattr(self, 'mask_layers_widget') and getattr(self, '_eyedropper_target', 'wb') == 'mask_color':
+            self.mask_layers_widget.set_color_picker_active(active)
+
         if not active:
             self._eyedropper_target = 'wb'
 
@@ -3193,6 +3343,8 @@ class DeveloperTab(QWidget):
                 self.btn_lp_center_pipette.setChecked(False)
             if hasattr(self, 'btn_lp_color_pipette') and self.btn_lp_color_pipette.isChecked():
                 self.btn_lp_color_pipette.setChecked(False)
+            if hasattr(self, 'mask_layers_widget'):
+                self.mask_layers_widget.set_color_picker_active(False)
             self.canvas.set_eyedropper_active(True)
         else:
             if getattr(self, '_eyedropper_target', 'wb') == 'wb':
@@ -3208,6 +3360,8 @@ class DeveloperTab(QWidget):
                 self.btn_lp_center_pipette.setChecked(False)
             if hasattr(self, 'btn_lp_color_pipette') and self.btn_lp_color_pipette.isChecked():
                 self.btn_lp_color_pipette.setChecked(False)
+            if hasattr(self, 'mask_layers_widget'):
+                self.mask_layers_widget.set_color_picker_active(False)
             self.canvas.set_eyedropper_active(True)
         else:
             if getattr(self, '_eyedropper_target', 'wb') == 'ghs_sp':
@@ -3224,6 +3378,8 @@ class DeveloperTab(QWidget):
                 self.btn_ghs_pipette.setChecked(False)
             if hasattr(self, 'btn_lp_color_pipette') and self.btn_lp_color_pipette.isChecked():
                 self.btn_lp_color_pipette.setChecked(False)
+            if hasattr(self, 'mask_layers_widget'):
+                self.mask_layers_widget.set_color_picker_active(False)
             self.canvas.set_eyedropper_active(True)
         else:
             if getattr(self, '_eyedropper_target', 'wb') == 'lp_center':
@@ -3240,14 +3396,57 @@ class DeveloperTab(QWidget):
                 self.btn_ghs_pipette.setChecked(False)
             if hasattr(self, 'btn_lp_center_pipette') and self.btn_lp_center_pipette.isChecked():
                 self.btn_lp_center_pipette.setChecked(False)
+            if hasattr(self, 'mask_layers_widget'):
+                self.mask_layers_widget.set_color_picker_active(False)
             self.canvas.set_eyedropper_active(True)
         else:
             if getattr(self, '_eyedropper_target', 'wb') == 'lp_color':
                 self.canvas.set_eyedropper_active(False)
                 self._eyedropper_target = 'wb'
 
+    def _on_layer_color_sample_requested(self, active: bool) -> None:
+        """Alterna el cuentagotas interactivo para capturar el color de una capa de ajuste en el lienzo."""
+        if active:
+            self._eyedropper_target = 'mask_color'
+            if hasattr(self, 'btn_pipette') and self.btn_pipette.isChecked():
+                self.btn_pipette.setChecked(False)
+            if hasattr(self, 'btn_ghs_pipette') and self.btn_ghs_pipette.isChecked():
+                self.btn_ghs_pipette.setChecked(False)
+            if hasattr(self, 'btn_lp_center_pipette') and self.btn_lp_center_pipette.isChecked():
+                self.btn_lp_center_pipette.setChecked(False)
+            if hasattr(self, 'btn_lp_color_pipette') and self.btn_lp_color_pipette.isChecked():
+                self.btn_lp_color_pipette.setChecked(False)
+            self.canvas.set_eyedropper_active(True)
+            self.log_message("[MÁSCARA COLOR] Pipeta activa: haz clic sobre cualquier zona del visor para capturar su color.")
+        else:
+            if getattr(self, '_eyedropper_target', 'wb') == 'mask_color':
+                self.canvas.set_eyedropper_active(False)
+                self._eyedropper_target = 'wb'
+
     def _on_eyedropper_color_sampled(self, r: float, g: float, b: float) -> None:
-        """Procesa la muestra del cuentagotas para Balance de Blancos, GHS SP o Cúpula de Polución 2D."""
+        """Procesa la muestra del cuentagotas para Balance de Blancos, GHS SP, Cúpula 2D o Máscara de Color."""
+        if getattr(self, '_eyedropper_target', 'wb') == 'mask_color':
+            disp_rgb = getattr(self.canvas, 'last_sampled_display_rgb', None)
+            if disp_rgb is not None:
+                dr, dg, db = disp_rgb[0] / 255.0, disp_rgb[1] / 255.0, disp_rgb[2] / 255.0
+            else:
+                dr, dg, db = r, g, b
+
+            import colorsys
+            h, s, v = colorsys.rgb_to_hsv(dr, dg, db)
+            hue_deg = int(round(h * 360.0)) % 360
+            sat_val = float(np.clip(s, 0.01, 0.90))
+
+            if hasattr(self, 'mask_layers_widget'):
+                self.mask_layers_widget.apply_sampled_color(hue_deg, sat_val)
+                self.mask_layers_widget.set_color_picker_active(False)
+
+            self._eyedropper_target = 'wb'
+            self.log_message(
+                f"[MÁSCARA COLOR] Color muestreado en visor: Hue={hue_deg}°, Sat={sat_val:.2f}."
+            )
+            return
+
         if getattr(self, '_eyedropper_target', 'wb') == 'ghs_sp':
             # Muestra para Punto de Simetría (SP) en GHS
             sample_lum = 0.2126 * r + 0.7152 * g + 0.0722 * b

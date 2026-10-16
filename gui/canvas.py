@@ -90,6 +90,7 @@ class MaskCanvas(QWidget):
         # Pipeta de Balance de Blancos (Eyedropper)
         self.eyedropper_active: bool = False
         self.last_sampled_coords: Optional[tuple[float, float]] = None
+        self.last_sampled_display_rgb: Optional[tuple[float, float, float]] = None
 
         # Lupa de Inspección Flotante (Floating Magnifier)
         self.magnifier_active: bool = False
@@ -260,7 +261,10 @@ class MaskCanvas(QWidget):
             norm = np.clip(self.orig_rgb / max(p_hi, 1e-4), 0.0, 1.0)
             display = (np.power(norm, 0.4) * 255.0).astype(np.uint8)
         else:
-            display = (np.clip(display_stretched, 0.0, 1.0) * 255.0).astype(np.uint8)
+            if display_stretched.dtype == np.uint8:
+                display = display_stretched
+            else:
+                display = (np.clip(display_stretched, 0.0, 1.0) * 255.0).astype(np.uint8)
 
         self._cached_display_u8 = np.ascontiguousarray(display, dtype=np.uint8)
         qimg = QImage(self._cached_display_u8.data, w, h, 3 * w, QImage.Format_RGB888).copy()
@@ -532,6 +536,21 @@ class MaskCanvas(QWidget):
                 patch = self.orig_rgb[y1:y2, x1:x2]
                 r, g, b = np.mean(patch, axis=(0, 1))[:3]
                 self.last_sampled_coords = (float(ix) / float(max(1, w)), float(iy) / float(max(1, h)))
+
+                if self._cached_display_u8 is not None:
+                    dh, dw = self._cached_display_u8.shape[:2]
+                    d_ix = int(np.clip(ix * dw / max(1, w), 0, dw - 1))
+                    d_iy = int(np.clip(iy * dh / max(1, h), 0, dh - 1))
+                    d_x1 = max(0, d_ix - 2)
+                    d_x2 = min(dw, d_ix + 3)
+                    d_y1 = max(0, d_iy - 2)
+                    d_y2 = min(dh, d_iy + 3)
+                    d_patch = self._cached_display_u8[d_y1:d_y2, d_x1:d_x2]
+                    dr, dg, db = np.mean(d_patch, axis=(0, 1))[:3]
+                    self.last_sampled_display_rgb = (float(dr), float(dg), float(db))
+                else:
+                    self.last_sampled_display_rgb = (float(r * 255.0), float(g * 255.0), float(b * 255.0))
+
                 self.color_sampled.emit(float(r), float(g), float(b))
                 self.set_eyedropper_active(False)
             event.accept()
@@ -601,6 +620,7 @@ class MaskCanvas(QWidget):
 
         if event.button() == Qt.LeftButton:
             self.drawing = True
+            self.show_scribbles = True
             ipt = self.widget_to_image_coords(event.position().toPoint())
             if ipt:
                 self.last_img_pt = ipt

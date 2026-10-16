@@ -39,6 +39,7 @@ class MaskLayersWidget(QWidget):
     ai_ground_mask_requested = Signal()          # Solicitud de auto-detección de horizonte con IA
     brush_tool_toggled = Signal(bool, object)    # (activo, MaskLayer) para activar el pincel en el lienzo
     brush_params_changed = Signal(int, float, float, str) # (radio, dureza, flujo, modo)
+    color_eyedropper_requested = Signal(bool)     # Solicitud de pipeta para muestrear color en el lienzo
     starnet_opacity_changed = Signal(float)       # (opacidad 0.0 - 1.0) para sincronizar con slider_stars de StarNet
     starnet_visibility_changed = Signal(bool)     # (visibilidad) para sincronizar con combo_layer de StarNet
     ground_ev_changed = Signal(int)              # (val) sincronizar slider_gnd_ev (-200 a 300)
@@ -397,6 +398,41 @@ class MaskLayersWidget(QWidget):
         self.slider_hue.valueChanged.connect(self._on_hue_slider_changed)
         row_hue.addWidget(self.slider_hue, stretch=1)
         color_layout.addLayout(row_hue)
+
+        # Fila con Pipeta Muestreadora de Color
+        row_pick = QHBoxLayout()
+        self.btn_pick_color = QPushButton("🎯 Muestrear Color en Imagen")
+        self.btn_pick_color.setCheckable(True)
+        self.btn_pick_color.setCursor(Qt.PointingHandCursor)
+        self.btn_pick_color.setToolTip(
+            "Activa la pipeta para hacer clic sobre cualquier zona de la imagen en el visor\n"
+            "y definir automáticamente el Matiz (Hue) y Saturación de esta máscara."
+        )
+        self.btn_pick_color.setStyleSheet("""
+            QPushButton {
+                background-color: #262933;
+                color: #e0e0e0;
+                border: 1px solid #4c566a;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #3b4252;
+                border-color: #ffd54f;
+                color: #ffffff;
+            }
+            QPushButton:checked {
+                background-color: #d97706;
+                color: #ffffff;
+                border: 1px solid #f59e0b;
+                font-weight: bold;
+            }
+        """)
+        self.btn_pick_color.toggled.connect(self._on_pick_color_toggled)
+        row_pick.addWidget(self.btn_pick_color)
+        color_layout.addLayout(row_pick)
 
         row_tol_sat = QHBoxLayout()
         row_tol_sat.addWidget(QLabel("Tolerancia:"))
@@ -1507,6 +1543,9 @@ class MaskLayersWidget(QWidget):
         # Aplicar identidad temática y cromática dinámica según el tipo de capa activa
         self._apply_layer_theme(layer)
 
+        if not layer or layer.mask_type != MASK_TYPE_COLOR:
+            self.set_color_picker_active(False)
+
         if not layer:
             self.brush_tool_toggled.emit(False, None)
             self.preview_mask_requested.emit(None)
@@ -1885,6 +1924,39 @@ class MaskLayersWidget(QWidget):
         self.lbl_color_swatch.setStyleSheet(
             f"background-color: {c.name()}; border: 1px solid #ffffff; border-radius: 3px;"
         )
+
+    def _on_pick_color_toggled(self, checked: bool) -> None:
+        """Emite señal para activar o cancelar la pipeta de color en el lienzo."""
+        self.color_eyedropper_requested.emit(checked)
+
+    def set_color_picker_active(self, active: bool) -> None:
+        """Sincroniza el botón de pipeta de color con el estado del lienzo."""
+        if hasattr(self, 'btn_pick_color') and self.btn_pick_color.isChecked() != active:
+            self.btn_pick_color.blockSignals(True)
+            self.btn_pick_color.setChecked(active)
+            self.btn_pick_color.blockSignals(False)
+
+    def apply_sampled_color(self, hue_deg: int, sat_val: float) -> None:
+        """Aplica el matiz y saturación muestreados con la pipeta a la capa de color activa."""
+        self._updating_ui = True
+        self.slider_hue.setValue(int(hue_deg))
+        self.lbl_hue_val.setText(f"{int(hue_deg)}°")
+        self._update_color_swatch(int(hue_deg))
+        # Umbral adaptativo razonable basado en la saturación de la muestra
+        suggested_sat = float(np.clip(sat_val * 0.45, 0.03, 0.40))
+        self.spin_color_sat.setValue(suggested_sat)
+        self._updating_ui = False
+
+        layer = self.get_selected_layer()
+        if layer and layer.mask_type == MASK_TYPE_COLOR:
+            layer.color_hue = float(hue_deg)
+            layer.color_min_sat = suggested_sat
+            if hasattr(self, 'btn_preview_mask'):
+                if not self.btn_preview_mask.isChecked():
+                    self.btn_preview_mask.setChecked(True)
+                else:
+                    self._emit_mask_preview()
+            self.layers_changed.emit()
 
     # Controles de Ajustes Locales
     def _on_adj_ev_changed(self, val: int) -> None:

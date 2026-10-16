@@ -6,6 +6,14 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 ## [Unreleased]
 
 ### Añadido
+* **Control Rápido y Ergonomía de Superposición de Máscara de Suelo:**
+  - **Botón `👁️ Ver Máscara` en la Barra Superior:** Ubicado directamente en la barra de herramientas del lienzo del Revelador junto a `🧠 Máscara IA` y `🖌️ Máscara Suelo (M)`, permitiendo encender o apagar la superposición coloreada de cielo/suelo en cualquier momento sin tener que abrir la herramienta secundaria de trazado.
+  - **Respuesta Visual Dinámica de Alta Visibilidad:** Indicador de estado con cambio dinámico de color: Verde activo (`#2e7d32` / `#81c784`) cuando la máscara se está proyectando en pantalla (`👁️ Máscara Visible`), y tono oscuro/gris cuando está oculta (`👁️ Ver Máscara`), sincronizado en tiempo real con el botón `👁️ Ver` de la barra horizontal.
+  - **Ocultación Automática de Trazos al Generar:** Al calcular la máscara guiada por semillas (`✨ Generar`), los trazos de pincel rojo/verde se ocultan automáticamente para mostrar de forma nítida la máscara continua refinada, y el badge de la Sección 8 pasa a indicar el origen exacto (`● Suelo (Trazos)`, `● Suelo (IA)`, etc.).
+* **Pipeta Muestreadora Interactiva para Máscaras de Rango de Color (HSV):**
+  - **Botón `🎯 Muestrear Color en Imagen` en Gestor de Capas:** Disponible en cualquier capa de ajuste de tipo Color (`MASK_TYPE_COLOR`).
+  - **Muestreo Cromático Directo en Lienzo:** Permite hacer clic sobre cualquier zona visible de la toma (nebulosa H-Alfa, OIII, contaminación de vapor de sodio, airglow, etc.) para calcular de forma instantánea el Matiz (Hue 0°–360°) y la saturación mínima a partir de los píxeles reales mostrados.
+  - **Activación Inmediata de Previsualización:** Al muestrear el color, se activa de inmediato el modo de previsualización en rubí translúcido para evaluar visualmente las áreas capturadas por la máscara.
 * **Filtro Difusor Digital y Realce de Constelaciones (Star Mist Filter) [P1]:**
   - **Aislamiento Selectivo y Morfológico de Estrellas (`core/star_diffusion.py`):** Detección selectiva de picos estelares prominentes (magnitudes 1ª a 4ª) mediante análisis Top-Hat en imágenes compuestas o acoplamiento directo sobre la capa de estrellas desacoplada de StarNet++.
   - **Protección de Estrellas Débiles de Fondo:** Las millones de estrellas tenues del fondo cósmico quedan protegidas mediante una curva de umbralización suave Hermite (*smoothstep*), preservando su puntualidad y nitidez sin inflarse ni generar niebla difusa en el cielo oscuro.
