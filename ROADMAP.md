@@ -9,11 +9,11 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 | Prioridad | Tarea / Funcionalidad | Módulo | Inspiración | Dificultad (1-10) | Impacto (1-10) | Estado |
 | :---: | :--- | :--- | :--- | :---: | :---: | :---: |
 | **P1** | **Realce de Estrellas / Filtro Difusor Digital** | Revelador | Sequator / Filtros físicos | 3.0 / 10 | 7.5 / 10 | 📋 Planificado |
-| **P2** | **Estirado Hiperbólico Generalizado (GHS)** | Revelador | Siril / PixInsight | 4.0 / 10 | 8.5 / 10 | 📋 Planificado |
+| **P2** | **Estirado Hiperbólico Generalizado (GHS)** | Revelador | Siril / PixInsight | 4.0 / 10 | 8.5 / 10 | ✅ Completado |
 | **P3** | **Anti-Ghosting de Árboles en Horizonte (Min-Horizon)** | Apilador | Starry Landscape Stacker | 4.0 / 10 | 8.0 / 10 | ✅ Completado |
 | **P4** | **Cribado Previo de Tomas y Calidad (Frame Culling)** | Apilador | Nebulb / Siril | 4.5 / 10 | 8.5 / 10 | ✅ Completado |
-| **P5** | **Sustracción de Domo Asimétrico de Polución** | Revelador | Sequator / Nebulb | 4.5 / 10 | 8.0 / 10 | ⏳ Pendiente |
-| **P6** | **Efecto Orton Cósmico y Glow de Polvo** | Revelador | Nebulb / Photoshop | 2.5 / 10 | 6.5 / 10 | ⏳ Pendiente |
+| **P5** | **Sustracción de Domo Asimétrico de Polución 2D** | Revelador | Sequator / Nebulb | 4.5 / 10 | 8.0 / 10 | ✅ Completado |
+| **P6** | **Efecto Orton Cósmico y Glow de Polvo** | Revelador | Nebulb / Photoshop | 2.5 / 10 | 6.5 / 10 | ✅ Completado |
 | **P7** | **Sub-stacking / Ventana Deslizante para Time-Lapse** | Startrails / Apilador | Sequator | 5.0 / 10 | 7.0 / 10 | ⏳ Pendiente |
 | **P8** | **Detección Automática de Suelo con IA Ligera** | Máscaras | Nebulb | 6.5 / 10 | 9.0 / 10 | ✅ Completado |
 | **P9** | **Reducción de Distorsión Óptica en Esquinas** | Apilador | Sequator | 7.5 / 10 | 8.5 / 10 | 🔍 En estudio |
