@@ -2896,6 +2896,50 @@ class DeveloperTab(QWidget):
         if paths:
             self.load_image_direct(paths[0])
 
+    def _process_starless_base(self, starless: Optional[np.ndarray], mask_3d: Optional[np.ndarray] = None, is_full_res: bool = True) -> Optional[np.ndarray]:
+        """Aplica las mejoras lineales a la capa StarNet (Denoise, Claridad, Dehaze, Ondículas)."""
+        if starless is None:
+            return None
+        processed_starless = starless.copy()
+
+        # 1. Reducción de Ruido
+        if self.denoise_strength > 1e-4:
+            denoised = apply_denoise(
+                processed_starless,
+                strength=self.denoise_strength,
+                is_full_res=is_full_res
+            )
+            if mask_3d is not None:
+                processed_starless = (denoised * mask_3d) + (processed_starless * (1.0 - mask_3d))
+            else:
+                processed_starless = denoised
+
+        # 2. Claridad y Borrar Neblina
+        if abs(self.clarity_starless_val) > 1e-4:
+            clarified = apply_clarity(processed_starless, strength=self.clarity_starless_val)
+            if mask_3d is not None:
+                processed_starless = (clarified * mask_3d) + (processed_starless * (1.0 - mask_3d))
+            else:
+                processed_starless = clarified
+
+        if abs(self.dehaze_starless_val) > 1e-4:
+            dehazed = apply_dehaze(processed_starless, strength=self.dehaze_starless_val)
+            if mask_3d is not None:
+                processed_starless = (dehazed * mask_3d) + (processed_starless * (1.0 - mask_3d))
+            else:
+                processed_starless = dehazed
+
+        # 3. Ondículas sobre la capa de fondo
+        if abs(self.multiescala_estructura) > 1e-4 or self.multiescala_fondo > 1e-4:
+            processed_starless = realce_multiescala_ondiculas(
+                processed_starless,
+                fuerza_estructura=self.multiescala_estructura,
+                reduccion_fondo=self.multiescala_fondo,
+                sky_mask=mask_3d[..., 0] if mask_3d is not None else None
+            )
+
+        return processed_starless
+
     def _compose_active_base(self, for_export: bool = False) -> tuple[np.ndarray, np.ndarray]:
         if for_export:
             starless, stars, base = self.image_starless, self.image_stars, self.image_32bit
@@ -2947,43 +2991,11 @@ class DeveloperTab(QWidget):
         if starless is None or stars is None:
             return base, mask_3d
 
-        processed_starless = starless.copy()
-
-        # 1. Reducción de Ruido
-        if self.denoise_strength > 1e-4:
-            denoised = apply_denoise(
-                processed_starless,
-                strength=self.denoise_strength,
-                is_full_res=(for_export or crop_active)
-            )
-            if mask_3d is not None:
-                processed_starless = (denoised * mask_3d) + (processed_starless * (1.0 - mask_3d))
-            else:
-                processed_starless = denoised
-
-        # 2. Claridad y Borrar Neblina
-        if abs(self.clarity_starless_val) > 1e-4:
-            clarified = apply_clarity(processed_starless, strength=self.clarity_starless_val)
-            if mask_3d is not None:
-                processed_starless = (clarified * mask_3d) + (processed_starless * (1.0 - mask_3d))
-            else:
-                processed_starless = clarified
-
-        if abs(self.dehaze_starless_val) > 1e-4:
-            dehazed = apply_dehaze(processed_starless, strength=self.dehaze_starless_val)
-            if mask_3d is not None:
-                processed_starless = (dehazed * mask_3d) + (processed_starless * (1.0 - mask_3d))
-            else:
-                processed_starless = dehazed
-
-        # 3. Ondículas sobre la capa de fondo
-        if abs(self.multiescala_estructura) > 1e-4 or self.multiescala_fondo > 1e-4:
-            processed_starless = realce_multiescala_ondiculas(
-                processed_starless,
-                fuerza_estructura=self.multiescala_estructura,
-                reduccion_fondo=self.multiescala_fondo,
-                sky_mask=mask_3d[..., 0] if mask_3d is not None else None
-            )
+        processed_starless = self._process_starless_base(
+            starless,
+            mask_3d=mask_3d,
+            is_full_res=(for_export or crop_active)
+        )
 
         # 4. Mezcla de capas
         # Si el gestor de capas contiene capas de imagen activas (StarNet / Suelo),
@@ -3808,16 +3820,56 @@ class DeveloperTab(QWidget):
             ext = os.path.splitext(p)[1].lower()
             if ext == '.psd' or "Photoshop" in selected_filter:
                 from core.psd_export import export_developer_psd
+                from core.config_manager import get_config_val
+                from core.icc_manager import get_icc_profile_bytes, normalize_colorspace_name
+
+                self.log_message("[PSD] Preparando capas reveladas y estiradas en 16-bit...")
+
+                # 1. Base estirada completa (balance, MTF y curvas globales aplicadas)
+                stretched_base = self._apply_pipeline_on_image(full_base, precomputed_mask=None)
+
+                # 2. Suelo desarrollado (con ajustes diferenciales de suelo/EV/sombras)
+                ground_dev = None
+                if clean_m is not None and full_mask is not None:
+                    zero_mask = np.zeros_like(full_mask)
+                    ground_dev = self._apply_pipeline_on_image(full_base, precomputed_mask=zero_mask)
+
+                # 3. Capas StarNet desacopladas (Starless estirado y Estrellas estiradas)
+                stretched_starless = None
+                stretched_stars = None
+                if self.image_starless is not None:
+                    # Fondo starless procesado (con filtros de denoise, claridad, dehaze)
+                    starless_full = self._process_starless_base(
+                        self.image_starless,
+                        mask_3d=full_mask,
+                        is_full_res=True
+                    )
+                    # Estirar el fondo starless con el pipeline de revelado
+                    stretched_starless = self._apply_pipeline_on_image(
+                        starless_full,
+                        precomputed_mask=full_mask if full_mask is not None else None
+                    )
+                    # Estrellas desacopladas estiradas en modo Linear Dodge / Add:
+                    # sky_with_stars - starless = stars
+                    sky_factor = clean_m[..., np.newaxis] if clean_m is not None else 1.0
+                    stretched_stars = np.clip((stretched_base - stretched_starless) * sky_factor, 0.0, 1.0)
+
+                # Obtener bytes del perfil de color ICC seleccionado en configuración
+                target_cs = normalize_colorspace_name(get_config_val("icc_profile", "srgb"))
+                icc_bytes = get_icc_profile_bytes(target_cs)
+
                 adj_layers = self.mask_layers_widget.layers if hasattr(self, 'mask_layers_widget') else None
                 ok, desc, n_layers = export_developer_psd(
                     p,
                     composite_image=processed,
-                    base_image=full_base,
-                    starless_image=self.image_starless,
-                    stars_image=self.image_stars,
+                    base_image=stretched_base,
+                    starless_image=stretched_starless,
+                    stars_image=stretched_stars,
                     sky_mask=clean_m if self.current_mask is not None else None,
+                    ground_image=ground_dev,
                     adjustment_layers=adj_layers,
                     depth=16,
+                    icc_profile_bytes=icc_bytes,
                     log_fn=self.log_message
                 )
                 if not ok:
@@ -3826,15 +3878,15 @@ class DeveloperTab(QWidget):
                 QMessageBox.information(
                     self, "Exportación a Photoshop (PSD)",
                     f"Archivo PSD multicapa guardado con éxito:\n{p}\n\n"
-                    f"Capas generadas: {n_layers} (16-bit por canal)\n"
+                    f"Capas generadas: {n_layers} (16-bit con Máscaras de Capa nativas)\n"
                     f"Resolución: {w_full}x{h_full} px\n\n"
-                    f"Se han preservado de forma independiente:\n"
-                    f"• Resultado final compuesto\n"
-                    f"• Imagen base original\n"
-                    f"• Fondo Starless (si existe)\n"
-                    f"• Estrellas en modo Linear Dodge / Add (si existen)\n"
-                    f"• Suelo y cielo aislados por máscara de horizonte (si existe)\n"
-                    f"• Máscara de horizonte de referencia en escala de grises"
+                    f"Estructura del proyecto en Photoshop:\n"
+                    f"• 00 - Revelado Final (Referencia oculta para comparar)\n"
+                    f"• 04 - Suelo / Paisaje (con Máscara de Capa nativa vinculada)\n"
+                    f"• 03 - Estrellas (Modo Linear Dodge / Añadir)\n"
+                    f"• 02 - Fondo Starless (Cielo nebular estirado)\n"
+                    f"• 01 - Imagen Base Revelada\n"
+                    f"• Perfil de color ICC incrustado ({target_cs.upper()})"
                 )
                 return
             elif ext in ['.jpg', '.jpeg']:
