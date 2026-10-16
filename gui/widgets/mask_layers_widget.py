@@ -937,14 +937,14 @@ class MaskLayersWidget(QWidget):
         col_thr = QVBoxLayout()
         col_thr.setSpacing(2)
         row_thr_lbl = QHBoxLayout()
-        row_thr_lbl.addWidget(self._make_resettable_label(QLabel("Umbral Polvo:"), lambda: self.slider_sl_orton_threshold.setValue(15), "0.15"))
-        self.lbl_sl_orton_threshold = QLabel("0.15")
+        row_thr_lbl.addWidget(self._make_resettable_label(QLabel("Umbral Polvo:"), lambda: self.slider_sl_orton_threshold.setValue(5), "0.05"))
+        self.lbl_sl_orton_threshold = QLabel("0.05")
         self.lbl_sl_orton_threshold.setStyleSheet("color: #ce93d8; font-weight: bold;")
         row_thr_lbl.addWidget(self.lbl_sl_orton_threshold)
         col_thr.addLayout(row_thr_lbl)
         self.slider_sl_orton_threshold = QSlider(Qt.Horizontal)
         self.slider_sl_orton_threshold.setRange(0, 50)
-        self.slider_sl_orton_threshold.setValue(15)
+        self.slider_sl_orton_threshold.setValue(5)
         self.slider_sl_orton_threshold.valueChanged.connect(self._on_sl_orton_threshold_changed)
         self.slider_sl_orton_threshold.sliderReleased.connect(self.ground_slider_released.emit)
         col_thr.addWidget(self.slider_sl_orton_threshold)
@@ -1980,7 +1980,7 @@ class MaskLayersWidget(QWidget):
 
     def set_starless_tone_values(
         self, clarity: int, dehaze: int, ond_est: int, ond_bg: int, contrast: int, denoise: int,
-        orton_strength: int = 0, orton_radius: int = 40, orton_threshold: int = 15,
+        orton_strength: int = 0, orton_radius: int = 40, orton_threshold: int = 5,
         orton_tint_idx: int = 0, orton_mode_idx: int = 0
     ) -> None:
         """Sincroniza los controles especiales de fondo nebular desde tab_developer."""

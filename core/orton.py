@@ -28,8 +28,8 @@ def apply_astronomical_orton(
     img_rgb: np.ndarray,
     strength: float = 0.0,
     radius: float = 40.0,
-    threshold: float = 0.15,
-    exponent: float = 1.5,
+    threshold: float = 0.05,
+    exponent: float = 1.0,
     tint_type: str = "warm_gold",
     custom_tint: Tuple[float, float, float] = (1.0, 0.85, 0.55),
     tint_strength: float = 0.40,
@@ -44,12 +44,13 @@ def apply_astronomical_orton(
     - img_rgb: Imagen RGB en float32 [0.0, 1.0] (H, W, 3).
     - strength: Intensidad de fusión del resplandor en [0.0, 1.0] (0.0 = desactivado).
     - radius: Radio del desenfoque difuso en píxeles (sigma espacial, 10.0 a 150.0).
-    - threshold: Umbral mínimo de luminancia a partir del cual el polvo y nebulosas emiten resplandor [0.0, 0.60].
-    - exponent: Curva de respuesta no lineal del resplandor (1.0 = lineal, 2.0 = cuadrático/focalizado).
+    - threshold: Umbral mínimo de luminancia a partir del cual el polvo y nebulosas emiten resplandor [0.0, 0.50].
+    - exponent: Curva de respuesta no lineal del resplandor (1.0 = suave estándar, >1.0 = más concentrado).
     - tint_type: Clave en ORTON_PRESET_TINTS ("warm_gold", "neutral", "cool_blue", "halpha") o "custom".
     - custom_tint: Tupla (R, G, B) utilizada cuando tint_type == "custom".
     - tint_strength: Grado de modulación cromática del resplandor en [0.0, 1.0].
-    - blend_mode: "soft_light" (contraste misterioso y aterciopelado), "screen" (velo etéreo luminoso) o "additive".
+    - blend_mode: "soft_light" (contraste aterciopelado y resplandor en medios tonos),
+                  "screen" (velo etéreo luminoso) o "additive" (acumulación fotónica brillante).
     - sky_mask: Máscara 2D de cielo [0.0, 1.0] (1.0 = cielo, 0.0 = suelo) para proteger el paisaje terrestre.
     - is_starless: Si es True, la imagen de entrada ya carece de estrellas (starless desacoplado con StarNet),
                    por lo que no requiere supresión morfológica de estrellas.
@@ -68,24 +69,27 @@ def apply_astronomical_orton(
         diffuse_luma = luma
     else:
         # Supresión de picos puntuales estelares mediante filtro morfológico de apertura
-        # Kernel elíptico pequeño (5x5) para remover estrellas puntuales sin dañar nebulosas
+        # Kernel elíptico adaptativo según resolución (mínimo 3, máximo 21)
         k_size = max(3, int(round(min(h, w) * 0.005)) | 1)
-        k_size = min(k_size, 9)
+        k_size = min(k_size, 21)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
         diffuse_luma = cv2.morphologyEx(luma, cv2.MORPH_OPEN, kernel)
 
-        # Máscara de estrellas detectadas
+        # Máscara de estrellas puntuales detectadas
         star_peak = np.clip(luma - diffuse_luma, 0.0, 1.0)
-        # Atenuamos las estrellas en la fuente del resplandor para evitar que se expandan
-        star_attenuation = 1.0 - (star_peak * 0.90)
+        # Atenuamos fuertemente las estrellas puntuales en la fuente del resplandor
+        # para que no se hinchen ni formen halos grotescos
+        star_attenuation = 1.0 - np.clip(star_peak * 2.0, 0.0, 0.95)
         glow_base = img_rgb * star_attenuation[..., np.newaxis]
 
-    # 3. Puerta de emisión por umbral: sólo el polvo y zonas iluminadas generan glow
-    # Las zonas profundas del cielo (luma < threshold) quedan completamente protegidas
-    denom = max(1e-4, 1.0 - threshold)
-    emission = np.clip((diffuse_luma - threshold) / denom, 0.0, 1.0)
+    # 3. Puerta de emisión por umbral: sólo las estructuras de polvo y nebulosas generan glow.
+    # El fondo oscuro del cielo profundo queda resguardado mediante curva suave Hermite (smoothstep).
+    thr = max(0.0, float(threshold))
+    knee = max(0.04, float(thr * 0.5))
+    t = np.clip((diffuse_luma - thr) / knee, 0.0, 1.0)
+    emission = t * t * (3.0 - 2.0 * t)
     if abs(exponent - 1.0) > 1e-3:
-        emission = np.power(emission, max(0.5, exponent))
+        emission = np.power(emission, max(0.2, float(exponent)))
 
     glow_source = glow_base * emission[..., np.newaxis]
 
@@ -131,15 +135,22 @@ def apply_astronomical_orton(
 
     # 7. Fusión Tonal según blend_mode
     if blend_mode == "screen":
-        # Modo Trama (Screen): 1 - (1 - I) * (1 - G)
+        # Modo Trama (Screen):
+        # 1.0 - (1.0 - I) * (1.0 - Bloom) = I + Bloom * (1.0 - I)
+        # Velo etéreo, luminoso y difuso continuo sin saltos bruscos
         blended = 1.0 - (1.0 - img_rgb) * (1.0 - bloom)
     elif blend_mode == "additive":
-        # Modo Aditivo directo: I + G
+        # Modo Aditivo directo (Linear Dodge):
+        # Acumulación directa de fotones dispersados por el polvo interestelar
         blended = img_rgb + bloom
     else:
-        # Modo por defecto "soft_light": fórmula continua de Pegtop
-        # (1 - 2*G)*I^2 + 2*G*I
-        blended = (1.0 - 2.0 * bloom) * (img_rgb ** 2) + 2.0 * bloom * img_rgb
+        # Modo por defecto "soft_light": Luz Suave Astronómica (Soft Glow)
+        # Resplandor aterciopelado focalizado en medios tonos y polvo estelar:
+        # I_out = I + 2.0 * Bloom * I * (1.0 - I)
+        # Propiedad vital para astrofotografía:
+        # Si Bloom == 0, I_out == I (0% oscurecimiento de fondo o estrellas).
+        # Si I == 0 o I == 1, no hay lavado de negros profundos ni quemado de estrellas saturadas.
+        blended = img_rgb + 2.0 * bloom * img_rgb * (1.0 - img_rgb)
 
     # 8. Interpolación ponderada por la intensidad (strength)
     out = (1.0 - strength) * img_rgb + strength * blended

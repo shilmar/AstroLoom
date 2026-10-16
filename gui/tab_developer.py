@@ -131,7 +131,7 @@ class DeveloperTab(QWidget):
         # Parámetros de Efecto Orton Astronómico y Glow de Polvo Galáctico
         self.orton_strength: float = 0.0            # 0.0 a 1.0 (0% a 100%)
         self.orton_radius: float = 40.0             # Radio de difusión en px (10 a 150)
-        self.orton_threshold: float = 0.15          # Umbral de luminancia de polvo (0.00 a 0.50)
+        self.orton_threshold: float = 0.05          # Umbral de luminancia de polvo (0.00 a 0.50)
         self.orton_tint_type: str = "warm_gold"     # "warm_gold", "neutral", "cool_blue", "halpha"
         self.orton_custom_tint: tuple = (1.0, 0.85, 0.55)
         self.orton_tint_strength: float = 0.40      # Grado de coloración del glow (0.0 a 1.0)
@@ -1197,14 +1197,14 @@ class DeveloperTab(QWidget):
         col_thr = QVBoxLayout()
         col_thr.setSpacing(2)
         row_thr_lbl = QHBoxLayout()
-        row_thr_lbl.addWidget(self._make_resettable_label(QLabel("Umbral Polvo:"), lambda: self.slider_orton_threshold.setValue(15), "0.15"))
-        self.lbl_orton_threshold = QLabel("0.15")
+        row_thr_lbl.addWidget(self._make_resettable_label(QLabel("Umbral Polvo:"), lambda: self.slider_orton_threshold.setValue(5), "0.05"))
+        self.lbl_orton_threshold = QLabel("0.05")
         self.lbl_orton_threshold.setStyleSheet("color: #ce93d8; font-weight: bold;")
         row_thr_lbl.addWidget(self.lbl_orton_threshold)
         col_thr.addLayout(row_thr_lbl)
         self.slider_orton_threshold = QSlider(Qt.Horizontal)
         self.slider_orton_threshold.setRange(0, 50)
-        self.slider_orton_threshold.setValue(15)
+        self.slider_orton_threshold.setValue(5)
         self.slider_orton_threshold.valueChanged.connect(self.on_orton_threshold_changed)
         col_thr.addWidget(self.slider_orton_threshold)
         row_ort_ru.addLayout(col_thr)
@@ -3697,7 +3697,7 @@ class DeveloperTab(QWidget):
                 strength=self.orton_strength,
                 radius=self.orton_radius,
                 threshold=self.orton_threshold,
-                exponent=1.5,
+                exponent=1.0,
                 tint_type=self.orton_tint_type,
                 custom_tint=getattr(self, 'orton_custom_tint', (1.0, 0.85, 0.55)),
                 tint_strength=self.orton_tint_strength,
@@ -3925,7 +3925,7 @@ class DeveloperTab(QWidget):
                 strength=self.orton_strength,
                 radius=self.orton_radius,
                 threshold=self.orton_threshold,
-                exponent=1.5,
+                exponent=1.0,
                 tint_type=self.orton_tint_type,
                 custom_tint=getattr(self, 'orton_custom_tint', (1.0, 0.85, 0.55)),
                 tint_strength=self.orton_tint_strength,
@@ -5017,7 +5017,7 @@ class DeveloperTab(QWidget):
         self.slider_denoise.setValue(0)
         self.slider_orton.setValue(0)
         self.slider_orton_radius.setValue(40)
-        self.slider_orton_threshold.setValue(15)
+        self.slider_orton_threshold.setValue(5)
         self.combo_orton_tint.setCurrentIndex(0)
         self.combo_orton_mode.setCurrentIndex(0)
         for w in widgets:
@@ -5031,7 +5031,7 @@ class DeveloperTab(QWidget):
         self.denoise_strength = 0.0
         self.orton_strength = 0.0
         self.orton_radius = 40.0
-        self.orton_threshold = 0.15
+        self.orton_threshold = 0.05
         self.orton_tint_type = "warm_gold"
         self.orton_mode = "soft_light"
 
@@ -5046,10 +5046,10 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'lbl_orton_radius'):
             self.lbl_orton_radius.setText("40 px")
         if hasattr(self, 'lbl_orton_threshold'):
-            self.lbl_orton_threshold.setText("0.15")
+            self.lbl_orton_threshold.setText("0.05")
 
         if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_starless_tone_values(0, 0, 0, 0, 0, 0, 0, 40, 15, 0, 0)
+            self.mask_layers_widget.set_starless_tone_values(0, 0, 0, 0, 0, 0, 0, 40, 5, 0, 0)
         self.update_stretch_preview()
     
     def _on_mask_widget_gnd_ev(self, val: int):
@@ -5367,7 +5367,7 @@ class DeveloperTab(QWidget):
         self.lp_legacy_1d = False
         self.orton_strength = 0.0
         self.orton_radius = 40.0
-        self.orton_threshold = 0.15
+        self.orton_threshold = 0.05
         self.orton_tint_type = "warm_gold"
         self.orton_mode = "soft_light"
         self.clarity_starless_val = 0.0
@@ -5432,8 +5432,8 @@ class DeveloperTab(QWidget):
             self.slider_orton_radius.setValue(40)
             self.lbl_orton_radius.setText("40 px")
         if hasattr(self, 'slider_orton_threshold'):
-            self.slider_orton_threshold.setValue(15)
-            self.lbl_orton_threshold.setText("0.15")
+            self.slider_orton_threshold.setValue(5)
+            self.lbl_orton_threshold.setText("0.05")
         if hasattr(self, 'combo_orton_tint'):
             self.combo_orton_tint.setCurrentIndex(0)
         if hasattr(self, 'combo_orton_mode'):
@@ -5707,7 +5707,7 @@ class DeveloperTab(QWidget):
             "lp_legacy_1d": self.chk_lp_legacy_1d.isChecked() if hasattr(self, 'chk_lp_legacy_1d') else False,
             "orton_strength": self.slider_orton.value() if hasattr(self, 'slider_orton') else 0,
             "orton_radius": self.slider_orton_radius.value() if hasattr(self, 'slider_orton_radius') else 40,
-            "orton_threshold": self.slider_orton_threshold.value() if hasattr(self, 'slider_orton_threshold') else 15,
+            "orton_threshold": self.slider_orton_threshold.value() if hasattr(self, 'slider_orton_threshold') else 5,
             "orton_tint_idx": self.combo_orton_tint.currentIndex() if hasattr(self, 'combo_orton_tint') else 0,
             "orton_mode_idx": self.combo_orton_mode.currentIndex() if hasattr(self, 'combo_orton_mode') else 0,
             "layer_idx": self.combo_layer.currentIndex(),
