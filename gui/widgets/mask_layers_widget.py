@@ -50,6 +50,11 @@ class MaskLayersWidget(QWidget):
     # Sincronización contextual de Estrellas
     stars_intensity_changed = Signal(int)        # (val 0 a 200) sincronizar slider_stars
     stars_reset_requested = Signal()             # restablecer estrellas a 100%
+    stars_diff_strength_changed = Signal(int)    # (val 0 a 100)
+    stars_diff_radius_changed = Signal(int)      # (val 5 a 60)
+    stars_diff_threshold_changed = Signal(int)   # (val 15 a 85)
+    stars_diff_color_boost_changed = Signal(int) # (val 0 a 100)
+    stars_diff_mode_changed = Signal(str)        # "screen", "soft_light", "additive"
 
     # Sincronización contextual de Fondo Nebular (Starless)
     starless_clarity_changed = Signal(int)       # (val -200 a 200)
@@ -753,7 +758,110 @@ class MaskLayersWidget(QWidget):
         row_stars_slider.addWidget(self.slider_stars_special, stretch=1)
         stars_spec_layout.addLayout(row_stars_slider)
 
-        self.btn_reset_stars_special = QPushButton("↺ Restablecer Estrellas (100%)")
+        # Filtro Difusor y Realce de Constelaciones (Star Mist)
+        self.box_sl_star_diff = QGroupBox("🌟 Filtro Difusor y Realce de Constelaciones")
+        self.box_sl_star_diff.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #fbc02d;
+                border-radius: 6px;
+                margin-top: 4px;
+                padding-top: 8px;
+                background-color: #221f14;
+                font-weight: bold;
+                color: #fff9c4;
+            }
+        """)
+        sl_sd_layout = QVBoxLayout(self.box_sl_star_diff)
+        sl_sd_layout.setContentsMargins(6, 4, 6, 6)
+        sl_sd_layout.setSpacing(6)
+
+        # Intensidad Difusor
+        row_sd_int = QHBoxLayout()
+        row_sd_int.addWidget(self._make_resettable_label(QLabel("Intensidad Difusor:"), lambda: self.slider_sl_star_diff_strength.setValue(0), "0%"))
+        self.lbl_sl_star_diff_strength = QLabel("0%")
+        self.lbl_sl_star_diff_strength.setStyleSheet("color: #ffd54f; font-weight: bold;")
+        self.lbl_sl_star_diff_strength.setFixedWidth(34)
+        row_sd_int.addWidget(self.lbl_sl_star_diff_strength)
+        self.slider_sl_star_diff_strength = QSlider(Qt.Horizontal)
+        self.slider_sl_star_diff_strength.setRange(0, 100)
+        self.slider_sl_star_diff_strength.setValue(0)
+        self.slider_sl_star_diff_strength.valueChanged.connect(self._on_sl_star_diff_strength_changed)
+        self.slider_sl_star_diff_strength.sliderReleased.connect(self.ground_slider_released.emit)
+        row_sd_int.addWidget(self.slider_sl_star_diff_strength, stretch=1)
+        sl_sd_layout.addLayout(row_sd_int)
+
+        # Fila 2: Radio (Halo) y Umbral de Magnitud
+        row_sd_params = QHBoxLayout()
+        row_sd_params.setSpacing(10)
+
+        col_sd_rad = QVBoxLayout()
+        col_sd_rad.setSpacing(2)
+        row_sd_rad_lbl = QHBoxLayout()
+        row_sd_rad_lbl.addWidget(self._make_resettable_label(QLabel("Radio (Halo):"), lambda: self.slider_sl_star_diff_radius.setValue(20), "20 px"))
+        self.lbl_sl_star_diff_radius = QLabel("20 px")
+        self.lbl_sl_star_diff_radius.setStyleSheet("color: #ffe082; font-weight: bold;")
+        row_sd_rad_lbl.addWidget(self.lbl_sl_star_diff_radius)
+        col_sd_rad.addLayout(row_sd_rad_lbl)
+        self.slider_sl_star_diff_radius = QSlider(Qt.Horizontal)
+        self.slider_sl_star_diff_radius.setRange(5, 60)
+        self.slider_sl_star_diff_radius.setValue(20)
+        self.slider_sl_star_diff_radius.valueChanged.connect(self._on_sl_star_diff_radius_changed)
+        self.slider_sl_star_diff_radius.sliderReleased.connect(self.ground_slider_released.emit)
+        col_sd_rad.addWidget(self.slider_sl_star_diff_radius)
+        row_sd_params.addLayout(col_sd_rad)
+
+        col_sd_thr = QVBoxLayout()
+        col_sd_thr.setSpacing(2)
+        row_sd_thr_lbl = QHBoxLayout()
+        row_sd_thr_lbl.addWidget(self._make_resettable_label(QLabel("Umbral Magnitud:"), lambda: self.slider_sl_star_diff_threshold.setValue(45), "0.45"))
+        self.lbl_sl_star_diff_threshold = QLabel("0.45")
+        self.lbl_sl_star_diff_threshold.setStyleSheet("color: #ffe082; font-weight: bold;")
+        row_sd_thr_lbl.addWidget(self.lbl_sl_star_diff_threshold)
+        col_sd_thr.addLayout(row_sd_thr_lbl)
+        self.slider_sl_star_diff_threshold = QSlider(Qt.Horizontal)
+        self.slider_sl_star_diff_threshold.setRange(15, 85)
+        self.slider_sl_star_diff_threshold.setValue(45)
+        self.slider_sl_star_diff_threshold.valueChanged.connect(self._on_sl_star_diff_threshold_changed)
+        self.slider_sl_star_diff_threshold.sliderReleased.connect(self.ground_slider_released.emit)
+        col_sd_thr.addWidget(self.slider_sl_star_diff_threshold)
+        row_sd_params.addLayout(col_sd_thr)
+        sl_sd_layout.addLayout(row_sd_params)
+
+        # Fila 3: Color Espectral y Modo de Fusión
+        row_sd_combos = QHBoxLayout()
+        row_sd_combos.setSpacing(8)
+
+        col_sd_col = QVBoxLayout()
+        col_sd_col.setSpacing(2)
+        row_sd_col_lbl = QHBoxLayout()
+        row_sd_col_lbl.addWidget(self._make_resettable_label(QLabel("Color Espectral:"), lambda: self.slider_sl_star_diff_color.setValue(50), "50%"))
+        self.lbl_sl_star_diff_color = QLabel("50%")
+        self.lbl_sl_star_diff_color.setStyleSheet("color: #ffe082; font-weight: bold;")
+        row_sd_col_lbl.addWidget(self.lbl_sl_star_diff_color)
+        col_sd_col.addLayout(row_sd_col_lbl)
+        self.slider_sl_star_diff_color = QSlider(Qt.Horizontal)
+        self.slider_sl_star_diff_color.setRange(0, 100)
+        self.slider_sl_star_diff_color.setValue(50)
+        self.slider_sl_star_diff_color.valueChanged.connect(self._on_sl_star_diff_color_changed)
+        self.slider_sl_star_diff_color.sliderReleased.connect(self.ground_slider_released.emit)
+        col_sd_col.addWidget(self.slider_sl_star_diff_color)
+        row_sd_combos.addLayout(col_sd_col, stretch=1)
+
+        col_sd_mode = QVBoxLayout()
+        col_sd_mode.setSpacing(2)
+        col_sd_mode.addWidget(QLabel("Fusión:"))
+        self.combo_sl_star_diff_mode = QComboBox()
+        self.combo_sl_star_diff_mode.addItem("Trama (Velo Etéreo)", "screen")
+        self.combo_sl_star_diff_mode.addItem("Luz Suave (Aterciopelado)", "soft_light")
+        self.combo_sl_star_diff_mode.addItem("Aditivo (Luminoso)", "additive")
+        self.combo_sl_star_diff_mode.currentIndexChanged.connect(self._on_sl_star_diff_mode_changed)
+        col_sd_mode.addWidget(self.combo_sl_star_diff_mode)
+        row_sd_combos.addLayout(col_sd_mode, stretch=1)
+        sl_sd_layout.addLayout(row_sd_combos)
+
+        stars_spec_layout.addWidget(self.box_sl_star_diff)
+
+        self.btn_reset_stars_special = QPushButton("↺ Restablecer Estrellas")
         self.btn_reset_stars_special.setCursor(Qt.PointingHandCursor)
         self.btn_reset_stars_special.clicked.connect(self.stars_reset_requested.emit)
         stars_spec_layout.addWidget(self.btn_reset_stars_special)
@@ -1914,13 +2022,65 @@ class MaskLayersWidget(QWidget):
         self.lbl_stars_special.setText(f"{val}%")
         self.stars_intensity_changed.emit(val)
 
-    def set_stars_special_value(self, val: int) -> None:
-        """Sincroniza el control especial de intensidad de estrellas desde tab_developer."""
+    def _on_sl_star_diff_strength_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_star_diff_strength.setText(f"{val}%")
+        self.stars_diff_strength_changed.emit(val)
+
+    def _on_sl_star_diff_radius_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_star_diff_radius.setText(f"{val} px")
+        self.stars_diff_radius_changed.emit(val)
+
+    def _on_sl_star_diff_threshold_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_star_diff_threshold.setText(f"{val / 100.0:.2f}")
+        self.stars_diff_threshold_changed.emit(val)
+
+    def _on_sl_star_diff_color_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_star_diff_color.setText(f"{val}%")
+        self.stars_diff_color_boost_changed.emit(val)
+
+    def _on_sl_star_diff_mode_changed(self, idx: int) -> None:
+        if self._updating_ui: return
+        modes = ["screen", "soft_light", "additive"]
+        mode_key = modes[idx] if 0 <= idx < len(modes) else "screen"
+        self.stars_diff_mode_changed.emit(mode_key)
+
+    def set_stars_special_values(
+        self,
+        presence: Optional[int] = None,
+        diff_strength: Optional[int] = None,
+        diff_radius: Optional[int] = None,
+        diff_threshold: Optional[int] = None,
+        diff_color: Optional[int] = None,
+        diff_mode_idx: Optional[int] = None
+    ) -> None:
+        """Sincroniza los controles especiales de estrellas desde tab_developer."""
         self._updating_ui = True
-        if hasattr(self, 'slider_stars_special'):
-            self.slider_stars_special.setValue(val)
-            self.lbl_stars_special.setText(f"{val}%")
+        if presence is not None and hasattr(self, 'slider_stars_special'):
+            self.slider_stars_special.setValue(presence)
+            self.lbl_stars_special.setText(f"{presence}%")
+        if diff_strength is not None and hasattr(self, 'slider_sl_star_diff_strength'):
+            self.slider_sl_star_diff_strength.setValue(diff_strength)
+            self.lbl_sl_star_diff_strength.setText(f"{diff_strength}%")
+        if diff_radius is not None and hasattr(self, 'slider_sl_star_diff_radius'):
+            self.slider_sl_star_diff_radius.setValue(diff_radius)
+            self.lbl_sl_star_diff_radius.setText(f"{diff_radius} px")
+        if diff_threshold is not None and hasattr(self, 'slider_sl_star_diff_threshold'):
+            self.slider_sl_star_diff_threshold.setValue(diff_threshold)
+            self.lbl_sl_star_diff_threshold.setText(f"{diff_threshold / 100.0:.2f}")
+        if diff_color is not None and hasattr(self, 'slider_sl_star_diff_color'):
+            self.slider_sl_star_diff_color.setValue(diff_color)
+            self.lbl_sl_star_diff_color.setText(f"{diff_color}%")
+        if diff_mode_idx is not None and hasattr(self, 'combo_sl_star_diff_mode'):
+            self.combo_sl_star_diff_mode.setCurrentIndex(diff_mode_idx)
         self._updating_ui = False
+
+    def set_stars_special_value(self, val: int) -> None:
+        """Sincroniza el control especial de intensidad de estrellas desde tab_developer (compatibilidad)."""
+        self.set_stars_special_values(presence=val)
 
     # Controles Especiales de Fondo Nebular (Starless)
     def _on_sl_clarity_changed(self, val: int) -> None:

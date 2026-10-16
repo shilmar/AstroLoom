@@ -13,6 +13,7 @@ from core.orton import (
     apply_astronomical_orton,
     ORTON_PRESET_TINTS
 )
+from core.star_diffusion import apply_star_diffusion
 
 def adjust_saturation_dual(
     img_rgb: np.ndarray, 

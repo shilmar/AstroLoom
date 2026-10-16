@@ -65,6 +65,7 @@ from core.orton import (
     apply_astronomical_orton,
     ORTON_PRESET_TINTS
 )
+from core.star_diffusion import apply_star_diffusion
 from core.masking import refine_mask_guided
 from core.mask_layers import (
     MaskLayer, apply_all_mask_layers,
@@ -136,6 +137,13 @@ class DeveloperTab(QWidget):
         self.orton_custom_tint: tuple = (1.0, 0.85, 0.55)
         self.orton_tint_strength: float = 0.40      # Grado de coloración del glow (0.0 a 1.0)
         self.orton_mode: str = "soft_light"         # "soft_light", "screen", "additive"
+
+        # Parámetros de Filtro Difusor y Realce de Constelaciones (Star Mist)
+        self.star_diff_strength: float = 0.0        # 0.0 a 1.0 (0% a 100%)
+        self.star_diff_radius: float = 20.0         # Radio de difusión en px (5 a 60)
+        self.star_diff_threshold: float = 0.45      # Umbral relativo de magnitud estelar (0.15 a 0.85)
+        self.star_diff_color_boost: float = 0.50    # Saturación cromática espectral (0.0 a 1.0)
+        self.star_diff_mode: str = "screen"         # "screen", "soft_light", "additive"
 
         self.clarity_starless_val = 0.0
         self.dehaze_starless_val = 0.0
@@ -1241,6 +1249,124 @@ class DeveloperTab(QWidget):
         box_orton_layout.addWidget(self.w_orton_advanced)
         tools_layout.addWidget(self.box_orton_tools)
 
+        # Emparejamiento 3.3: Filtro Difusor y Realce de Constelaciones (Star Mist)
+        self.box_star_diff_tools = QGroupBox("🌟 Filtro Difusor y Realce de Constelaciones")
+        self.box_star_diff_tools.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #fbc02d;
+                border-radius: 6px;
+                margin-top: 4px;
+                padding-top: 8px;
+                background-color: #221f14;
+                font-weight: bold;
+                color: #fff9c4;
+            }
+        """)
+        box_sd_layout = QVBoxLayout(self.box_star_diff_tools)
+        box_sd_layout.setContentsMargins(6, 4, 6, 6)
+        box_sd_layout.setSpacing(6)
+
+        # Intensidad Difusor
+        row_sd_int = QHBoxLayout()
+        row_sd_int.addWidget(self._make_resettable_label(QLabel("Intensidad Difusor:"), lambda: self.slider_star_diff.setValue(0), "0%"))
+        self.lbl_star_diff = QLabel("0%")
+        self.lbl_star_diff.setStyleSheet("color: #ffd54f; font-weight: bold;")
+        self.lbl_star_diff.setFixedWidth(34)
+        row_sd_int.addWidget(self.lbl_star_diff)
+        self.slider_star_diff = QSlider(Qt.Horizontal)
+        self.slider_star_diff.setRange(0, 100)
+        self.slider_star_diff.setValue(0)
+        self.slider_star_diff.valueChanged.connect(self.on_star_diff_strength_changed)
+        row_sd_int.addWidget(self.slider_star_diff, stretch=1)
+
+        self.btn_star_diff_expand = QPushButton("⚙️")
+        self.btn_star_diff_expand.setCheckable(True)
+        self.btn_star_diff_expand.setChecked(False)
+        self.btn_star_diff_expand.setToolTip("Despliega controles avanzados de radio de halo, umbral de magnitud, saturación espectral y modo de fusión.")
+        self.btn_star_diff_expand.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 2px 6px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
+            "QPushButton:checked { background: #f57f17; color: #fffde7; border: 1px solid #ffd54f; }"
+        )
+        self.btn_star_diff_expand.toggled.connect(self._on_toggle_star_diff_expand)
+        row_sd_int.addWidget(self.btn_star_diff_expand)
+        box_sd_layout.addLayout(row_sd_int)
+
+        # Opciones avanzadas colapsables
+        self.w_star_diff_advanced = QWidget()
+        self.w_star_diff_advanced.setVisible(False)
+        w_sd_layout = QVBoxLayout(self.w_star_diff_advanced)
+        w_sd_layout.setContentsMargins(0, 2, 0, 0)
+        w_sd_layout.setSpacing(6)
+
+        # Fila Radio y Umbral
+        row_sd_ru = QHBoxLayout()
+        row_sd_ru.setSpacing(10)
+
+        col_sd_rad = QVBoxLayout()
+        col_sd_rad.setSpacing(2)
+        row_sd_rad_lbl = QHBoxLayout()
+        row_sd_rad_lbl.addWidget(self._make_resettable_label(QLabel("Radio (Halo):"), lambda: self.slider_star_diff_radius.setValue(20), "20 px"))
+        self.lbl_star_diff_radius = QLabel("20 px")
+        self.lbl_star_diff_radius.setStyleSheet("color: #ffe082; font-weight: bold;")
+        row_sd_rad_lbl.addWidget(self.lbl_star_diff_radius)
+        col_sd_rad.addLayout(row_sd_rad_lbl)
+        self.slider_star_diff_radius = QSlider(Qt.Horizontal)
+        self.slider_star_diff_radius.setRange(5, 60)
+        self.slider_star_diff_radius.setValue(20)
+        self.slider_star_diff_radius.valueChanged.connect(self.on_star_diff_radius_changed)
+        col_sd_rad.addWidget(self.slider_star_diff_radius)
+        row_sd_ru.addLayout(col_sd_rad)
+
+        col_sd_thr = QVBoxLayout()
+        col_sd_thr.setSpacing(2)
+        row_sd_thr_lbl = QHBoxLayout()
+        row_sd_thr_lbl.addWidget(self._make_resettable_label(QLabel("Umbral Magnitud:"), lambda: self.slider_star_diff_threshold.setValue(45), "0.45"))
+        self.lbl_star_diff_threshold = QLabel("0.45")
+        self.lbl_star_diff_threshold.setStyleSheet("color: #ffe082; font-weight: bold;")
+        row_sd_thr_lbl.addWidget(self.lbl_star_diff_threshold)
+        col_sd_thr.addLayout(row_sd_thr_lbl)
+        self.slider_star_diff_threshold = QSlider(Qt.Horizontal)
+        self.slider_star_diff_threshold.setRange(15, 85)
+        self.slider_star_diff_threshold.setValue(45)
+        self.slider_star_diff_threshold.valueChanged.connect(self.on_star_diff_threshold_changed)
+        col_sd_thr.addWidget(self.slider_star_diff_threshold)
+        row_sd_ru.addLayout(col_sd_thr)
+        w_sd_layout.addLayout(row_sd_ru)
+
+        # Fila Color Espectral y Modo
+        row_sd_cm = QHBoxLayout()
+        row_sd_cm.setSpacing(10)
+
+        col_sd_col = QVBoxLayout()
+        col_sd_col.setSpacing(2)
+        row_sd_col_lbl = QHBoxLayout()
+        row_sd_col_lbl.addWidget(self._make_resettable_label(QLabel("Color Espectral:"), lambda: self.slider_star_diff_color.setValue(50), "50%"))
+        self.lbl_star_diff_color = QLabel("50%")
+        self.lbl_star_diff_color.setStyleSheet("color: #ffe082; font-weight: bold;")
+        row_sd_col_lbl.addWidget(self.lbl_star_diff_color)
+        col_sd_col.addLayout(row_sd_col_lbl)
+        self.slider_star_diff_color = QSlider(Qt.Horizontal)
+        self.slider_star_diff_color.setRange(0, 100)
+        self.slider_star_diff_color.setValue(50)
+        self.slider_star_diff_color.valueChanged.connect(self.on_star_diff_color_changed)
+        col_sd_col.addWidget(self.slider_star_diff_color)
+        row_sd_cm.addLayout(col_sd_col)
+
+        col_sd_mode = QVBoxLayout()
+        col_sd_mode.setSpacing(2)
+        col_sd_mode.addWidget(QLabel("Fusión:"))
+        self.combo_star_diff_mode = QComboBox()
+        self.combo_star_diff_mode.addItem("Trama (Velo Etéreo)", "screen")
+        self.combo_star_diff_mode.addItem("Luz Suave (Aterciopelado)", "soft_light")
+        self.combo_star_diff_mode.addItem("Aditivo (Luminoso)", "additive")
+        self.combo_star_diff_mode.currentIndexChanged.connect(self._on_star_diff_mode_changed)
+        col_sd_mode.addWidget(self.combo_star_diff_mode)
+        row_sd_cm.addLayout(col_sd_mode)
+        w_sd_layout.addLayout(row_sd_cm)
+
+        box_sd_layout.addWidget(self.w_star_diff_advanced)
+        tools_layout.addWidget(self.box_star_diff_tools)
+
         self.sec_starnet.set_content_widget(w_starnet)
         left_layout.addWidget(self.sec_starnet)
         self._set_starnet_tools_enabled(False)
@@ -1541,6 +1667,11 @@ class DeveloperTab(QWidget):
 
         # Sincronización contextual de Estrellas y Fondo Nebular (Starless)
         self.mask_layers_widget.stars_intensity_changed.connect(self._on_mask_widget_stars_intensity)
+        self.mask_layers_widget.stars_diff_strength_changed.connect(self._on_mask_widget_stars_diff_strength)
+        self.mask_layers_widget.stars_diff_radius_changed.connect(self._on_mask_widget_stars_diff_radius)
+        self.mask_layers_widget.stars_diff_threshold_changed.connect(self._on_mask_widget_stars_diff_threshold)
+        self.mask_layers_widget.stars_diff_color_boost_changed.connect(self._on_mask_widget_stars_diff_color)
+        self.mask_layers_widget.stars_diff_mode_changed.connect(self._on_mask_widget_stars_diff_mode)
         self.mask_layers_widget.stars_reset_requested.connect(self.reset_stars_intensity)
         self.mask_layers_widget.starless_clarity_changed.connect(self._on_mask_widget_sl_clarity)
         self.mask_layers_widget.starless_dehaze_changed.connect(self._on_mask_widget_sl_dehaze)
@@ -1555,7 +1686,14 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.starless_orton_mode_changed.connect(self._on_mask_widget_sl_orton_mode)
         self.mask_layers_widget.starless_reset_requested.connect(self.reset_starless_adjustments)
 
-        self.mask_layers_widget.set_stars_special_value(self.slider_stars.value())
+        self.mask_layers_widget.set_stars_special_values(
+            presence=self.slider_stars.value(),
+            diff_strength=self.slider_star_diff.value(),
+            diff_radius=self.slider_star_diff_radius.value(),
+            diff_threshold=self.slider_star_diff_threshold.value(),
+            diff_color=self.slider_star_diff_color.value(),
+            diff_mode_idx=self.combo_star_diff_mode.currentIndex()
+        )
         self.mask_layers_widget.set_starless_tone_values(
             self.slider_clarity.value(),
             self.slider_dehaze.value(),
@@ -3934,6 +4072,20 @@ class DeveloperTab(QWidget):
                 is_starless=False
             )
 
+        # 9c. Filtro Difusor y Realce de Constelaciones (en modo imagen única / sin capas StarNet)
+        if self.star_diff_strength > 1e-4 and not has_active_starless:
+            mask_2d = precomputed_mask[..., 0] if precomputed_mask is not None else None
+            stretched = apply_star_diffusion(
+                stretched,
+                strength=self.star_diff_strength,
+                radius=self.star_diff_radius,
+                threshold=self.star_diff_threshold,
+                color_boost=self.star_diff_color_boost,
+                halo_mode=self.star_diff_mode,
+                sky_mask=mask_2d,
+                stars_layer=None
+            )
+
         # 10. Aplicación de Capas y Máscaras Locales (Compositor Multicapa estilo Photoshop)
         if apply_mask_layers and hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers:
             is_full_res = (self.image_32bit is not None and stretched.shape[:2] == self.image_32bit.shape[:2])
@@ -3976,8 +4128,32 @@ class DeveloperTab(QWidget):
                         manual_stretch(st_img, black_point=0.0, midtone=self.spin_mtf.value()) * self.star_intensity,
                         0.0, 1.0
                     )
+                if self.star_diff_strength > 1e-4:
+                    mask_2d = precomputed_mask[..., 0] if precomputed_mask is not None else None
+                    st_stretched = apply_star_diffusion(
+                        st_stretched,
+                        strength=self.star_diff_strength,
+                        radius=self.star_diff_radius,
+                        threshold=self.star_diff_threshold,
+                        color_boost=self.star_diff_color_boost,
+                        halo_mode=self.star_diff_mode,
+                        sky_mask=mask_2d,
+                        stars_layer=st_stretched
+                    )
             elif st_img is not None:
                 st_stretched = np.clip(st_img * self.star_intensity, 0.0, 1.0)
+                if self.star_diff_strength > 1e-4:
+                    mask_2d = precomputed_mask[..., 0] if precomputed_mask is not None else None
+                    st_stretched = apply_star_diffusion(
+                        st_stretched,
+                        strength=self.star_diff_strength,
+                        radius=self.star_diff_radius,
+                        threshold=self.star_diff_threshold,
+                        color_boost=self.star_diff_color_boost,
+                        halo_mode=self.star_diff_mode,
+                        sky_mask=mask_2d,
+                        stars_layer=st_stretched
+                    )
             else:
                 st_stretched = st_img
 
@@ -4116,21 +4292,135 @@ class DeveloperTab(QWidget):
         self.star_intensity = val / 100.0
         self.lbl_stars.setText(f"{val}%")
         if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_stars_special_value(val)
+            self.mask_layers_widget.set_stars_special_values(presence=val)
         self.update_stretch_preview()
 
     def _on_mask_widget_stars_intensity(self, val: int):
         if hasattr(self, 'slider_stars') and self.slider_stars.value() != val:
             self.slider_stars.setValue(val)
 
+    def on_star_diff_strength_changed(self, val: int):
+        self.star_diff_strength = val / 100.0
+        self.lbl_star_diff.setText(f"{val}%")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_stars_special_values(diff_strength=val)
+        self.update_stretch_preview()
+
+    def on_star_diff_radius_changed(self, val: int):
+        self.star_diff_radius = float(val)
+        self.lbl_star_diff_radius.setText(f"{val} px")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_stars_special_values(diff_radius=val)
+        self.update_stretch_preview()
+
+    def on_star_diff_threshold_changed(self, val: int):
+        self.star_diff_threshold = val / 100.0
+        self.lbl_star_diff_threshold.setText(f"{val / 100.0:.2f}")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_stars_special_values(diff_threshold=val)
+        self.update_stretch_preview()
+
+    def on_star_diff_color_changed(self, val: int):
+        self.star_diff_color_boost = val / 100.0
+        self.lbl_star_diff_color.setText(f"{val}%")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_stars_special_values(diff_color=val)
+        self.update_stretch_preview()
+
+    def _on_star_diff_mode_changed(self, idx: int):
+        modes = ["screen", "soft_light", "additive"]
+        mode_key = modes[idx] if 0 <= idx < len(modes) else "screen"
+        self.star_diff_mode = mode_key
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_stars_special_values(diff_mode_idx=idx)
+        self.update_stretch_preview()
+        self._commit_action()
+
+    def _on_toggle_star_diff_expand(self, checked: bool):
+        if hasattr(self, 'w_star_diff_advanced'):
+            self.w_star_diff_advanced.setVisible(checked)
+
+    def _on_mask_widget_stars_diff_strength(self, val: int):
+        if hasattr(self, 'slider_star_diff') and self.slider_star_diff.value() != val:
+            self.slider_star_diff.setValue(val)
+
+    def _on_mask_widget_stars_diff_radius(self, val: int):
+        if hasattr(self, 'slider_star_diff_radius') and self.slider_star_diff_radius.value() != val:
+            self.slider_star_diff_radius.setValue(val)
+
+    def _on_mask_widget_stars_diff_threshold(self, val: int):
+        if hasattr(self, 'slider_star_diff_threshold') and self.slider_star_diff_threshold.value() != val:
+            self.slider_star_diff_threshold.setValue(val)
+
+    def _on_mask_widget_stars_diff_color(self, val: int):
+        if hasattr(self, 'slider_star_diff_color') and self.slider_star_diff_color.value() != val:
+            self.slider_star_diff_color.setValue(val)
+
+    def _on_mask_widget_stars_diff_mode(self, mode_key: str):
+        if hasattr(self, 'combo_star_diff_mode'):
+            modes = ["screen", "soft_light", "additive"]
+            idx = modes.index(mode_key) if mode_key in modes else 0
+            if self.combo_star_diff_mode.currentIndex() != idx:
+                self.combo_star_diff_mode.setCurrentIndex(idx)
+
     def reset_stars_intensity(self):
+        widgets = [
+            getattr(self, 'slider_stars', None),
+            getattr(self, 'slider_star_diff', None),
+            getattr(self, 'slider_star_diff_radius', None),
+            getattr(self, 'slider_star_diff_threshold', None),
+            getattr(self, 'slider_star_diff_color', None),
+            getattr(self, 'combo_star_diff_mode', None),
+        ]
+        for w in widgets:
+            if w is not None:
+                w.blockSignals(True)
+
         if hasattr(self, 'slider_stars'):
             self.slider_stars.setValue(100)
         self.star_intensity = 1.0
         if hasattr(self, 'lbl_stars'):
             self.lbl_stars.setText("100%")
+
+        if hasattr(self, 'slider_star_diff'):
+            self.slider_star_diff.setValue(0)
+        if hasattr(self, 'slider_star_diff_radius'):
+            self.slider_star_diff_radius.setValue(20)
+        if hasattr(self, 'slider_star_diff_threshold'):
+            self.slider_star_diff_threshold.setValue(45)
+        if hasattr(self, 'slider_star_diff_color'):
+            self.slider_star_diff_color.setValue(50)
+        if hasattr(self, 'combo_star_diff_mode'):
+            self.combo_star_diff_mode.setCurrentIndex(0)
+
+        self.star_diff_strength = 0.0
+        self.star_diff_radius = 20.0
+        self.star_diff_threshold = 0.45
+        self.star_diff_color_boost = 0.50
+        self.star_diff_mode = "screen"
+
+        if hasattr(self, 'lbl_star_diff'):
+            self.lbl_star_diff.setText("0%")
+        if hasattr(self, 'lbl_star_diff_radius'):
+            self.lbl_star_diff_radius.setText("20 px")
+        if hasattr(self, 'lbl_star_diff_threshold'):
+            self.lbl_star_diff_threshold.setText("0.45")
+        if hasattr(self, 'lbl_star_diff_color'):
+            self.lbl_star_diff_color.setText("50%")
+
+        for w in widgets:
+            if w is not None:
+                w.blockSignals(False)
+
         if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_stars_special_value(100)
+            self.mask_layers_widget.set_stars_special_values(
+                presence=100,
+                diff_strength=0,
+                diff_radius=20,
+                diff_threshold=45,
+                diff_color=50,
+                diff_mode_idx=0
+            )
         self.update_stretch_preview()
 
     def on_layer_mode_changed(self, idx: int):
@@ -5271,6 +5561,19 @@ class DeveloperTab(QWidget):
                             0.0, 1.0
                         )
 
+                    # Aplicar filtro difusor de estrellas si está activo
+                    if self.star_diff_strength > 1e-4:
+                        st_stretched = apply_star_diffusion(
+                            st_stretched,
+                            strength=self.star_diff_strength,
+                            radius=self.star_diff_radius,
+                            threshold=self.star_diff_threshold,
+                            color_boost=self.star_diff_color_boost,
+                            halo_mode=self.star_diff_mode,
+                            sky_mask=clean_m if clean_m is not None else None,
+                            stars_layer=st_stretched
+                        )
+
                     # Aplicar ajustes cromáticos propios de la capa de estrellas si están definidos
                     if hasattr(self, 'mask_layers_widget'):
                         stars_layer = next((l for l in self.mask_layers_widget.layers if getattr(l, 'mask_type', '') == 'image_stars'), None)
@@ -5370,6 +5673,11 @@ class DeveloperTab(QWidget):
         self.orton_threshold = 0.05
         self.orton_tint_type = "warm_gold"
         self.orton_mode = "soft_light"
+        self.star_diff_strength = 0.0
+        self.star_diff_radius = 20.0
+        self.star_diff_threshold = 0.45
+        self.star_diff_color_boost = 0.50
+        self.star_diff_mode = "screen"
         self.clarity_starless_val = 0.0
         self.dehaze_starless_val = 0.0
         self.multiescala_estructura = 0.0
@@ -5399,6 +5707,11 @@ class DeveloperTab(QWidget):
             self.slider_ond_bg, self.slider_denoise, 
             self.slider_orton, self.slider_orton_radius, self.slider_orton_threshold,
             self.combo_orton_tint, self.combo_orton_mode,
+            getattr(self, 'slider_star_diff', None),
+            getattr(self, 'slider_star_diff_radius', None),
+            getattr(self, 'slider_star_diff_threshold', None),
+            getattr(self, 'slider_star_diff_color', None),
+            getattr(self, 'combo_star_diff_mode', None),
             self.slider_temp, self.slider_tint, self.slider_sat_sky,
             self.slider_sat_gnd, self.slider_vibrance, self.slider_contrast,
             self.combo_layer, self.spin_bp, self.slider_bp,
@@ -5406,7 +5719,8 @@ class DeveloperTab(QWidget):
             self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp,
         ]
         for w in widgets_to_block:
-            w.blockSignals(True)
+            if w is not None:
+                w.blockSignals(True)
 
         self.slider_lp.setValue(0)
         self.lbl_lp.setText("0%")
@@ -5438,6 +5752,21 @@ class DeveloperTab(QWidget):
             self.combo_orton_tint.setCurrentIndex(0)
         if hasattr(self, 'combo_orton_mode'):
             self.combo_orton_mode.setCurrentIndex(0)
+
+        if hasattr(self, 'slider_star_diff'):
+            self.slider_star_diff.setValue(0)
+            self.lbl_star_diff.setText("0%")
+        if hasattr(self, 'slider_star_diff_radius'):
+            self.slider_star_diff_radius.setValue(20)
+            self.lbl_star_diff_radius.setText("20 px")
+        if hasattr(self, 'slider_star_diff_threshold'):
+            self.slider_star_diff_threshold.setValue(45)
+            self.lbl_star_diff_threshold.setText("0.45")
+        if hasattr(self, 'slider_star_diff_color'):
+            self.slider_star_diff_color.setValue(50)
+            self.lbl_star_diff_color.setText("50%")
+        if hasattr(self, 'combo_star_diff_mode'):
+            self.combo_star_diff_mode.setCurrentIndex(0)
 
         self.combo_layer.setCurrentIndex(0)
 
@@ -5498,8 +5827,8 @@ class DeveloperTab(QWidget):
         self.lbl_gnd_bp.setText("0.000")
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_ground_tone_values(0, 0, 0)
-            self.mask_layers_widget.set_stars_special_value(100)
-            self.mask_layers_widget.set_starless_tone_values(0, 0, 0, 0, 0, 0)
+            self.mask_layers_widget.set_stars_special_values(100, 0, 20, 45, 50, 0)
+            self.mask_layers_widget.set_starless_tone_values(0, 0, 0, 0, 0, 0, 0, 40, 5, 0, 0)
 
         self.spin_bp.setValue(0.0)
         self.slider_bp.setValue(0)
@@ -5650,6 +5979,10 @@ class DeveloperTab(QWidget):
             self.slider_clarity, self.slider_dehaze, self.slider_ond_est,
             self.slider_ond_bg, self.slider_denoise, 
             self.slider_orton, self.slider_orton_radius, self.slider_orton_threshold,
+            getattr(self, 'slider_star_diff', None),
+            getattr(self, 'slider_star_diff_radius', None),
+            getattr(self, 'slider_star_diff_threshold', None),
+            getattr(self, 'slider_star_diff_color', None),
             self.slider_temp, self.slider_tint, self.slider_sat_sky,
             self.slider_sat_gnd, self.slider_vibrance, self.slider_contrast,
             self.slider_bp, self.slider_mtf,
@@ -5658,7 +5991,8 @@ class DeveloperTab(QWidget):
             self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp,
         ]
         for s in all_sliders:
-            s.sliderReleased.connect(self._commit_action)
+            if s is not None:
+                s.sliderReleased.connect(self._commit_action)
 
         self.spin_bp.editingFinished.connect(self._commit_action)
         self.spin_mtf.editingFinished.connect(self._commit_action)
@@ -5677,6 +6011,8 @@ class DeveloperTab(QWidget):
         self.chk_lp_legacy_1d.toggled.connect(lambda _: self._commit_action())
         self.combo_orton_tint.activated.connect(lambda _: self._commit_action())
         self.combo_orton_mode.activated.connect(lambda _: self._commit_action())
+        if hasattr(self, 'combo_star_diff_mode'):
+            self.combo_star_diff_mode.activated.connect(lambda _: self._commit_action())
         self.spin_temp.editingFinished.connect(self._commit_action)
         self.spin_tint.editingFinished.connect(self._commit_action)
         self.combo_layer.activated.connect(lambda _: self._commit_action())
@@ -5710,6 +6046,11 @@ class DeveloperTab(QWidget):
             "orton_threshold": self.slider_orton_threshold.value() if hasattr(self, 'slider_orton_threshold') else 5,
             "orton_tint_idx": self.combo_orton_tint.currentIndex() if hasattr(self, 'combo_orton_tint') else 0,
             "orton_mode_idx": self.combo_orton_mode.currentIndex() if hasattr(self, 'combo_orton_mode') else 0,
+            "star_diff_strength": self.slider_star_diff.value() if hasattr(self, 'slider_star_diff') else 0,
+            "star_diff_radius": self.slider_star_diff_radius.value() if hasattr(self, 'slider_star_diff_radius') else 20,
+            "star_diff_threshold": self.slider_star_diff_threshold.value() if hasattr(self, 'slider_star_diff_threshold') else 45,
+            "star_diff_color": self.slider_star_diff_color.value() if hasattr(self, 'slider_star_diff_color') else 50,
+            "star_diff_mode_idx": self.combo_star_diff_mode.currentIndex() if hasattr(self, 'combo_star_diff_mode') else 0,
             "layer_idx": self.combo_layer.currentIndex(),
             "stars_val": self.slider_stars.value(),
             "contrast_starless_val": self.slider_contrast_starless.value(),
@@ -5888,6 +6229,11 @@ class DeveloperTab(QWidget):
             self.slider_ond_bg, self.slider_denoise, 
             self.slider_orton, self.slider_orton_radius, self.slider_orton_threshold,
             self.combo_orton_tint, self.combo_orton_mode,
+            getattr(self, 'slider_star_diff', None),
+            getattr(self, 'slider_star_diff_radius', None),
+            getattr(self, 'slider_star_diff_threshold', None),
+            getattr(self, 'slider_star_diff_color', None),
+            getattr(self, 'combo_star_diff_mode', None),
             self.slider_temp, self.slider_tint, self.spin_temp, self.spin_tint,
             self.slider_sat_sky, self.slider_sat_gnd, self.slider_vibrance,
             self.slider_contrast, self.combo_layer, self.spin_bp, self.slider_bp,
@@ -5901,7 +6247,8 @@ class DeveloperTab(QWidget):
             self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp,
         ]
         for w in widgets_to_block:
-            w.blockSignals(True)
+            if w is not None:
+                w.blockSignals(True)
 
         if "stretch_mode" in state:
             self._set_stretch_mode(state["stretch_mode"])
@@ -6001,6 +6348,32 @@ class DeveloperTab(QWidget):
             self.combo_orton_mode.setCurrentIndex(state["orton_mode_idx"])
             self.orton_mode = self.combo_orton_mode.currentData()
 
+        if "star_diff_strength" in state and hasattr(self, 'slider_star_diff'):
+            self.slider_star_diff.setValue(state["star_diff_strength"])
+            self.star_diff_strength = state["star_diff_strength"] / 100.0
+            self.lbl_star_diff.setText(f"{state['star_diff_strength']}%")
+
+        if "star_diff_radius" in state and hasattr(self, 'slider_star_diff_radius'):
+            self.slider_star_diff_radius.setValue(state["star_diff_radius"])
+            self.star_diff_radius = float(state["star_diff_radius"])
+            self.lbl_star_diff_radius.setText(f"{state['star_diff_radius']} px")
+
+        if "star_diff_threshold" in state and hasattr(self, 'slider_star_diff_threshold'):
+            self.slider_star_diff_threshold.setValue(state["star_diff_threshold"])
+            self.star_diff_threshold = state["star_diff_threshold"] / 100.0
+            self.lbl_star_diff_threshold.setText(f"{self.star_diff_threshold:.2f}")
+
+        if "star_diff_color" in state and hasattr(self, 'slider_star_diff_color'):
+            self.slider_star_diff_color.setValue(state["star_diff_color"])
+            self.star_diff_color_boost = state["star_diff_color"] / 100.0
+            self.lbl_star_diff_color.setText(f"{state['star_diff_color']}%")
+
+        if "star_diff_mode_idx" in state and hasattr(self, 'combo_star_diff_mode'):
+            self.combo_star_diff_mode.setCurrentIndex(state["star_diff_mode_idx"])
+            modes = ["screen", "soft_light", "additive"]
+            idx = state["star_diff_mode_idx"]
+            self.star_diff_mode = modes[idx] if 0 <= idx < len(modes) else "screen"
+
         if "layer_idx" in state:
             self.combo_layer.setCurrentIndex(state["layer_idx"])
             self.view_layer_mode = state["layer_idx"]
@@ -6096,7 +6469,8 @@ class DeveloperTab(QWidget):
             self.lbl_gnd_bp.setText(f"{self.gnd_bp_val:+.3f}")
 
         for w in widgets_to_block:
-            w.blockSignals(False)
+            if w is not None:
+                w.blockSignals(False)
 
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_ground_tone_values(
@@ -6104,14 +6478,26 @@ class DeveloperTab(QWidget):
                 self.slider_gnd_sh.value(),
                 self.slider_gnd_bp.value()
             )
-            self.mask_layers_widget.set_stars_special_value(self.slider_stars.value())
+            self.mask_layers_widget.set_stars_special_values(
+                presence=self.slider_stars.value(),
+                diff_strength=self.slider_star_diff.value() if hasattr(self, 'slider_star_diff') else 0,
+                diff_radius=self.slider_star_diff_radius.value() if hasattr(self, 'slider_star_diff_radius') else 20,
+                diff_threshold=self.slider_star_diff_threshold.value() if hasattr(self, 'slider_star_diff_threshold') else 45,
+                diff_color=self.slider_star_diff_color.value() if hasattr(self, 'slider_star_diff_color') else 50,
+                diff_mode_idx=self.combo_star_diff_mode.currentIndex() if hasattr(self, 'combo_star_diff_mode') else 0
+            )
             self.mask_layers_widget.set_starless_tone_values(
                 self.slider_clarity.value(),
                 self.slider_dehaze.value(),
                 self.slider_ond_est.value(),
                 self.slider_ond_bg.value(),
                 self.slider_contrast_starless.value(),
-                self.slider_denoise.value()
+                self.slider_denoise.value(),
+                self.slider_orton.value() if hasattr(self, 'slider_orton') else 0,
+                self.slider_orton_radius.value() if hasattr(self, 'slider_orton_radius') else 40,
+                self.slider_orton_threshold.value() if hasattr(self, 'slider_orton_threshold') else 5,
+                self.combo_orton_tint.currentIndex() if hasattr(self, 'combo_orton_tint') else 0,
+                self.combo_orton_mode.currentIndex() if hasattr(self, 'combo_orton_mode') else 0
             )
 
         if "curves" in state and state["curves"] is not None and hasattr(self, 'curve_widget'):

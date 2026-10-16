@@ -5,7 +5,26 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
-## [0.8.3] - 2026-10-16
+### Añadido
+* **Filtro Difusor Digital y Realce de Constelaciones (Star Mist Filter) [P1]:**
+  - **Aislamiento Selectivo y Morfológico de Estrellas (`core/star_diffusion.py`):** Detección selectiva de picos estelares prominentes (magnitudes 1ª a 4ª) mediante análisis Top-Hat en imágenes compuestas o acoplamiento directo sobre la capa de estrellas desacoplada de StarNet++.
+  - **Protección de Estrellas Débiles de Fondo:** Las millones de estrellas tenues del fondo cósmico quedan protegidas mediante una curva de umbralización suave Hermite (*smoothstep*), preservando su puntualidad y nitidez sin inflarse ni generar niebla difusa en el cielo oscuro.
+  - **Recuperación Cromática Espectral (Spectral Color Recovery):** Extracción del matiz (*hue*) y saturación cromática real desde la periferia no saturada del disco de Airy estelar (clases espectrales O, B, A, F, G, K, M), infundiendo halos ricos y coloridos (el naranja cálido de Betelgeuse/Antares, el azul de Rigel/Vega).
+  - **Dispersión Óptica Multi-Escala:** Modelo analítico de doble dispersión gaussiana continua con caída natural de luz difusa y semilla elíptica de micro-difracción.
+  - **Modos de Fusión No Destructivos:** Soporte para *Trama (Screen - Velo Etéreo)*, *Luz Suave (Soft Light - Aterciopelado)* y *Aditivo (Additive - Luminoso)*.
+  - **Protección de Paisaje Terrestre:** Integración con la máscara de cielo para anular la propagación de halos hacia el relieve, árboles o arquitectura.
+  - **Integración UI Contextual y Exportación:**
+    - Panel dedicado en la capa **⭐ Estrellas** del Gestor de Capas y en el revelador con controles de *Intensidad*, *Radio*, *Umbral*, *Color Espectral* y *Modo de Fusión*.
+    - Integración en el pipeline principal, previsualización en vivo, histórico Deshacer/Rehacer (Ctrl+Z / Ctrl+Y) y exportación de capas nativas en Photoshop PSD.
+* **Manual de Usuario Completo (`MANUAL_DE_USUARIO.md`):**
+  - Documento exhaustivo en español explicando de manera accesible y visual cada módulo de AstroLoom (Apilador, Revelador, Startrails, Eclipses, Gestor de Capas).
+  - Guía detallada slider por slider de todos los controles del módulo Revelador (estirado MTF/GHS, curvas, StarNet, texturas de polvo, Orton, polución lumínica, balance de blancos, máscaras IA, exportación PSD).
+* **Efecto Orton Astronómico y Glow de Polvo Galáctico [P6]:**
+  - Resplandor etéreo y suave enfocado selectivamente en nubes moleculares y bandas galácticas sin oscurecer estrellas.
+* **Reducción Paramétrica 2D de Contaminación Lumínica Terrestre (Domo Asimétrico) [P5]:**
+  - Sustracción de cúpulas lumínicas urbanas en el horizonte mediante modelo elíptico 2D con ajuste de centro, anchura, altura y tinte de vapor de sodio.
+* **Estirado Hiperbólico Generalizado (GHS) [P2]:**
+  - Transformación hiperbólica con punto de simetría (SP), factor de estirado (D) y protección de núcleos estelares (HP) con modos de Luminancia y RGB enlazado.
 
 ### Añadido
 * **Detección Automática de Suelo y Horizonte con IA Ligera (1-Click Sky/Ground) [P8]:**

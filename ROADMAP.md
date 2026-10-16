@@ -8,7 +8,7 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 
 | Prioridad | Tarea / Funcionalidad | Módulo | Inspiración | Dificultad (1-10) | Impacto (1-10) | Estado |
 | :---: | :--- | :--- | :--- | :---: | :---: | :---: |
-| **P1** | **Realce de Estrellas / Filtro Difusor Digital** | Revelador | Sequator / Filtros físicos | 3.0 / 10 | 7.5 / 10 | 📋 Planificado |
+| **P1** | **Realce de Estrellas / Filtro Difusor Digital** | Revelador | Sequator / Filtros físicos | 3.0 / 10 | 7.5 / 10 | ✅ Completado |
 | **P2** | **Estirado Hiperbólico Generalizado (GHS)** | Revelador | Siril / PixInsight | 4.0 / 10 | 8.5 / 10 | ✅ Completado |
 | **P3** | **Anti-Ghosting de Árboles en Horizonte (Min-Horizon)** | Apilador | Starry Landscape Stacker | 4.0 / 10 | 8.0 / 10 | ✅ Completado |
 | **P4** | **Cribado Previo de Tomas y Calidad (Frame Culling)** | Apilador | Nebulb / Siril | 4.5 / 10 | 8.5 / 10 | ✅ Completado |

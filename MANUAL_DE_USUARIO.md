@@ -192,6 +192,21 @@ Crea un halo de luz celestial suave y etéreo alrededor de las partes más lumin
   * *Trama (Screen):* Velo luminoso, transparente y etéreo.
   * *Aditivo:* Resplandor directo de gran energía para efectos dramáticos.
 
+#### 🌟 Filtro Difusor Digital y Realce de Constelaciones (Star Mist Filter)
+Emula los prestigiosos filtros físicos de difusión estelar (como *Kenko Pro1D Pro Softon-A*, *Kase Star Diffusion* o *Lee Soft Mist*) y la función *Enhance Star Light* de Sequator de forma matemática y no destructiva:
+* **Intensidad Difusor (%):** Cantidad de difusión estelar aplicada. Al 0% permanece desactivado.
+* **Radio (Halo):** Diámetro óptico del halo difuso que envuelve a las estrellas (5 a 60 px).
+* **Umbral de Magnitud:** Controla qué estrellas reciben el halo difusor:
+  * *Valores altos (0.60 - 0.80):* El halo se restringe exclusivamente a las estrellas más brillantes de las constelaciones (Orión, Casiopea, Escorpio, Osa Mayor), haciéndolas destacar como en una carta celeste.
+  * *Valores medios (0.35 - 0.50):* Añade un resplandor elegante tanto a las estrellas principales como a las de brillo intermedio.
+  * *Protección de estrellas débiles:* Los millones de estrellas diminutas del fondo cósmico quedan protegidas para que permanezcan nítidas y puntuales sin formar niebla.
+* **Color Espectral (%):** Recupera el color intrínseco de la estrella a partir de la periferia de su disco de Airy (tipo espectral estelar) y lo propaga por todo el halo (ej. el naranja cálido de Betelgeuse o Antares, el azul eléctrico de Rigel o Vega).
+* **Modo de Fusión:**
+  * *Trama (Screen - Recomendado):* Velo estelar etéreo y luminoso, libre de quemaduras o saturaciones agresivas.
+  * *Luz Suave (Soft Light):* Resplandor aterciopelado con cero oscurecimiento.
+  * *Aditivo (Additive):* Energía lumínica directa para una atmósfera nocturna brillante y romántica.
+* *Nota:* Disponible de forma contextual al seleccionar la capa **⭐ Estrellas** en el Gestor de Capas o en el revelado general. Protege el horizonte y suelo terrestre mediante la máscara de cielo para no generar halos en luces terrestres ni relieve.
+
 ---
 
 ### Sección 6: Balance de Blancos y Calibración
