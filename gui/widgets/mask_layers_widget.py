@@ -58,6 +58,11 @@ class MaskLayersWidget(QWidget):
     starless_ond_bg_changed = Signal(int)        # (val 0 a 100)
     starless_contrast_changed = Signal(int)      # (val -100 a 100)
     starless_denoise_changed = Signal(int)       # (val 0 a 100)
+    starless_orton_strength_changed = Signal(int)   # (val 0 a 100)
+    starless_orton_radius_changed = Signal(int)     # (val 10 a 150)
+    starless_orton_threshold_changed = Signal(int)  # (val 0 a 50)
+    starless_orton_tint_changed = Signal(str)       # "warm_gold", "neutral", "cool_blue", "halpha"
+    starless_orton_mode_changed = Signal(str)       # "soft_light", "screen", "additive"
     starless_reset_requested = Signal()          # restablecer ajustes de fondo
 
     def __init__(self, parent: Optional[QWidget] = None):
@@ -876,6 +881,105 @@ class MaskLayersWidget(QWidget):
         col_dn.addWidget(self.slider_sl_denoise)
         row_sl_p3.addLayout(col_dn)
         sl_layout.addLayout(row_sl_p3)
+
+        # Par 4: Efecto Orton Astronómico y Glow de Polvo Galáctico
+        self.box_sl_orton = QGroupBox("✨ Efecto Orton y Glow de Polvo Galáctico")
+        self.box_sl_orton.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #7b1fa2;
+                border-radius: 6px;
+                margin-top: 6px;
+                padding-top: 10px;
+                background-color: #1a1625;
+                font-weight: bold;
+                color: #e1bee7;
+            }
+        """)
+        orton_layout = QVBoxLayout(self.box_sl_orton)
+        orton_layout.setContentsMargins(6, 6, 6, 6)
+        orton_layout.setSpacing(6)
+
+        # Fila 1: Deslizador de Intensidad Orton
+        row_ort_int = QHBoxLayout()
+        row_ort_int.addWidget(self._make_resettable_label(QLabel("Intensidad Glow:"), lambda: self.slider_sl_orton_strength.setValue(0), "0%"))
+        self.lbl_sl_orton_strength = QLabel("0%")
+        self.lbl_sl_orton_strength.setStyleSheet("color: #ffb74d; font-weight: bold;")
+        self.lbl_sl_orton_strength.setFixedWidth(34)
+        row_ort_int.addWidget(self.lbl_sl_orton_strength)
+        self.slider_sl_orton_strength = QSlider(Qt.Horizontal)
+        self.slider_sl_orton_strength.setRange(0, 100)
+        self.slider_sl_orton_strength.setValue(0)
+        self.slider_sl_orton_strength.valueChanged.connect(self._on_sl_orton_strength_changed)
+        self.slider_sl_orton_strength.sliderReleased.connect(self.ground_slider_released.emit)
+        row_ort_int.addWidget(self.slider_sl_orton_strength, stretch=1)
+        orton_layout.addLayout(row_ort_int)
+
+        # Fila 2: Radio (Difusión) y Umbral de Polvo
+        row_ort_params = QHBoxLayout()
+        row_ort_params.setSpacing(10)
+
+        col_rad = QVBoxLayout()
+        col_rad.setSpacing(2)
+        row_rad_lbl = QHBoxLayout()
+        row_rad_lbl.addWidget(self._make_resettable_label(QLabel("Radio:"), lambda: self.slider_sl_orton_radius.setValue(40), "40 px"))
+        self.lbl_sl_orton_radius = QLabel("40 px")
+        self.lbl_sl_orton_radius.setStyleSheet("color: #ce93d8; font-weight: bold;")
+        row_rad_lbl.addWidget(self.lbl_sl_orton_radius)
+        col_rad.addLayout(row_rad_lbl)
+        self.slider_sl_orton_radius = QSlider(Qt.Horizontal)
+        self.slider_sl_orton_radius.setRange(10, 150)
+        self.slider_sl_orton_radius.setValue(40)
+        self.slider_sl_orton_radius.valueChanged.connect(self._on_sl_orton_radius_changed)
+        self.slider_sl_orton_radius.sliderReleased.connect(self.ground_slider_released.emit)
+        col_rad.addWidget(self.slider_sl_orton_radius)
+        row_ort_params.addLayout(col_rad)
+
+        col_thr = QVBoxLayout()
+        col_thr.setSpacing(2)
+        row_thr_lbl = QHBoxLayout()
+        row_thr_lbl.addWidget(self._make_resettable_label(QLabel("Umbral Polvo:"), lambda: self.slider_sl_orton_threshold.setValue(15), "0.15"))
+        self.lbl_sl_orton_threshold = QLabel("0.15")
+        self.lbl_sl_orton_threshold.setStyleSheet("color: #ce93d8; font-weight: bold;")
+        row_thr_lbl.addWidget(self.lbl_sl_orton_threshold)
+        col_thr.addLayout(row_thr_lbl)
+        self.slider_sl_orton_threshold = QSlider(Qt.Horizontal)
+        self.slider_sl_orton_threshold.setRange(0, 50)
+        self.slider_sl_orton_threshold.setValue(15)
+        self.slider_sl_orton_threshold.valueChanged.connect(self._on_sl_orton_threshold_changed)
+        self.slider_sl_orton_threshold.sliderReleased.connect(self.ground_slider_released.emit)
+        col_thr.addWidget(self.slider_sl_orton_threshold)
+        row_ort_params.addLayout(col_thr)
+        orton_layout.addLayout(row_ort_params)
+
+        # Fila 3: Tinte Cromático y Modo de Fusión
+        row_ort_combos = QHBoxLayout()
+        row_ort_combos.setSpacing(8)
+
+        col_tint = QVBoxLayout()
+        col_tint.setSpacing(2)
+        col_tint.addWidget(QLabel("Tinte:"))
+        self.combo_sl_orton_tint = QComboBox()
+        self.combo_sl_orton_tint.addItem("Dorado Cálido (Núcleo Vía Láctea)", "warm_gold")
+        self.combo_sl_orton_tint.addItem("Luminancia Neutra", "neutral")
+        self.combo_sl_orton_tint.addItem("Azul Frío (Reflexión)", "cool_blue")
+        self.combo_sl_orton_tint.addItem("H-Alfa (Rubí Cósmico)", "halpha")
+        self.combo_sl_orton_tint.currentIndexChanged.connect(self._on_sl_orton_tint_changed)
+        col_tint.addWidget(self.combo_sl_orton_tint)
+        row_ort_combos.addLayout(col_tint, stretch=1)
+
+        col_mode = QVBoxLayout()
+        col_mode.setSpacing(2)
+        col_mode.addWidget(QLabel("Fusión:"))
+        self.combo_sl_orton_mode = QComboBox()
+        self.combo_sl_orton_mode.addItem("Luz Suave (Profundidad)", "soft_light")
+        self.combo_sl_orton_mode.addItem("Trama (Velo Etéreo)", "screen")
+        self.combo_sl_orton_mode.addItem("Aditivo (Luminoso)", "additive")
+        self.combo_sl_orton_mode.currentIndexChanged.connect(self._on_sl_orton_mode_changed)
+        col_mode.addWidget(self.combo_sl_orton_mode)
+        row_ort_combos.addLayout(col_mode, stretch=1)
+
+        orton_layout.addLayout(row_ort_combos)
+        sl_layout.addWidget(self.box_sl_orton)
 
         self.btn_reset_sl_special = QPushButton("↺ Restablecer Ajustes de Fondo")
         self.btn_reset_sl_special.setCursor(Qt.PointingHandCursor)
@@ -1849,8 +1953,35 @@ class MaskLayersWidget(QWidget):
         self.lbl_sl_denoise.setText(f"{val}%")
         self.starless_denoise_changed.emit(val)
 
+    def _on_sl_orton_strength_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_orton_strength.setText(f"{val}%")
+        self.starless_orton_strength_changed.emit(val)
+
+    def _on_sl_orton_radius_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_orton_radius.setText(f"{val} px")
+        self.starless_orton_radius_changed.emit(val)
+
+    def _on_sl_orton_threshold_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_orton_threshold.setText(f"{val / 100.0:.2f}")
+        self.starless_orton_threshold_changed.emit(val)
+
+    def _on_sl_orton_tint_changed(self, idx: int) -> None:
+        if self._updating_ui: return
+        tint_key = self.combo_sl_orton_tint.currentData()
+        self.starless_orton_tint_changed.emit(tint_key)
+
+    def _on_sl_orton_mode_changed(self, idx: int) -> None:
+        if self._updating_ui: return
+        mode_key = self.combo_sl_orton_mode.currentData()
+        self.starless_orton_mode_changed.emit(mode_key)
+
     def set_starless_tone_values(
-        self, clarity: int, dehaze: int, ond_est: int, ond_bg: int, contrast: int, denoise: int
+        self, clarity: int, dehaze: int, ond_est: int, ond_bg: int, contrast: int, denoise: int,
+        orton_strength: int = 0, orton_radius: int = 40, orton_threshold: int = 15,
+        orton_tint_idx: int = 0, orton_mode_idx: int = 0
     ) -> None:
         """Sincroniza los controles especiales de fondo nebular desde tab_developer."""
         self._updating_ui = True
@@ -1872,6 +2003,19 @@ class MaskLayersWidget(QWidget):
         if hasattr(self, 'slider_sl_denoise'):
             self.slider_sl_denoise.setValue(denoise)
             self.lbl_sl_denoise.setText(f"{denoise}%")
+        if hasattr(self, 'slider_sl_orton_strength'):
+            self.slider_sl_orton_strength.setValue(orton_strength)
+            self.lbl_sl_orton_strength.setText(f"{orton_strength}%")
+        if hasattr(self, 'slider_sl_orton_radius'):
+            self.slider_sl_orton_radius.setValue(orton_radius)
+            self.lbl_sl_orton_radius.setText(f"{orton_radius} px")
+        if hasattr(self, 'slider_sl_orton_threshold'):
+            self.slider_sl_orton_threshold.setValue(orton_threshold)
+            self.lbl_sl_orton_threshold.setText(f"{orton_threshold / 100.0:.2f}")
+        if hasattr(self, 'combo_sl_orton_tint'):
+            self.combo_sl_orton_tint.setCurrentIndex(orton_tint_idx)
+        if hasattr(self, 'combo_sl_orton_mode'):
+            self.combo_sl_orton_mode.setCurrentIndex(orton_mode_idx)
         self._updating_ui = False
 
     # Previsualización interactiva de la máscara en el lienzo
