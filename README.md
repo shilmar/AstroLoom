@@ -2,6 +2,8 @@
 
 **AstroLoom** (anteriormente *Apilator*) es una suite y estación de trabajo especializada de posprocesado, apilado, mosaicos panorámicos y revelado para **astrofotografía de paisaje (nightscapes)**, **mosaicos gigapíxel**, **circumpolares / trazas de estrellas (startrails)** y **eclipses (solares y lunares)**. Permite desacoplar el movimiento del cielo respecto al horizonte terrestre, aplicar integración estadística Kappa-Sigma en coma flotante de 32 bits, componer panorámicas multifila con corte óptimo de siluetas terrestres (Dual-Zone), componer circumpolares con efectos cometa y supresión automática de satélites, procesar series de bracketing de eclipses con alineación subpíxel de limbo y filtro NRGF continuo, y editar la imagen final en tiempo real con asistencia de redes neuronales (GraXpert y StarNet++ v2).
 
+> 📖 **¿Nuevo en AstroLoom? Consulta el [Manual de Usuario Completo (Guía Paso a Paso y Parámetros)](MANUAL_DE_USUARIO.md)** para una explicación sencilla y práctica de cada módulo y de todos los controles deslizantes del revelador.
+
 ---
 
 ## Características Principales
