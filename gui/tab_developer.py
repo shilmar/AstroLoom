@@ -82,6 +82,8 @@ from core.mask_layers import (
 from gui.widgets.curve_widget import CurveWidget
 from gui.widgets.mask_layers_widget import MaskLayersWidget
 from gui.widgets.collapsible_section import CollapsibleSection
+from gui.widgets.precision_slider import PrecisionSliderRow, PrecisionSpinBox
+from gui.icons import get_icon, get_svg_pixmap
 from gui.canvas import MaskCanvas
 from gui.worker import GraXpertWorker, StarNetWorker
 from core.icc_manager import save_tiff_with_icc
@@ -255,7 +257,8 @@ class DeveloperTab(QWidget):
         left_container.setMaximumWidth(540)
 
         # Carga externa (Siempre fijada arriba)
-        self.btn_open_img = QPushButton("📁 Abrir Imagen (TIFF / FITS / RAW)...")
+        self.btn_open_img = QPushButton("Abrir Imagen (TIFF / FITS / RAW)...")
+        self.btn_open_img.setIcon(get_icon("folder", color="#38bdf8", size=16))
         self.btn_open_img.setStyleSheet("font-weight: bold; color: #80d8ff; padding: 7px; background: #1c2030; border: 1px solid #2f3549; border-radius: 4px;")
         self.btn_open_img.setCursor(Qt.PointingHandCursor)
         self.btn_open_img.clicked.connect(self.open_image_file)
@@ -274,7 +277,7 @@ class DeveloperTab(QWidget):
         left_layout.setSpacing(6)
 
         # --- SECCIÓN 1: Estilos y Presets de Revelado ---
-        self.sec_presets = CollapsibleSection("🎨 Presets y Estilos de Revelado", is_expanded=False)
+        self.sec_presets = CollapsibleSection("Presets y Estilos de Revelado", is_expanded=False, icon_name="sliders")
         w_presets = QWidget()
         presets_layout = QVBoxLayout(w_presets)
         presets_layout.setContentsMargins(6, 4, 6, 6)
@@ -304,7 +307,8 @@ class DeveloperTab(QWidget):
         self.combo_preset_scope.setToolTip("Elige qué controles aplicar del preset (el estirado MTF y el punto negro de la imagen se respetan siempre)")
         row_mode_apply.addWidget(self.combo_preset_scope, stretch=1)
 
-        self.btn_apply_preset = QPushButton("⚡ Aplicar")
+        self.btn_apply_preset = QPushButton("Aplicar")
+        self.btn_apply_preset.setIcon(get_icon("sparkles", color="#ffffff", size=12))
         self.btn_apply_preset.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.btn_apply_preset.setFixedWidth(84)
         self.btn_apply_preset.setStyleSheet("""
@@ -337,12 +341,14 @@ class DeveloperTab(QWidget):
 
         # Fila 4: Botones Guardar Actual y Administrar
         row_preset_btns = QHBoxLayout()
-        self.btn_save_preset = QPushButton("💾 Guardar...")
+        self.btn_save_preset = QPushButton("Guardar...")
+        self.btn_save_preset.setIcon(get_icon("save", color="#94a3b8", hover_color="#38bdf8", size=12))
         self.btn_save_preset.setToolTip("Guarda los ajustes y deslizadores actuales como un nuevo preset")
         self.btn_save_preset.clicked.connect(self.open_save_preset_dialog)
         row_preset_btns.addWidget(self.btn_save_preset)
 
-        self.btn_manage_presets = QPushButton("⚙️ Gestor Presets...")
+        self.btn_manage_presets = QPushButton("Gestor Presets...")
+        self.btn_manage_presets.setIcon(get_icon("settings", color="#94a3b8", hover_color="#38bdf8", size=12))
         self.btn_manage_presets.setToolTip("Abre el administrador para importar, exportar, inspeccionar o eliminar presets")
         self.btn_manage_presets.clicked.connect(self.open_preset_manager_dialog)
         row_preset_btns.addWidget(self.btn_manage_presets)
@@ -353,9 +359,10 @@ class DeveloperTab(QWidget):
 
         # --- SECCIÓN 2: Extracción de Fondo y Polución Lumínica (GraXpert AI) ---
         self.sec_gradients = CollapsibleSection(
-            "⚡ Calibración y Gradientes (GraXpert AI)",
+            "Calibración y Gradientes (GraXpert AI)",
             is_expanded=False,
-            on_reset=self.reset_gradients
+            on_reset=self.reset_gradients,
+            icon_name="sparkles"
         )
         w_bg = QWidget()
         layout_bg = QVBoxLayout(w_bg)
@@ -378,30 +385,24 @@ class DeveloperTab(QWidget):
         row_engine.addWidget(self.spin_smoothing)
         layout_bg.addLayout(row_engine)
 
-        self.btn_extract_bg = QPushButton("⚡ Eliminar Gradientes")
+        self.btn_extract_bg = QPushButton("Eliminar Gradientes")
+        self.btn_extract_bg.setIcon(get_icon("sparkles", color="#80d8ff", size=13))
         self.btn_extract_bg.setStyleSheet("font-weight: bold; color: #80d8ff;")
         self.btn_extract_bg.clicked.connect(self.on_extract_background_clicked)
         layout_bg.addWidget(self.btn_extract_bg)
 
         # Cúpula de luz (Contaminación Lumínica) integrada
-        row_lp = QHBoxLayout()
-        row_lp.addWidget(self._make_resettable_label(QLabel("Atenuar Cúpula de Luz:"), lambda: self.slider_lp.setValue(0), "0%"))
-        self.lbl_lp = QLabel("0%")
-        self.lbl_lp.setStyleSheet("color: #ffd54f; font-weight: bold;")
-        self.lbl_lp.setMinimumWidth(38)
-        row_lp.addWidget(self.lbl_lp)
-        row_lp.addSpacing(6)
-        self.slider_lp = QSlider(Qt.Horizontal)
-        self.slider_lp.setRange(0, 100)
-        self.slider_lp.setValue(0)
+        self.row_lp = PrecisionSliderRow("Atenuar Cúpula:", 0, 100, 0, unit="%", label_width=115)
+        self.slider_lp = self.row_lp.slider
+        self.lbl_lp = self.row_lp.lbl_value
         self.slider_lp.valueChanged.connect(self.on_lp_changed)
-        row_lp.addWidget(self.slider_lp, stretch=1)
-        layout_bg.addLayout(row_lp)
+        layout_bg.addWidget(self.row_lp)
 
         # Botonera de herramientas de Cúpula 2D
         row_lp_tools = QHBoxLayout()
         row_lp_tools.setSpacing(4)
-        self.btn_lp_expand = QPushButton("⚙️ Cúpula 2D")
+        self.btn_lp_expand = QPushButton("Cúpula 2D")
+        self.btn_lp_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#ffd54f", size=12))
         self.btn_lp_expand.setCheckable(True)
         self.btn_lp_expand.setChecked(False)
         self.btn_lp_expand.setStyleSheet(
@@ -412,13 +413,15 @@ class DeveloperTab(QWidget):
         self.btn_lp_expand.toggled.connect(self._on_toggle_lp_expand)
         row_lp_tools.addWidget(self.btn_lp_expand)
 
-        self.btn_lp_auto = QPushButton("⚡ Auto-Detectar")
+        self.btn_lp_auto = QPushButton("Auto-Detectar")
+        self.btn_lp_auto.setIcon(get_icon("sparkles", color="#80d8ff", size=12))
         self.btn_lp_auto.setStyleSheet("font-size: 11px; padding: 4px; font-weight: bold; color: #80d8ff;")
         self.btn_lp_auto.setToolTip("Analiza el resplandor difuso del cielo y sitúa automáticamente el centro de la cúpula urbana.")
         self.btn_lp_auto.clicked.connect(self.auto_detect_lp_center)
         row_lp_tools.addWidget(self.btn_lp_auto)
 
-        self.btn_lp_center_pipette = QPushButton("🎯 Pinchar Centro")
+        self.btn_lp_center_pipette = QPushButton("Pinchar Centro")
+        self.btn_lp_center_pipette.setIcon(get_icon("crosshair", color="#94a3b8", active_color="#ffd54f", size=12))
         self.btn_lp_center_pipette.setCheckable(True)
         self.btn_lp_center_pipette.setStyleSheet(
             "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
@@ -438,82 +441,38 @@ class DeveloperTab(QWidget):
         layout_lp_params.setSpacing(6)
 
         # Fila 1: Centro X y Centro Y
-        row_lp_c = QHBoxLayout()
-        row_lp_c.setSpacing(8)
-
-        col_cx = QHBoxLayout()
-        col_cx.addWidget(QLabel("Centro X:"))
-        self.spin_lp_cx = QDoubleSpinBox()
-        self.spin_lp_cx.setRange(0.0, 1.0)
-        self.spin_lp_cx.setSingleStep(0.01)
-        self.spin_lp_cx.setDecimals(2)
-        self.spin_lp_cx.setValue(0.50)
-        self.spin_lp_cx.setFixedWidth(54)
-        self.spin_lp_cx.valueChanged.connect(self.on_spin_lp_cx_changed)
-        col_cx.addWidget(self.spin_lp_cx)
-        self.slider_lp_cx = QSlider(Qt.Horizontal)
-        self.slider_lp_cx.setRange(0, 100)
-        self.slider_lp_cx.setValue(50)
+        self.row_lp_cx = PrecisionSliderRow("Centro X:", 0, 100, 50, scale=100.0, decimals=2, label_width=115)
+        self.slider_lp_cx = self.row_lp_cx.slider
+        self.spin_lp_cx = self.row_lp_cx.spin
+        self.lbl_lp_cx = self.row_lp_cx.lbl_value
         self.slider_lp_cx.valueChanged.connect(self.on_slider_lp_cx_changed)
-        col_cx.addWidget(self.slider_lp_cx, stretch=1)
-        row_lp_c.addLayout(col_cx)
+        self.spin_lp_cx.valueChanged.connect(self.on_spin_lp_cx_changed)
+        layout_lp_params.addWidget(self.row_lp_cx)
 
-        col_cy = QHBoxLayout()
-        col_cy.addWidget(QLabel("Centro Y:"))
-        self.spin_lp_cy = QDoubleSpinBox()
-        self.spin_lp_cy.setRange(0.0, 1.0)
-        self.spin_lp_cy.setSingleStep(0.01)
-        self.spin_lp_cy.setDecimals(2)
-        self.spin_lp_cy.setValue(0.90)
-        self.spin_lp_cy.setFixedWidth(54)
-        self.spin_lp_cy.valueChanged.connect(self.on_spin_lp_cy_changed)
-        col_cy.addWidget(self.spin_lp_cy)
-        self.slider_lp_cy = QSlider(Qt.Horizontal)
-        self.slider_lp_cy.setRange(0, 100)
-        self.slider_lp_cy.setValue(90)
+        self.row_lp_cy = PrecisionSliderRow("Centro Y:", 0, 100, 90, scale=100.0, decimals=2, label_width=115)
+        self.slider_lp_cy = self.row_lp_cy.slider
+        self.spin_lp_cy = self.row_lp_cy.spin
+        self.lbl_lp_cy = self.row_lp_cy.lbl_value
         self.slider_lp_cy.valueChanged.connect(self.on_slider_lp_cy_changed)
-        col_cy.addWidget(self.slider_lp_cy, stretch=1)
-        row_lp_c.addLayout(col_cy)
-        layout_lp_params.addLayout(row_lp_c)
+        self.spin_lp_cy.valueChanged.connect(self.on_spin_lp_cy_changed)
+        layout_lp_params.addWidget(self.row_lp_cy)
 
         # Fila 2: Ancho W y Alto H
-        row_lp_wh = QHBoxLayout()
-        row_lp_wh.setSpacing(8)
-
-        col_w = QHBoxLayout()
-        col_w.addWidget(QLabel("Ancho:"))
-        self.spin_lp_w = QDoubleSpinBox()
-        self.spin_lp_w.setRange(0.05, 2.00)
-        self.spin_lp_w.setSingleStep(0.05)
-        self.spin_lp_w.setDecimals(2)
-        self.spin_lp_w.setValue(0.60)
-        self.spin_lp_w.setFixedWidth(54)
-        self.spin_lp_w.valueChanged.connect(self.on_spin_lp_w_changed)
-        col_w.addWidget(self.spin_lp_w)
-        self.slider_lp_w = QSlider(Qt.Horizontal)
-        self.slider_lp_w.setRange(5, 200)
-        self.slider_lp_w.setValue(60)
+        self.row_lp_w = PrecisionSliderRow("Ancho:", 5, 200, 60, scale=100.0, decimals=2, label_width=115)
+        self.slider_lp_w = self.row_lp_w.slider
+        self.spin_lp_w = self.row_lp_w.spin
+        self.lbl_lp_w = self.row_lp_w.lbl_value
         self.slider_lp_w.valueChanged.connect(self.on_slider_lp_w_changed)
-        col_w.addWidget(self.slider_lp_w, stretch=1)
-        row_lp_wh.addLayout(col_w)
+        self.spin_lp_w.valueChanged.connect(self.on_spin_lp_w_changed)
+        layout_lp_params.addWidget(self.row_lp_w)
 
-        col_h = QHBoxLayout()
-        col_h.addWidget(QLabel("Alto:"))
-        self.spin_lp_h = QDoubleSpinBox()
-        self.spin_lp_h.setRange(0.05, 1.50)
-        self.spin_lp_h.setSingleStep(0.05)
-        self.spin_lp_h.setDecimals(2)
-        self.spin_lp_h.setValue(0.45)
-        self.spin_lp_h.setFixedWidth(54)
-        self.spin_lp_h.valueChanged.connect(self.on_spin_lp_h_changed)
-        col_h.addWidget(self.spin_lp_h)
-        self.slider_lp_h = QSlider(Qt.Horizontal)
-        self.slider_lp_h.setRange(5, 150)
-        self.slider_lp_h.setValue(45)
+        self.row_lp_h = PrecisionSliderRow("Alto:", 5, 150, 45, scale=100.0, decimals=2, label_width=115)
+        self.slider_lp_h = self.row_lp_h.slider
+        self.spin_lp_h = self.row_lp_h.spin
+        self.lbl_lp_h = self.row_lp_h.lbl_value
         self.slider_lp_h.valueChanged.connect(self.on_slider_lp_h_changed)
-        col_h.addWidget(self.slider_lp_h, stretch=1)
-        row_lp_wh.addLayout(col_h)
-        layout_lp_params.addLayout(row_lp_wh)
+        self.spin_lp_h.valueChanged.connect(self.on_spin_lp_h_changed)
+        layout_lp_params.addWidget(self.row_lp_h)
 
         # Fila 3: Tinte cromático y botón cuentagotas de color
         row_lp_tint = QHBoxLayout()
@@ -527,7 +486,8 @@ class DeveloperTab(QWidget):
         self.combo_lp_tint.currentIndexChanged.connect(self._on_lp_tint_combo_changed)
         row_lp_tint.addWidget(self.combo_lp_tint, stretch=1)
 
-        self.btn_lp_color_pipette = QPushButton("🎨 Muestrear Color")
+        self.btn_lp_color_pipette = QPushButton("Muestrear Color")
+        self.btn_lp_color_pipette.setIcon(get_icon("pipette", color="#94a3b8", active_color="#ffd54f", size=12))
         self.btn_lp_color_pipette.setCheckable(True)
         self.btn_lp_color_pipette.setStyleSheet(
             "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
@@ -539,18 +499,11 @@ class DeveloperTab(QWidget):
         layout_lp_params.addLayout(row_lp_tint)
 
         # Fila 4: Neutralización cromática
-        row_lp_strength = QHBoxLayout()
-        row_lp_strength.addWidget(QLabel("Neutralización:"))
-        self.lbl_lp_tint_strength = QLabel("50%")
-        self.lbl_lp_tint_strength.setStyleSheet("color: #ffd54f; font-weight: bold;")
-        self.lbl_lp_tint_strength.setFixedWidth(34)
-        row_lp_strength.addWidget(self.lbl_lp_tint_strength)
-        self.slider_lp_tint_strength = QSlider(Qt.Horizontal)
-        self.slider_lp_tint_strength.setRange(0, 100)
-        self.slider_lp_tint_strength.setValue(50)
+        self.row_lp_tint_strength = PrecisionSliderRow("Neutralización:", 0, 100, 50, unit="%", label_width=115)
+        self.slider_lp_tint_strength = self.row_lp_tint_strength.slider
+        self.lbl_lp_tint_strength = self.row_lp_tint_strength.lbl_value
         self.slider_lp_tint_strength.valueChanged.connect(self._on_lp_tint_strength_changed)
-        row_lp_strength.addWidget(self.slider_lp_tint_strength, stretch=1)
-        layout_lp_params.addLayout(row_lp_strength)
+        layout_lp_params.addWidget(self.row_lp_tint_strength)
 
         # Fila 5: Modo de reducción y Compatibilidad 1D
         row_lp_mode = QHBoxLayout()
@@ -575,9 +528,10 @@ class DeveloperTab(QWidget):
 
         # --- SECCIÓN 3: Estirado Tonal y Contraste (MTF / GHS) ---
         self.sec_stretch = CollapsibleSection(
-            "📈 Estirado Tonal y Contraste",
+            "Estirado Tonal y Contraste",
             is_expanded=True,
-            on_reset=self.reset_sliders
+            on_reset=self.reset_sliders,
+            icon_name="chart"
         )
         w_stretch = QWidget()
         stretch_layout = QVBoxLayout(w_stretch)
@@ -588,7 +542,8 @@ class DeveloperTab(QWidget):
         row_stretch_mode = QHBoxLayout()
         row_stretch_mode.setSpacing(4)
 
-        self.btn_mode_mtf = QPushButton("📊 MTF Clásico")
+        self.btn_mode_mtf = QPushButton("MTF Clásico")
+        self.btn_mode_mtf.setIcon(get_icon("chart", color="#80d8ff", size=12))
         self.btn_mode_mtf.setCheckable(True)
         self.btn_mode_mtf.setChecked(True)
         self.btn_mode_mtf.setStyleSheet(
@@ -598,7 +553,8 @@ class DeveloperTab(QWidget):
         self.btn_mode_mtf.setToolTip("Estirado estándar por Función de Transferencia de Medios Tonos (MTF).")
         self.btn_mode_mtf.clicked.connect(lambda: self._set_stretch_mode("mtf"))
 
-        self.btn_mode_ghs = QPushButton("📈 GHS Hiperbólico")
+        self.btn_mode_ghs = QPushButton("GHS Hiperbólico")
+        self.btn_mode_ghs.setIcon(get_icon("curve", color="#ffb74d", size=12))
         self.btn_mode_ghs.setCheckable(True)
         self.btn_mode_ghs.setStyleSheet(
             "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
@@ -623,7 +579,8 @@ class DeveloperTab(QWidget):
         mtf_layout.setSpacing(6)
 
         btn_row_mtf = QHBoxLayout()
-        btn_auto_mtf = QPushButton("⚡ Auto-Estirado MTF")
+        btn_auto_mtf = QPushButton("Auto-Estirado MTF")
+        btn_auto_mtf.setIcon(get_icon("sparkles", color="#80d8ff", size=12))
         btn_auto_mtf.setStyleSheet("font-weight: bold; color: #80d8ff;")
         btn_auto_mtf.clicked.connect(self.apply_auto_mtf)
         btn_reset_tone = QPushButton("Restablecer MTF")
@@ -632,47 +589,24 @@ class DeveloperTab(QWidget):
         btn_row_mtf.addWidget(btn_reset_tone)
         mtf_layout.addLayout(btn_row_mtf)
 
-        # Emparejamiento: Punto Negro (izq) y Medios Tonos (der)
-        row_spins = QHBoxLayout()
-        row_spins.setSpacing(14)
-
-        col_bp_lbl = QHBoxLayout()
-        col_bp_lbl.addWidget(self._make_resettable_label(QLabel("P. Negro:"), lambda: self.spin_bp.setValue(getattr(self, 'initial_bp', 0.0)), "0.00000"))
-        self.spin_bp = QDoubleSpinBox()
-        self.spin_bp.setDecimals(5)
+        # Sliders de alta precisión para MTF (Punto Negro y Medios Tonos)
+        self.row_bp = PrecisionSliderRow("P. Negro:", 0, 2000, 0, scale=10000.0, decimals=5, label_width=115)
+        self.slider_bp = self.row_bp.slider
+        self.spin_bp = self.row_bp.spin
         self.spin_bp.setRange(0.0, 0.20000)
         self.spin_bp.setSingleStep(0.00010)
-        self.spin_bp.setValue(0.0)
+        self.slider_bp.valueChanged.connect(self.on_slider_bp_changed)
         self.spin_bp.valueChanged.connect(self.on_spin_bp_changed)
-        col_bp_lbl.addWidget(self.spin_bp)
-        row_spins.addLayout(col_bp_lbl)
+        mtf_layout.addWidget(self.row_bp)
 
-        col_mtf_lbl = QHBoxLayout()
-        col_mtf_lbl.addWidget(self._make_resettable_label(QLabel("Medios (m):"), lambda: self.spin_mtf.setValue(getattr(self, 'initial_mtf', 0.10000)), "0.10000"))
-        self.spin_mtf = QDoubleSpinBox()
-        self.spin_mtf.setDecimals(5)
+        self.row_mtf = PrecisionSliderRow("Medios (m):", 1, 2000, 400, scale=4000.0, decimals=5, label_width=115)
+        self.slider_mtf = self.row_mtf.slider
+        self.spin_mtf = self.row_mtf.spin
         self.spin_mtf.setRange(0.00010, 0.50000)
         self.spin_mtf.setSingleStep(0.00050)
-        self.spin_mtf.setValue(0.10000)
-        self.spin_mtf.valueChanged.connect(self.on_spin_mtf_changed)
-        col_mtf_lbl.addWidget(self.spin_mtf)
-        row_spins.addLayout(col_mtf_lbl)
-        mtf_layout.addLayout(row_spins)
-
-        row_sliders = QHBoxLayout()
-        row_sliders.setSpacing(14)
-        self.slider_bp = QSlider(Qt.Horizontal)
-        self.slider_bp.setRange(0, 2000)
-        self.slider_bp.setValue(0)
-        self.slider_bp.valueChanged.connect(self.on_slider_bp_changed)
-        row_sliders.addWidget(self.slider_bp)
-
-        self.slider_mtf = QSlider(Qt.Horizontal)
-        self.slider_mtf.setRange(1, 2000)
-        self.slider_mtf.setValue(400)
         self.slider_mtf.valueChanged.connect(self.on_slider_mtf_changed)
-        row_sliders.addWidget(self.slider_mtf)
-        mtf_layout.addLayout(row_sliders)
+        self.spin_mtf.valueChanged.connect(self.on_spin_mtf_changed)
+        mtf_layout.addWidget(self.row_mtf)
 
         stretch_layout.addWidget(self.w_mtf_container)
 
@@ -685,12 +619,14 @@ class DeveloperTab(QWidget):
 
         # Botonera superior GHS: Auto-GHS, Cuentagotas SP, Restablecer GHS
         btn_row_ghs = QHBoxLayout()
-        self.btn_auto_ghs = QPushButton("⚡ Auto-GHS")
+        self.btn_auto_ghs = QPushButton("Auto-GHS")
+        self.btn_auto_ghs.setIcon(get_icon("sparkles", color="#ffb74d", size=12))
         self.btn_auto_ghs.setStyleSheet("font-weight: bold; color: #ffb74d;")
         self.btn_auto_ghs.clicked.connect(self.apply_auto_ghs)
         self.btn_auto_ghs.setToolTip("Calcula y aplica automáticamente los parámetros óptimos de GHS según el histograma")
 
-        self.btn_ghs_pipette = QPushButton("🎯 Cuentagotas SP")
+        self.btn_ghs_pipette = QPushButton("Cuentagotas SP")
+        self.btn_ghs_pipette.setIcon(get_icon("pipette", color="#80d8ff", size=12))
         self.btn_ghs_pipette.setCheckable(True)
         self.btn_ghs_pipette.setCursor(Qt.PointingHandCursor)
         self.btn_ghs_pipette.setStyleSheet("font-weight: bold; color: #80d8ff;")
@@ -708,7 +644,8 @@ class DeveloperTab(QWidget):
         # Selector de Modo de Color GHS: Luminancia vs RGB
         row_ghs_color = QHBoxLayout()
         row_ghs_color.setSpacing(4)
-        self.btn_ghs_luma = QPushButton("💡 Luminancia (Color)")
+        self.btn_ghs_luma = QPushButton("Luminancia (Color)")
+        self.btn_ghs_luma.setIcon(get_icon("chart", color="#80d8ff", size=11))
         self.btn_ghs_luma.setCheckable(True)
         self.btn_ghs_luma.setChecked(True)
         self.btn_ghs_luma.setStyleSheet(
@@ -718,7 +655,8 @@ class DeveloperTab(QWidget):
         self.btn_ghs_luma.setToolTip("Preserva la saturación natural y matices estirando solo la luminancia Rec.709")
         self.btn_ghs_luma.clicked.connect(lambda: self._set_ghs_color_mode("luma"))
 
-        self.btn_ghs_rgb = QPushButton("🎨 RGB Enlazado")
+        self.btn_ghs_rgb = QPushButton("RGB Enlazado")
+        self.btn_ghs_rgb.setIcon(get_icon("palette", color="#00e676", size=11))
         self.btn_ghs_rgb.setCheckable(True)
         self.btn_ghs_rgb.setStyleSheet(
             "QPushButton { font-size: 10px; padding: 3px; font-weight: bold; border-radius: 3px; background: #262933; color: #cfd8dc; }"
@@ -736,149 +674,77 @@ class DeveloperTab(QWidget):
         ghs_layout.addLayout(row_ghs_color)
 
         # Fila SP: Punto de Simetría
-        row_sp = QHBoxLayout()
-        row_sp.addWidget(self._make_resettable_label(QLabel("P. Simetría (SP):"), lambda: self.spin_ghs_sp.setValue(0.02000), "0.02000"))
-        self.spin_ghs_sp = QDoubleSpinBox()
-        self.spin_ghs_sp.setDecimals(5)
-        self.spin_ghs_sp.setRange(0.00000, 1.00000)
-        self.spin_ghs_sp.setSingleStep(0.00050)
-        self.spin_ghs_sp.setValue(0.02000)
-        self.spin_ghs_sp.valueChanged.connect(self.on_spin_ghs_sp_changed)
-        row_sp.addWidget(self.spin_ghs_sp)
-        ghs_layout.addLayout(row_sp)
-
-        self.slider_ghs_sp = QSlider(Qt.Horizontal)
-        self.slider_ghs_sp.setRange(0, 10000)
-        self.slider_ghs_sp.setValue(200)
+        self.row_ghs_sp = PrecisionSliderRow("P. Simetría (SP):", 0, 10000, 200, scale=10000.0, decimals=5, label_width=115)
+        self.slider_ghs_sp = self.row_ghs_sp.slider
+        self.spin_ghs_sp = self.row_ghs_sp.spin
+        self.lbl_ghs_sp = self.row_ghs_sp.lbl_value
         self.slider_ghs_sp.valueChanged.connect(self.on_slider_ghs_sp_changed)
-        ghs_layout.addWidget(self.slider_ghs_sp)
+        self.spin_ghs_sp.valueChanged.connect(self.on_spin_ghs_sp_changed)
+        ghs_layout.addWidget(self.row_ghs_sp)
 
-        # Fila D y b: Factor de Estirado e Intensidad Local
-        row_db_spins = QHBoxLayout()
-        row_db_spins.setSpacing(10)
-
-        col_d = QHBoxLayout()
-        col_d.addWidget(self._make_resettable_label(QLabel("Factor D:"), lambda: self.spin_ghs_d.setValue(5.00), "5.00"))
-        self.spin_ghs_d = QDoubleSpinBox()
-        self.spin_ghs_d.setDecimals(2)
-        self.spin_ghs_d.setRange(0.00, 20.00)
-        self.spin_ghs_d.setSingleStep(0.10)
-        self.spin_ghs_d.setValue(5.00)
-        self.spin_ghs_d.valueChanged.connect(self.on_spin_ghs_d_changed)
-        col_d.addWidget(self.spin_ghs_d)
-        row_db_spins.addLayout(col_d)
-
-        col_b = QHBoxLayout()
-        col_b.addWidget(self._make_resettable_label(QLabel("Forma (b):"), lambda: self.spin_ghs_b.setValue(2.00), "2.00"))
-        self.spin_ghs_b = QDoubleSpinBox()
-        self.spin_ghs_b.setDecimals(2)
-        self.spin_ghs_b.setRange(0.00, 15.00)
-        self.spin_ghs_b.setSingleStep(0.10)
-        self.spin_ghs_b.setValue(2.00)
-        self.spin_ghs_b.valueChanged.connect(self.on_spin_ghs_b_changed)
-        col_b.addWidget(self.spin_ghs_b)
-        row_db_spins.addLayout(col_b)
-        ghs_layout.addLayout(row_db_spins)
-
-        row_db_sliders = QHBoxLayout()
-        row_db_sliders.setSpacing(10)
-        self.slider_ghs_d = QSlider(Qt.Horizontal)
-        self.slider_ghs_d.setRange(0, 2000)
-        self.slider_ghs_d.setValue(500)
+        # Fila Factor D
+        self.row_ghs_d = PrecisionSliderRow("Factor D:", 0, 2000, 500, scale=100.0, decimals=2, label_width=115)
+        self.slider_ghs_d = self.row_ghs_d.slider
+        self.spin_ghs_d = self.row_ghs_d.spin
+        self.lbl_ghs_d = self.row_ghs_d.lbl_value
         self.slider_ghs_d.valueChanged.connect(self.on_slider_ghs_d_changed)
-        row_db_sliders.addWidget(self.slider_ghs_d)
+        self.spin_ghs_d.valueChanged.connect(self.on_spin_ghs_d_changed)
+        ghs_layout.addWidget(self.row_ghs_d)
 
-        self.slider_ghs_b = QSlider(Qt.Horizontal)
-        self.slider_ghs_b.setRange(0, 1500)
-        self.slider_ghs_b.setValue(200)
+        # Fila Forma (b)
+        self.row_ghs_b = PrecisionSliderRow("Forma (b):", 0, 1500, 200, scale=100.0, decimals=2, label_width=115)
+        self.slider_ghs_b = self.row_ghs_b.slider
+        self.spin_ghs_b = self.row_ghs_b.spin
+        self.lbl_ghs_b = self.row_ghs_b.lbl_value
         self.slider_ghs_b.valueChanged.connect(self.on_slider_ghs_b_changed)
-        row_db_sliders.addWidget(self.slider_ghs_b)
-        ghs_layout.addLayout(row_db_sliders)
+        self.spin_ghs_b.valueChanged.connect(self.on_spin_ghs_b_changed)
+        ghs_layout.addWidget(self.row_ghs_b)
 
-        # Fila HP (Protección de Estrellas) y LP (Protección de Sombras)
-        row_prot_spins = QHBoxLayout()
-        row_prot_spins.setSpacing(10)
-
-        col_hp = QHBoxLayout()
-        col_hp.addWidget(self._make_resettable_label(QLabel("Prot. Estrellas (HP):"), lambda: self.spin_ghs_hp.setValue(0.00), "0.00"))
-        self.spin_ghs_hp = QDoubleSpinBox()
-        self.spin_ghs_hp.setDecimals(2)
-        self.spin_ghs_hp.setRange(0.00, 1.00)
-        self.spin_ghs_hp.setSingleStep(0.02)
-        self.spin_ghs_hp.setValue(0.00)
-        self.spin_ghs_hp.valueChanged.connect(self.on_spin_ghs_hp_changed)
-        col_hp.addWidget(self.spin_ghs_hp)
-        row_prot_spins.addLayout(col_hp)
-
-        col_lp = QHBoxLayout()
-        col_lp.addWidget(self._make_resettable_label(QLabel("Prot. Sombras (LP):"), lambda: self.spin_ghs_lp.setValue(0.00), "0.00"))
-        self.spin_ghs_lp = QDoubleSpinBox()
-        self.spin_ghs_lp.setDecimals(2)
-        self.spin_ghs_lp.setRange(0.00, 1.00)
-        self.spin_ghs_lp.setSingleStep(0.02)
-        self.spin_ghs_lp.setValue(0.00)
-        self.spin_ghs_lp.valueChanged.connect(self.on_spin_ghs_lp_changed)
-        col_lp.addWidget(self.spin_ghs_lp)
-        row_prot_spins.addLayout(col_lp)
-        ghs_layout.addLayout(row_prot_spins)
-
-        row_prot_sliders = QHBoxLayout()
-        row_prot_sliders.setSpacing(10)
-        self.slider_ghs_hp = QSlider(Qt.Horizontal)
-        self.slider_ghs_hp.setRange(0, 1000)
-        self.slider_ghs_hp.setValue(0)
+        # Fila Prot. Estrellas (HP)
+        self.row_ghs_hp = PrecisionSliderRow("Prot. Estrellas:", 0, 1000, 0, scale=1000.0, decimals=2, label_width=115)
+        self.slider_ghs_hp = self.row_ghs_hp.slider
+        self.spin_ghs_hp = self.row_ghs_hp.spin
+        self.lbl_ghs_hp = self.row_ghs_hp.lbl_value
         self.slider_ghs_hp.valueChanged.connect(self.on_slider_ghs_hp_changed)
-        row_prot_sliders.addWidget(self.slider_ghs_hp)
+        self.spin_ghs_hp.valueChanged.connect(self.on_spin_ghs_hp_changed)
+        ghs_layout.addWidget(self.row_ghs_hp)
 
-        self.slider_ghs_lp = QSlider(Qt.Horizontal)
-        self.slider_ghs_lp.setRange(0, 1000)
-        self.slider_ghs_lp.setValue(0)
+        # Fila Prot. Sombras (LP)
+        self.row_ghs_lp = PrecisionSliderRow("Prot. Sombras:", 0, 1000, 0, scale=1000.0, decimals=2, label_width=115)
+        self.slider_ghs_lp = self.row_ghs_lp.slider
+        self.spin_ghs_lp = self.row_ghs_lp.spin
+        self.lbl_ghs_lp = self.row_ghs_lp.lbl_value
         self.slider_ghs_lp.valueChanged.connect(self.on_slider_ghs_lp_changed)
-        row_prot_sliders.addWidget(self.slider_ghs_lp)
-        ghs_layout.addLayout(row_prot_sliders)
+        self.spin_ghs_lp.valueChanged.connect(self.on_spin_ghs_lp_changed)
+        ghs_layout.addWidget(self.row_ghs_lp)
 
         # Fila Punto Negro GHS (BP)
-        row_ghs_bp = QHBoxLayout()
-        row_ghs_bp.addWidget(self._make_resettable_label(QLabel("P. Negro GHS (BP):"), lambda: self.spin_ghs_bp.setValue(0.00000), "0.00000"))
-        self.spin_ghs_bp = QDoubleSpinBox()
-        self.spin_ghs_bp.setDecimals(5)
-        self.spin_ghs_bp.setRange(0.00000, 0.20000)
-        self.spin_ghs_bp.setSingleStep(0.00010)
-        self.spin_ghs_bp.setValue(0.00000)
-        self.spin_ghs_bp.valueChanged.connect(self.on_spin_ghs_bp_changed)
-        row_ghs_bp.addWidget(self.spin_ghs_bp)
-        ghs_layout.addLayout(row_ghs_bp)
-
-        self.slider_ghs_bp = QSlider(Qt.Horizontal)
-        self.slider_ghs_bp.setRange(0, 2000)
-        self.slider_ghs_bp.setValue(0)
+        self.row_ghs_bp = PrecisionSliderRow("P. Negro GHS:", 0, 2000, 0, scale=10000.0, decimals=5, label_width=115)
+        self.slider_ghs_bp = self.row_ghs_bp.slider
+        self.spin_ghs_bp = self.row_ghs_bp.spin
+        self.lbl_ghs_bp = self.row_ghs_bp.lbl_value
         self.slider_ghs_bp.valueChanged.connect(self.on_slider_ghs_bp_changed)
-        ghs_layout.addWidget(self.slider_ghs_bp)
+        self.spin_ghs_bp.valueChanged.connect(self.on_spin_ghs_bp_changed)
+        ghs_layout.addWidget(self.row_ghs_bp)
 
         stretch_layout.addWidget(self.w_ghs_container)
 
         # 3.4 Contraste General (común para MTF y GHS)
-        row_cnt = QHBoxLayout()
-        row_cnt.addWidget(self._make_resettable_label(QLabel("Contraste:"), lambda: self.slider_contrast.setValue(0), "0.00"))
-        self.lbl_contrast = QLabel("0.00")
-        self.lbl_contrast.setStyleSheet("color: #ffd54f; font-weight: bold;")
-        row_cnt.addWidget(self.lbl_contrast)
-        row_cnt.addSpacing(10)
-        self.slider_contrast = QSlider(Qt.Horizontal)
-        self.slider_contrast.setRange(-100, 100)
-        self.slider_contrast.setValue(0)
+        self.row_contrast = PrecisionSliderRow("Contraste:", -100, 100, 0, scale=100.0, decimals=2, force_sign=True, label_width=115)
+        self.slider_contrast = self.row_contrast.slider
+        self.lbl_contrast = self.row_contrast.lbl_value
         self.slider_contrast.valueChanged.connect(self.on_contrast_changed)
-        row_cnt.addWidget(self.slider_contrast, stretch=1)
-        stretch_layout.addLayout(row_cnt)
+        stretch_layout.addWidget(self.row_contrast)
 
         self.sec_stretch.set_content_widget(w_stretch)
         left_layout.addWidget(self.sec_stretch)
 
         # --- SECCIÓN 4: Curva Tonal Interactiva (RGB / Saturación) ---
         self.sec_curves = CollapsibleSection(
-            "📈 Curva Tonal Interactiva (RGB / Saturación)",
+            "Curva Tonal Interactiva (RGB / Saturación)",
             is_expanded=False,
-            on_reset=lambda: self.curve_widget.reset_all_curves()
+            on_reset=lambda: self.curve_widget.reset_all_curves(),
+            icon_name="curve"
         )
         w_curves = QWidget()
         curves_layout = QVBoxLayout(w_curves)
@@ -889,7 +755,8 @@ class DeveloperTab(QWidget):
         row_curve_mode = QHBoxLayout()
         row_curve_mode.setSpacing(4)
 
-        self.btn_curve_rgb = QPushButton("📈 Tonos (RGB)")
+        self.btn_curve_rgb = QPushButton("Tonos (RGB)")
+        self.btn_curve_rgb.setIcon(get_icon("curve", color="#80d8ff", size=12))
         self.btn_curve_rgb.setCheckable(True)
         self.btn_curve_rgb.setChecked(True)
         self.btn_curve_rgb.setStyleSheet(
@@ -899,7 +766,8 @@ class DeveloperTab(QWidget):
         self.btn_curve_rgb.setToolTip("Curva tonal RGB continua con histograma logarítmico y avisos de recorte.")
         self.btn_curve_rgb.clicked.connect(lambda: self._set_curve_mode("rgb"))
 
-        self.btn_curve_hue = QPushButton("🌈 Tono vs Sat")
+        self.btn_curve_hue = QPushButton("Tono vs Sat")
+        self.btn_curve_hue.setIcon(get_icon("palette", color="#ffb74d", size=12))
         self.btn_curve_hue.setCheckable(True)
         self.btn_curve_hue.setStyleSheet(
             "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
@@ -908,7 +776,8 @@ class DeveloperTab(QWidget):
         self.btn_curve_hue.setToolTip("Curva selectiva de saturación en función del tono (Hue vs Sat).\nPermite saturar selectivamente H-alfa / nebulosas o neutralizar tonalidades no deseadas.")
         self.btn_curve_hue.clicked.connect(lambda: self._set_curve_mode("hue_sat"))
 
-        self.btn_curve_luma = QPushButton("💡 Luma vs Sat")
+        self.btn_curve_luma = QPushButton("Luma vs Sat")
+        self.btn_curve_luma.setIcon(get_icon("chart", color="#00e676", size=12))
         self.btn_curve_luma.setCheckable(True)
         self.btn_curve_luma.setStyleSheet(
             "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
@@ -954,7 +823,7 @@ class DeveloperTab(QWidget):
         left_layout.addWidget(self.sec_curves)
 
         # --- SECCIÓN 5: StarNet++ AI — Desacoplo y Procesado de Capas ---
-        self.sec_starnet = CollapsibleSection("⭐ StarNet++ AI — Desacoplo de Estrellas", is_expanded=False)
+        self.sec_starnet = CollapsibleSection("StarNet++ AI — Desacoplo de Estrellas", is_expanded=False, icon_name="star")
         w_starnet = QWidget()
         layout_starnet = QVBoxLayout(w_starnet)
         layout_starnet.setContentsMargins(6, 4, 6, 6)
@@ -970,7 +839,8 @@ class DeveloperTab(QWidget):
         self.spin_stride.setFixedWidth(65)
         row_sn.addWidget(self.spin_stride)
 
-        self.btn_starnet = QPushButton("✨ Separar Estrellas con StarNet")
+        self.btn_starnet = QPushButton("Separar Estrellas con StarNet")
+        self.btn_starnet.setIcon(get_icon("star", color="#b388ff", size=13))
         self.btn_starnet.setStyleSheet("font-weight: bold; color: #b388ff;")
         self.btn_starnet.clicked.connect(self.run_starnet)
         row_sn.addWidget(self.btn_starnet)
@@ -991,14 +861,15 @@ class DeveloperTab(QWidget):
         layout_card_sn.setSpacing(8)
 
         self.lbl_starnet_info = QLabel(
-            "💡 Ejecuta StarNet para desacoplar las estrellas del fondo cósmico.\n"
-            "Se generarán automáticamente las capas '🌌 Fondo Nebular' y '⭐ Estrellas' en el Gestor de Capas (Sección 9), donde podrás ajustar de forma contextual su presencia, claridad, contraste y reducción de ruido."
+            "Ejecuta StarNet para desacoplar las estrellas del fondo cósmico.\n"
+            "Se generarán automáticamente las capas 'Fondo Nebular' y 'Estrellas' en el Gestor de Capas (Sección 9), donde podrás ajustar de forma contextual su presencia, claridad, contraste y reducción de ruido."
         )
         self.lbl_starnet_info.setWordWrap(True)
         self.lbl_starnet_info.setStyleSheet("color: #b0bec5; font-size: 11px; line-height: 1.4;")
         layout_card_sn.addWidget(self.lbl_starnet_info)
 
-        self.btn_go_to_masks_starnet = QPushButton("🌌 Abrir Capas en Gestor de Capas (Sección 9) ➔")
+        self.btn_go_to_masks_starnet = QPushButton("Abrir Capas en Gestor de Capas (Sección 9)")
+        self.btn_go_to_masks_starnet.setIcon(get_icon("layers", color="#b388ff", size=13))
         self.btn_go_to_masks_starnet.setCursor(Qt.PointingHandCursor)
         self.btn_go_to_masks_starnet.setStyleSheet("""
             QPushButton {
@@ -1156,7 +1027,7 @@ class DeveloperTab(QWidget):
         tools_layout.addLayout(row_pair3)
 
         # Emparejamiento 3.2 - Par 4: Efecto Orton y Resplandor de Polvo Galáctico
-        self.box_orton_tools = QGroupBox("✨ Efecto Orton y Glow Galáctico")
+        self.box_orton_tools = QGroupBox("Efecto Orton y Glow Galáctico")
         self.box_orton_tools.setStyleSheet("""
             QGroupBox {
                 border: 1px solid #7b1fa2;
@@ -1185,7 +1056,8 @@ class DeveloperTab(QWidget):
         self.slider_orton.valueChanged.connect(self.on_orton_strength_changed)
         row_ort_int.addWidget(self.slider_orton, stretch=1)
 
-        self.btn_orton_expand = QPushButton("⚙️")
+        self.btn_orton_expand = QPushButton("")
+        self.btn_orton_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#e1bee7", size=13))
         self.btn_orton_expand.setCheckable(True)
         self.btn_orton_expand.setChecked(False)
         self.btn_orton_expand.setToolTip("Despliega los controles avanzados de radio, umbral de polvo, tinte cromático y modo de fusión.")
@@ -1271,7 +1143,7 @@ class DeveloperTab(QWidget):
         tools_layout.addWidget(self.box_orton_tools)
 
         # Emparejamiento 3.3: Filtro Difusor y Realce de Constelaciones (Star Mist)
-        self.box_star_diff_tools = QGroupBox("🌟 Filtro Difusor y Realce de Constelaciones")
+        self.box_star_diff_tools = QGroupBox("Filtro Difusor y Realce de Constelaciones")
         self.box_star_diff_tools.setStyleSheet("""
             QGroupBox {
                 border: 1px solid #fbc02d;
@@ -1300,7 +1172,8 @@ class DeveloperTab(QWidget):
         self.slider_star_diff.valueChanged.connect(self.on_star_diff_strength_changed)
         row_sd_int.addWidget(self.slider_star_diff, stretch=1)
 
-        self.btn_star_diff_expand = QPushButton("⚙️")
+        self.btn_star_diff_expand = QPushButton("")
+        self.btn_star_diff_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#fff9c4", size=13))
         self.btn_star_diff_expand.setCheckable(True)
         self.btn_star_diff_expand.setChecked(False)
         self.btn_star_diff_expand.setToolTip("Despliega controles avanzados de radio de halo, umbral de magnitud, saturación espectral y modo de fusión.")
@@ -1394,9 +1267,10 @@ class DeveloperTab(QWidget):
 
         # --- SECCIÓN 5b: Deconvolución Óptica y Enfoque (Richardson-Lucy) ---
         self.sec_deconv = CollapsibleSection(
-            "🔬 Deconvolución Óptica y Enfoque (R-L)",
+            "Deconvolución Óptica y Enfoque (R-L)",
             is_expanded=False,
-            on_reset=self.reset_deconv
+            on_reset=self.reset_deconv,
+            icon_name="microscope"
         )
         w_deconv = QWidget()
         deconv_layout = QVBoxLayout(w_deconv)
@@ -1404,7 +1278,8 @@ class DeveloperTab(QWidget):
         deconv_layout.setSpacing(6)
 
         # 1. Botón de Estimación Automática de PSF y Estado
-        self.btn_auto_psf = QPushButton("🎯 Estimar PSF Automática de Estrellas")
+        self.btn_auto_psf = QPushButton("Estimar PSF Automática de Estrellas")
+        self.btn_auto_psf.setIcon(get_icon("crosshair", color="#90caf9", size=14))
         self.btn_auto_psf.setToolTip("Analiza estrellas aisladas no saturadas de la imagen para determinar el diámetro FWHM y relación de aspecto de la PSF.")
         self.btn_auto_psf.setStyleSheet(
             "QPushButton { font-weight: bold; padding: 6px; background: #1c2836; border: 1px solid #1e88e5; border-radius: 4px; color: #90caf9; }"
@@ -1419,19 +1294,12 @@ class DeveloperTab(QWidget):
         deconv_layout.addWidget(self.lbl_psf_status)
 
         # 2. Control Principal: Iteraciones R-L
-        row_iter = QHBoxLayout()
-        row_iter.addWidget(self._make_resettable_label(QLabel("Iteraciones (R-L):"), lambda: self.slider_deconv_iter.setValue(0), "0 (Desactivado)"))
-        self.lbl_deconv_iter = QLabel("0 (Off)")
-        self.lbl_deconv_iter.setStyleSheet("color: #4fc3f7; font-weight: bold;")
-        self.lbl_deconv_iter.setFixedWidth(52)
-        row_iter.addWidget(self.lbl_deconv_iter)
-        self.slider_deconv_iter = QSlider(Qt.Horizontal)
-        self.slider_deconv_iter.setRange(0, 40)
-        self.slider_deconv_iter.setValue(0)
-        self.slider_deconv_iter.valueChanged.connect(self.on_deconv_iterations_changed)
-        row_iter.addWidget(self.slider_deconv_iter, stretch=1)
+        self.row_deconv_iter = PrecisionSliderRow("Iteraciones (R-L):", 0, 40, 0, special_zero_text="0 (Off)", label_width=115)
+        self.slider_deconv_iter = self.row_deconv_iter.slider
+        self.lbl_deconv_iter = self.row_deconv_iter.lbl_value
 
-        self.btn_deconv_expand = QPushButton("⚙️")
+        self.btn_deconv_expand = QPushButton("")
+        self.btn_deconv_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#e3f2fd", size=13))
         self.btn_deconv_expand.setCheckable(True)
         self.btn_deconv_expand.setChecked(False)
         self.btn_deconv_expand.setToolTip("Despliega controles avanzados de FWHM, antianillos (deringing), amortiguación de ruido, elipticidad y ámbito.")
@@ -1440,99 +1308,50 @@ class DeveloperTab(QWidget):
             "QPushButton:checked { background: #1976d2; color: #e3f2fd; border: 1px solid #42a5f5; }"
         )
         self.btn_deconv_expand.toggled.connect(self._on_toggle_deconv_expand)
-        row_iter.addWidget(self.btn_deconv_expand)
-        deconv_layout.addLayout(row_iter)
+        self.row_deconv_iter.layout().addWidget(self.btn_deconv_expand)
+
+        self.row_deconv_iter.valueChanged.connect(self.on_deconv_iterations_changed)
+        self.row_deconv_iter.sliderReleased.connect(self.update_stretch_preview)
+        deconv_layout.addWidget(self.row_deconv_iter)
 
         # 3. Control Principal: FWHM
-        row_fwhm = QHBoxLayout()
-        row_fwhm.addWidget(self._make_resettable_label(QLabel("FWHM (px):"), lambda: self.slider_deconv_fwhm.setValue(30), "3.0 px"))
-        self.lbl_deconv_fwhm = QLabel("3.0 px")
-        self.lbl_deconv_fwhm.setStyleSheet("color: #ffe082; font-weight: bold;")
-        self.lbl_deconv_fwhm.setFixedWidth(52)
-        row_fwhm.addWidget(self.lbl_deconv_fwhm)
-        self.slider_deconv_fwhm = QSlider(Qt.Horizontal)
-        self.slider_deconv_fwhm.setRange(10, 80)
-        self.slider_deconv_fwhm.setValue(30)
-        self.slider_deconv_fwhm.valueChanged.connect(self.on_deconv_fwhm_changed)
-        row_fwhm.addWidget(self.slider_deconv_fwhm, stretch=1)
-        deconv_layout.addLayout(row_fwhm)
+        self.row_deconv_fwhm = PrecisionSliderRow("FWHM (PSF):", 10, 80, 30, scale=10.0, decimals=1, unit=" px", label_width=115)
+        self.slider_deconv_fwhm = self.row_deconv_fwhm.slider
+        self.lbl_deconv_fwhm = self.row_deconv_fwhm.lbl_value
+        self.row_deconv_fwhm.valueChanged.connect(self.on_deconv_fwhm_changed)
+        deconv_layout.addWidget(self.row_deconv_fwhm)
 
-        # 4. Panel Avanzado Desplegable (⚙️)
+        # 4. Panel Avanzado Desplegable
         self.w_deconv_advanced = QWidget()
         self.w_deconv_advanced.setVisible(False)
         w_dadv_layout = QVBoxLayout(self.w_deconv_advanced)
         w_dadv_layout.setContentsMargins(0, 4, 0, 2)
         w_dadv_layout.setSpacing(6)
 
-        # Fila Deringing y Damping
-        row_der_damp = QHBoxLayout()
-        row_der_damp.setSpacing(10)
+        # Controles avanzados con PrecisionSliderRow
+        self.row_deconv_deringing = PrecisionSliderRow("Antianillos:", 0, 40, 8, scale=1000.0, decimals=3, label_width=115)
+        self.slider_deconv_deringing = self.row_deconv_deringing.slider
+        self.lbl_deconv_deringing = self.row_deconv_deringing.lbl_value
+        self.row_deconv_deringing.valueChanged.connect(self.on_deconv_deringing_changed)
+        w_dadv_layout.addWidget(self.row_deconv_deringing)
 
-        col_der = QVBoxLayout()
-        col_der.setSpacing(2)
-        row_der_lbl = QHBoxLayout()
-        row_der_lbl.addWidget(self._make_resettable_label(QLabel("Antianillos:"), lambda: self.slider_deconv_deringing.setValue(8), "0.008"))
-        self.lbl_deconv_deringing = QLabel("0.008")
-        self.lbl_deconv_deringing.setStyleSheet("color: #80cbc4; font-weight: bold;")
-        row_der_lbl.addWidget(self.lbl_deconv_deringing)
-        col_der.addLayout(row_der_lbl)
-        self.slider_deconv_deringing = QSlider(Qt.Horizontal)
-        self.slider_deconv_deringing.setRange(0, 40)
-        self.slider_deconv_deringing.setValue(8)
-        self.slider_deconv_deringing.valueChanged.connect(self.on_deconv_deringing_changed)
-        col_der.addWidget(self.slider_deconv_deringing)
-        row_der_damp.addLayout(col_der)
+        self.row_deconv_damping = PrecisionSliderRow("Amortiguación:", 0, 100, 25, unit="%", label_width=115)
+        self.slider_deconv_damping = self.row_deconv_damping.slider
+        self.lbl_deconv_damping = self.row_deconv_damping.lbl_value
+        self.row_deconv_damping.valueChanged.connect(self.on_deconv_damping_changed)
+        w_dadv_layout.addWidget(self.row_deconv_damping)
 
-        col_damp = QVBoxLayout()
-        col_damp.setSpacing(2)
-        row_damp_lbl = QHBoxLayout()
-        row_damp_lbl.addWidget(self._make_resettable_label(QLabel("Amortiguación:"), lambda: self.slider_deconv_damping.setValue(25), "25%"))
-        self.lbl_deconv_damping = QLabel("25%")
-        self.lbl_deconv_damping.setStyleSheet("color: #80cbc4; font-weight: bold;")
-        row_damp_lbl.addWidget(self.lbl_deconv_damping)
-        col_damp.addLayout(row_damp_lbl)
-        self.slider_deconv_damping = QSlider(Qt.Horizontal)
-        self.slider_deconv_damping.setRange(0, 100)
-        self.slider_deconv_damping.setValue(25)
-        self.slider_deconv_damping.valueChanged.connect(self.on_deconv_damping_changed)
-        col_damp.addWidget(self.slider_deconv_damping)
-        row_der_damp.addLayout(col_damp)
-        w_dadv_layout.addLayout(row_der_damp)
+        self.row_deconv_aspect = PrecisionSliderRow("Aspecto PSF:", 100, 250, 100, scale=100.0, decimals=2, unit="x", label_width=115)
+        self.slider_deconv_aspect = self.row_deconv_aspect.slider
+        self.lbl_deconv_aspect = self.row_deconv_aspect.lbl_value
+        self.row_deconv_aspect.valueChanged.connect(self.on_deconv_aspect_changed)
+        w_dadv_layout.addWidget(self.row_deconv_aspect)
 
-        # Fila Aspect Ratio y Ángulo
-        row_asp_ang = QHBoxLayout()
-        row_asp_ang.setSpacing(10)
-
-        col_asp = QVBoxLayout()
-        col_asp.setSpacing(2)
-        row_asp_lbl = QHBoxLayout()
-        row_asp_lbl.addWidget(self._make_resettable_label(QLabel("Aspecto:"), lambda: self.slider_deconv_aspect.setValue(100), "1.00x"))
-        self.lbl_deconv_aspect = QLabel("1.00x")
-        self.lbl_deconv_aspect.setStyleSheet("color: #ce93d8; font-weight: bold;")
-        row_asp_lbl.addWidget(self.lbl_deconv_aspect)
-        col_asp.addLayout(row_asp_lbl)
-        self.slider_deconv_aspect = QSlider(Qt.Horizontal)
-        self.slider_deconv_aspect.setRange(100, 250)
-        self.slider_deconv_aspect.setValue(100)
-        self.slider_deconv_aspect.valueChanged.connect(self.on_deconv_aspect_changed)
-        col_asp.addWidget(self.slider_deconv_aspect)
-        row_asp_ang.addLayout(col_asp)
-
-        col_ang = QVBoxLayout()
-        col_ang.setSpacing(2)
-        row_ang_lbl = QHBoxLayout()
-        row_ang_lbl.addWidget(self._make_resettable_label(QLabel("Ángulo (°):"), lambda: self.slider_deconv_angle.setValue(0), "0°"))
-        self.lbl_deconv_angle = QLabel("0°")
-        self.lbl_deconv_angle.setStyleSheet("color: #ce93d8; font-weight: bold;")
-        row_ang_lbl.addWidget(self.lbl_deconv_angle)
-        col_ang.addLayout(row_ang_lbl)
-        self.slider_deconv_angle = QSlider(Qt.Horizontal)
-        self.slider_deconv_angle.setRange(-90, 90)
-        self.slider_deconv_angle.setValue(0)
-        self.slider_deconv_angle.valueChanged.connect(self.on_deconv_angle_changed)
-        col_ang.addWidget(self.slider_deconv_angle)
-        row_asp_ang.addLayout(col_ang)
-        w_dadv_layout.addLayout(row_asp_ang)
+        self.row_deconv_angle = PrecisionSliderRow("Ángulo PSF:", -90, 90, 0, unit="°", force_sign=True, label_width=115)
+        self.slider_deconv_angle = self.row_deconv_angle.slider
+        self.lbl_deconv_angle = self.row_deconv_angle.lbl_value
+        self.row_deconv_angle.valueChanged.connect(self.on_deconv_angle_changed)
+        w_dadv_layout.addWidget(self.row_deconv_angle)
 
         # Fila Modelo PSF y Ámbito de Aplicación
         row_mod_scp = QHBoxLayout()
@@ -1574,81 +1393,36 @@ class DeveloperTab(QWidget):
 
         # --- SECCIÓN 6: Balance de Blancos (Precisión Fina) ---
         self.sec_wb = CollapsibleSection(
-            "🌡️ Balance de Blancos y Calibración",
+            "Balance de Blancos y Calibración",
             is_expanded=True,
-            on_reset=self.reset_wb
+            on_reset=self.reset_wb,
+            icon_name="thermometer"
         )
         w_wb = QWidget()
         wb_layout = QVBoxLayout(w_wb)
         wb_layout.setContentsMargins(6, 4, 6, 6)
         wb_layout.setSpacing(8)
 
-        # Emparejamiento 3.2: Temp (izq) y Tinte (der) en 2 columnas
-        row_wb = QHBoxLayout()
-        row_wb.setSpacing(14)
-
-        col_temp = QVBoxLayout()
-        col_temp.setSpacing(4)
-        row_temp_lbl = QHBoxLayout()
-        lbl_temp_title = QLabel("Temp:")
-        lbl_temp_title.setToolTip("Doble clic para restablecer Temperatura a 0.000")
-        lbl_temp_title.setCursor(Qt.PointingHandCursor)
-        row_temp_lbl.addWidget(lbl_temp_title)
-
-        self.spin_temp = QDoubleSpinBox()
-        self.spin_temp.setDecimals(3)
-        self.spin_temp.setRange(-1.000, 1.000)
-        self.spin_temp.setSingleStep(0.010)
-        self.spin_temp.setValue(0.000)
-        self.spin_temp.setFixedWidth(82)
-        self.spin_temp.setStyleSheet("color: #ffd54f; font-weight: bold;")
-        self.spin_temp.setToolTip("Ajuste numérico manual de Temperatura (-1.000 a +1.000). Doble clic en 'Temp:' para reiniciar")
-        self.spin_temp.valueChanged.connect(self.on_spin_temp_changed)
-        row_temp_lbl.addWidget(self.spin_temp)
-        col_temp.addLayout(row_temp_lbl)
-
-        self.slider_temp = QSlider(Qt.Horizontal)
-        self.slider_temp.setRange(-1000, 1000)
-        self.slider_temp.setValue(0)
-        self.slider_temp.setToolTip("Temperatura de color (-1.000 azul/frío a +1.000 rojo/cálido). Doble clic en 'Temp:' para reiniciar")
+        # Sliders de alta precisión para Balance de Blancos
+        self.row_temp = PrecisionSliderRow("Temperatura:", -1000, 1000, 0, scale=1000.0, decimals=3, force_sign=True, label_width=115)
+        self.slider_temp = self.row_temp.slider
+        self.spin_temp = self.row_temp.spin
+        self.lbl_temp = self.row_temp.lbl_value
         self.slider_temp.valueChanged.connect(self.on_temp_changed)
-        lbl_temp_title.mouseDoubleClickEvent = lambda e: self.spin_temp.setValue(0.0)
-        col_temp.addWidget(self.slider_temp)
-        row_wb.addLayout(col_temp)
+        self.spin_temp.valueChanged.connect(self.on_spin_temp_changed)
+        wb_layout.addWidget(self.row_temp)
 
-        col_tint = QVBoxLayout()
-        col_tint.setSpacing(4)
-        row_tint_lbl = QHBoxLayout()
-        lbl_tint_title = QLabel("Tinte:")
-        lbl_tint_title.setToolTip("Doble clic para restablecer Tinte a 0.000")
-        lbl_tint_title.setCursor(Qt.PointingHandCursor)
-        row_tint_lbl.addWidget(lbl_tint_title)
-
-        self.spin_tint = QDoubleSpinBox()
-        self.spin_tint.setDecimals(3)
-        self.spin_tint.setRange(-1.000, 1.000)
-        self.spin_tint.setSingleStep(0.010)
-        self.spin_tint.setValue(0.000)
-        self.spin_tint.setFixedWidth(82)
-        self.spin_tint.setStyleSheet("color: #b388ff; font-weight: bold;")
-        self.spin_tint.setToolTip("Ajuste numérico manual de Tinte (-1.000 a +1.000). Doble clic en 'Tinte:' para reiniciar")
-        self.spin_tint.valueChanged.connect(self.on_spin_tint_changed)
-        row_tint_lbl.addWidget(self.spin_tint)
-        col_tint.addLayout(row_tint_lbl)
-
-        self.slider_tint = QSlider(Qt.Horizontal)
-        self.slider_tint.setRange(-1000, 1000)
-        self.slider_tint.setValue(0)
-        self.slider_tint.setToolTip("Tinte de color (-1.000 verde a +1.000 magenta). Doble clic en 'Tinte:' para reiniciar")
+        self.row_tint = PrecisionSliderRow("Tinte (V/M):", -1000, 1000, 0, scale=1000.0, decimals=3, force_sign=True, label_width=115)
+        self.slider_tint = self.row_tint.slider
+        self.spin_tint = self.row_tint.spin
+        self.lbl_tint = self.row_tint.lbl_value
         self.slider_tint.valueChanged.connect(self.on_tint_changed)
-        lbl_tint_title.mouseDoubleClickEvent = lambda e: self.spin_tint.setValue(0.0)
-        col_tint.addWidget(self.slider_tint)
-        row_wb.addLayout(col_tint)
-
-        wb_layout.addLayout(row_wb)
+        self.spin_tint.valueChanged.connect(self.on_spin_tint_changed)
+        wb_layout.addWidget(self.row_tint)
 
         row_wb_btn = QHBoxLayout()
-        self.btn_panel_pipette = QPushButton("🧪 Pipeta WB (W)")
+        self.btn_panel_pipette = QPushButton("Pipeta WB (W)")
+        self.btn_panel_pipette.setIcon(get_icon("pipette", color="#80d8ff", size=13))
         self.btn_panel_pipette.setCheckable(True)
         self.btn_panel_pipette.setCursor(Qt.PointingHandCursor)
         self.btn_panel_pipette.setStyleSheet("font-weight: bold; color: #80d8ff;")
@@ -1667,80 +1441,49 @@ class DeveloperTab(QWidget):
 
         # --- SECCIÓN 7: Color: Saturación e Intensidad ---
         self.sec_color = CollapsibleSection(
-            "🎨 Color y Saturación",
+            "Color y Saturación",
             is_expanded=True,
-            on_reset=self.reset_saturation
+            on_reset=self.reset_saturation,
+            icon_name="palette"
         )
         w_sat = QWidget()
         sat_layout = QVBoxLayout(w_sat)
         sat_layout.setContentsMargins(6, 4, 6, 6)
         sat_layout.setSpacing(8)
 
-        # Emparejamiento 3.2: Saturación Cielo (izq) y Suelo (der) en 2 columnas
-        row_sat_dual = QHBoxLayout()
-        row_sat_dual.setSpacing(14)
-
-        col_sky = QVBoxLayout()
-        col_sky.setSpacing(4)
-        row_sky_lbl = QHBoxLayout()
-        row_sky_lbl.addWidget(self._make_resettable_label(QLabel("Sat. Cielo:"), lambda: self.slider_sat_sky.setValue(100), "1.00x"))
-        self.lbl_sat_sky = QLabel("1.00x")
-        self.lbl_sat_sky.setStyleSheet("color: #80d8ff; font-weight: bold;")
-        row_sky_lbl.addWidget(self.lbl_sat_sky)
-        col_sky.addLayout(row_sky_lbl)
-
-        self.slider_sat_sky = QSlider(Qt.Horizontal)
-        self.slider_sat_sky.setRange(0, 250)
-        self.slider_sat_sky.setValue(100)
+        # Sliders de alta precisión para Saturación y Vibranza
+        self.row_sat_sky = PrecisionSliderRow("Sat. Cielo:", 0, 250, 100, scale=100.0, decimals=2, unit="x", label_width=115)
+        self.slider_sat_sky = self.row_sat_sky.slider
+        self.lbl_sat_sky = self.row_sat_sky.lbl_value
         self.slider_sat_sky.valueChanged.connect(self.on_sat_sky_changed)
-        col_sky.addWidget(self.slider_sat_sky)
-        row_sat_dual.addLayout(col_sky)
+        sat_layout.addWidget(self.row_sat_sky)
 
-        col_gnd = QVBoxLayout()
-        col_gnd.setSpacing(4)
-        row_gnd_lbl = QHBoxLayout()
-        row_gnd_lbl.addWidget(self._make_resettable_label(QLabel("Sat. Suelo:"), lambda: self.slider_sat_gnd.setValue(100), "1.00x"))
-        self.lbl_sat_gnd = QLabel("1.00x")
-        self.lbl_sat_gnd.setStyleSheet("color: #a5d6a7; font-weight: bold;")
-        row_gnd_lbl.addWidget(self.lbl_sat_gnd)
-        col_gnd.addLayout(row_gnd_lbl)
-
-        self.slider_sat_gnd = QSlider(Qt.Horizontal)
-        self.slider_sat_gnd.setRange(0, 250)
-        self.slider_sat_gnd.setValue(100)
+        self.row_sat_gnd = PrecisionSliderRow("Sat. Suelo:", 0, 250, 100, scale=100.0, decimals=2, unit="x", label_width=115)
+        self.slider_sat_gnd = self.row_sat_gnd.slider
+        self.lbl_sat_gnd = self.row_sat_gnd.lbl_value
         self.slider_sat_gnd.valueChanged.connect(self.on_sat_gnd_changed)
-        col_gnd.addWidget(self.slider_sat_gnd)
-        row_sat_dual.addLayout(col_gnd)
+        sat_layout.addWidget(self.row_sat_gnd)
 
-        sat_layout.addLayout(row_sat_dual)
-
-        # Vibrance y Reset en una fila compacta
-        row_vib = QHBoxLayout()
-        row_vib.addWidget(self._make_resettable_label(QLabel("Vibranza:"), lambda: self.slider_vibrance.setValue(0), "0.00"))
-        self.lbl_vibrance = QLabel("0.00")
-        self.lbl_vibrance.setStyleSheet("color: #ffd54f; font-weight: bold;")
-        row_vib.addWidget(self.lbl_vibrance)
-        row_vib.addSpacing(6)
-        self.slider_vibrance = QSlider(Qt.Horizontal)
-        self.slider_vibrance.setRange(-100, 100)
-        self.slider_vibrance.setValue(0)
+        self.row_vibrance = PrecisionSliderRow("Vibranza:", -100, 100, 0, scale=100.0, decimals=2, force_sign=True, label_width=115)
+        self.slider_vibrance = self.row_vibrance.slider
+        self.lbl_vibrance = self.row_vibrance.lbl_value
         self.slider_vibrance.valueChanged.connect(self.on_vibrance_changed)
-        row_vib.addWidget(self.slider_vibrance, stretch=1)
 
         btn_reset_sat = QPushButton("Restablecer")
         btn_reset_sat.setToolTip("Restablecer Saturación y Vibranza")
         btn_reset_sat.clicked.connect(self.reset_saturation)
-        row_vib.addWidget(btn_reset_sat)
-        sat_layout.addLayout(row_vib)
+        self.row_vibrance.layout().addWidget(btn_reset_sat)
+        sat_layout.addWidget(self.row_vibrance)
 
         self.sec_color.set_content_widget(w_sat)
         left_layout.addWidget(self.sec_color)
 
         # --- SECCIÓN 8: Ajuste Tonal Suelo (Paisaje) ---
         self.sec_gnd_tone = CollapsibleSection(
-            "🏞️ Ajuste Tonal Suelo (Paisaje)",
+            "Ajuste Tonal Suelo (Paisaje)",
             is_expanded=False,
-            on_reset=self.reset_gnd_tone
+            on_reset=self.reset_gnd_tone,
+            icon_name="mountain"
         )
         w_gnd_tone = QWidget()
         gnd_tone_layout = QVBoxLayout(w_gnd_tone)
@@ -1749,11 +1492,12 @@ class DeveloperTab(QWidget):
 
         # Acceso y estado de la Máscara de Suelo
         row_mask_status = QHBoxLayout()
-        self.lbl_gnd_mask_status = QLabel("⚠️ Sin máscara de suelo activa")
+        self.lbl_gnd_mask_status = QLabel("Sin máscara de suelo activa")
         self.lbl_gnd_mask_status.setStyleSheet("color: #ffb74d; font-size: 11px;")
         row_mask_status.addWidget(self.lbl_gnd_mask_status, stretch=1)
 
-        self.btn_edit_ground_mask = QPushButton("🖌️ Crear / Editar Máscara...")
+        self.btn_edit_ground_mask = QPushButton("Crear / Editar Máscara...")
+        self.btn_edit_ground_mask.setIcon(get_icon("brush", color="#80d8ff", size=13))
         self.btn_edit_ground_mask.setCursor(Qt.PointingHandCursor)
         self.btn_edit_ground_mask.setToolTip("Abre la herramienta de trazado interactivo de máscara en el visor (Atajo: M)")
         self.btn_edit_ground_mask.clicked.connect(self._open_mask_tool_from_section)
@@ -1775,14 +1519,15 @@ class DeveloperTab(QWidget):
         layout_card_gnd.setSpacing(8)
 
         self.lbl_gnd_info = QLabel(
-            "💡 Los ajustes tonales de la superficie terrestre (Exposición, Sombras, Punto Negro y Balance de Blancos dedicado) "
+            "Los ajustes tonales de la superficie terrestre (Exposición, Sombras, Punto Negro y Balance de Blancos dedicado) "
             "se gestionan ahora de forma centralizada e intuitiva en la Capa de Suelo dentro del Gestor de Capas (Sección 9)."
         )
         self.lbl_gnd_info.setWordWrap(True)
         self.lbl_gnd_info.setStyleSheet("color: #c8e6c9; font-size: 11px; line-height: 1.4;")
         layout_card_gnd.addWidget(self.lbl_gnd_info)
 
-        self.btn_go_to_ground_layer = QPushButton("🏞️ Abrir Capa de Suelo en Sección 9 ➔")
+        self.btn_go_to_ground_layer = QPushButton("Abrir Capa de Suelo en Sección 9")
+        self.btn_go_to_ground_layer.setIcon(get_icon("mountain", color="#a5d6a7", size=13))
         self.btn_go_to_ground_layer.setCursor(Qt.PointingHandCursor)
         self.btn_go_to_ground_layer.setStyleSheet("""
             QPushButton {
@@ -1839,7 +1584,7 @@ class DeveloperTab(QWidget):
         left_layout.addWidget(self.sec_gnd_tone)
 
         # --- SECCIÓN 9: Máscaras y Capas de Ajuste Local ---
-        self.sec_masks = CollapsibleSection("🎭 Máscaras y Capas de Ajuste Local", is_expanded=False)
+        self.sec_masks = CollapsibleSection("Máscaras y Capas de Ajuste Local", is_expanded=False, icon_name="layers")
         self.mask_layers_widget = MaskLayersWidget()
         self.mask_layers_widget.set_getters(
             img_getter=lambda: self.preview_proxy if self.preview_proxy is not None else self.image_32bit,
@@ -1928,14 +1673,16 @@ class DeveloperTab(QWidget):
         left_container_layout.addWidget(self.left_scroll_area, 1)
 
         # Botón Exportar siempre fijado al pie del panel izquierdo
-        self.btn_export = QPushButton("💾 EXPORTAR IMAGEN REVELADA...")
+        self.btn_export = QPushButton("EXPORTAR IMAGEN REVELADA...")
+        self.btn_export.setIcon(get_icon("save", color="#ffffff", size=16))
         self.btn_export.setFixedHeight(40)
         self.btn_export.setCursor(Qt.PointingHandCursor)
         self.btn_export.setStyleSheet(STYLE_RUN_IDLE)
         self.btn_export.clicked.connect(self.export_image)
         left_container_layout.addWidget(self.btn_export, 0)
 
-        self.btn_export_psd = QPushButton("📑 EXPORTAR A PHOTOSHOP (PSD)...")
+        self.btn_export_psd = QPushButton("EXPORTAR A PHOTOSHOP (PSD)...")
+        self.btn_export_psd.setIcon(get_icon("layers", color="#82b1ff", size=15))
         self.btn_export_psd.setFixedHeight(34)
         self.btn_export_psd.setCursor(Qt.PointingHandCursor)
         self.btn_export_psd.setStyleSheet("""
@@ -1990,11 +1737,16 @@ class DeveloperTab(QWidget):
         self.mask_toolbar.setVisible(False)
         right_layout.addWidget(self.mask_toolbar)
         right_layout.addWidget(self.canvas, 1)
+        self.canvas_footer = self._create_canvas_footer_bar()
+        right_layout.addWidget(self.canvas_footer)
 
         # Sincronización bidireccional de Pipeta, Lupa, Recorte y Pincel con la barra de herramientas
         self.canvas.eyedropper_toggled.connect(self._on_canvas_eyedropper_toggled)
+        self.canvas.eyedropper_toggled.connect(lambda active: self._update_canvas_info_label())
         self.canvas.magnifier_toggled.connect(self.btn_magnifier.setChecked)
+        self.canvas.magnifier_toggled.connect(lambda active: self._update_canvas_info_label())
         self.canvas.crop_toggled.connect(self.btn_crop.setChecked)
+        self.canvas.crop_toggled.connect(lambda active: self._update_canvas_info_label())
         self.canvas.crop_rect_changed.connect(self._on_crop_rect_changed)
         self.canvas.crop_applied.connect(self._apply_crop)
         self.canvas.color_sampled.connect(self._on_eyedropper_color_sampled)
@@ -2066,10 +1818,11 @@ class DeveloperTab(QWidget):
 
         tb_layout = QHBoxLayout(toolbar)
         tb_layout.setContentsMargins(8, 3, 8, 3)
-        tb_layout.setSpacing(8)
+        tb_layout.setSpacing(6)
 
         # 0a. Botón Deshacer (Undo)
-        self.btn_undo = QPushButton("↺ Deshacer")
+        self.btn_undo = QPushButton("Deshacer")
+        self.btn_undo.setIcon(get_icon("undo", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_undo.setCursor(Qt.PointingHandCursor)
         self.btn_undo.setEnabled(False)
         self.btn_undo.setToolTip("Deshace el último ajuste de revelado (Atajo: Ctrl+Z)")
@@ -2077,7 +1830,8 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.btn_undo)
 
         # 0b. Botón Rehacer (Redo)
-        self.btn_redo = QPushButton("↻ Rehacer")
+        self.btn_redo = QPushButton("Rehacer")
+        self.btn_redo.setIcon(get_icon("redo", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_redo.setCursor(Qt.PointingHandCursor)
         self.btn_redo.setEnabled(False)
         self.btn_redo.setToolTip("Rehace el ajuste deshecho (Atajo: Ctrl+Y o Ctrl+Shift+Z)")
@@ -2092,7 +1846,8 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep_undo)
 
         # 1. Botón Comparador Antes / Después
-        self.btn_split_view = QPushButton("◫ Antes / Después (Y)")
+        self.btn_split_view = QPushButton("Antes / Después (Y)")
+        self.btn_split_view.setIcon(get_icon("split", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_split_view.setCheckable(True)
         self.btn_split_view.setCursor(Qt.PointingHandCursor)
         self.btn_split_view.setToolTip(
@@ -2104,20 +1859,22 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.btn_split_view)
 
         # 1b. Botón Orientación Cortina (Vertical / Horizontal)
-        self.btn_split_orientation = QPushButton("⇋ Vertical")
+        self.btn_split_orientation = QPushButton("Vertical")
+        self.btn_split_orientation.setIcon(get_icon("sliders", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_split_orientation.setCursor(Qt.PointingHandCursor)
         self.btn_split_orientation.setEnabled(False)
         self.btn_split_orientation.setToolTip(
             "Alterna la orientación de la cortina divisoria:\n"
-            "• ⇋ Vertical: Izquierda ('Antes') / Derecha ('Después')\n"
-            "• ⥯ Horizontal: Arriba ('Antes') / Abajo ('Después')\n"
+            "• Vertical: Izquierda ('Antes') / Derecha ('Después')\n"
+            "• Horizontal: Arriba ('Antes') / Abajo ('Después')\n"
             "Atajo de teclado: Shift+Y"
         )
         self.btn_split_orientation.clicked.connect(self.on_toggle_split_orientation)
         tb_layout.addWidget(self.btn_split_orientation)
 
         # 2. Botón Fijar como Antes (Snapshot)
-        self.btn_set_before = QPushButton("📸 Fijar como Antes")
+        self.btn_set_before = QPushButton("Fijar como Antes")
+        self.btn_set_before.setIcon(get_icon("camera", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_set_before.setCursor(Qt.PointingHandCursor)
         self.btn_set_before.setToolTip(
             "Congela el procesado actual como la nueva referencia de 'Antes'\n"
@@ -2134,7 +1891,8 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep1)
 
         # 3. Botón Indicador de Recorte (Clipping)
-        self.btn_toggle_clipping = QPushButton("⚠️ Recorte Sombras/Luces (J)")
+        self.btn_toggle_clipping = QPushButton("Recorte (J)")
+        self.btn_toggle_clipping.setIcon(get_icon("alert", color="#94a3b8", hover_color="#ffffff", active_color="#f87171", size=13))
         self.btn_toggle_clipping.setCheckable(True)
         self.btn_toggle_clipping.setCursor(Qt.PointingHandCursor)
         self.btn_toggle_clipping.setToolTip(
@@ -2153,7 +1911,8 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep2)
 
         # 4. Botón Zoom 1:1
-        self.btn_toggle_zoom = QPushButton("🔍 Zoom 100% (Clic Der.)")
+        self.btn_toggle_zoom = QPushButton("Zoom 100%")
+        self.btn_toggle_zoom.setIcon(get_icon("zoom_in", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_toggle_zoom.setCheckable(True)
         self.btn_toggle_zoom.setCursor(Qt.PointingHandCursor)
         self.btn_toggle_zoom.setToolTip(
@@ -2171,7 +1930,8 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep3)
 
         # 5. Lupa de Inspección Flotante
-        self.btn_magnifier = QPushButton("🔎 Lupa (Z)")
+        self.btn_magnifier = QPushButton("Lupa (Z)")
+        self.btn_magnifier.setIcon(get_icon("search", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_magnifier.setCheckable(True)
         self.btn_magnifier.setCursor(Qt.PointingHandCursor)
         self.btn_magnifier.setToolTip(
@@ -2190,7 +1950,8 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep4)
 
         # 7. Botón Recorte Interactivo (Crop)
-        self.btn_crop = QPushButton("✂️ Recortar (C)")
+        self.btn_crop = QPushButton("Recortar (C)")
+        self.btn_crop.setIcon(get_icon("crop", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_crop.setCheckable(True)
         self.btn_crop.setCursor(Qt.PointingHandCursor)
         self.btn_crop.setToolTip(
@@ -2209,7 +1970,8 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep5)
 
         # 8. Botón Máscara Suelo Interactivo
-        self.btn_mask_tool = QPushButton("🖌️ Máscara Suelo (M)")
+        self.btn_mask_tool = QPushButton("Máscara Suelo (M)")
+        self.btn_mask_tool.setIcon(get_icon("brush", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_mask_tool.setCheckable(True)
         self.btn_mask_tool.setCursor(Qt.PointingHandCursor)
         self.btn_mask_tool.setToolTip(
@@ -2221,7 +1983,8 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.btn_mask_tool)
 
         # 8b. Botón Detección Automática con IA Ligera (1-Click)
-        self.btn_top_ai_mask = QPushButton("🧠 Máscara IA")
+        self.btn_top_ai_mask = QPushButton("Máscara IA")
+        self.btn_top_ai_mask.setIcon(get_icon("sparkles", color="#ffffff", size=13))
         self.btn_top_ai_mask.setCursor(Qt.PointingHandCursor)
         self.btn_top_ai_mask.setStyleSheet("""
             QPushButton {
@@ -2246,7 +2009,8 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.btn_top_ai_mask)
 
         # 8c. Botón Visualización Rápida de Máscara de Suelo (Overlay)
-        self.btn_top_mask_overlay = QPushButton("👁️ Ver Máscara")
+        self.btn_top_mask_overlay = QPushButton("Ver Máscara")
+        self.btn_top_mask_overlay.setIcon(get_icon("eye", color="#94a3b8", hover_color="#ffffff", active_color="#4ade80", size=13))
         self.btn_top_mask_overlay.setCheckable(True)
         self.btn_top_mask_overlay.setEnabled(False)
         self.btn_top_mask_overlay.setCursor(Qt.PointingHandCursor)
@@ -2278,69 +2042,100 @@ class DeveloperTab(QWidget):
         # Espaciador elástico
         tb_layout.addStretch()
 
-        # 5. Etiqueta informativa de resolución y estado
-        self.lbl_canvas_info = QLabel("Sin imagen cargada")
-        self.lbl_canvas_info.setStyleSheet("color: #88c0d0; font-size: 11px; font-weight: bold;")
-        tb_layout.addWidget(self.lbl_canvas_info)
-
         return toolbar
+
+    def _create_canvas_footer_bar(self) -> QWidget:
+        """Crea la barra inferior de estado, modo de herramienta activa y metadatos del lienzo."""
+        footer = QWidget()
+        footer.setObjectName("canvas_footer_bar")
+        footer.setFixedHeight(26)
+
+        layout = QHBoxLayout(footer)
+        layout.setContentsMargins(10, 0, 10, 0)
+        layout.setSpacing(10)
+
+        # 1. Indicador de Herramienta Activa (Pill badge)
+        self.lbl_tool_badge = QLabel("● Modo: Vista General")
+        self.lbl_tool_badge.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: 600;")
+        layout.addWidget(self.lbl_tool_badge)
+
+        # Separador vertical
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.VLine)
+        sep1.setStyleSheet("color: #232738;")
+        layout.addWidget(sep1)
+
+        # 2. Información de Zoom
+        self.lbl_canvas_zoom = QLabel("Zoom: Ajustar (Fit)")
+        self.lbl_canvas_zoom.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        layout.addWidget(self.lbl_canvas_zoom)
+
+        # Espaciador elástico
+        layout.addStretch(1)
+
+        # 3. Metadatos de la Imagen (Resolución, MP, Profundidad, Espacio de Color)
+        self.lbl_canvas_info = QLabel("Sin imagen cargada")
+        self.lbl_canvas_info.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        layout.addWidget(self.lbl_canvas_info)
+
+        return footer
 
     def retranslate_ui(self) -> None:
         """Actualiza todos los textos visibles del Revelador según el idioma activo."""
         if hasattr(self, 'btn_open_img'):
-            self.btn_open_img.setText(tr("developer.btn_open", "📁 Abrir Imagen (TIFF / FITS / RAW)..."))
+            self.btn_open_img.setText(tr("developer.btn_open", "Abrir Imagen (TIFF / FITS / RAW)..."))
         if hasattr(self, 'btn_export'):
-            self.btn_export.setText(tr("developer.btn_export", "💾 EXPORTAR IMAGEN REVELADA..."))
+            self.btn_export.setText(tr("developer.btn_export", "EXPORTAR IMAGEN REVELADA..."))
         if hasattr(self, 'lbl_log_title'):
             self.lbl_log_title.setText(tr("developer.activity_log", "Registro de Actividad:"))
 
         # Secciones del acordeón
         if hasattr(self, 'sec_presets'):
-            self.sec_presets.set_title(tr("developer.sections.presets", "🎨 Presets y Estilos de Revelado"))
+            self.sec_presets.set_title(tr("developer.sections.presets", "Presets y Estilos de Revelado"))
         if hasattr(self, 'sec_gradients'):
-            self.sec_gradients.set_title(tr("developer.sections.gradients", "⚡ Calibración y Gradientes (GraXpert AI)"))
+            self.sec_gradients.set_title(tr("developer.sections.gradients", "Calibración y Gradientes (GraXpert AI)"))
         if hasattr(self, 'sec_stretch'):
-            self.sec_stretch.set_title(tr("developer.sections.stretch", "📈 Estirado Tonal y Contraste"))
+            self.sec_stretch.set_title(tr("developer.sections.stretch", "Estirado Tonal y Contraste"))
         if hasattr(self, 'sec_curves'):
-            self.sec_curves.set_title(tr("developer.sections.curves", "📈 Curva Tonal Interactiva (RGB / Saturación)"))
+            self.sec_curves.set_title(tr("developer.sections.curves", "Curva Tonal Interactiva (RGB / Saturación)"))
         if hasattr(self, 'sec_starnet'):
-            self.sec_starnet.set_title(tr("developer.sections.starnet", "⭐ StarNet++ AI — Desacoplo de Estrellas"))
+            self.sec_starnet.set_title(tr("developer.sections.starnet", "StarNet++ AI — Desacoplo de Estrellas"))
         if hasattr(self, 'sec_deconv'):
-            self.sec_deconv.set_title(tr("developer.sections.deconv", "🔬 Deconvolución Óptica y Enfoque (R-L)"))
+            self.sec_deconv.set_title(tr("developer.sections.deconv", "Deconvolución Óptica y Enfoque (R-L)"))
         if hasattr(self, 'sec_wb'):
-            self.sec_wb.set_title(tr("developer.sections.wb", "🌡️ Balance de Blancos y Calibración"))
+            self.sec_wb.set_title(tr("developer.sections.wb", "Balance de Blancos y Calibración"))
         if hasattr(self, 'sec_color'):
-            self.sec_color.set_title(tr("developer.sections.color", "🎨 Color y Saturación"))
+            self.sec_color.set_title(tr("developer.sections.color", "Color y Saturación"))
         if hasattr(self, 'sec_gnd_tone'):
-            self.sec_gnd_tone.set_title(tr("developer.sections.ground_tone", "🏞️ Ajuste Tonal Suelo (Paisaje)"))
+            self.sec_gnd_tone.set_title(tr("developer.sections.ground_tone", "Ajuste Tonal Suelo (Paisaje)"))
         if hasattr(self, 'sec_masks'):
-            self.sec_masks.set_title(tr("developer.sections.masks", "🎭 Máscaras y Capas de Ajuste Local"))
+            self.sec_masks.set_title(tr("developer.sections.masks", "Máscaras y Capas de Ajuste Local"))
 
         # Botones de herramientas
         if hasattr(self, 'btn_starnet'):
-            self.btn_starnet.setText(tr("developer.starnet.btn_separate", "✨ Separar Estrellas con StarNet"))
+            self.btn_starnet.setText(tr("developer.starnet.btn_separate", "Separar Estrellas con StarNet"))
         if hasattr(self, 'btn_panel_pipette'):
             self.btn_panel_pipette.setText(tr("developer.wb.pipette", "Pipeta WB (W)"))
 
-        # Barra superior del visor
+        # Barra superior del visor (iconos gestionados por setIcon)
         if hasattr(self, 'btn_undo'):
-            self.btn_undo.setText("↺ " + tr("developer.toolbar.undo", "Deshacer"))
+            self.btn_undo.setText(tr("developer.toolbar.undo", "Deshacer"))
         if hasattr(self, 'btn_redo'):
-            self.btn_redo.setText("↻ " + tr("developer.toolbar.redo", "Rehacer"))
+            self.btn_redo.setText(tr("developer.toolbar.redo", "Rehacer"))
         if hasattr(self, 'btn_split_view'):
-            self.btn_split_view.setText("◫ " + tr("developer.toolbar.before_after", "Antes / Después (Y)"))
+            self.btn_split_view.setText(tr("developer.toolbar.before_after", "Antes / Después (Y)"))
         if hasattr(self, 'btn_set_before'):
-            self.btn_set_before.setText("📸 " + tr("developer.toolbar.set_as_before", "Fijar como Antes"))
+            self.btn_set_before.setText(tr("developer.toolbar.set_as_before", "Fijar como Antes"))
         if hasattr(self, 'btn_toggle_clipping'):
-            self.btn_toggle_clipping.setText("⚠️ " + tr("developer.toolbar.clipping", "Recorte Sombras/Luces (J)"))
+            self.btn_toggle_clipping.setText(tr("developer.toolbar.clipping", "Recorte (J)"))
         if hasattr(self, 'btn_toggle_zoom'):
-            self.btn_toggle_zoom.setText("🔍 " + tr("developer.toolbar.zoom_100", "Zoom 100% (Clic Der.)"))
+            self.btn_toggle_zoom.setText(tr("developer.toolbar.zoom_100", "Zoom 100%"))
         if hasattr(self, 'btn_magnifier'):
-            self.btn_magnifier.setText("🔎 " + tr("developer.toolbar.loupe", "Lupa (Z)"))
+            self.btn_magnifier.setText(tr("developer.toolbar.loupe", "Lupa (Z)"))
         if hasattr(self, 'btn_crop'):
-            self.btn_crop.setText("✂️ " + tr("developer.toolbar.crop", "Recortar (C)"))
+            self.btn_crop.setText(tr("developer.toolbar.crop", "Recortar (C)"))
         if hasattr(self, 'btn_mask_tool'):
-            self.btn_mask_tool.setText("🖌️ " + tr("developer.toolbar.ground_mask", "Máscara Suelo (M)"))
+            self.btn_mask_tool.setText(tr("developer.toolbar.ground_mask", "Máscara Suelo (M)"))
         if hasattr(self, '_update_mask_status_ui'):
             self._update_mask_status_ui()
 
@@ -2355,7 +2150,7 @@ class DeveloperTab(QWidget):
         tb_layout.setSpacing(8)
 
         # 1. Título / Icono
-        lbl_title = QLabel("✂️ Recorte:")
+        lbl_title = QLabel("Recorte:")
         lbl_title.setStyleSheet("font-weight: bold; color: #80d8ff; font-size: 11px;")
         tb_layout.addWidget(lbl_title)
 
@@ -2382,7 +2177,8 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.combo_crop_ratio)
 
         # 3. Botón Invertir orientación de la proporción
-        self.btn_crop_flip_ratio = QPushButton("⇄ Invertir (X)")
+        self.btn_crop_flip_ratio = QPushButton("Invertir (X)")
+        self.btn_crop_flip_ratio.setIcon(get_icon("sliders", size=12))
         self.btn_crop_flip_ratio.setToolTip("Invierte la orientación de la proporción (Horizontal ⇄ Vertical)\nAtajo: X")
         self.btn_crop_flip_ratio.setCursor(Qt.PointingHandCursor)
         self.btn_crop_flip_ratio.clicked.connect(self._on_crop_flip_ratio)
@@ -2396,7 +2192,7 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep1)
 
         # 4. Nivelación de Horizonte / Ángulo de rotación
-        lbl_ang = self._make_resettable_label(QLabel("📐 Ángulo:"), lambda: self.slider_crop_angle.setValue(0), "0.0°")
+        lbl_ang = self._make_resettable_label(QLabel("Ángulo:"), lambda: self.slider_crop_angle.setValue(0), "0.0°")
         lbl_ang.setStyleSheet("color: #c0caf5; font-size: 11px;")
         tb_layout.addWidget(lbl_ang)
         self.slider_crop_angle = QSlider(Qt.Horizontal)
@@ -2446,19 +2242,22 @@ class DeveloperTab(QWidget):
         tb_layout.addStretch()
 
         # 7. Botones de acción: Restablecer, Cancelar, Aplicar
-        self.btn_crop_reset = QPushButton("↺ Restablecer")
+        self.btn_crop_reset = QPushButton("Restablecer")
+        self.btn_crop_reset.setIcon(get_icon("refresh", size=13))
         self.btn_crop_reset.setToolTip("Restablece el marco de recorte al tamaño completo de la imagen")
         self.btn_crop_reset.setCursor(Qt.PointingHandCursor)
         self.btn_crop_reset.clicked.connect(self._reset_crop)
         tb_layout.addWidget(self.btn_crop_reset)
 
-        self.btn_crop_cancel = QPushButton("❌ Cancelar (Esc)")
+        self.btn_crop_cancel = QPushButton("Cancelar (Esc)")
+        self.btn_crop_cancel.setIcon(get_icon("x", color="#f87171", size=13))
         self.btn_crop_cancel.setToolTip("Cancela el recorte y descarta los cambios (Esc)")
         self.btn_crop_cancel.setCursor(Qt.PointingHandCursor)
         self.btn_crop_cancel.clicked.connect(self._cancel_crop)
         tb_layout.addWidget(self.btn_crop_cancel)
 
-        self.btn_crop_apply = QPushButton("✅ Aplicar Recorte (Intro)")
+        self.btn_crop_apply = QPushButton("Aplicar Recorte (Intro)")
+        self.btn_crop_apply.setIcon(get_icon("check", color="#ffffff", size=13))
         self.btn_crop_apply.setStyleSheet("""
             QPushButton {
                 background-color: #2e7d32;
@@ -2511,11 +2310,12 @@ class DeveloperTab(QWidget):
             h, w = self.image_32bit.shape[:2]
             self.canvas.set_native_image_size((w, h))
             self.canvas._emit_crop_size()
-            self.log_message("✂️ Modo Recorte activado. Ajusta el marco, nivela el horizonte o presiona Intro para aplicar.")
+            self.log_message("[RECORTE] Modo Recorte activado. Ajusta el marco, nivela el horizonte o presiona Intro para aplicar.")
         else:
             self.canvas.reset_crop_rect()
             if hasattr(self, 'slider_crop_angle'):
                 self.slider_crop_angle.setValue(0)
+        self._update_canvas_info_label()
 
     def _on_crop_ratio_changed(self, idx: int) -> None:
         """Ajusta la relación de aspecto forzada en el lienzo según la selección del combo."""
@@ -2664,7 +2464,7 @@ class DeveloperTab(QWidget):
         self._update_undo_redo_buttons()
 
         ang_info = f" con rotación {angle:+.1f}°" if not no_angle else ""
-        self.log_message(f"✅ Recorte aplicado{ang_info}: {orig_w}x{orig_h} → {new_w}x{new_h} px. (Deshacer con Ctrl+Z)")
+        self.log_message(f"[RECORTE] Recorte aplicado{ang_info}: {orig_w}x{orig_h} → {new_w}x{new_h} px. (Deshacer con Ctrl+Z)")
 
     def _create_mask_toolbar(self) -> QWidget:
         """Crea la barra de herramientas interactiva para dibujar semillas y refinar la máscara de suelo."""
@@ -2677,12 +2477,12 @@ class DeveloperTab(QWidget):
         tb_layout.setSpacing(8)
 
         # 1. Título / Icono
-        lbl_title = QLabel("🖌️ Máscara Suelo:")
+        lbl_title = QLabel("Máscara Suelo:")
         lbl_title.setStyleSheet("font-weight: bold; color: #80d8ff; font-size: 11px;")
         tb_layout.addWidget(lbl_title)
 
         # 2. Selector de Clase de Pincel (Cielo vs Suelo)
-        self.btn_brush_sky = QPushButton("🟢 Cielo (Verde)")
+        self.btn_brush_sky = QPushButton("● Cielo (Verde)")
         self.btn_brush_sky.setCheckable(True)
         self.btn_brush_sky.setChecked(True)
         self.btn_brush_sky.setCursor(Qt.PointingHandCursor)
@@ -2705,7 +2505,7 @@ class DeveloperTab(QWidget):
         self.btn_brush_sky.setToolTip("Pinta semillas de CIELO (trazo verde)")
         tb_layout.addWidget(self.btn_brush_sky)
 
-        self.btn_brush_gnd = QPushButton("🔴 Suelo (Rojo)")
+        self.btn_brush_gnd = QPushButton("● Suelo (Rojo)")
         self.btn_brush_gnd.setCheckable(True)
         self.btn_brush_gnd.setCursor(Qt.PointingHandCursor)
         self.btn_brush_gnd.setStyleSheet("""
@@ -2794,7 +2594,8 @@ class DeveloperTab(QWidget):
         sep3.setFrameShadow(QFrame.Sunken)
         sep3.setStyleSheet("color: #3b4252; margin: 4px 2px;")
         # 5a. Detección Automática con IA Ligera
-        self.btn_ai_mask = QPushButton("🧠 Máscara IA")
+        self.btn_ai_mask = QPushButton("Máscara IA")
+        self.btn_ai_mask.setIcon(get_icon("sparkles", color="#ffffff", size=13))
         self.btn_ai_mask.setCursor(Qt.PointingHandCursor)
         self.btn_ai_mask.setStyleSheet("""
             QPushButton {
@@ -2819,7 +2620,8 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.btn_ai_mask)
 
         # 5b. Generar Máscara desde trazos
-        self.btn_generate_mask = QPushButton("✨ Generar (Intro)")
+        self.btn_generate_mask = QPushButton("Generar (Intro)")
+        self.btn_generate_mask.setIcon(get_icon("check", color="#ffffff", size=13))
         self.btn_generate_mask.setCursor(Qt.PointingHandCursor)
         self.btn_generate_mask.setStyleSheet("""
             QPushButton {
@@ -2844,7 +2646,8 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.btn_generate_mask)
 
         # 5c. Cargar Máscara (del Apilado o desde Archivo)
-        self.btn_load_mask = QPushButton("📂 Cargar...")
+        self.btn_load_mask = QPushButton("Cargar...")
+        self.btn_load_mask.setIcon(get_icon("folder", color="#80d8ff", size=13))
         self.btn_load_mask.setCursor(Qt.PointingHandCursor)
         self.btn_load_mask.setStyleSheet("""
             QPushButton {
@@ -2869,7 +2672,8 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.btn_load_mask)
 
         # 6. Ver / Ocultar Máscara Overlay
-        self.btn_mask_overlay_toggle = QPushButton("👁️ Ver")
+        self.btn_mask_overlay_toggle = QPushButton("Ver")
+        self.btn_mask_overlay_toggle.setIcon(get_icon("eye", color="#94a3b8", active_color="#4ade80", size=13))
         self.btn_mask_overlay_toggle.setCheckable(True)
         self.btn_mask_overlay_toggle.setChecked(False)
         self.btn_mask_overlay_toggle.setEnabled(False)
@@ -2899,14 +2703,16 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.btn_mask_overlay_toggle)
 
         # 7. Limpiar Trazos
-        self.btn_clear_scribbles = QPushButton("🗑️ Trazos")
+        self.btn_clear_scribbles = QPushButton("Trazos")
+        self.btn_clear_scribbles.setIcon(get_icon("trash", color="#94a3b8", size=13))
         self.btn_clear_scribbles.setCursor(Qt.PointingHandCursor)
         self.btn_clear_scribbles.setToolTip("Borra los trazos dibujados sin eliminar la máscara actual calculada")
         self.btn_clear_scribbles.clicked.connect(self._clear_scribbles)
         tb_layout.addWidget(self.btn_clear_scribbles)
 
         # 8. Quitar / Eliminar Máscara
-        self.btn_delete_mask = QPushButton("❌ Quitar")
+        self.btn_delete_mask = QPushButton("Quitar")
+        self.btn_delete_mask.setIcon(get_icon("x", color="#f87171", size=13))
         self.btn_delete_mask.setCursor(Qt.PointingHandCursor)
         self.btn_delete_mask.setToolTip("Elimina la máscara activa por completo de la imagen")
         self.btn_delete_mask.clicked.connect(self._delete_mask)
@@ -2915,7 +2721,8 @@ class DeveloperTab(QWidget):
         tb_layout.addStretch()
 
         # 9. Botón Finalizar / Cerrar
-        self.btn_mask_done = QPushButton("✅ Listo (Esc)")
+        self.btn_mask_done = QPushButton("Listo (Esc)")
+        self.btn_mask_done.setIcon(get_icon("check", color="#ffffff", size=13))
         self.btn_mask_done.setCursor(Qt.PointingHandCursor)
         self.btn_mask_done.setStyleSheet("""
             QPushButton {
@@ -2973,6 +2780,7 @@ class DeveloperTab(QWidget):
         else:
             self.canvas.set_masking_enabled(False)
             self.log_message("[MÁSCARA] Modo de trazado cerrado.")
+        self._update_canvas_info_label()
 
     def _on_brush_mode_changed(self, btn_id: int) -> None:
         """Actualiza la clase de semilla seleccionada (2 = Cielo, 1 = Suelo)."""
@@ -3020,7 +2828,7 @@ class DeveloperTab(QWidget):
             QMessageBox.warning(
                 self, 
                 "Trazos insuficientes", 
-                "Debes pintar al menos un trazo verde (🟢 Cielo) y un trazo rojo (🔴 Suelo) sobre la imagen."
+                "Debes pintar al menos un trazo verde (● Cielo) y un trazo rojo (● Suelo) sobre la imagen."
             )
             return
 
@@ -3139,11 +2947,11 @@ class DeveloperTab(QWidget):
             self.btn_top_mask_overlay.blockSignals(False)
             self.btn_top_mask_overlay.setStyleSheet(qss_active if is_active else qss_inactive)
             if is_active:
-                self.btn_top_mask_overlay.setText("👁️ Máscara Visible")
+                self.btn_top_mask_overlay.setText("Máscara Visible")
                 src = f" ({self._mask_source_name})" if self._mask_source_name else ""
                 self.btn_top_mask_overlay.setToolTip(f"Ocultar superposición de la máscara{src}. La máscara sigue activa internamente.")
             else:
-                self.btn_top_mask_overlay.setText("👁️ Ver Máscara")
+                self.btn_top_mask_overlay.setText("Ver Máscara")
                 if has_mask:
                     src = f" ({self._mask_source_name})" if self._mask_source_name else ""
                     self.btn_top_mask_overlay.setToolTip(f"Mostrar superposición de la máscara{src} sobre la imagen.")
@@ -3156,7 +2964,7 @@ class DeveloperTab(QWidget):
             self.btn_mask_overlay_toggle.setChecked(is_active)
             self.btn_mask_overlay_toggle.blockSignals(False)
             self.btn_mask_overlay_toggle.setStyleSheet(qss_active if is_active else qss_inactive)
-            self.btn_mask_overlay_toggle.setText("👁️ Visible" if is_active else "👁️ Ver")
+            self.btn_mask_overlay_toggle.setText("Visible" if is_active else "Ver")
 
     def _on_top_mask_overlay_toggled(self, checked: bool) -> None:
         """Alterna la visibilidad del overlay de la máscara cielo/suelo en el visor interactivo."""
@@ -3202,11 +3010,14 @@ class DeveloperTab(QWidget):
                 color: #ffffff;
             }
         """)
-        act_ai = menu.addAction("🧠 Auto-Detectar Suelo con IA (1-Click)")
+        act_ai = menu.addAction("Auto-Detectar Suelo con IA (1-Click)")
+        act_ai.setIcon(get_icon("sparkles", color="#ffffff", size=14))
         act_stacker = None
         if stacker_mask is not None:
-            act_stacker = menu.addAction("📥 Usar Máscara generada en el Apilado")
-        act_file = menu.addAction("📁 Cargar Archivo de Máscara (.png, .tif, .fits)...")
+            act_stacker = menu.addAction("Usar Máscara generada en el Apilado")
+            act_stacker.setIcon(get_icon("layers", color="#80d8ff", size=14))
+        act_file = menu.addAction("Cargar Archivo de Máscara (.png, .tif, .fits)...")
+        act_file.setIcon(get_icon("folder", color="#80d8ff", size=14))
 
         pos = self.btn_load_mask.mapToGlobal(self.btn_load_mask.rect().bottomLeft())
         selected = menu.exec(pos)
@@ -3230,8 +3041,8 @@ class DeveloperTab(QWidget):
                 "El modelo de IA para detección semántica precisa de suelo (skyseg.onnx, ~167 MB) no se encuentra en la carpeta 'models/'.\n\n"
                 "¿Deseas descargarlo ahora automáticamente o prefieres usar el método algorítmico rápido?"
             )
-            btn_download = msg.addButton("📥 Descargar IA (~167 MB)", QMessageBox.AcceptRole)
-            btn_algo = msg.addButton("⚡ Usar Algorítmico", QMessageBox.ActionRole)
+            btn_download = msg.addButton("Descargar IA (~167 MB)", QMessageBox.AcceptRole)
+            btn_algo = msg.addButton("Usar Algorítmico", QMessageBox.ActionRole)
             btn_cancel = msg.addButton("Cancelar", QMessageBox.RejectRole)
             msg.setDefaultButton(btn_download)
             msg.exec()
@@ -3373,18 +3184,18 @@ class DeveloperTab(QWidget):
         if not hasattr(self, 'lbl_gnd_mask_status'):
             return
         if is_mask_present:
-            desc = f"✓ Máscara de suelo activa ({self._mask_source_name})" if self._mask_source_name else "✓ Máscara de suelo activa"
+            desc = f"Máscara de suelo activa ({self._mask_source_name})" if self._mask_source_name else "Máscara de suelo activa"
             self.lbl_gnd_mask_status.setText(desc)
             self.lbl_gnd_mask_status.setStyleSheet("color: #a5d6a7; font-size: 11px; font-weight: bold;")
             if hasattr(self, 'btn_edit_ground_mask'):
-                self.btn_edit_ground_mask.setText("🖌️ Editar Máscara...")
+                self.btn_edit_ground_mask.setText("Editar Máscara...")
             if hasattr(self, 'btn_delete_mask'):
                 self.btn_delete_mask.setEnabled(True)
         else:
-            self.lbl_gnd_mask_status.setText("⚠️ Sin máscara de suelo activa")
+            self.lbl_gnd_mask_status.setText("Sin máscara de suelo activa")
             self.lbl_gnd_mask_status.setStyleSheet("color: #ffb74d; font-size: 11px;")
             if hasattr(self, 'btn_edit_ground_mask'):
-                self.btn_edit_ground_mask.setText("🖌️ Crear Máscara Suelo...")
+                self.btn_edit_ground_mask.setText("Crear Máscara Suelo...")
             if hasattr(self, 'btn_delete_mask'):
                 self.btn_delete_mask.setEnabled(False)
 
@@ -3449,6 +3260,7 @@ class DeveloperTab(QWidget):
                 else:
                     self.canvas.set_refined_mask(None)
                     self.canvas.set_mask_visible(False)
+        self._update_canvas_info_label()
 
     def _on_layer_brush_params_changed(self, radius: int, hardness: float, flow: float, mode: str) -> None:
         """Actualiza los parámetros interactivos de trazo en el lienzo."""
@@ -3879,7 +3691,35 @@ class DeveloperTab(QWidget):
             self.canvas.set_before_pixmap(QPixmap.fromImage(qimg))
 
     def _update_canvas_info_label(self) -> None:
-        """Actualiza la etiqueta informativa de resolución y estado en la barra del lienzo."""
+        """Actualiza la etiqueta informativa de resolución, herramienta activa y zoom en el pie del lienzo."""
+        if hasattr(self, 'lbl_tool_badge'):
+            if getattr(self.canvas, 'crop_mode', False):
+                self.lbl_tool_badge.setText("● Modo: Recortar y Nivelar (C)")
+                self.lbl_tool_badge.setStyleSheet("color: #f59e0b; font-size: 11px; font-weight: 600;")
+            elif getattr(self.canvas, 'enable_masking', False):
+                self.lbl_tool_badge.setText("● Modo: Máscara Suelo (M)")
+                self.lbl_tool_badge.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: 600;")
+            elif getattr(self.canvas, 'layer_brush_active', False):
+                self.lbl_tool_badge.setText("● Modo: Pincel de Máscara")
+                self.lbl_tool_badge.setStyleSheet("color: #a855f7; font-size: 11px; font-weight: 600;")
+            elif getattr(self.canvas, 'eyedropper_active', False):
+                self.lbl_tool_badge.setText("● Modo: Pipeta de Muestreo (W)")
+                self.lbl_tool_badge.setStyleSheet("color: #ffd54f; font-size: 11px; font-weight: 600;")
+            elif getattr(self.canvas, 'magnifier_active', False):
+                self.lbl_tool_badge.setText("● Modo: Lupa de Inspección (Z)")
+                self.lbl_tool_badge.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: 600;")
+            elif getattr(self.canvas, 'split_view_enabled', False):
+                ori_txt = "Vertical" if self.canvas.split_orientation == "vertical" else "Horizontal"
+                self.lbl_tool_badge.setText(f"● Modo: Comparación Split ({ori_txt})")
+                self.lbl_tool_badge.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: 600;")
+            else:
+                self.lbl_tool_badge.setText("● Modo: Vista General")
+                self.lbl_tool_badge.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 500;")
+
+        if hasattr(self, 'lbl_canvas_zoom'):
+            zoom_txt = "Zoom 100% (1:1)" if self.is_zoomed_100 else "Ajustar (Fit)"
+            self.lbl_canvas_zoom.setText(f"Zoom: {zoom_txt}")
+
         if not hasattr(self, 'lbl_canvas_info'):
             return
         if self.image_32bit is None:
@@ -3887,12 +3727,7 @@ class DeveloperTab(QWidget):
             return
         h, w = self.image_32bit.shape[:2]
         mp = (w * h) / 1e6
-        zoom_txt = "Zoom 100% (1:1)" if self.is_zoomed_100 else "Ajustado"
-        split_txt = ""
-        if self.canvas.split_view_enabled:
-            ori_txt = "Vert." if self.canvas.split_orientation == "vertical" else "Horiz."
-            split_txt = f" | ◫ Comparador ({ori_txt})"
-        self.lbl_canvas_info.setText(f"{w}x{h} px ({mp:.1f} MP) | {zoom_txt}{split_txt}")
+        self.lbl_canvas_info.setText(f"{w} × {h} px ({mp:.1f} MP)  |  32-bit Float  |  sRGB")
 
     def keyPressEvent(self, event) -> None:
         """Captura directa de teclas rápidas 'M', 'J', 'Y', 'Shift+Y', 'C' y controles interactivos."""
@@ -6659,14 +6494,14 @@ class DeveloperTab(QWidget):
         if hasattr(self, "lbl_starnet_info"):
             if enabled:
                 self.lbl_starnet_info.setText(
-                    "✅ Estrellas separadas correctamente.\n"
-                    "Las capas '🌌 Fondo Nebular' y '⭐ Estrellas' están activas en el Gestor de Capas (Sección 9). "
+                    "Estrellas separadas correctamente.\n"
+                    "Las capas 'Fondo Nebular' y 'Estrellas' están activas en el Gestor de Capas (Sección 9). "
                     "Selecciona cada capa allí para regular su presencia estelar, claridad, neblina, contraste y reducción de ruido."
                 )
             else:
                 self.lbl_starnet_info.setText(
-                    "💡 Ejecuta StarNet para desacoplar las estrellas del fondo cósmico.\n"
-                    "Se generarán automáticamente las capas '🌌 Fondo Nebular' y '⭐ Estrellas' en el Gestor de Capas (Sección 9), donde podrás ajustar de forma contextual su presencia, claridad, contraste y reducción de ruido."
+                    "Ejecuta StarNet para desacoplar las estrellas del fondo cósmico.\n"
+                    "Se generarán automáticamente las capas 'Fondo Nebular' y 'Estrellas' en el Gestor de Capas (Sección 9), donde podrás ajustar de forma contextual su presencia, claridad, contraste y reducción de ruido."
                 )
 
         if hasattr(self, "container_starnet_tools"):
@@ -7438,7 +7273,7 @@ class DeveloperTab(QWidget):
             SCOPE_DETAILS: "Solo Estrellas/Detalles"
         }
         scope_str = scope_names.get(scope, scope)
-        self.log_message(f"🎨 Preset aplicado: '{preset.name}' [{scope_str}]")
+        self.log_message(f"[PRESET] Preset aplicado: '{preset.name}' [{scope_str}]")
 
         if hasattr(self, 'sec_presets'):
             if preset and preset.name and "Neutro" not in preset.name:
@@ -7456,7 +7291,7 @@ class DeveloperTab(QWidget):
         dlg = SavePresetDialog(current_params, categories, self)
         if dlg.exec() == QDialog.Accepted and dlg.created_preset:
             self._populate_presets_combo(select_preset_id=dlg.created_preset.id)
-            self.log_message(f"💾 Nuevo preset guardado con éxito: '{dlg.created_preset.name}' ({dlg.created_preset.category})")
+            self.log_message(f"[PRESET] Nuevo preset guardado con éxito: '{dlg.created_preset.name}' ({dlg.created_preset.category})")
 
     def open_preset_manager_dialog(self):
         """Abre el diálogo de gestión, importación y exportación de presets."""

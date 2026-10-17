@@ -17,7 +17,7 @@ import numpy as np
 import cv2
 
 from PySide6.QtCore import Qt, QThread, Signal, QCoreApplication
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QTextCursor, QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QPushButton, QFileDialog, QMessageBox, QSlider, QRadioButton,
@@ -34,6 +34,9 @@ from gui.widgets.drop_widgets import DropTableWidget
 from gui.theme import (
     STYLE_RUN_IDLE, STYLE_RUN_ACTIVE, STYLE_RUN_CANCELLING, STYLE_TRANSFER_BTN
 )
+from gui.icons import get_icon, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_MUTED
+from gui.widgets.collapsible_section import CollapsibleSection
+from gui.widgets.precision_slider import PrecisionSliderRow
 
 
 class StartrailWorker(QThread):
@@ -142,20 +145,23 @@ class StartrailsTab(QWidget):
         left_layout.setSpacing(12)
 
         # 1. GRUPO: SERIE TEMPORAL DE TOMAS
-        grp_files = QGroupBox("1. Serie Temporal de Tomas (Lights)")
-        files_layout = QVBoxLayout(grp_files)
-        files_layout.setContentsMargins(10, 14, 10, 10)
+        grp_files = CollapsibleSection("1. Serie Temporal de Tomas (Lights)", icon_name="camera")
+        files_layout = grp_files.content_layout
+        files_layout.setContentsMargins(10, 8, 10, 10)
         files_layout.setSpacing(8)
 
         btn_row_files = QHBoxLayout()
-        self.btn_load_series = QPushButton("📁 Cargar Serie...")
+        self.btn_load_series = QPushButton("Cargar Serie...")
+        self.btn_load_series.setIcon(get_icon("folder", size=13, color="#80d8ff"))
         self.btn_load_series.setStyleSheet("font-weight: bold; color: #80d8ff;")
         self.btn_load_series.clicked.connect(self._on_load_series_clicked)
 
-        self.btn_clear_series = QPushButton("🗑️ Limpiar")
+        self.btn_clear_series = QPushButton("Limpiar")
+        self.btn_clear_series.setIcon(get_icon("trash", size=13, color="#ff8a80"))
         self.btn_clear_series.clicked.connect(self._on_clear_series_clicked)
 
-        self.btn_set_ref = QPushButton("📌 Marcar REF")
+        self.btn_set_ref = QPushButton("Marcar REF")
+        self.btn_set_ref.setIcon(get_icon("target", size=13, color="#00e5ff"))
         self.btn_set_ref.setToolTip("Establece la toma seleccionada como referencia para el suelo y previsualización")
         self.btn_set_ref.clicked.connect(self._on_set_ref_clicked)
 
@@ -181,18 +187,22 @@ class StartrailsTab(QWidget):
 
         # Fila compacta de Darks
         row_dark = QHBoxLayout()
-        row_dark.addWidget(QLabel("🌑 Darks (opcional):"))
+        lbl_darks_title = QLabel("Darks (opcional):")
+        lbl_darks_title.setStyleSheet("font-size: 11px;")
+        row_dark.addWidget(lbl_darks_title)
         self.lbl_darks_count = QLabel("0 darks")
         self.lbl_darks_count.setStyleSheet("color: #90a4ae; font-size: 11px;")
         row_dark.addWidget(self.lbl_darks_count)
         row_dark.addStretch()
 
         self.btn_load_darks = QPushButton("Añadir Darks...")
+        self.btn_load_darks.setIcon(get_icon("plus", size=11, color="#90a4ae"))
         self.btn_load_darks.setStyleSheet("font-size: 11px; padding: 3px 8px;")
         self.btn_load_darks.clicked.connect(self._on_load_darks_clicked)
         row_dark.addWidget(self.btn_load_darks)
 
         self.btn_clear_darks = QPushButton("Quitar")
+        self.btn_clear_darks.setIcon(get_icon("trash", size=11, color="#ff8a80"))
         self.btn_clear_darks.setStyleSheet("font-size: 11px; padding: 3px 8px;")
         self.btn_clear_darks.clicked.connect(self._on_clear_darks_clicked)
         row_dark.addWidget(self.btn_clear_darks)
@@ -201,38 +211,37 @@ class StartrailsTab(QWidget):
         left_layout.addWidget(grp_files)
 
         # 2. GRUPO: ALGORITMO DE TRAZAS (CIELO)
-        grp_modes = QGroupBox("2. Algoritmo de Trazas (Cielo)")
-        modes_layout = QVBoxLayout(grp_modes)
-        modes_layout.setContentsMargins(10, 14, 10, 10)
+        grp_modes = CollapsibleSection("2. Algoritmo de Trazas (Cielo)", icon_name="sliders")
+        modes_layout = grp_modes.content_layout
+        modes_layout.setContentsMargins(10, 8, 10, 10)
         modes_layout.setSpacing(8)
 
-        self.rb_lighten = QRadioButton("⭐ Máximo Estándar (Lighten Clásico)")
+        self.rb_lighten = QRadioButton("Máximo Estándar (Lighten Clásico)")
         self.rb_lighten.setChecked(True)
         self.rb_lighten.toggled.connect(self._on_mode_toggled)
         modes_layout.addWidget(self.rb_lighten)
 
-        self.rb_comet = QRadioButton("☄️ Efecto Cometa / Estela Progresiva (Fade)")
+        self.rb_comet = QRadioButton("Efecto Cometa / Estela Progresiva (Fade)")
         self.rb_comet.toggled.connect(self._on_mode_toggled)
         modes_layout.addWidget(self.rb_comet)
 
         # Contenedor de parámetros del Efecto Cometa
         self.container_comet = QWidget()
         comet_layout = QVBoxLayout(self.container_comet)
-        comet_layout.setContentsMargins(12, 4, 4, 4)
-        comet_layout.setSpacing(8)
+        comet_layout.setContentsMargins(8, 4, 4, 4)
+        comet_layout.setSpacing(6)
 
-        # Longitud de estela
-        row_tail = QHBoxLayout()
-        row_tail.addWidget(QLabel("Longitud de Estela:"))
+        # Longitud de estela con PrecisionSliderRow
+        self.slider_tail = PrecisionSliderRow(
+            label="Longitud Estela:",
+            min_val=5,
+            max_val=100,
+            default_val=35,
+            step=1,
+            unit="%"
+        )
         self.lbl_tail_val = QLabel("35%")
-        self.lbl_tail_val.setStyleSheet("color: #80d8ff; font-weight: bold;")
-        row_tail.addWidget(self.lbl_tail_val)
-        row_tail.addStretch()
-        comet_layout.addLayout(row_tail)
-
-        self.slider_tail = QSlider(Qt.Horizontal)
-        self.slider_tail.setRange(5, 100)
-        self.slider_tail.setValue(35)
+        self.lbl_tail_val.setVisible(False)
         self.slider_tail.valueChanged.connect(lambda v: self.lbl_tail_val.setText(f"{v}%"))
         comet_layout.addWidget(self.slider_tail)
 
@@ -252,30 +261,29 @@ class StartrailsTab(QWidget):
         self.combo_dir = QComboBox()
         self.combo_dir.addItem("Hacia atrás (Cola en tomas pasadas)", "backward")
         self.combo_dir.addItem("Hacia adelante (Cola en tomas futuras)", "forward")
-        self.combo_dir.addItem("Doble / Ambos sentidos (Simétrico: brillo central y colas afiladas)", "bidirectional")
+        self.combo_dir.addItem("Doble / Ambos sentidos (Simétrico)", "bidirectional")
         row_dir.addWidget(self.combo_dir)
         comet_layout.addLayout(row_dir)
 
-        # Cota mínima de luminancia de fondo
-        row_floor = QHBoxLayout()
-        row_floor.addWidget(QLabel("Luminancia mínima de fondo:"))
+        # Cota mínima de luminancia de fondo con PrecisionSliderRow
+        self.slider_floor = PrecisionSliderRow(
+            label="Luminancia Fondo:",
+            min_val=0,
+            max_val=25,
+            default_val=0,
+            step=1,
+            unit="%"
+        )
         self.lbl_floor_val = QLabel("0%")
-        self.lbl_floor_val.setStyleSheet("color: #ffd54f; font-weight: bold;")
-        row_floor.addWidget(self.lbl_floor_val)
-        row_floor.addStretch()
-        comet_layout.addLayout(row_floor)
-
-        self.slider_floor = QSlider(Qt.Horizontal)
-        self.slider_floor.setRange(0, 25)
-        self.slider_floor.setValue(0)
+        self.lbl_floor_val.setVisible(False)
         self.slider_floor.valueChanged.connect(lambda v: self.lbl_floor_val.setText(f"{v}%"))
         comet_layout.addWidget(self.slider_floor)
 
         modes_layout.addWidget(self.container_comet)
-        self.container_comet.setVisible(False)  # Inicialmente oculto en modo Lighten
+        self.container_comet.setVisible(False)
 
         # Supresión de satélites y aviones
-        self.chk_suppress_streaks = QCheckBox("🛸 Suprimir satélites y aviones automáticamente")
+        self.chk_suppress_streaks = QCheckBox("Suprimir satélites y aviones automáticamente")
         self.chk_suppress_streaks.setStyleSheet("font-weight: bold; color: #80cbc4;")
         self.chk_suppress_streaks.setToolTip(
             "Detecta trazas lineales transitorias (satélites artificiales y aviones con luces estroboscópicas)\n"
@@ -303,7 +311,7 @@ class StartrailsTab(QWidget):
         modes_layout.addWidget(self.container_streaks)
 
         # Relleno de pausas entre tomas (Gap Filling)
-        self.chk_fill_gaps = QCheckBox("✨ Rellenar pausas entre tomas (Gap Filling)")
+        self.chk_fill_gaps = QCheckBox("Rellenar pausas entre tomas (Gap Filling)")
         self.chk_fill_gaps.setStyleSheet("font-weight: bold; color: #ffb74d;")
         self.chk_fill_gaps.setToolTip(
             "Elimina la apariencia de línea punteada o saltos conectando de forma continua\n"
@@ -317,22 +325,20 @@ class StartrailsTab(QWidget):
         gaps_layout.setContentsMargins(16, 2, 4, 4)
         gaps_layout.setSpacing(6)
 
-        row_gap_radius = QHBoxLayout()
-        row_gap_radius.addWidget(QLabel("Radio del salto (px):"))
+        self.slider_gap_radius = PrecisionSliderRow(
+            label="Radio del Salto:",
+            min_val=1,
+            max_val=4,
+            default_val=2,
+            step=1,
+            unit=" px"
+        )
         self.lbl_gap_radius_val = QLabel("2 px")
-        self.lbl_gap_radius_val.setStyleSheet("color: #ffb74d; font-weight: bold;")
-        row_gap_radius.addWidget(self.lbl_gap_radius_val)
-        row_gap_radius.addStretch()
-        gaps_layout.addLayout(row_gap_radius)
-
-        self.slider_gap_radius = QSlider(Qt.Horizontal)
-        self.slider_gap_radius.setRange(1, 4)
-        self.slider_gap_radius.setValue(2)
-        self.slider_gap_radius.setToolTip("1–2 px para pausas de intervalómetro de 1–2s; 3–4 px para pausas mayores.")
+        self.lbl_gap_radius_val.setVisible(False)
         self.slider_gap_radius.valueChanged.connect(lambda v: self.lbl_gap_radius_val.setText(f"{v} px"))
         gaps_layout.addWidget(self.slider_gap_radius)
 
-        lbl_gap_hint = QLabel("💡 1–2 px cierra huecos sin engrosar trazas; valores mayores ensanchan las estrellas.")
+        lbl_gap_hint = QLabel("Nota: 1–2 px cierra huecos sin engrosar trazas; valores mayores ensanchan las estrellas.")
         lbl_gap_hint.setStyleSheet("color: #90a4ae; font-size: 10px; font-style: italic;")
         lbl_gap_hint.setWordWrap(True)
         gaps_layout.addWidget(lbl_gap_hint)
@@ -351,7 +357,7 @@ class StartrailsTab(QWidget):
         modes_layout.addWidget(self.container_gaps)
 
         # Realce y preservación de color estelar (Star Color Boost)
-        self.chk_star_color = QCheckBox("🌈 Realzar y preservar color estelar (Star Color Boost)")
+        self.chk_star_color = QCheckBox("Realzar y preservar color estelar (Star Color Boost)")
         self.chk_star_color.setStyleSheet("font-weight: bold; color: #ce93d8;")
         self.chk_star_color.setToolTip(
             "Preserva los colores espectrales naturales de las estrellas (azules, dorados, anaranjados y rojos)\n"
@@ -366,37 +372,37 @@ class StartrailsTab(QWidget):
         color_layout.setSpacing(6)
 
         # Saturación estelar
-        row_sat = QHBoxLayout()
-        row_sat.addWidget(QLabel("Saturación Estelar:"))
+        self.slider_star_sat = PrecisionSliderRow(
+            label="Saturación Estelar:",
+            min_val=100,
+            max_val=300,
+            default_val=150,
+            scale=100.0,
+            decimals=1,
+            unit="x"
+        )
         self.lbl_star_sat_val = QLabel("1.5x")
-        self.lbl_star_sat_val.setStyleSheet("color: #ce93d8; font-weight: bold;")
-        row_sat.addWidget(self.lbl_star_sat_val)
-        row_sat.addStretch()
-        color_layout.addLayout(row_sat)
-
-        self.slider_star_sat = QSlider(Qt.Horizontal)
-        self.slider_star_sat.setRange(100, 300)  # 1.0x a 3.0x
-        self.slider_star_sat.setValue(150)
+        self.lbl_star_sat_val.setVisible(False)
         self.slider_star_sat.valueChanged.connect(lambda v: self.lbl_star_sat_val.setText(f"{v/100.0:.1f}x"))
         color_layout.addWidget(self.slider_star_sat)
 
         # Recuperación de núcleos (Core Recovery)
-        row_core = QHBoxLayout()
-        row_core.addWidget(QLabel("Recuperación de Núcleos Quemados:"))
+        self.slider_core_rec = PrecisionSliderRow(
+            label="Recuperación Núcleos:",
+            min_val=0,
+            max_val=100,
+            default_val=50,
+            step=1,
+            unit="%"
+        )
         self.lbl_core_rec_val = QLabel("50%")
-        self.lbl_core_rec_val.setStyleSheet("color: #ffd54f; font-weight: bold;")
-        row_core.addWidget(self.lbl_core_rec_val)
-        row_core.addStretch()
-        color_layout.addLayout(row_core)
-
-        self.slider_core_rec = QSlider(Qt.Horizontal)
-        self.slider_core_rec.setRange(0, 100)  # 0% a 100%
-        self.slider_core_rec.setValue(50)
+        self.lbl_core_rec_val.setVisible(False)
         self.slider_core_rec.valueChanged.connect(lambda v: self.lbl_core_rec_val.setText(f"{v}%"))
         color_layout.addWidget(self.slider_core_rec)
 
         # Botón para reajuste rápido sin recalcular todo
-        self.btn_apply_color_live = QPushButton("✨ Aplicar a la Imagen Actual (Retoque Rápido)")
+        self.btn_apply_color_live = QPushButton("Aplicar a la Imagen Actual (Retoque Rápido)")
+        self.btn_apply_color_live.setIcon(get_icon("sparkles", size=13, color="#e1bee7"))
         self.btn_apply_color_live.setStyleSheet("""
             QPushButton {
                 font-size: 11px;
@@ -404,8 +410,8 @@ class StartrailsTab(QWidget):
                 background-color: #4a148c;
                 color: #e1bee7;
                 border: 1px solid #7b1fa2;
-                border-radius: 3px;
-                padding: 4px;
+                border-radius: 4px;
+                padding: 5px;
             }
             QPushButton:hover {
                 background-color: #6a1b9a;
@@ -430,9 +436,9 @@ class StartrailsTab(QWidget):
         left_layout.addWidget(grp_modes)
 
         # 3. GRUPO: FUSIÓN DE SUELO LIMPIO (ANTI-RUIDO)
-        grp_ground = QGroupBox("3. Fusión de Suelo Limpio (Separación Cielo / Suelo)")
-        ground_layout = QVBoxLayout(grp_ground)
-        ground_layout.setContentsMargins(10, 14, 10, 10)
+        grp_ground = CollapsibleSection("3. Fusión de Suelo Limpio (Separación Cielo / Suelo)", icon_name="mountain")
+        ground_layout = grp_ground.content_layout
+        ground_layout.setContentsMargins(10, 8, 10, 10)
         ground_layout.setSpacing(8)
 
         self.chk_clean_ground = QCheckBox("Activar Suelo Limpio (Eliminación de Ruido)")
@@ -454,7 +460,8 @@ class StartrailsTab(QWidget):
         gnd_sub_layout.addLayout(row_gnd_mode)
 
         # Máscara de horizonte
-        self.btn_ai_mask = QPushButton("🧠 Auto-Detectar Suelo (IA)")
+        self.btn_ai_mask = QPushButton("Auto-Detectar Suelo (IA)")
+        self.btn_ai_mask.setIcon(get_icon("sparkles", size=15, color="#ffffff"))
         self.btn_ai_mask.setCursor(Qt.PointingHandCursor)
         self.btn_ai_mask.setStyleSheet("""
             QPushButton {
@@ -479,11 +486,13 @@ class StartrailsTab(QWidget):
         gnd_sub_layout.addWidget(self.btn_ai_mask)
 
         row_mask_btns = QHBoxLayout()
-        self.btn_load_mask = QPushButton("📁 Cargar...")
+        self.btn_load_mask = QPushButton("Cargar...")
+        self.btn_load_mask.setIcon(get_icon("folder", size=13, color="#80cbc4"))
         self.btn_load_mask.setToolTip("Carga un archivo PNG, TIFF o FITS con la máscara de cielo/suelo")
         self.btn_load_mask.clicked.connect(self._on_load_mask_clicked)
 
-        self.btn_import_stacker_mask = QPushButton("🖌️ Del Apilador")
+        self.btn_import_stacker_mask = QPushButton("Del Apilador")
+        self.btn_import_stacker_mask.setIcon(get_icon("brush", size=13, color="#ffcc80"))
         self.btn_import_stacker_mask.setStyleSheet("color: #ffcc80;")
         self.btn_import_stacker_mask.setToolTip("Importa con un solo clic la máscara de horizonte calculada en la Pestaña 1")
         self.btn_import_stacker_mask.clicked.connect(self._on_import_stacker_mask_clicked)
@@ -492,22 +501,21 @@ class StartrailsTab(QWidget):
         row_mask_btns.addWidget(self.btn_import_stacker_mask)
         gnd_sub_layout.addLayout(row_mask_btns)
 
-        self.lbl_mask_status = QLabel("⚠️ Sin máscara de horizonte asignada")
+        self.lbl_mask_status = QLabel("Sin máscara de horizonte asignada")
         self.lbl_mask_status.setStyleSheet("color: #ffb74d; font-size: 11px;")
         gnd_sub_layout.addWidget(self.lbl_mask_status)
 
         # Suavizado de bordes (Feathering)
-        row_feather = QHBoxLayout()
-        row_feather.addWidget(QLabel("Suavizado de Borde (Feather):"))
+        self.slider_feather = PrecisionSliderRow(
+            label="Suavizado de Borde:",
+            min_val=0,
+            max_val=30,
+            default_val=5,
+            step=1,
+            unit=" px"
+        )
         self.lbl_feather_val = QLabel("5 px")
-        self.lbl_feather_val.setStyleSheet("color: #80d8ff; font-weight: bold;")
-        row_feather.addWidget(self.lbl_feather_val)
-        row_feather.addStretch()
-        gnd_sub_layout.addLayout(row_feather)
-
-        self.slider_feather = QSlider(Qt.Horizontal)
-        self.slider_feather.setRange(0, 30)
-        self.slider_feather.setValue(5)
+        self.lbl_feather_val.setVisible(False)
         self.slider_feather.valueChanged.connect(lambda v: self.lbl_feather_val.setText(f"{v} px"))
         gnd_sub_layout.addWidget(self.slider_feather)
 
@@ -522,12 +530,12 @@ class StartrailsTab(QWidget):
         left_layout.addWidget(grp_ground)
 
         # 4. GRUPO: VÍDEO TIME-LAPSE
-        grp_timelapse = QGroupBox("4. Vídeo Time-Lapse de la Circumpolar (Opcional)")
-        tl_layout = QVBoxLayout(grp_timelapse)
-        tl_layout.setContentsMargins(10, 14, 10, 10)
+        grp_timelapse = CollapsibleSection("4. Vídeo Time-Lapse de la Circumpolar (Opcional)", icon_name="video")
+        tl_layout = grp_timelapse.content_layout
+        tl_layout.setContentsMargins(10, 8, 10, 10)
         tl_layout.setSpacing(8)
 
-        self.chk_enable_timelapse = QCheckBox("🎬 Generar Vídeo Time-Lapse (.mp4)")
+        self.chk_enable_timelapse = QCheckBox("Generar Vídeo Time-Lapse (.mp4)")
         self.chk_enable_timelapse.setStyleSheet("font-weight: bold; color: #80d8ff;")
         self.chk_enable_timelapse.setToolTip(
             "Crea un vídeo .mp4 mostrando el nacimiento y giro progresivo de las trazas de estrellas,\n"
@@ -578,7 +586,8 @@ class StartrailsTab(QWidget):
         self.lbl_tl_path = QLabel("Destino: Automático (junto a las tomas)")
         self.lbl_tl_path.setStyleSheet("color: #90a4ae; font-size: 10px;")
         self.lbl_tl_path.setWordWrap(True)
-        self.btn_tl_dest = QPushButton("📁 Cambiar Destino...")
+        self.btn_tl_dest = QPushButton("Cambiar Destino...")
+        self.btn_tl_dest.setIcon(get_icon("folder", size=12, color="#80d8ff"))
         self.btn_tl_dest.setStyleSheet("font-size: 11px; padding: 3px 6px;")
         self.btn_tl_dest.clicked.connect(self._on_select_timelapse_dest_clicked)
         row_dest.addWidget(self.lbl_tl_path, 1)
@@ -586,7 +595,8 @@ class StartrailsTab(QWidget):
         tl_sub_layout.addLayout(row_dest)
 
         # Botón de reproducción de timelapse generado
-        self.btn_play_timelapse = QPushButton("▶️ Reproducir Vídeo Time-Lapse")
+        self.btn_play_timelapse = QPushButton("Reproducir Vídeo Time-Lapse")
+        self.btn_play_timelapse.setIcon(get_icon("play", size=14, color="#ffffff"))
         self.btn_play_timelapse.setStyleSheet("""
             QPushButton {
                 font-weight: bold;
@@ -614,17 +624,19 @@ class StartrailsTab(QWidget):
         left_layout.addWidget(grp_timelapse)
 
         # 5. GRUPO: EXPORTACIÓN
-        grp_export = QGroupBox("5. Exportación y Flujo de Trabajo")
-        export_layout = QVBoxLayout(grp_export)
-        export_layout.setContentsMargins(10, 14, 10, 10)
+        grp_export = CollapsibleSection("5. Exportación y Flujo de Trabajo", icon_name="save")
+        export_layout = grp_export.content_layout
+        export_layout.setContentsMargins(10, 8, 10, 10)
         export_layout.setSpacing(8)
 
         btn_tiff_row = QHBoxLayout()
-        self.btn_save_tiff_16 = QPushButton("💾 Guardar TIFF 16-bit...")
+        self.btn_save_tiff_16 = QPushButton("Guardar TIFF 16-bit...")
+        self.btn_save_tiff_16.setIcon(get_icon("save", size=13, color="#80cbc4"))
         self.btn_save_tiff_16.setStyleSheet("font-weight: bold; color: #80cbc4;")
         self.btn_save_tiff_16.clicked.connect(lambda: self._on_save_tiff_clicked(bit_depth=16))
 
-        self.btn_save_tiff_32 = QPushButton("💾 Guardar TIFF 32-bit...")
+        self.btn_save_tiff_32 = QPushButton("Guardar TIFF 32-bit...")
+        self.btn_save_tiff_32.setIcon(get_icon("save", size=13, color="#90caf9"))
         self.btn_save_tiff_32.setStyleSheet("font-weight: bold; color: #90caf9;")
         self.btn_save_tiff_32.clicked.connect(lambda: self._on_save_tiff_clicked(bit_depth=32))
 
@@ -632,7 +644,8 @@ class StartrailsTab(QWidget):
         btn_tiff_row.addWidget(self.btn_save_tiff_32)
         export_layout.addLayout(btn_tiff_row)
 
-        self.btn_send_to_dev = QPushButton("➡️ Enviar al Revelador / Editor")
+        self.btn_send_to_dev = QPushButton("Enviar al Revelador / Editor")
+        self.btn_send_to_dev.setIcon(get_icon("sliders", size=13, color="#ffffff"))
         self.btn_send_to_dev.setStyleSheet(STYLE_TRANSFER_BTN)
         self.btn_send_to_dev.clicked.connect(self._on_send_to_developer_clicked)
         export_layout.addWidget(self.btn_send_to_dev)
@@ -771,10 +784,10 @@ class StartrailsTab(QWidget):
         self.table_files.setRowCount(len(self.files_list))
         for row, path in enumerate(self.files_list):
             is_ref = (row == self.ref_idx)
-            ref_item = QTableWidgetItem("📌 REF" if is_ref else "")
+            ref_item = QTableWidgetItem("● REF" if is_ref else "")
             ref_item.setTextAlignment(Qt.AlignCenter)
             if is_ref:
-                ref_item.setForeground(Qt.yellow)
+                ref_item.setForeground(QColor("#00e5ff"))
 
             name_item = QTableWidgetItem(os.path.basename(path))
             dir_item = QTableWidgetItem(os.path.dirname(path))
@@ -859,8 +872,8 @@ class StartrailsTab(QWidget):
                 "El modelo de IA para detección semántica precisa de suelo (skyseg.onnx, ~167 MB) no se encuentra en la carpeta 'models/'.\n\n"
                 "¿Deseas descargarlo ahora automáticamente o prefieres usar el método algorítmico rápido?"
             )
-            btn_download = msg.addButton("📥 Descargar IA (~167 MB)", QMessageBox.AcceptRole)
-            btn_algo = msg.addButton("⚡ Usar Algorítmico", QMessageBox.ActionRole)
+            btn_download = msg.addButton("Descargar IA (~167 MB)", QMessageBox.AcceptRole)
+            btn_algo = msg.addButton("Usar Algorítmico", QMessageBox.ActionRole)
             btn_cancel = msg.addButton("Cancelar", QMessageBox.RejectRole)
             msg.setDefaultButton(btn_download)
             msg.exec()
@@ -983,10 +996,10 @@ class StartrailsTab(QWidget):
         """Actualiza el texto descriptivo del estado de la máscara."""
         if self.current_mask is not None:
             h, w = self.current_mask.shape[:2]
-            self.lbl_mask_status.setText(f"✓ Máscara activa ({w}x{h} px)")
+            self.lbl_mask_status.setText(f"Máscara activa ({w}x{h} px)")
             self.lbl_mask_status.setStyleSheet("color: #81c784; font-weight: bold; font-size: 11px;")
         else:
-            self.lbl_mask_status.setText("⚠️ Sin máscara de horizonte asignada")
+            self.lbl_mask_status.setText("Sin máscara de horizonte asignada")
             self.lbl_mask_status.setStyleSheet("color: #ffb74d; font-size: 11px;")
 
     def _on_show_mask_toggled(self, checked: bool) -> None:
@@ -1004,15 +1017,18 @@ class StartrailsTab(QWidget):
     def _set_run_button_state(self, state: str) -> None:
         """Configura el texto, estilo y disponibilidad del botón principal de ejecución."""
         if state == "running":
-            self.btn_run.setText("🛑 CANCELAR PROCESAMIENTO")
+            self.btn_run.setText("CANCELAR PROCESAMIENTO")
+            self.btn_run.setIcon(get_icon("stop", size=16, color="#ffffff"))
             self.btn_run.setStyleSheet(STYLE_RUN_ACTIVE)
             self.btn_run.setEnabled(True)
         elif state == "cancelling":
-            self.btn_run.setText("⏳ Cancelando procesamiento...")
+            self.btn_run.setText("Cancelando procesamiento...")
+            self.btn_run.setIcon(get_icon("stop", size=16, color="#ffffff"))
             self.btn_run.setStyleSheet(STYLE_RUN_CANCELLING)
             self.btn_run.setEnabled(False)
         else: # idle
-            self.btn_run.setText("⚡ Generar Trazas de Estrellas (Startrails)")
+            self.btn_run.setText("GENERAR TRAZAS DE ESTRELLAS (STARTRAILS)")
+            self.btn_run.setIcon(get_icon("play", size=16, color="#ffffff"))
             self.btn_run.setStyleSheet(STYLE_RUN_IDLE)
             self.btn_run.setEnabled(True)
 
@@ -1137,7 +1153,7 @@ class StartrailsTab(QWidget):
             self.last_timelapse_path = video_path
             self.btn_play_timelapse.setEnabled(True)
             size_mb = os.path.getsize(video_path) / (1024.0 * 1024.0)
-            self.log(f"🎬 Vídeo Time-Lapse generado con éxito ({size_mb:.2f} MB): {video_path}")
+            self.log(f"Vídeo Time-Lapse generado con éxito ({size_mb:.2f} MB): {video_path}")
 
     def _on_worker_error(self, err_msg: str) -> None:
         self._set_run_button_state("idle")

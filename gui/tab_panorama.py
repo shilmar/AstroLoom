@@ -41,6 +41,9 @@ from core.panorama import (
 from core.icc_manager import save_tiff_with_icc
 from gui.widgets.drop_widgets import DropTableWidget, collect_image_files_from_mime
 from gui.theme import STYLE_RUN_IDLE, STYLE_CANCEL_ACTIVE, STYLE_TRANSFER_BTN
+from gui.icons import get_icon, get_svg_pixmap, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_ACCENT
+from gui.widgets.collapsible_section import CollapsibleSection
+from gui.widgets.precision_slider import PrecisionSliderRow
 
 
 class MetadataExtractWorker(QThread):
@@ -352,15 +355,22 @@ class PanoramaTab(QWidget):
         left_layout.setSpacing(10)
 
         # --- SECCIÓN 1: INGESTA DE PANELES ---
-        grp_ingest = QGroupBox("1. Ingesta de Paneles / Teselas")
-        ingest_layout = QVBoxLayout(grp_ingest)
+        self.sec_ingest = CollapsibleSection("1. Ingesta de Paneles / Teselas", is_expanded=True, icon_name="camera")
+        ingest_layout = self.sec_ingest.content_layout
         ingest_layout.setSpacing(6)
 
         btn_bar = QHBoxLayout()
-        self.btn_add_files = QPushButton("➕ Añadir Tomas")
-        self.btn_add_dir = QPushButton("📁 Carpeta")
-        self.btn_remove = QPushButton("❌ Quitar")
-        self.btn_clear = QPushButton("🧹 Limpiar")
+        self.btn_add_files = QPushButton("Añadir Tomas")
+        self.btn_add_files.setIcon(get_icon("plus", color="#80d8ff"))
+        self.btn_add_files.setStyleSheet("font-weight: bold; color: #80d8ff;")
+        self.btn_add_dir = QPushButton("Carpeta")
+        self.btn_add_dir.setIcon(get_icon("folder", color="#80d8ff"))
+        self.btn_remove = QPushButton("Quitar")
+        self.btn_remove.setIcon(get_icon("x", color="#ff8a80"))
+        self.btn_remove.setStyleSheet("color: #ff8a80;")
+        self.btn_clear = QPushButton("Limpiar")
+        self.btn_clear.setIcon(get_icon("trash", color="#ff8a80"))
+        self.btn_clear.setStyleSheet("color: #ff8a80;")
         btn_bar.addWidget(self.btn_add_files)
         btn_bar.addWidget(self.btn_add_dir)
         btn_bar.addWidget(self.btn_remove)
@@ -384,9 +394,12 @@ class PanoramaTab(QWidget):
 
         # Botones de ordenación
         order_bar = QHBoxLayout()
-        self.btn_up = QPushButton("⬆️ Subir")
-        self.btn_down = QPushButton("⬇️ Bajar")
-        self.btn_sort_time = QPushButton("🕒 Ordenar por Hora")
+        self.btn_up = QPushButton("Subir")
+        self.btn_up.setIcon(get_icon("chevron_up", color="#b0bec5"))
+        self.btn_down = QPushButton("Bajar")
+        self.btn_down.setIcon(get_icon("chevron_down", color="#b0bec5"))
+        self.btn_sort_time = QPushButton("Ordenar por Hora")
+        self.btn_sort_time.setIcon(get_icon("refresh", color="#80d8ff"))
         order_bar.addWidget(self.btn_up)
         order_bar.addWidget(self.btn_down)
         order_bar.addWidget(self.btn_sort_time)
@@ -396,11 +409,11 @@ class PanoramaTab(QWidget):
         self.lbl_ingest_summary.setStyleSheet("color: #90a4ae; font-size: 11px;")
         ingest_layout.addWidget(self.lbl_ingest_summary)
 
-        left_layout.addWidget(grp_ingest)
+        left_layout.addWidget(self.sec_ingest)
 
         # --- SECCIÓN 2: DISPOSICIÓN Y GEOMETRÍA ---
-        grp_geo = QGroupBox("2. Disposición y Geometría")
-        geo_layout = QVBoxLayout(grp_geo)
+        self.sec_geo = CollapsibleSection("2. Disposición y Geometría", is_expanded=True, icon_name="compass")
+        geo_layout = self.sec_geo.content_layout
         geo_layout.setSpacing(6)
 
         # Modo de solapamiento
@@ -453,11 +466,11 @@ class PanoramaTab(QWidget):
         self.chk_wave_correction.setChecked(True)
         geo_layout.addWidget(self.chk_wave_correction)
 
-        left_layout.addWidget(grp_geo)
+        left_layout.addWidget(self.sec_geo)
 
         # --- SECCIÓN 3: ALGORITMOS ASTRO Y FUSIÓN ---
-        grp_fusion = QGroupBox("3. Algoritmos Astro y Fusión")
-        fusion_layout = QVBoxLayout(grp_fusion)
+        self.sec_fusion = CollapsibleSection("3. Algoritmos Astro y Fusión", is_expanded=True, icon_name="sparkles")
+        fusion_layout = self.sec_fusion.content_layout
         fusion_layout.setSpacing(6)
 
         self.chk_astro_mode = QCheckBox("Pre-realce Astro (CLAHE + sombras profundas)")
@@ -467,14 +480,16 @@ class PanoramaTab(QWidget):
         )
         fusion_layout.addWidget(self.chk_astro_mode)
 
-        # Inliers mínimos
-        inliers_bar = QHBoxLayout()
-        inliers_bar.addWidget(QLabel("Mínimo de Coincidencias:"))
-        self.spin_min_inliers = QSpinBox()
-        self.spin_min_inliers.setRange(4, 100)
-        self.spin_min_inliers.setValue(6)
-        inliers_bar.addWidget(self.spin_min_inliers)
-        fusion_layout.addLayout(inliers_bar)
+        # Precision sliders
+        self.spin_min_inliers = PrecisionSliderRow(
+            title="Coincidencias mínimas",
+            min_val=4,
+            max_val=100,
+            default_val=6,
+            decimals=0,
+            label_width=140
+        )
+        fusion_layout.addWidget(self.spin_min_inliers)
 
         self.chk_exposure_comp = QCheckBox("Compensación de Viñeteo y Ganancia entre Tomas")
         self.chk_exposure_comp.setChecked(True)
@@ -487,31 +502,37 @@ class PanoramaTab(QWidget):
         self.combo_blend.addItem("Degradado Suave por Distancia (Feathering)", "feather")
         fusion_layout.addWidget(self.combo_blend)
 
-        bands_bar = QHBoxLayout()
-        bands_bar.addWidget(QLabel("Niveles de Pirámide:"))
-        self.spin_bands = QSpinBox()
-        self.spin_bands.setRange(2, 7)
-        self.spin_bands.setValue(5)
-        bands_bar.addWidget(self.spin_bands)
-        fusion_layout.addLayout(bands_bar)
+        self.spin_bands = PrecisionSliderRow(
+            title="Niveles de Pirámide",
+            min_val=2,
+            max_val=7,
+            default_val=5,
+            decimals=0,
+            label_width=140
+        )
+        fusion_layout.addWidget(self.spin_bands)
 
-        self.chk_auto_crop = QCheckBox("✂️ Auto-Recorte de Bordes (Rectángulo Máximo)")
+        self.chk_auto_crop = QCheckBox("Auto-Recorte de Bordes (Rectángulo Máximo)")
         self.chk_auto_crop.setChecked(True)
         self.chk_auto_crop.setToolTip(
             "Calcula el rectángulo de máxima superficie completamente relleno dentro del cosido."
         )
         fusion_layout.addWidget(self.chk_auto_crop)
 
-        left_layout.addWidget(grp_fusion)
+        left_layout.addWidget(self.sec_fusion)
 
         # --- SECCIÓN 4: PROCESAMIENTO Y ENLACE ---
-        grp_proc = QGroupBox("4. Procesamiento y Exportación")
-        proc_layout = QVBoxLayout(grp_proc)
+        self.sec_proc = CollapsibleSection("4. Procesamiento y Exportación", is_expanded=True, icon_name="play")
+        proc_layout = self.sec_proc.content_layout
         proc_layout.setSpacing(8)
 
-        self.btn_stitch = QPushButton("🧩 Coser Panorámica")
+        self.btn_stitch = QPushButton("Coser Panorámica")
+        self.btn_stitch.setIcon(get_icon("play", color="#ffffff"))
+        self.btn_stitch.setFixedHeight(40)
         self.btn_stitch.setStyleSheet(STYLE_RUN_IDLE)
-        self.btn_cancel = QPushButton("🛑 Cancelar")
+        self.btn_cancel = QPushButton("Cancelar")
+        self.btn_cancel.setIcon(get_icon("stop", color="#ffffff"))
+        self.btn_cancel.setFixedHeight(40)
         self.btn_cancel.setStyleSheet(STYLE_CANCEL_ACTIVE)
         self.btn_cancel.setVisible(False)
 
@@ -534,23 +555,29 @@ class PanoramaTab(QWidget):
         line.setStyleSheet("color: #37474f;")
         proc_layout.addWidget(line)
 
-        self.btn_save_tiff = QPushButton("💾 Guardar Panorámica (TIFF 16/32-bit)")
+        self.btn_save_tiff = QPushButton("Guardar Panorámica (TIFF 16/32-bit)")
+        self.btn_save_tiff.setIcon(get_icon("save", color="#80cbc4"))
         self.btn_save_tiff.setEnabled(False)
         proc_layout.addWidget(self.btn_save_tiff)
 
-        self.btn_to_developer = QPushButton("➡️ Enviar Panorámica al Revelador / Editor")
+        self.btn_to_developer = QPushButton("Enviar Panorámica al Revelador / Editor")
+        self.btn_to_developer.setIcon(get_icon("arrow_right", color="#ffffff"))
         self.btn_to_developer.setStyleSheet(STYLE_TRANSFER_BTN)
         self.btn_to_developer.setEnabled(False)
         proc_layout.addWidget(self.btn_to_developer)
 
         sess_bar = QHBoxLayout()
-        self.btn_save_sess = QPushButton("💾 Guardar Sesión")
-        self.btn_load_sess = QPushButton("📂 Cargar Sesión")
+        self.btn_save_sess = QPushButton("Guardar Sesión")
+        self.btn_save_sess.setIcon(get_icon("save", color="#d1c4e9"))
+        self.btn_save_sess.setStyleSheet("background: #2a1b4e; color: #d1c4e9; border: 1px solid #7e57c2;")
+        self.btn_load_sess = QPushButton("Cargar Sesión")
+        self.btn_load_sess.setIcon(get_icon("folder", color="#d1c4e9"))
+        self.btn_load_sess.setStyleSheet("background: #2a1b4e; color: #d1c4e9; border: 1px solid #7e57c2;")
         sess_bar.addWidget(self.btn_save_sess)
         sess_bar.addWidget(self.btn_load_sess)
         proc_layout.addLayout(sess_bar)
 
-        left_layout.addWidget(grp_proc)
+        left_layout.addWidget(self.sec_proc)
         left_layout.addStretch()
 
         scroll_area.setWidget(left_container)
@@ -568,16 +595,20 @@ class PanoramaTab(QWidget):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(6)
 
-        self.btn_zoom_out = QPushButton("🔍 -")
-        self.btn_zoom_out.setFixedWidth(50)
+        self.btn_zoom_out = QPushButton("-")
+        self.btn_zoom_out.setIcon(get_icon("search", color="#94a3b8"))
+        self.btn_zoom_out.setFixedWidth(44)
         self.btn_zoom_100 = QPushButton("100%")
         self.btn_zoom_100.setFixedWidth(55)
-        self.btn_zoom_in = QPushButton("🔍 +")
-        self.btn_zoom_in.setFixedWidth(50)
-        self.btn_zoom_fit = QPushButton("⛶ Ajustar")
-        self.btn_zoom_fit.setFixedWidth(75)
+        self.btn_zoom_in = QPushButton("+")
+        self.btn_zoom_in.setIcon(get_icon("zoom_in", color="#94a3b8"))
+        self.btn_zoom_in.setFixedWidth(44)
+        self.btn_zoom_fit = QPushButton("Ajustar")
+        self.btn_zoom_fit.setIcon(get_icon("maximize", color="#80d8ff"))
+        self.btn_zoom_fit.setFixedWidth(80)
 
-        self.btn_toggle_crop = QPushButton("✂️ Ver Recorte")
+        self.btn_toggle_crop = QPushButton("Ver Recorte")
+        self.btn_toggle_crop.setIcon(get_icon("crop", color="#80d8ff"))
         self.btn_toggle_crop.setCheckable(True)
         self.btn_toggle_crop.setChecked(True)
         self.btn_toggle_crop.setFixedWidth(110)
@@ -860,7 +891,7 @@ class PanoramaTab(QWidget):
             f"Paneles: {result.panels_stitched}/{result.total_panels} | "
             f"Proyección: {result.projection.capitalize()}"
         )
-        self.lbl_status.setText(f"✓ {result.message}")
+        self.lbl_status.setText(f"● {result.message}")
 
         # Enviar al lienzo
         self.canvas.set_image(result.image, crop_rect=result.crop_rect)

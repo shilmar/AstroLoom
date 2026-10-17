@@ -206,7 +206,7 @@ def get_application_stylesheet() -> str:
         }}
         
         QWidget {{
-            font-family: "Segoe UI";
+            font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "Inter", "Roboto", sans-serif;
             font-size: 11px;
             color: {TEXT_PRIMARY};
         }}
@@ -246,17 +246,21 @@ def get_application_stylesheet() -> str:
         QGroupBox {{
             font-weight: bold;
             border: 1px solid {BORDER_BASE};
-            border-radius: 6px;
-            margin-top: 12px;
-            padding-top: 14px;
+            border-radius: 8px;
+            margin-top: 14px;
+            padding: 16px 10px 10px 10px;
             background-color: {BG_CARD};
             color: {TEXT_PRIMARY};
         }}
         QGroupBox::title {{
             subcontrol-origin: margin;
             subcontrol-position: top left;
-            left: 12px;
-            padding: 0 6px;
+            left: 14px;
+            top: 4px;
+            padding: 2px 8px;
+            background-color: {BG_CARD_ALT};
+            border: 1px solid #282f44;
+            border-radius: 4px;
             color: {TEXT_CYAN};
             font-weight: bold;
             font-size: 11px;
@@ -335,28 +339,43 @@ def get_application_stylesheet() -> str:
             padding: 2px;
         }}
 
-        /* --- DESLIZADORES (QSlider) --- */
+        /* --- DESLIZADORES (QSlider) - Pro Studio Styling --- */
         QSlider::groove:horizontal {{
-            border: 1px solid {BORDER_BASE};
-            height: 4px;
-            background: {BG_INPUT};
-            border-radius: 2px;
+            border: 1px solid #232738;
+            height: 3px;
+            background: #141722;
+            border-radius: 1.5px;
         }}
         QSlider::sub-page:horizontal {{
-            background: #0288d1;
-            border-radius: 2px;
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284c7, stop:1 #38bdf8);
+            border-radius: 1.5px;
+        }}
+        QSlider::sub-page:horizontal:disabled {{
+            background: #232738;
         }}
         QSlider::handle:horizontal {{
-            background: {ACCENT_CYAN};
-            border: 1px solid #0288d1;
-            width: 14px;
-            height: 14px;
+            background: #e2e8f0;
+            border: 1.5px solid #38bdf8;
+            width: 12px;
+            height: 12px;
             margin: -5px 0;
-            border-radius: 7px;
+            border-radius: 6px;
         }}
         QSlider::handle:horizontal:hover {{
             background: #ffffff;
-            border: 1px solid {ACCENT_CYAN};
+            border: 1.5px solid #00e5ff;
+            width: 13px;
+            height: 13px;
+            margin: -5px 0;
+            border-radius: 6.5px;
+        }}
+        QSlider::handle:horizontal:pressed {{
+            background: #00e5ff;
+            border: 1.5px solid #ffffff;
+        }}
+        QSlider::handle:horizontal:disabled {{
+            background: #475569;
+            border: 1px solid #334155;
         }}
 
         /* --- CASILLAS Y SELECTORES --- */
@@ -507,6 +526,64 @@ def get_application_stylesheet() -> str:
             color: {TEXT_SECONDARY};
             font-size: 11px;
             padding: 2px 8px;
+        }}
+
+        /* --- BARRA SUPERIOR DEL LIENZO (CANVAS TOOLBAR) --- */
+        QWidget#canvas_toolbar {{
+            background-color: #121520;
+            border-bottom: 1px solid #1e2230;
+            min-height: 36px;
+            max-height: 38px;
+        }}
+        QWidget#canvas_toolbar QPushButton {{
+            background-color: #161924;
+            border: 1px solid #232738;
+            border-radius: 4px;
+            padding: 3px 9px;
+            color: #94a3b8;
+            font-size: 11px;
+            font-weight: 500;
+        }}
+        QWidget#canvas_toolbar QPushButton:hover {{
+            background-color: #1c2234;
+            border-color: #38bdf8;
+            color: #ffffff;
+        }}
+        QWidget#canvas_toolbar QPushButton:pressed {{
+            background-color: #0f172a;
+        }}
+        QWidget#canvas_toolbar QPushButton:checked {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0369a1, stop:1 #0284c7);
+            border: 1px solid #38bdf8;
+            color: #ffffff;
+            font-weight: 600;
+        }}
+        QWidget#canvas_toolbar QPushButton:checked:hover {{
+            background: #0284c7;
+            border-color: #7dd3fc;
+        }}
+        QWidget#canvas_toolbar QPushButton:disabled {{
+            background-color: #12141c;
+            color: #475569;
+            border-color: #1a1e2a;
+        }}
+        QWidget#canvas_toolbar QFrame {{
+            color: #232738;
+        }}
+
+        /* --- BARRA INFERIOR DE ESTADO DEL LIENZO (CANVAS FOOTER BAR) --- */
+        QWidget#canvas_footer_bar {{
+            background-color: #0d1017;
+            border-top: 1px solid #1e2230;
+            min-height: 24px;
+            max-height: 26px;
+        }}
+        QWidget#canvas_footer_bar QLabel {{
+            color: #94a3b8;
+            font-size: 11px;
+        }}
+        QWidget#canvas_footer_bar QFrame {{
+            color: #232738;
         }}
     """
 

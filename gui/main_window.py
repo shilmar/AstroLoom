@@ -49,12 +49,12 @@ class MainWindow(QMainWindow):
         status_bar.addWidget(self.lbl_status, 1)
 
         # Píldora del Motor AstroLoom
-        self.lbl_engine_badge = QLabel("⚡ AstroLoom Engine v0.8.5")
+        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.8.5")
         self.lbl_engine_badge.setStyleSheet(STYLE_STATUS_PILL)
         status_bar.addPermanentWidget(self.lbl_engine_badge)
 
         # Píldora de Monitor de Memoria RAM en tiempo real
-        self.lbl_ram_monitor = QLabel("🧠 RAM: --")
+        self.lbl_ram_monitor = QLabel("RAM: --")
         self.lbl_ram_monitor.setStyleSheet(
             "background-color: #141724; border: 1px solid #232738; border-radius: 4px; padding: 2px 8px; color: #ffd54f; font-weight: bold; font-size: 10px;"
         )
@@ -84,7 +84,7 @@ class MainWindow(QMainWindow):
         """)
         avail_langs = get_i18n().get_available_languages()
         for code, name in avail_langs:
-            self.combo_lang_bar.addItem(f"🌐 {code.upper()} ({name})", code)
+            self.combo_lang_bar.addItem(f"{code.upper()} ({name})", code)
 
         curr_lang = get_i18n().get_current_language()
         idx_lang = self.combo_lang_bar.findData(curr_lang)
@@ -110,7 +110,7 @@ class MainWindow(QMainWindow):
         """Actualiza todos los textos estáticos principales al cambiar de idioma."""
         self.setWindowTitle(tr("app.title", self.BASE_TITLE))
         self.lbl_status.setText(tr("app.ready", "Listo para procesar"))
-        self.lbl_engine_badge.setText(tr("app.engine_badge", "⚡ AstroLoom Engine v0.8.5"))
+        self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.8.5"))
 
         if hasattr(self, 'tab_widget'):
             self.tab_widget.setTabText(0, tr("app.tabs.stacker", "1. Apilador (Stacker)"))
@@ -139,7 +139,7 @@ class MainWindow(QMainWindow):
             pct = vm.percent
             used_gb = vm.used / (1024 ** 3)
             total_gb = vm.total / (1024 ** 3)
-            self.lbl_ram_monitor.setText(f"🧠 RAM: {pct:.0f}% ({used_gb:.1f} / {total_gb:.1f} GB)")
+            self.lbl_ram_monitor.setText(f"RAM: {pct:.0f}% ({used_gb:.1f} / {total_gb:.1f} GB)")
             if pct > 85:
                 self.lbl_ram_monitor.setStyleSheet(
                     "background-color: #381a1a; border: 1px solid #c62828; border-radius: 4px; padding: 2px 8px; color: #ff8a80; font-weight: bold; font-size: 10px;"
@@ -149,7 +149,7 @@ class MainWindow(QMainWindow):
                     "background-color: #141724; border: 1px solid #232738; border-radius: 4px; padding: 2px 8px; color: #ffd54f; font-weight: bold; font-size: 10px;"
                 )
         except Exception:
-            self.lbl_ram_monitor.setText("🧠 RAM: N/D")
+            self.lbl_ram_monitor.setText("RAM: N/D")
 
     def set_status(self, text: str) -> None:
         """Actualiza el mensaje principal de la barra de estado."""

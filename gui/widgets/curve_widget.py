@@ -498,7 +498,7 @@ class CurveWidget(QWidget):
             painter.drawPath(tri_hl)
         else:
             # Badge discreto con el nombre del modo selectivo
-            badge_text = "🌈 Tono vs Sat" if self._mode == MODE_HUE_SAT else "💡 Luma vs Sat"
+            badge_text = "● Tono vs Sat" if self._mode == MODE_HUE_SAT else "● Luma vs Sat"
             badge_color = QColor("#ffb74d") if self._mode == MODE_HUE_SAT else QColor("#00e676")
             badge_rect = QRectF(margin + inner_w - 94, margin + 4, 90, 16)
             painter.setBrush(QBrush(QColor(22, 24, 30, 220)))

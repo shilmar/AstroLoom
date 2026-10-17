@@ -355,16 +355,16 @@ python run_app.py
 * [x] Rediseño del Revelador con Acordeón Plegable Inteligente (9 secciones colapsables e interactivas).
 * [x] Motor de Internacionalización (i18n) Multilingüe en tiempo real con soporte modular de diccionarios (Español / Inglés).
 * [x] Gestor Avanzado de Capas y Máscaras de Ajuste Local estilo Photoshop / Lightroom: Capas especiales (Fondo Base, Fondo Starless, Estrellas, Suelo), orden natural de pila (bottom-up), controles contextuales dinámicos, identidad cromática por capa y carga directa de máscaras en barra horizontal.
-* [ ] Realce Espectral de Estrellas y Filtro Difusor Digital (Enhance Star Light / Constellation Glow).
-* [ ] Estirado Hiperbólico Generalizado (GHS - Generalized Hyperbolic Stretch) en el Revelador.
-* [ ] Tratamiento Anti-Borde en Siluetas Arbóreas Complejas (Tree Boundary Anti-Ghosting / Min-Horizon).
-* [ ] Cribado Inteligente Previo de Tomas y Calidad Estelar (Frame Culling: FWHM, excentricidad y SNR).
-* [ ] Reducción Paramétrica de Contaminación Lumínica Asimétrica (Light Dome Subtraction).
-* [ ] Efecto Orton Astronómico y Glow Específico para Polvo Galáctico en el Revelador.
-* [ ] Apilado por Ventana Deslizante (Sub-Stacking) para Vídeo Time-Lapse.
-* [ ] Detección Automática de Suelo / Cielo con Red Neuronal Ligera (1-Click Auto Sky/Ground).
+* [x] Realce Espectral de Estrellas y Filtro Difusor Digital (Enhance Star Light / Constellation Glow).
+* [x] Estirado Hiperbólico Generalizado (GHS - Generalized Hyperbolic Stretch) en el Revelador.
+* [x] Tratamiento Anti-Borde en Siluetas Arbóreas Complejas (Tree Boundary Anti-Ghosting / Min-Horizon).
+* [x] Cribado Inteligente Previo de Tomas y Calidad Estelar (Frame Culling: FWHM, excentricidad y SNR).
+* [x] Reducción Paramétrica de Contaminación Lumínica Asimétrica (Light Dome Subtraction).
+* [x] Efecto Orton Astronómico y Glow Específico para Polvo Galáctico en el Revelador.
+* [x] Apilado por Ventana Deslizante (Sub-Stacking) para Vídeo Time-Lapse.
+* [x] Detección Automática de Suelo / Cielo con Red Neuronal Ligera (1-Click Auto Sky/Ground).
 * [ ] Reducción de Distorsión Óptica Periférica de Estrellas en Grandes Angulares (Reduce Star Distortion).
-* [ ] Deconvolución Estelar Regularizada (Richardson-Lucy con estimación de PSF).
+* [x] Deconvolución Estelar Regularizada (Richardson-Lucy con estimación de PSF).
 * [ ] Histograma RGB Interactivo en Vivo en el Revelador.
 * [ ] Anti-parpadeo (Deflicker) y morphing temporal entre fotogramas en Startrails / Time-Lapse.
 * [ ] Estimación de tiempo restante (ETA) y progreso fluido en barras de ejecución.

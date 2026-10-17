@@ -48,6 +48,9 @@ from core.config_manager import get_config_val
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from gui.widgets.drop_widgets import DropTableWidget, collect_image_files_from_mime
 from gui.theme import STYLE_RUN_IDLE, STYLE_TRANSFER_BTN
+from gui.icons import get_icon, get_svg_pixmap, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_ACCENT
+from gui.widgets.collapsible_section import CollapsibleSection
+from gui.widgets.precision_slider import PrecisionSliderRow
 
 
 class ToggleSwitch(QWidget):
@@ -122,30 +125,36 @@ class EclipseModeToggle(QWidget):
         self._is_solar = is_solar
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(12)
+        layout.setContentsMargins(10, 4, 10, 4)
+        layout.setSpacing(10)
 
-        self.lbl_solar = QLabel("☀️ Eclipse Solar")
+        self.icon_solar = QLabel()
+        self.icon_solar.setFixedSize(16, 16)
+        self.lbl_solar = QLabel("Eclipse Solar")
         self.lbl_solar.setCursor(Qt.PointingHandCursor)
         self.lbl_solar.mousePressEvent = lambda e: self.set_solar(True)
 
         self.toggle_btn = ToggleSwitch(checked=not is_solar)
         self.toggle_btn.toggled.connect(self._on_switch_toggled)
 
-        self.lbl_lunar = QLabel("🌕 Eclipse Lunar")
+        self.icon_lunar = QLabel()
+        self.icon_lunar.setFixedSize(16, 16)
+        self.lbl_lunar = QLabel("Eclipse Lunar")
         self.lbl_lunar.setCursor(Qt.PointingHandCursor)
         self.lbl_lunar.mousePressEvent = lambda e: self.set_solar(False)
 
         layout.addStretch()
+        layout.addWidget(self.icon_solar)
         layout.addWidget(self.lbl_solar)
         layout.addWidget(self.toggle_btn)
+        layout.addWidget(self.icon_lunar)
         layout.addWidget(self.lbl_lunar)
         layout.addStretch()
 
         self.setStyleSheet("""
             EclipseModeToggle {
-                background-color: #1a1a22;
-                border: 1px solid #2d2d3a;
+                background-color: #141724;
+                border: 1px solid #232738;
                 border-radius: 6px;
             }
         """)
@@ -174,11 +183,16 @@ class EclipseModeToggle(QWidget):
 
     def _update_styles(self):
         if self._is_solar:
+            self.icon_solar.setPixmap(get_svg_pixmap("sun", color="#ff4081", size=15))
             self.lbl_solar.setStyleSheet("font-weight: bold; font-size: 12px; color: #ff4081;")
+            self.icon_lunar.setPixmap(get_svg_pixmap("moon", color="#64748b", size=15))
             self.lbl_lunar.setStyleSheet("font-weight: normal; font-size: 12px; color: #78909c;")
         else:
+            self.icon_solar.setPixmap(get_svg_pixmap("sun", color="#64748b", size=15))
             self.lbl_solar.setStyleSheet("font-weight: normal; font-size: 12px; color: #78909c;")
+            self.icon_lunar.setPixmap(get_svg_pixmap("moon", color="#00e5ff", size=15))
             self.lbl_lunar.setStyleSheet("font-weight: bold; font-size: 12px; color: #00e5ff;")
+
 
 
 class EclipseCanvas(QWidget):
@@ -374,7 +388,7 @@ class EclipseCanvas(QWidget):
         f.setBold(True)
         f.setPointSize(10)
         painter.setFont(f)
-        painter.drawText(pill_rect, Qt.AlignCenter, "📥 Soltar archivo(s) para cargar")
+        painter.drawText(pill_rect, Qt.AlignCenter, "Soltar archivo(s) para cargar")
         painter.restore()
 
     def dragEnterEvent(self, event) -> None:
@@ -677,17 +691,17 @@ class EclipseTab(QWidget):
         self.mode_toggle.mode_changed.connect(self._on_mode_changed)
         left_layout.addWidget(self.mode_toggle)
 
-        # GRUPO 2: Serie de Bracketing y Alineación
-        grp_brack = QGroupBox("2. Serie de Bracketing")
-        brack_layout = QVBoxLayout(grp_brack)
-        brack_layout.setContentsMargins(10, 14, 10, 10)
-        brack_layout.setSpacing(8)
+        # SECCIÓN 1: Serie de Bracketing y Alineación
+        self.sec_brack = CollapsibleSection("1. Serie de Bracketing", is_expanded=True, icon_name="camera")
+        brack_layout = self.sec_brack.content_layout
 
         btn_row_files = QHBoxLayout()
-        self.btn_load_brack = QPushButton("📁 Cargar Bracketing...")
+        self.btn_load_brack = QPushButton("Cargar Bracketing...")
+        self.btn_load_brack.setIcon(get_icon("folder", color="#80d8ff"))
         self.btn_load_brack.setStyleSheet("font-weight: bold; color: #80d8ff;")
         self.btn_load_brack.clicked.connect(self._on_load_bracketing_clicked)
-        self.btn_clear_brack = QPushButton("🗑️ Limpiar")
+        self.btn_clear_brack = QPushButton("Limpiar")
+        self.btn_clear_brack.setIcon(get_icon("trash", color="#ff8a80"))
         self.btn_clear_brack.setStyleSheet("font-weight: bold; color: #ff8a80;")
         self.btn_clear_brack.clicked.connect(self._on_clear_bracketing_clicked)
         btn_row_files.addWidget(self.btn_load_brack)
@@ -713,12 +727,14 @@ class EclipseTab(QWidget):
         brack_layout.addWidget(self.table_brack)
 
         btn_align_row = QHBoxLayout()
-        self.btn_detect_all = QPushButton("⚙️ Detectar Limbo en Todo el Lote")
+        self.btn_detect_all = QPushButton("Detectar Limbo en Lote")
+        self.btn_detect_all.setIcon(get_icon("target", color="#80d8ff"))
         self.btn_detect_all.setStyleSheet("font-weight: bold; color: #80d8ff;")
         self.btn_detect_all.setToolTip("Analiza el limbo con escáner radial subpíxel en cada imagen")
         self.btn_detect_all.clicked.connect(self._on_detect_all_clicked)
 
-        self.btn_set_ref = QPushButton("📌 Marcar REF")
+        self.btn_set_ref = QPushButton("Marcar REF")
+        self.btn_set_ref.setIcon(get_icon("pin", color="#a5d6a7"))
         self.btn_set_ref.setStyleSheet("font-weight: bold; color: #a5d6a7;")
         self.btn_set_ref.setToolTip("Establece la toma seleccionada como centro de referencia de alineación")
         self.btn_set_ref.clicked.connect(self._on_set_ref_clicked)
@@ -727,26 +743,27 @@ class EclipseTab(QWidget):
         btn_align_row.addWidget(self.btn_set_ref)
         brack_layout.addLayout(btn_align_row)
 
-        left_layout.addWidget(grp_brack)
+        left_layout.addWidget(self.sec_brack)
 
-        # GRUPO 3: Geometría del Disco (Limbo de la Toma Seleccionada)
-        grp_geom = QGroupBox("3. Geometría del Disco (Toma Seleccionada)")
-        geom_layout = QVBoxLayout(grp_geom)
-        geom_layout.setContentsMargins(10, 14, 10, 10)
-        geom_layout.setSpacing(8)
+        # SECCIÓN 2: Geometría del Disco (Limbo de la Toma Seleccionada)
+        self.sec_geom = CollapsibleSection("2. Geometría del Disco (Limbo)", is_expanded=True, icon_name="crosshair")
+        geom_layout = self.sec_geom.content_layout
 
         btn_auto_row = QHBoxLayout()
-        self.btn_detect_disk = QPushButton("🎯 Auto-detectar")
+        self.btn_detect_disk = QPushButton("Auto-detectar")
+        self.btn_detect_disk.setIcon(get_icon("target", color="#80d8ff"))
         self.btn_detect_disk.setStyleSheet("font-weight: bold; color: #80d8ff;")
         self.btn_detect_disk.setToolTip("Detección global del disco lunar/solar")
         self.btn_detect_disk.clicked.connect(self._on_auto_detect_clicked)
 
-        self.btn_refine_subpixel = QPushButton("🔍 Ajuste Fino Subpíxel")
+        self.btn_refine_subpixel = QPushButton("Ajuste Fino Subpíxel")
+        self.btn_refine_subpixel.setIcon(get_icon("search", color="#b388ff"))
         self.btn_refine_subpixel.setStyleSheet("color: #b388ff; font-weight: bold;")
         self.btn_refine_subpixel.setToolTip("Ajusta el círculo exactamente al borde del limbo ignorando protuberancias")
         self.btn_refine_subpixel.clicked.connect(self._on_refine_subpixel_clicked)
 
-        self.btn_pick_center = QPushButton("👆 Clic Canvas")
+        self.btn_pick_center = QPushButton("Clic Canvas")
+        self.btn_pick_center.setIcon(get_icon("crosshair", color="#ffd54f"))
         self.btn_pick_center.setCheckable(True)
         self.btn_pick_center.setStyleSheet("font-weight: bold; color: #ffd54f;")
         self.btn_pick_center.setToolTip("Haz clic en el canvas para situar el centro")
@@ -791,47 +808,44 @@ class EclipseTab(QWidget):
         row_radius.addWidget(self.chk_show_guide)
         geom_layout.addLayout(row_radius)
 
-        left_layout.addWidget(grp_geom)
+        left_layout.addWidget(self.sec_geom)
 
-        # GRUPO 4: Fusión HDR (Bracketing y Estirado Asinh)
-        self.grp_hdr = QGroupBox("4. Fusión HDR (Lineal 32-bit)")
-        hdr_layout = QVBoxLayout(self.grp_hdr)
-        hdr_layout.setContentsMargins(10, 14, 10, 10)
-        hdr_layout.setSpacing(8)
+        # SECCIÓN 3: Fusión HDR (Bracketing y Estirado Asinh)
+        self.grp_hdr = CollapsibleSection("3. Fusión HDR (Lineal 32-bit)", is_expanded=True, icon_name="zap")
+        hdr_layout = self.grp_hdr.content_layout
 
         self.chk_auto_align = QCheckBox("Alinear tomas por limbo antes de fusionar")
         self.chk_auto_align.setChecked(True)
         self.chk_auto_align.setStyleSheet("font-weight: bold; color: #b9f6ca;")
         hdr_layout.addWidget(self.chk_auto_align)
 
-        row_sat = QHBoxLayout()
-        row_sat.addWidget(QLabel("Corte de Saturación:"))
-        self.lbl_sat_val = QLabel("92%")
-        self.lbl_sat_val.setStyleSheet("color: #80d8ff; font-weight: bold;")
-        row_sat.addWidget(self.lbl_sat_val)
-        hdr_layout.addLayout(row_sat)
-
-        self.slider_sat = QSlider(Qt.Horizontal)
-        self.slider_sat.setRange(70, 98)
-        self.slider_sat.setValue(92)
-        self.slider_sat.valueChanged.connect(lambda v: self.lbl_sat_val.setText(f"{v}%"))
+        self.slider_sat = PrecisionSliderRow(
+            title="Corte Saturación",
+            min_val=70,
+            max_val=98,
+            default_val=92,
+            unit="%",
+            decimals=0,
+            label_width=135
+        )
+        self.lbl_sat_val = self.slider_sat.spin  # compatibilidad
         hdr_layout.addWidget(self.slider_sat)
 
-        row_asinh = QHBoxLayout()
-        row_asinh.addWidget(QLabel("Compresión Tonal (Asinh):"))
-        self.lbl_asinh_val = QLabel("35x")
-        self.lbl_asinh_val.setStyleSheet("color: #ffd54f; font-weight: bold;")
-        row_asinh.addWidget(self.lbl_asinh_val)
-        hdr_layout.addLayout(row_asinh)
-
-        self.slider_asinh = QSlider(Qt.Horizontal)
-        self.slider_asinh.setRange(0, 100)
-        self.slider_asinh.setValue(35)
-        self.slider_asinh.setToolTip("Levanta suavemente la corona exterior tenue sin quemar el centro ni las protuberancias")
+        self.slider_asinh = PrecisionSliderRow(
+            title="Compresión Asinh",
+            min_val=0,
+            max_val=100,
+            default_val=35,
+            unit="x",
+            decimals=0,
+            label_width=135
+        )
+        self.lbl_asinh_val = self.slider_asinh.spin  # compatibilidad
         self.slider_asinh.valueChanged.connect(self._on_asinh_slider_changed)
         hdr_layout.addWidget(self.slider_asinh)
 
-        self.btn_fuse_hdr = QPushButton("⚡ FUSIONAR BRACKETING HDR")
+        self.btn_fuse_hdr = QPushButton("FUSIONAR BRACKETING HDR")
+        self.btn_fuse_hdr.setIcon(get_icon("zap", color="#ffffff"))
         self.btn_fuse_hdr.setFixedHeight(40)
         self.btn_fuse_hdr.setCursor(Qt.PointingHandCursor)
         self.btn_fuse_hdr.setStyleSheet(STYLE_RUN_IDLE)
@@ -839,18 +853,17 @@ class EclipseTab(QWidget):
         hdr_layout.addWidget(self.btn_fuse_hdr)
         left_layout.addWidget(self.grp_hdr)
 
-        # GRUPO 5: Filtros de Corona Solar (NRGF Limpio)
-        self.grp_nrgf = QGroupBox("5. Filtros de Corona Solar (NRGF Limpio)")
-        nrgf_layout = QVBoxLayout(self.grp_nrgf)
-        nrgf_layout.setContentsMargins(10, 14, 10, 10)
-        nrgf_layout.setSpacing(8)
+        # SECCIÓN 4: Filtros de Corona Solar (NRGF Limpio)
+        self.grp_nrgf = CollapsibleSection("4. Filtros de Corona Solar (NRGF)", is_expanded=True, icon_name="sparkles")
+        nrgf_layout = self.grp_nrgf.content_layout
 
         row_bin = QHBoxLayout()
-        row_bin.addWidget(QLabel("Ancho de anillo radial (px):"))
+        row_bin.addWidget(QLabel("Ancho anillo radial:"))
         self.spin_bin_px = QDoubleSpinBox()
         self.spin_bin_px.setRange(0.5, 20.0)
         self.spin_bin_px.setValue(2.0)
         self.spin_bin_px.setSingleStep(0.5)
+        self.spin_bin_px.setSuffix(" px")
         row_bin.addWidget(self.spin_bin_px)
         nrgf_layout.addLayout(row_bin)
 
@@ -860,52 +873,49 @@ class EclipseTab(QWidget):
         nrgf_layout.addWidget(self.rb_robust)
         nrgf_layout.addWidget(self.rb_mean)
 
-        row_reach = QHBoxLayout()
-        row_reach.addWidget(QLabel("Alcance Radial de Corona:"))
-        self.lbl_reach_val = QLabel("3.5x")
-        self.lbl_reach_val.setStyleSheet("color: #80d8ff; font-weight: bold;")
-        row_reach.addWidget(self.lbl_reach_val)
-        nrgf_layout.addLayout(row_reach)
-
-        self.slider_reach = QSlider(Qt.Horizontal)
-        self.slider_reach.setRange(12, 50)
-        self.slider_reach.setValue(35)
-        self.slider_reach.setToolTip("Extiende la acción del filtro a lo largo de toda la corona media y externa, suprimiendo al 100% el ruido del cielo negro")
-        self.slider_reach.valueChanged.connect(lambda v: self.lbl_reach_val.setText(f"{v/10.0:.1f}x"))
+        self.slider_reach = PrecisionSliderRow(
+            title="Alcance Corona",
+            min_val=12,
+            max_val=50,
+            default_val=35,
+            scale=10.0,
+            unit="x",
+            decimals=1,
+            label_width=135
+        )
+        self.lbl_reach_val = self.slider_reach.spin  # compatibilidad
         nrgf_layout.addWidget(self.slider_reach)
 
-        row_blend = QHBoxLayout()
-        row_blend.addWidget(QLabel("Fuerza de Filamentos (Mezcla):"))
-        self.lbl_blend_val = QLabel("50%")
-        self.lbl_blend_val.setStyleSheet("color: #ffd54f; font-weight: bold;")
-        row_blend.addWidget(self.lbl_blend_val)
-        nrgf_layout.addLayout(row_blend)
-
-        self.slider_blend = QSlider(Qt.Horizontal)
-        self.slider_blend.setRange(0, 100)
-        self.slider_blend.setValue(50)
-        self.slider_blend.setToolTip("Aumenta el estiramiento y contraste de los filamentos magnéticos ('hilos') de la corona")
-        self.slider_blend.valueChanged.connect(lambda v: self.lbl_blend_val.setText(f"{v}%"))
+        self.slider_blend = PrecisionSliderRow(
+            title="Fuerza Filamentos",
+            min_val=0,
+            max_val=100,
+            default_val=50,
+            unit="%",
+            decimals=0,
+            label_width=135
+        )
+        self.lbl_blend_val = self.slider_blend.spin  # compatibilidad
         nrgf_layout.addWidget(self.slider_blend)
 
-        self.chk_highpass = QCheckBox("Realce de hilos finos (Filtro bilateral tangencial)")
+        self.chk_highpass = QCheckBox("Realce de hilos finos (filtro bilateral tangencial)")
         self.chk_highpass.setChecked(True)
         nrgf_layout.addWidget(self.chk_highpass)
 
-        row_hp = QHBoxLayout()
-        row_hp.addWidget(QLabel("Nitidez de hilos:"))
-        self.lbl_hp_val = QLabel("50%")
-        self.lbl_hp_val.setStyleSheet("color: #b388ff; font-weight: bold;")
-        row_hp.addWidget(self.lbl_hp_val)
-        nrgf_layout.addLayout(row_hp)
-
-        self.slider_hp = QSlider(Qt.Horizontal)
-        self.slider_hp.setRange(0, 100)
-        self.slider_hp.setValue(50)
-        self.slider_hp.valueChanged.connect(lambda v: self.lbl_hp_val.setText(f"{v}%"))
+        self.slider_hp = PrecisionSliderRow(
+            title="Nitidez Hilos",
+            min_val=0,
+            max_val=100,
+            default_val=50,
+            unit="%",
+            decimals=0,
+            label_width=135
+        )
+        self.lbl_hp_val = self.slider_hp.spin  # compatibilidad
         nrgf_layout.addWidget(self.slider_hp)
 
-        self.btn_apply_filters = QPushButton("✨ APLICAR FILTROS DE CORONA (NRGF)")
+        self.btn_apply_filters = QPushButton("APLICAR FILTROS DE CORONA (NRGF)")
+        self.btn_apply_filters.setIcon(get_icon("sparkles", color="#ffffff"))
         self.btn_apply_filters.setFixedHeight(40)
         self.btn_apply_filters.setCursor(Qt.PointingHandCursor)
         self.btn_apply_filters.setStyleSheet("""
@@ -930,19 +940,19 @@ class EclipseTab(QWidget):
 
         left_layout.addWidget(self.grp_nrgf)
 
-        # GRUPO 6: Exportación y Conexión
-        grp_export = QGroupBox("6. Exportación")
-        export_layout = QVBoxLayout(grp_export)
-        export_layout.setContentsMargins(10, 14, 10, 10)
-        export_layout.setSpacing(8)
+        # SECCIÓN 5: Exportación y Acabado
+        self.sec_export = CollapsibleSection("5. Exportación y Acabado", is_expanded=True, icon_name="save")
+        export_layout = self.sec_export.content_layout
 
         btn_tiff_row = QHBoxLayout()
-        self.btn_save_tiff_16 = QPushButton("💾 Guardar TIFF 16-bit...")
+        self.btn_save_tiff_16 = QPushButton("Guardar TIFF 16-bit...")
+        self.btn_save_tiff_16.setIcon(get_icon("save", color="#80cbc4"))
         self.btn_save_tiff_16.setStyleSheet("font-weight: bold; color: #80cbc4;")
         self.btn_save_tiff_16.setToolTip("Exporta en TIFF 16-bit entero compatible directamente con Photoshop, Lightroom y editores estándar sin conversiones extrañas.")
         self.btn_save_tiff_16.clicked.connect(lambda: self._on_save_tiff_clicked(bit_depth=16))
 
-        self.btn_save_tiff_32 = QPushButton("💾 Guardar TIFF 32-bit...")
+        self.btn_save_tiff_32 = QPushButton("Guardar TIFF 32-bit...")
+        self.btn_save_tiff_32.setIcon(get_icon("save", color="#90caf9"))
         self.btn_save_tiff_32.setStyleSheet("font-weight: bold; color: #90caf9;")
         self.btn_save_tiff_32.setToolTip("Exporta en TIFF 32-bit float con el rango dinámico HDR lineal completo.")
         self.btn_save_tiff_32.clicked.connect(lambda: self._on_save_tiff_clicked(bit_depth=32))
@@ -953,22 +963,24 @@ class EclipseTab(QWidget):
         btn_tiff_row.addWidget(self.btn_save_tiff_32)
         export_layout.addLayout(btn_tiff_row)
 
-        self.btn_send_to_dev = QPushButton("➡️ Enviar al Revelador / Editor")
+        self.btn_send_to_dev = QPushButton("Enviar al Revelador / Editor")
+        self.btn_send_to_dev.setIcon(get_icon("arrow_right", color="#ffffff"))
         self.btn_send_to_dev.setFixedHeight(38)
         self.btn_send_to_dev.setCursor(Qt.PointingHandCursor)
         self.btn_send_to_dev.setStyleSheet(STYLE_TRANSFER_BTN)
         self.btn_send_to_dev.clicked.connect(self._on_send_to_developer_clicked)
         export_layout.addWidget(self.btn_send_to_dev)
 
-        self.btn_open_collage = QPushButton("🎨 Ir a Pestaña 4: Collage de Eclipses ➡️")
+        self.btn_open_collage = QPushButton("Diseñar Secuencia / Collage")
+        self.btn_open_collage.setIcon(get_icon("grid", color="#e1bee7"))
         self.btn_open_collage.setFixedHeight(38)
         self.btn_open_collage.setCursor(Qt.PointingHandCursor)
-        self.btn_open_collage.setStyleSheet("font-weight: bold; background: #2e1c4e; color: #e1bee7; border: 1px solid #ba68c8; padding: 6px;")
+        self.btn_open_collage.setStyleSheet("font-weight: bold; background: #2e1c4e; color: #e1bee7; border: 1px solid #ba68c8; padding: 6px; border-radius: 4px;")
         self.btn_open_collage.setToolTip("Cambia a la pestaña dedicada de Collage de Eclipses transfiriendo la serie de fotos")
         self.btn_open_collage.clicked.connect(self._on_open_collage_clicked)
         export_layout.addWidget(self.btn_open_collage)
 
-        left_layout.addWidget(grp_export)
+        left_layout.addWidget(self.sec_export)
 
         scroll_area.setWidget(panel_content)
         left_panel_layout.addWidget(scroll_area, stretch=1)
@@ -1000,10 +1012,18 @@ class EclipseTab(QWidget):
 
         canvas_bar = QHBoxLayout()
         self.btn_reset_zoom = QPushButton("Ajustar Vista")
+        self.btn_reset_zoom.setIcon(get_icon("maximize", color="#80d8ff"))
         self.btn_reset_zoom.clicked.connect(self._on_reset_zoom_clicked)
+
+        self.lbl_mode_badge = QLabel("● Modo: Solar (HDR)")
+        self.lbl_mode_badge.setStyleSheet(
+            "background-color: #141724; border: 1px solid #ff4081; border-radius: 4px; padding: 2px 8px; color: #ff4081; font-weight: bold; font-size: 11px;"
+        )
+
         self.lbl_canvas_status = QLabel("Listo.")
         self.lbl_canvas_status.setStyleSheet("color: #90a4ae; font-size: 11px;")
         canvas_bar.addWidget(self.btn_reset_zoom)
+        canvas_bar.addWidget(self.lbl_mode_badge)
         canvas_bar.addStretch()
         canvas_bar.addWidget(self.lbl_canvas_status)
         right_layout.addLayout(canvas_bar)
@@ -1066,11 +1086,21 @@ class EclipseTab(QWidget):
         self.log(f"Modo cambiado a: Eclipse {mode_label}")
 
         if is_solar:
-            self.grp_hdr.setTitle("4. Fusión HDR (Lineal 32-bit)")
+            self.grp_hdr.setTitle("3. Fusión HDR (Lineal 32-bit)")
             self.slider_asinh.setValue(35)
+            if hasattr(self, "lbl_mode_badge"):
+                self.lbl_mode_badge.setText("● Modo: Solar (HDR)")
+                self.lbl_mode_badge.setStyleSheet(
+                    "background-color: #141724; border: 1px solid #ff4081; border-radius: 4px; padding: 2px 8px; color: #ff4081; font-weight: bold; font-size: 11px;"
+                )
         else:
-            self.grp_hdr.setTitle("4. Fusión HDR (Mertens Multiescala)")
+            self.grp_hdr.setTitle("3. Fusión HDR (Mertens Multiescala)")
             self.slider_asinh.setValue(0)
+            if hasattr(self, "lbl_mode_badge"):
+                self.lbl_mode_badge.setText("● Modo: Lunar (Mertens)")
+                self.lbl_mode_badge.setStyleSheet(
+                    "background-color: #141724; border: 1px solid #00e5ff; border-radius: 4px; padding: 2px 8px; color: #00e5ff; font-weight: bold; font-size: 11px;"
+                )
 
     def add_bracketing_paths(self, paths: list):
         """Añade tomas a la serie de bracketing (Drag & Drop o diálogo) y detecta limbo de referencia."""
@@ -1160,7 +1190,7 @@ class EclipseTab(QWidget):
         self.table_brack.setRowCount(len(self.bracketing_files))
 
         for row, item in enumerate(self.bracketing_files):
-            ref_txt = "✓ REF" if item.get("is_ref", False) else ""
+            ref_txt = "● REF" if item.get("is_ref", False) else ""
             item_ref = QTableWidgetItem(ref_txt)
             item_ref.setTextAlignment(Qt.AlignCenter)
             if item.get("is_ref", False):

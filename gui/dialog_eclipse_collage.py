@@ -29,6 +29,11 @@ class EclipseCollageDialog(QDialog):
         self.tab = EclipseCollageTab(parent=self, initial_filepaths=initial_filepaths, mode=mode)
         layout.addWidget(self.tab)
 
+    def __getattr__(self, name):
+        if "tab" in self.__dict__:
+            return getattr(self.tab, name)
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
     def closeEvent(self, event):
         self.tab.closeEvent(event)
         super().closeEvent(event)

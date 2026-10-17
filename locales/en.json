@@ -7,8 +7,8 @@
   "app": {
     "title": "AstroLoom - Astrophotography & Nightscape Suite (v0.8.5)",
     "ready": "Ready to process",
-    "engine_badge": "⚡ AstroLoom Engine v0.8.5",
-    "ram_monitor": "🧠 RAM: {pct}% ({used:.1f} / {total:.1f} GB)",
+    "engine_badge": "● AstroLoom Engine v0.8.5",
+    "ram_monitor": "RAM: {pct}% ({used:.1f} / {total:.1f} GB)",
     "language": "Language",
     "tabs": {
       "stacker": "1. Stacker",
@@ -36,23 +36,23 @@
     "close": "Close"
   },
   "developer": {
-    "btn_open": "📁 Open Image (TIFF / FITS / RAW)...",
-    "btn_export": "💾 EXPORT REVEALED IMAGE...",
+    "btn_open": "Open Image (TIFF / FITS / RAW)...",
+    "btn_export": "EXPORT REVEALED IMAGE...",
     "activity_log": "Activity Log:",
     "sections": {
-      "presets": "🎨 Presets & Developing Styles",
-      "gradients": "⚡ Calibration & Gradients (GraXpert AI)",
-      "stretch": "📈 Tonal Stretch & Contrast",
-      "curves": "📈 Interactive Tone Curve (RGB / Saturation)",
-      "starnet": "⭐ StarNet++ AI — Star Separation",
-      "deconv": "🔬 Optical Deconvolution & Sharpening (R-L)",
-      "wb": "🌡️ White Balance & Calibration",
-      "color": "🎨 Color & Saturation",
-      "ground_tone": "🏞️ Landscape Ground Tone Adjustment",
-      "masks": "🎭 Masks & Local Adjustment Layers"
+      "presets": "Presets & Developing Styles",
+      "gradients": "Calibration & Gradients (GraXpert AI)",
+      "stretch": "Tonal Stretch & Contrast",
+      "curves": "Interactive Tone Curve (RGB / Saturation)",
+      "starnet": "StarNet++ AI — Star Separation",
+      "deconv": "Optical Deconvolution & Sharpening (R-L)",
+      "wb": "White Balance & Calibration",
+      "color": "Color & Saturation",
+      "ground_tone": "Landscape Ground Tone Adjustment",
+      "masks": "Masks & Local Adjustment Layers"
     },
     "stretch": {
-      "auto_mtf": "⚡ Auto-Stretch MTF",
+      "auto_mtf": "Auto-Stretch MTF",
       "reset_tone": "Reset Tone",
       "black_point": "Black Pt:",
       "midtones": "Midtones (m):",
@@ -60,7 +60,7 @@
     },
     "starnet": {
       "stride": "Stride:",
-      "btn_separate": "✨ Separate Stars with StarNet",
+      "btn_separate": "Separate Stars with StarNet",
       "badge_separated": "● Separated",
       "layer_visible": "Visible layer:",
       "mode_composite": "Composite (Normal)",
@@ -88,10 +88,10 @@
     },
     "ground": {
       "badge_active": "● Ground Active",
-      "status_active": "✓ Ground mask active",
-      "status_inactive": "⚠️ No active ground mask",
-      "btn_create": "🖌️ Create Ground Mask...",
-      "btn_edit": "🖌️ Edit Mask...",
+      "status_active": "Ground mask active",
+      "status_inactive": "No active ground mask",
+      "btn_create": "Create Ground Mask...",
+      "btn_edit": "Edit Mask...",
       "btn_delete": "Delete",
       "exposure": "Ground Exposure (EV):",
       "shadows": "Shadow Recovery:",
@@ -115,8 +115,8 @@
   "settings": {
     "title": "Configuration / Settings",
     "language": "Interface Language / Idioma:",
-    "lang_es": "🇪🇸 Español (Spanish)",
-    "lang_en": "🇬🇧 English (Inglés)",
-    "btn_save": "💾 Save Configuration Changes"
+    "lang_es": "Español (ES)",
+    "lang_en": "English (EN)",
+    "btn_save": "Save Configuration Changes"
   }
 }
