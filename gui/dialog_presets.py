@@ -1,17 +1,19 @@
 # gui/dialog_presets.py
 """
 gui/dialog_presets.py - Diálogos interactivos para guardar, importar, exportar y gestionar
-los ajustes preestablecidos (Presets) de revelado en AstroLoom.
+los ajustes preestablecidos (Presets) de revelado en AstroLoom Studio Pro 2.0.
+Diseño homogéneo con iconografía vectorial SVG, sin emojis y acabado Slate/Charcoal.
 """
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit,
     QComboBox, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QMessageBox, QFileDialog, QGroupBox, QRadioButton, QButtonGroup,
-    QSplitter, QWidget, QFrame
+    QMessageBox, QFileDialog, QRadioButton, QButtonGroup,
+    QSplitter, QWidget, QFrame, QSizePolicy
 )
 
 from core.developer_presets import (
@@ -24,6 +26,7 @@ from gui.theme import (
     BG_WINDOW, BG_PANEL, BG_CARD, BG_INPUT, BORDER_BASE, BORDER_FOCUS,
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_CYAN, ACCENT_GREEN, ACCENT_RED
 )
+from gui.icons import get_icon, get_svg_pixmap
 
 
 class SavePresetDialog(QDialog):
@@ -36,38 +39,73 @@ class SavePresetDialog(QDialog):
         self.created_preset: Optional[DeveloperPreset] = None
 
         self.setWindowTitle("Guardar Ajustes Actuales como Preset")
-        self.resize(480, 420)
+        self.resize(500, 460)
         self.setModal(True)
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #0f121d;
+                color: #e2e8f0;
+            }
+            QLabel {
+                color: #e2e8f0;
+            }
+            QLineEdit, QComboBox, QTextEdit {
+                background-color: #131724;
+                border: 1px solid #273044;
+                border-radius: 5px;
+                color: #f1f5f9;
+                padding: 6px 8px;
+                font-size: 12px;
+            }
+            QLineEdit:focus, QComboBox:focus, QTextEdit:focus {
+                border: 1px solid #38bdf8;
+            }
+        """)
         self._setup_ui()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(14)
 
-        # Encabezado
-        lbl_header = QLabel("🎨 Guardar Nuevo Ajuste Preestablecido")
-        lbl_header.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {TEXT_CYAN};")
-        layout.addWidget(lbl_header)
+        # Encabezado con icono SVG
+        header_row = QHBoxLayout()
+        header_row.setSpacing(10)
+        lbl_icon = QLabel()
+        lbl_icon.setPixmap(get_svg_pixmap("save", color="#38bdf8", size=20))
+        header_row.addWidget(lbl_icon)
 
+        title_box = QVBoxLayout()
+        lbl_header = QLabel("Guardar Nuevo Ajuste Preestablecido")
+        lbl_header.setStyleSheet("font-size: 15px; font-weight: 700; color: #f8fafc;")
         lbl_sub = QLabel("Guarda todos los deslizadores, curvas y parámetros actuales para aplicarlos en otras imágenes.")
         lbl_sub.setWordWrap(True)
-        lbl_sub.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
-        layout.addWidget(lbl_sub)
+        lbl_sub.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        title_box.addWidget(lbl_header)
+        title_box.addWidget(lbl_sub)
+        header_row.addLayout(title_box)
+        header_row.addStretch()
+        layout.addLayout(header_row)
 
-        # Formulario
-        form_group = QGroupBox("Detalles del Preset")
-        form_layout = QVBoxLayout(form_group)
-        form_layout.setSpacing(8)
+        # Formulario dentro de una tarjeta moderna
+        form_card = QFrame()
+        form_card.setStyleSheet("QFrame { background-color: #141724; border: 1px solid #222738; border-radius: 8px; }")
+        form_layout = QVBoxLayout(form_card)
+        form_layout.setContentsMargins(14, 14, 14, 14)
+        form_layout.setSpacing(10)
 
         # Nombre
-        form_layout.addWidget(QLabel("Nombre del Preset:*"))
+        lbl_n = QLabel("Nombre del Preset:*")
+        lbl_n.setStyleSheet("font-weight: 600; font-size: 11px; color: #cbd5e1;")
+        form_layout.addWidget(lbl_n)
         self.txt_name = QLineEdit()
         self.txt_name.setPlaceholderText("Ej: Vía Láctea - Verano Contraste Alto")
         form_layout.addWidget(self.txt_name)
 
         # Categoría
-        form_layout.addWidget(QLabel("Categoría:"))
+        lbl_c = QLabel("Categoría:")
+        lbl_c.setStyleSheet("font-weight: 600; font-size: 11px; color: #cbd5e1;")
+        form_layout.addWidget(lbl_c)
         self.combo_category = QComboBox()
         self.combo_category.setEditable(True)
         categories = sorted(list(set(self.existing_categories + ["Vía Láctea", "Paisaje Nocturno", "Cielo Profundo", "Usuario", "Especial"])))
@@ -76,31 +114,66 @@ class SavePresetDialog(QDialog):
         form_layout.addWidget(self.combo_category)
 
         # Autor
-        form_layout.addWidget(QLabel("Autor:"))
+        lbl_a = QLabel("Autor:")
+        lbl_a.setStyleSheet("font-weight: 600; font-size: 11px; color: #cbd5e1;")
+        form_layout.addWidget(lbl_a)
         self.txt_author = QLineEdit()
         self.txt_author.setPlaceholderText("Tu nombre o alias")
         self.txt_author.setText("Usuario")
         form_layout.addWidget(self.txt_author)
 
         # Descripción
-        form_layout.addWidget(QLabel("Descripción / Notas (Opcional):"))
+        lbl_d = QLabel("Descripción / Notas (Opcional):")
+        lbl_d.setStyleSheet("font-weight: 600; font-size: 11px; color: #cbd5e1;")
+        form_layout.addWidget(lbl_d)
         self.txt_desc = QTextEdit()
         self.txt_desc.setPlaceholderText("Describe el tipo de lente, cámara, cielo o propósito para el que está pensado este preset...")
         self.txt_desc.setMaximumHeight(70)
         form_layout.addWidget(self.txt_desc)
 
-        layout.addWidget(form_group)
+        layout.addWidget(form_card)
 
         # Botones inferiores
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
         btn_layout.addStretch()
 
         self.btn_cancel = QPushButton("Cancelar")
+        self.btn_cancel.setCursor(Qt.PointingHandCursor)
+        self.btn_cancel.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                color: #94a3b8;
+                border: 1px solid #2b3245;
+                border-radius: 5px;
+                padding: 6px 14px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background: #1e2433;
+                color: #f1f5f9;
+            }
+        """)
         self.btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(self.btn_cancel)
 
-        self.btn_save = QPushButton("💾 Guardar Preset")
-        self.btn_save.setStyleSheet(STYLE_RUN_IDLE)
+        self.btn_save = QPushButton("Guardar Preset")
+        self.btn_save.setIcon(get_icon("save", color="#ffffff", size=14))
+        self.btn_save.setCursor(Qt.PointingHandCursor)
+        self.btn_save.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284c7, stop:1 #0ea5e9);
+                color: #ffffff;
+                border: 1px solid #38bdf8;
+                border-radius: 5px;
+                font-weight: 600;
+                padding: 6px 16px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0369a1, stop:1 #0284c7);
+            }
+        """)
         self.btn_save.clicked.connect(self._on_save_clicked)
         btn_layout.addWidget(self.btn_save)
 
@@ -143,74 +216,210 @@ class PresetManagerDialog(QDialog):
         self.selected_preset: Optional[DeveloperPreset] = None
 
         self.setWindowTitle("Gestor de Ajustes Preestablecidos (Presets)")
-        self.resize(780, 520)
+        self.resize(840, 560)
         self.setModal(True)
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #0f121d;
+                color: #e2e8f0;
+            }
+            QLabel {
+                color: #e2e8f0;
+            }
+        """)
 
         self._setup_ui()
         self._refresh_presets()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
 
-        # Encabezado
-        lbl_header = QLabel("⚙️ Gestor de Presets de Revelado")
-        lbl_header.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {TEXT_CYAN};")
-        layout.addWidget(lbl_header)
+        # Encabezado con icono SVG
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(10)
+        lbl_icon = QLabel()
+        lbl_icon.setPixmap(get_svg_pixmap("sliders", color="#38bdf8", size=22))
+        header_layout.addWidget(lbl_icon)
+
+        title_box = QVBoxLayout()
+        lbl_header = QLabel("Gestor de Presets de Revelado")
+        lbl_header.setStyleSheet("font-size: 15px; font-weight: 700; color: #f8fafc;")
+        lbl_sub = QLabel("Administra, inspecciona, importa y exporta estilos de procesado astronómico")
+        lbl_sub.setStyleSheet("font-size: 11px; color: #94a3b8;")
+        title_box.addWidget(lbl_header)
+        title_box.addWidget(lbl_sub)
+        header_layout.addLayout(title_box)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
 
         # Divisor principal horizontal
         splitter = QSplitter(Qt.Horizontal)
+        splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #1a1e2c;
+                width: 6px;
+            }
+            QSplitter::handle:hover {
+                background-color: #38bdf8;
+            }
+        """)
 
         # --- LADO IZQUIERDO: Tabla de Presets ---
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setContentsMargins(0, 0, 8, 0)
         left_layout.setSpacing(8)
 
         # Filtro de búsqueda / categoría
         filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("Filtrar:"))
+        filter_layout.setSpacing(8)
+
         self.txt_filter = QLineEdit()
-        self.txt_filter.setPlaceholderText("Buscar por nombre...")
+        self.txt_filter.setClearButtonEnabled(True)
+        self.txt_filter.setPlaceholderText("Buscar por nombre o descripción...")
+        self.txt_filter.setStyleSheet("""
+            QLineEdit {
+                background-color: #131724;
+                border: 1px solid #242c3e;
+                border-radius: 6px;
+                padding: 6px 10px;
+                color: #f1f5f9;
+                font-size: 12px;
+            }
+            QLineEdit:focus {
+                border-color: #38bdf8;
+            }
+        """)
         self.txt_filter.textChanged.connect(self._apply_filter)
-        filter_layout.addWidget(self.txt_filter)
+        filter_layout.addWidget(self.txt_filter, 1)
 
         self.combo_cat_filter = QComboBox()
         self.combo_cat_filter.addItem("Todas las categorías")
+        self.combo_cat_filter.setStyleSheet("""
+            QComboBox {
+                background-color: #131724;
+                border: 1px solid #242c3e;
+                border-radius: 6px;
+                padding: 6px 10px;
+                color: #f1f5f9;
+                font-size: 12px;
+            }
+            QComboBox:focus {
+                border-color: #38bdf8;
+            }
+        """)
         self.combo_cat_filter.currentTextChanged.connect(self._apply_filter)
         filter_layout.addWidget(self.combo_cat_filter)
         left_layout.addLayout(filter_layout)
 
-        # Tabla
+        # Tabla de Presets Pro
         self.table = QTableWidget()
         self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["Nombre", "Categoría", "Origen"])
+        self.table.setHorizontalHeaderLabels(["Nombre del Preset", "Categoría", "Origen"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(32)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setShowGrid(False)
+        self.table.setStyleSheet("""
+            QTableWidget {
+                background-color: #121520;
+                border: 1px solid #222738;
+                border-radius: 6px;
+                color: #e2e8f0;
+                selection-background-color: rgba(56, 189, 248, 0.15);
+                selection-color: #38bdf8;
+                outline: none;
+            }
+            QTableWidget::item {
+                padding: 5px 8px;
+                border-bottom: 1px solid #181d2a;
+            }
+            QTableWidget::item:selected {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #38bdf8;
+            }
+            QHeaderView::section {
+                background-color: #161a27;
+                color: #94a3b8;
+                font-weight: 600;
+                font-size: 11px;
+                padding: 6px 8px;
+                border: none;
+                border-bottom: 1px solid #242c3f;
+            }
+        """)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
         self.table.doubleClicked.connect(self._on_table_double_clicked)
         left_layout.addWidget(self.table)
 
         # Botones bajo la tabla
         tbl_btn_layout = QHBoxLayout()
-        self.btn_import = QPushButton("📂 Importar...")
+        tbl_btn_layout.setSpacing(8)
+
+        btn_style = """
+            QPushButton {
+                background-color: #141724;
+                border: 1px solid #242c3e;
+                border-radius: 5px;
+                padding: 6px 12px;
+                color: #cbd5e1;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #1e2434;
+                border-color: #38bdf8;
+                color: #f8fafc;
+            }
+            QPushButton:disabled {
+                background-color: transparent;
+                border-color: #1c2230;
+                color: #475569;
+            }
+        """
+
+        self.btn_import = QPushButton("Importar...")
+        self.btn_import.setIcon(get_icon("upload", color="#94a3b8", hover_color="#38bdf8", size=13))
+        self.btn_import.setStyleSheet(btn_style)
         self.btn_import.setToolTip("Carga un archivo .json de preset desde tu disco")
         self.btn_import.clicked.connect(self._on_import_clicked)
         tbl_btn_layout.addWidget(self.btn_import)
 
-        self.btn_export = QPushButton("💾 Exportar...")
+        self.btn_export = QPushButton("Exportar...")
+        self.btn_export.setIcon(get_icon("download", color="#94a3b8", hover_color="#38bdf8", size=13))
+        self.btn_export.setStyleSheet(btn_style)
         self.btn_export.setEnabled(False)
         self.btn_export.setToolTip("Exporta el preset seleccionado a un archivo .json para compartirlo")
         self.btn_export.clicked.connect(self._on_export_clicked)
         tbl_btn_layout.addWidget(self.btn_export)
 
-        self.btn_delete = QPushButton("🗑️ Eliminar")
+        self.btn_delete = QPushButton("Eliminar")
+        self.btn_delete.setIcon(get_icon("trash", color="#f87171", size=13))
         self.btn_delete.setEnabled(False)
-        self.btn_delete.setStyleSheet(f"color: #ff8a80;")
+        self.btn_delete.setStyleSheet("""
+            QPushButton {
+                background: rgba(248, 113, 113, 0.06);
+                border: 1px solid rgba(248, 113, 113, 0.25);
+                border-radius: 5px;
+                padding: 6px 12px;
+                color: #f87171;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background: rgba(248, 113, 113, 0.16);
+                border-color: #f87171;
+            }
+            QPushButton:disabled {
+                background: transparent;
+                border-color: #1c2230;
+                color: #475569;
+            }
+        """)
         self.btn_delete.setToolTip("Elimina permanentemente el preset de usuario seleccionado")
         self.btn_delete.clicked.connect(self._on_delete_clicked)
         tbl_btn_layout.addWidget(self.btn_delete)
@@ -224,44 +433,84 @@ class PresetManagerDialog(QDialog):
         right_layout.setContentsMargins(8, 0, 0, 0)
         right_layout.setSpacing(10)
 
-        grp_detail = QGroupBox("Detalles del Preset")
-        detail_layout = QVBoxLayout(grp_detail)
+        # Tarjeta de Detalles del Preset
+        card_detail = QFrame()
+        card_detail.setStyleSheet("QFrame { background-color: #141724; border: 1px solid #222738; border-radius: 8px; }")
+        detail_layout = QVBoxLayout(card_detail)
+        detail_layout.setContentsMargins(12, 12, 12, 12)
         detail_layout.setSpacing(8)
 
+        lbl_sec_detail = QLabel("DETALLES DEL PRESET")
+        lbl_sec_detail.setStyleSheet("font-weight: 700; font-size: 10px; color: #80d8ff; letter-spacing: 0.6px;")
+        detail_layout.addWidget(lbl_sec_detail)
+
         self.lbl_detail_name = QLabel("Selecciona un preset")
-        self.lbl_detail_name.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {TEXT_PRIMARY};")
+        self.lbl_detail_name.setStyleSheet("font-size: 14px; font-weight: 700; color: #f8fafc;")
         self.lbl_detail_name.setWordWrap(True)
         detail_layout.addWidget(self.lbl_detail_name)
 
         self.lbl_detail_badge = QLabel("")
-        self.lbl_detail_badge.setStyleSheet(STYLE_STATUS_PILL)
+        self.lbl_detail_badge.setStyleSheet("""
+            background-color: #101420;
+            border: 1px solid #242d40;
+            border-radius: 4px;
+            padding: 3px 8px;
+            font-size: 10px;
+            font-weight: 600;
+            color: #38bdf8;
+        """)
         detail_layout.addWidget(self.lbl_detail_badge)
 
         self.lbl_detail_desc = QLabel("Elige un preset de la lista para ver su descripción y parámetros.")
-        self.lbl_detail_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_detail_desc.setStyleSheet("color: #94a3b8; font-size: 11px; line-height: 1.3;")
         self.lbl_detail_desc.setWordWrap(True)
         detail_layout.addWidget(self.lbl_detail_desc)
 
         # Resumen de Parámetros Clave
-        detail_layout.addWidget(QLabel("Parámetros Configurados:"))
+        lbl_params_hdr = QLabel("Parámetros Configurados:")
+        lbl_params_hdr.setStyleSheet("font-weight: 600; font-size: 11px; color: #cbd5e1; margin-top: 4px;")
+        detail_layout.addWidget(lbl_params_hdr)
+
         self.txt_params_summary = QTextEdit()
         self.txt_params_summary.setReadOnly(True)
-        self.txt_params_summary.setStyleSheet("font-family: monospace; font-size: 11px;")
+        self.txt_params_summary.setStyleSheet("""
+            QTextEdit {
+                background-color: #0b0e15;
+                border: 1px solid #1a202c;
+                border-radius: 6px;
+                color: #94a3b8;
+                font-family: monospace;
+                font-size: 11px;
+                padding: 6px;
+            }
+        """)
         detail_layout.addWidget(self.txt_params_summary)
 
-        right_layout.addWidget(grp_detail)
+        right_layout.addWidget(card_detail, 1)
 
-        # Grupo de Ámbito de Aplicación
-        grp_scope = QGroupBox("Modo de Aplicación:")
-        scope_layout = QVBoxLayout(grp_scope)
-        scope_layout.setSpacing(4)
+        # Tarjeta de Modo de Aplicación
+        card_scope = QFrame()
+        card_scope.setStyleSheet("QFrame { background-color: #141724; border: 1px solid #222738; border-radius: 8px; }")
+        scope_layout = QVBoxLayout(card_scope)
+        scope_layout.setContentsMargins(12, 10, 12, 10)
+        scope_layout.setSpacing(6)
+
+        lbl_sec_scope = QLabel("MODO DE APLICACIÓN")
+        lbl_sec_scope.setStyleSheet("font-weight: 700; font-size: 10px; color: #80d8ff; letter-spacing: 0.6px;")
+        scope_layout.addWidget(lbl_sec_scope)
 
         self.scope_group = QButtonGroup(self)
         self.rad_all = QRadioButton("Todo (Sin alterar estirado MTF ni punto negro)")
         self.rad_all.setChecked(True)
-        self.rad_tone = QRadioButton("Solo Contraste y Suelo (Contraste general, EV y sombras)")
-        self.rad_color = QRadioButton("Solo Color y WB (Temp, Tinte, Saturación, Vibración)")
-        self.rad_details = QRadioButton("Solo Estrellas y Detalles (Claridad, Dehaze, StarNet, Ondículas)")
+        self.rad_tone = QRadioButton("Solo Contraste y Suelo (Contraste, EV y sombras)")
+        self.rad_color = QRadioButton("Solo Color y WB (Temp, Tinte, Sat, Vibración)")
+        self.rad_details = QRadioButton("Solo Estrellas y Detalles (Claridad, Dehaze, StarNet)")
+
+        radio_style = "QRadioButton { color: #cbd5e1; font-size: 11px; } QRadioButton:hover { color: #f8fafc; }"
+        self.rad_all.setStyleSheet(radio_style)
+        self.rad_tone.setStyleSheet(radio_style)
+        self.rad_color.setStyleSheet(radio_style)
+        self.rad_details.setStyleSheet(radio_style)
 
         self.scope_group.addButton(self.rad_all, 0)
         self.scope_group.addButton(self.rad_tone, 1)
@@ -273,24 +522,64 @@ class PresetManagerDialog(QDialog):
         scope_layout.addWidget(self.rad_color)
         scope_layout.addWidget(self.rad_details)
 
-        right_layout.addWidget(grp_scope)
+        right_layout.addWidget(card_scope)
 
-        # Botón Aplicar Preset
-        self.btn_apply = QPushButton("⚡ Aplicar Preset a la Imagen")
+        # Botón Aplicar Preset Pro
+        self.btn_apply = QPushButton("Aplicar Preset a la Imagen")
+        self.btn_apply.setIcon(get_icon("sparkles", color="#ffffff", size=15))
         self.btn_apply.setEnabled(False)
-        self.btn_apply.setFixedHeight(36)
-        self.btn_apply.setStyleSheet(STYLE_RUN_IDLE)
+        self.btn_apply.setFixedHeight(38)
+        self.btn_apply.setCursor(Qt.PointingHandCursor)
+        self.btn_apply.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284c7, stop:1 #0ea5e9);
+                color: #ffffff;
+                font-weight: 700;
+                font-size: 12px;
+                border: 1px solid #38bdf8;
+                border-radius: 6px;
+                padding: 6px 12px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0369a1, stop:1 #0284c7);
+                border-color: #7dd3fc;
+            }
+            QPushButton:pressed {
+                background-color: #075985;
+            }
+            QPushButton:disabled {
+                background-color: #161c28;
+                color: #475569;
+                border-color: #242c3b;
+            }
+        """)
         self.btn_apply.clicked.connect(self._on_apply_clicked)
         right_layout.addWidget(self.btn_apply)
 
         splitter.addWidget(right_widget)
-        splitter.setSizes([450, 310])
-        layout.addWidget(splitter)
+        splitter.setSizes([470, 330])
+        layout.addWidget(splitter, 1)
 
         # Barra inferior de cierre
         close_layout = QHBoxLayout()
         close_layout.addStretch()
         btn_close = QPushButton("Cerrar")
+        btn_close.setCursor(Qt.PointingHandCursor)
+        btn_close.setStyleSheet("""
+            QPushButton {
+                background-color: #141724;
+                border: 1px solid #273044;
+                border-radius: 5px;
+                padding: 6px 18px;
+                color: #94a3b8;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #1e2433;
+                color: #f1f5f9;
+                border-color: #38bdf8;
+            }
+        """)
         btn_close.clicked.connect(self.accept)
         close_layout.addWidget(btn_close)
         layout.addLayout(close_layout)
@@ -330,16 +619,23 @@ class PresetManagerDialog(QDialog):
 
         self.table.setRowCount(len(filtered))
         for row, p in enumerate(filtered):
+            # Nombre con icono vectorial sutil
             item_name = QTableWidgetItem(p.name)
+            item_name.setIcon(get_icon("sliders" if p.is_builtin else "file", color="#38bdf8" if p.is_builtin else "#fbbf24", size=13))
             item_name.setData(Qt.UserRole, p)
-            item_cat = QTableWidgetItem(p.category)
-            origin_str = "⭐ Fábrica" if p.is_builtin else "👤 Usuario"
-            item_origin = QTableWidgetItem(origin_str)
 
+            # Categoría
+            item_cat = QTableWidgetItem(p.category)
+            item_cat.setForeground(QColor("#94a3b8"))
+
+            # Origen: Texto limpio sin emojis
+            origin_str = "Fábrica" if p.is_builtin else "Usuario"
+            item_origin = QTableWidgetItem(origin_str)
+            item_origin.setTextAlignment(Qt.AlignCenter)
             if p.is_builtin:
-                item_origin.setForeground(Qt.cyan)
+                item_origin.setForeground(QColor("#38bdf8"))
             else:
-                item_origin.setForeground(Qt.yellow)
+                item_origin.setForeground(QColor("#fbbf24"))
 
             self.table.setItem(row, 0, item_name)
             self.table.setItem(row, 1, item_cat)
@@ -357,6 +653,7 @@ class PresetManagerDialog(QDialog):
             self.selected_preset = None
             self.lbl_detail_name.setText("Ningún preset seleccionado")
             self.lbl_detail_badge.setText("")
+            self.lbl_detail_badge.setVisible(False)
             self.lbl_detail_desc.setText("Elige un preset de la lista para ver su descripción y parámetros.")
             self.txt_params_summary.clear()
             self.btn_export.setEnabled(False)
@@ -370,8 +667,9 @@ class PresetManagerDialog(QDialog):
         self.selected_preset = preset
 
         self.lbl_detail_name.setText(preset.name)
-        origin_text = "Preset Oficial de Fábrica" if preset.is_builtin else f"Preset de Usuario ({preset.author})"
-        self.lbl_detail_badge.setText(f"🏷️ {preset.category}  |  {origin_text}")
+        origin_text = "Oficial de Fábrica" if preset.is_builtin else f"Usuario ({preset.author})"
+        self.lbl_detail_badge.setText(f"{preset.category}  ·  {origin_text}")
+        self.lbl_detail_badge.setVisible(True)
         self.lbl_detail_desc.setText(preset.description or "Sin descripción proporcionada.")
 
         # Construir resumen de parámetros

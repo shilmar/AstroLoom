@@ -503,10 +503,17 @@ def get_application_stylesheet() -> str:
 
         /* --- DIVISORES AJUSTABLES (QSplitter) --- */
         QSplitter::handle {{
-            background-color: #1a1e2c;
+            background-color: #161a28;
         }}
-        QSplitter::handle:hover {{
-            background-color: {ACCENT_CYAN};
+        QSplitter::handle:horizontal {{
+            background-color: #141824;
+            border-left: 1px solid #1f2638;
+            border-right: 1px solid #1f2638;
+        }}
+        QSplitter::handle:horizontal:hover {{
+            background-color: #38bdf8;
+            border-left: 1px solid #7dd3fc;
+            border-right: 1px solid #7dd3fc;
         }}
 
         /* --- INFORMACIÓN FLOTANTE (QToolTip) --- */

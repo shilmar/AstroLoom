@@ -13,7 +13,7 @@ from typing import Optional, Callable
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QSizePolicy
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QCursor, QFont
 
 from gui.icons import get_svg_pixmap, get_icon, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_MUTED
@@ -143,12 +143,16 @@ class CollapsibleSection(QWidget):
         # Título de la sección
         self.lbl_title = QLabel(self._title_text)
         self.lbl_title.setStyleSheet("font-weight: 600; color: #eceff4; font-size: 12px;")
+        self.lbl_title.setMinimumWidth(0)
+        self.lbl_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         header_layout.addWidget(self.lbl_title)
 
         header_layout.addStretch(1)
 
         # Badge / Indicador de estado flotante (ej: '● ON', '● Separadas')
         self.lbl_badge = QLabel("")
+        self.lbl_badge.setMaximumWidth(135)
+        self.lbl_badge.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
         self.lbl_badge.setStyleSheet(
             "background-color: #121622; border: 1px solid #2b3648; border-radius: 4px; "
             "padding: 2px 6px; font-size: 10px; font-weight: bold; color: #80d8ff; margin-right: 4px;"
@@ -339,7 +343,10 @@ class CollapsibleSection(QWidget):
     def set_status_badge(self, text: str, color: str = "#80d8ff") -> None:
         """Muestra u oculta una insignia de estado en la cabecera (ej: '● ON', '● Separadas')."""
         if text:
-            self.lbl_badge.setText(text)
+            fm = self.lbl_badge.fontMetrics()
+            elided = fm.elidedText(text, Qt.ElideRight, 125)
+            self.lbl_badge.setText(elided)
+            self.lbl_badge.setToolTip(text)
             self.lbl_badge.setStyleSheet(
                 f"background-color: #121622; border: 1px solid #2b3648; border-radius: 4px; "
                 f"padding: 2px 6px; font-size: 10px; font-weight: bold; color: {color}; margin-right: 4px;"
@@ -347,6 +354,7 @@ class CollapsibleSection(QWidget):
             self.lbl_badge.setVisible(True)
         else:
             self.lbl_badge.setText("")
+            self.lbl_badge.setToolTip("")
             self.lbl_badge.setVisible(False)
 
     def set_reset_callback(self, callback: Optional[Callable[[], None]]) -> None:
@@ -390,3 +398,11 @@ class CollapsibleSection(QWidget):
     def _on_switch_toggled(self, checked: bool) -> None:
         """Emite la señal al alternar el switch."""
         self.switchToggled.emit(checked)
+
+    def minimumSizeHint(self) -> QSize:
+        """Permite que la sección se adapte con total fluidez a columnas estrechas sin desbordamiento."""
+        return QSize(250, super().minimumSizeHint().height())
+
+    def sizeHint(self) -> QSize:
+        """Tamaño sugerido por defecto para la sección."""
+        return QSize(350, super().sizeHint().height())

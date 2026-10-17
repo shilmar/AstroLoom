@@ -91,7 +91,7 @@ def get_builtin_presets() -> List[DeveloperPreset]:
     return [
         DeveloperPreset(
             id="builtin_neutral",
-            name="⭐ Neutro / Restablecer",
+            name="Neutro / Restablecer",
             category="Básicos",
             description="Restablece todos los parámetros de color, contraste y StarNet a sus valores neutros (sin alterar el estirado MTF de la imagen).",
             is_builtin=True,
@@ -120,7 +120,7 @@ def get_builtin_presets() -> List[DeveloperPreset]:
         ),
         DeveloperPreset(
             id="builtin_mw_high_contrast",
-            name="🌌 Vía Láctea - Alto Contraste & Polvo Oscuro",
+            name="Vía Láctea - Alto Contraste & Polvo Oscuro",
             category="Vía Láctea",
             description="Realce agresivo de bandas oscuras y carril de polvo en el centro galáctico con microtextura de ondículas y contraste refinado.",
             is_builtin=True,
@@ -149,7 +149,7 @@ def get_builtin_presets() -> List[DeveloperPreset]:
         ),
         DeveloperPreset(
             id="builtin_mw_natural",
-            name="🌠 Vía Láctea - Fiel y Natural",
+            name="Vía Láctea - Fiel y Natural",
             category="Vía Láctea",
             description="Estilo equilibrado, fiel a la visión telescópica con transición suave de estrellas y colores no saturados en exceso.",
             is_builtin=True,
@@ -178,7 +178,7 @@ def get_builtin_presets() -> List[DeveloperPreset]:
         ),
         DeveloperPreset(
             id="builtin_nightscape_foreground",
-            name="🏕️ Paisaje Nocturno - Suelo Iluminado",
+            name="Paisaje Nocturno - Suelo Iluminado",
             category="Paisaje Nocturno",
             description="Prioriza la visibilidad y rango dinámico del primer plano terrestre levantando sombras (+1.2 EV) sin quemar el cielo estrellado.",
             is_builtin=True,
@@ -207,7 +207,7 @@ def get_builtin_presets() -> List[DeveloperPreset]:
         ),
         DeveloperPreset(
             id="builtin_dso_nebula",
-            name="🔭 Cielo Profundo - Nebulosas (Deep Sky Pop)",
+            name="Cielo Profundo - Nebulosas (Deep Sky Pop)",
             category="Cielo Profundo",
             description="Optimizado para nebulosas difusas y objetos de espacio profundo; reduce estrellas de fondo y destaca estructuras gaseosas débiles.",
             is_builtin=True,
@@ -236,7 +236,7 @@ def get_builtin_presets() -> List[DeveloperPreset]:
         ),
         DeveloperPreset(
             id="builtin_light_pollution_fix",
-            name="🏙️ Reducción de Polución Lumínica Periurbana",
+            name="Reducción de Polución Lumínica Periurbana",
             category="Corrección",
             description="Atenúa cúpulas de luz amarillentas/anaranjadas de ciudades cercanas, neutraliza la dominante térmica y limpia el fondo.",
             is_builtin=True,
@@ -265,7 +265,7 @@ def get_builtin_presets() -> List[DeveloperPreset]:
         ),
         DeveloperPreset(
             id="builtin_star_minimizer",
-            name="✨ Reducción Drástica de Estrellas (Star Minimizer)",
+            name="Reducción Drástica de Estrellas (Star Minimizer)",
             category="Estrellas",
             description="Comprime las estrellas a pequeñas cabezas de alfiler discretas (35%), despejando la visión de nebulosas y nubes galácticas.",
             is_builtin=True,
@@ -294,7 +294,7 @@ def get_builtin_presets() -> List[DeveloperPreset]:
         ),
         DeveloperPreset(
             id="builtin_starless_pure",
-            name="🌫️ Starless Puro (Solo Nebulosa / Sin Estrellas)",
+            name="Starless Puro (Solo Nebulosa / Sin Estrellas)",
             category="Estrellas",
             description="Elimina totalmente la capa de estrellas (0%), dejando visible únicamente el gas nebuloso y polvo con realce de texturas.",
             is_builtin=True,

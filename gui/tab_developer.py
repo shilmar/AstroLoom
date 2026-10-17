@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QProgressDialog,
     QCheckBox
 )
-from PySide6.QtCore import Qt, QCoreApplication, QTimer
+from PySide6.QtCore import Qt, QCoreApplication, QTimer, QEvent
 from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap, QColor, QFont, QCursor
 from core.stacking import load_image_as_float32
 from core.stretch import (
@@ -258,8 +258,8 @@ class DeveloperTab(QWidget):
         left_container_layout = QVBoxLayout(self.left_container)
         left_container_layout.setContentsMargins(4, 4, 4, 4)
         left_container_layout.setSpacing(6)
-        self.left_container.setMinimumWidth(320)
-        self.left_container.setMaximumWidth(440)
+        self.left_container.setMinimumWidth(280)
+        self.left_container.setMaximumWidth(1200)
 
         # Carga externa (Siempre fijada arriba)
         self.btn_open_img = QPushButton("Abrir Imagen (TIFF / FITS / RAW)...")
@@ -277,6 +277,8 @@ class DeveloperTab(QWidget):
         self.left_scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         left_panel = QWidget()
+        left_panel.setMinimumWidth(0)
+        left_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 4, 0)
         left_layout.setSpacing(6)
@@ -290,6 +292,8 @@ class DeveloperTab(QWidget):
 
         # Fila 1: Selector de Preset (ancho completo)
         self.combo_presets = QComboBox()
+        self.combo_presets.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_presets.setMinimumContentsLength(8)
         self.combo_presets.setToolTip("Selecciona un estilo astronómico preestablecido oficial o personalizado")
         self.combo_presets.currentIndexChanged.connect(self._on_preset_combo_changed)
         presets_layout.addWidget(self.combo_presets)
@@ -305,6 +309,8 @@ class DeveloperTab(QWidget):
         row_mode_apply.setSpacing(6)
 
         self.combo_preset_scope = QComboBox()
+        self.combo_preset_scope.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_preset_scope.setMinimumContentsLength(8)
         self.combo_preset_scope.addItem("Todo (Sin estirado)", SCOPE_ALL)
         self.combo_preset_scope.addItem("Solo Color y WB", SCOPE_COLOR)
         self.combo_preset_scope.addItem("Solo Estrellas y Filtros", SCOPE_DETAILS)
@@ -874,7 +880,7 @@ class DeveloperTab(QWidget):
         self.lbl_starnet_info.setStyleSheet("color: #b0bec5; font-size: 11px; line-height: 1.4;")
         layout_card_sn.addWidget(self.lbl_starnet_info)
 
-        self.btn_go_to_masks_starnet = QPushButton("Abrir Capas en Gestor de Capas (Sección 9)")
+        self.btn_go_to_masks_starnet = QPushButton("Gestionar Capas en Columna 3")
         self.btn_go_to_masks_starnet.setIcon(get_icon("layers", color="#b388ff", size=13))
         self.btn_go_to_masks_starnet.setCursor(Qt.PointingHandCursor)
         self.btn_go_to_masks_starnet.setStyleSheet("""
@@ -1284,7 +1290,7 @@ class DeveloperTab(QWidget):
         deconv_layout.setSpacing(6)
 
         # 1. Botón de Estimación Automática de PSF y Estado
-        self.btn_auto_psf = QPushButton("Estimar PSF Automática de Estrellas")
+        self.btn_auto_psf = QPushButton("Auto-Estimar PSF de Estrellas")
         self.btn_auto_psf.setIcon(get_icon("crosshair", color="#90caf9", size=14))
         self.btn_auto_psf.setToolTip("Analiza estrellas aisladas no saturadas de la imagen para determinar el diámetro FWHM y relación de aspecto de la PSF.")
         self.btn_auto_psf.setStyleSheet(
@@ -1296,6 +1302,7 @@ class DeveloperTab(QWidget):
         deconv_layout.addWidget(self.btn_auto_psf)
 
         self.lbl_psf_status = QLabel("PSF: Moffat 2D (FWHM: 3.0 px | Aspecto: 1.00)")
+        self.lbl_psf_status.setWordWrap(True)
         self.lbl_psf_status.setStyleSheet("color: #90caf9; font-size: 11px; padding-left: 2px;")
         deconv_layout.addWidget(self.lbl_psf_status)
 
@@ -1386,7 +1393,7 @@ class DeveloperTab(QWidget):
         w_dadv_layout.addLayout(row_mod_scp)
 
         # Checkbox Solo Luminancia
-        self.chk_deconv_luma_only = QCheckBox("Solo Luminancia (Preservar color espectral)")
+        self.chk_deconv_luma_only = QCheckBox("Solo Luminancia (Preservar color)")
         self.chk_deconv_luma_only.setChecked(True)
         self.chk_deconv_luma_only.toggled.connect(self._on_deconv_luma_only_toggled)
         self.chk_deconv_luma_only.setStyleSheet("color: #b0bec5; font-size: 11px;")
@@ -1729,6 +1736,7 @@ class DeveloperTab(QWidget):
 
         # 3. Contenedor central (Visor y Lienzo interactivo)
         self.center_container = QWidget()
+        self.center_container.setMinimumWidth(260)
         center_layout = QVBoxLayout(self.center_container)
         center_layout.setContentsMargins(0, 0, 0, 0)
         center_layout.setSpacing(0)
@@ -1764,8 +1772,8 @@ class DeveloperTab(QWidget):
         right_container_layout = QVBoxLayout(self.right_container)
         right_container_layout.setContentsMargins(4, 4, 4, 4)
         right_container_layout.setSpacing(6)
-        self.right_container.setMinimumWidth(320)
-        self.right_container.setMaximumWidth(460)
+        self.right_container.setMinimumWidth(280)
+        self.right_container.setMaximumWidth(1200)
 
         # Cabecera de Columna Derecha
         right_header = QWidget()
@@ -1788,6 +1796,8 @@ class DeveloperTab(QWidget):
         self.right_scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         right_panel = QWidget()
+        right_panel.setMinimumWidth(0)
+        right_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 4, 0)
         right_layout.setSpacing(6)
@@ -1812,6 +1822,7 @@ class DeveloperTab(QWidget):
         # Splitter principal de 3 columnas
         self.main_splitter = splitter
         self.main_splitter.setChildrenCollapsible(True)
+        self.main_splitter.setHandleWidth(6)
 
         self.main_splitter.addWidget(self.left_container)
         self.main_splitter.addWidget(self.center_container)
@@ -1821,6 +1832,19 @@ class DeveloperTab(QWidget):
         self.main_splitter.setStretchFactor(1, 10)
         self.main_splitter.setStretchFactor(2, 0)
         self.main_splitter.setSizes([380, 1100, 360])
+
+        # Asas de divisor: cursor, tooltip y doble clic para alternar expansión al centro
+        h1 = self.main_splitter.handle(1)
+        if h1:
+            h1.setCursor(Qt.SplitHCursor)
+            h1.setToolTip("Arrastra para redimensionar o doble clic para alternar panel ancho")
+            h1.installEventFilter(self)
+
+        h2 = self.main_splitter.handle(2)
+        if h2:
+            h2.setCursor(Qt.SplitHCursor)
+            h2.setToolTip("Arrastra para redimensionar o doble clic para alternar panel ancho")
+            h2.installEventFilter(self)
 
         # Atajo global 'Tab' para alternar ambos paneles laterales (Modo Inmersivo / Cine Lightroom)
         self.shortcut_tab = QShortcut(QKeySequence(Qt.Key_Tab), self)
@@ -3799,6 +3823,60 @@ class DeveloperTab(QWidget):
         target_vis = not (left_vis or right_vis)
         self.toggle_left_panel(target_vis)
         self.toggle_right_panel(target_vis)
+
+    def _on_toggle_left_wide(self) -> None:
+        """Alterna el ancho del panel izquierdo entre normal (~380px) y expandido (~720px o 42% del visor)."""
+        if not hasattr(self, 'main_splitter') or not hasattr(self, 'left_container'):
+            return
+        if not self.left_container.isVisible():
+            self.toggle_left_panel(True)
+        sizes = self.main_splitter.sizes()
+        if len(sizes) >= 3:
+            total_w = sum(sizes)
+            curr_left = sizes[0]
+            target_wide = min(850, max(600, int(total_w * 0.42)))
+            if curr_left < 520:
+                diff = target_wide - curr_left
+                new_center = max(260, sizes[1] - diff)
+                self.main_splitter.setSizes([target_wide, new_center, sizes[2]])
+            else:
+                target_norm = 380
+                diff = curr_left - target_norm
+                new_center = sizes[1] + diff
+                self.main_splitter.setSizes([target_norm, new_center, sizes[2]])
+
+    def _on_toggle_right_wide(self) -> None:
+        """Alterna el ancho del panel derecho entre normal (~360px) y expandido (~720px o 42% del visor)."""
+        if not hasattr(self, 'main_splitter') or not hasattr(self, 'right_container'):
+            return
+        if not self.right_container.isVisible():
+            self.toggle_right_panel(True)
+        sizes = self.main_splitter.sizes()
+        if len(sizes) >= 3:
+            total_w = sum(sizes)
+            curr_right = sizes[2]
+            target_wide = min(850, max(600, int(total_w * 0.42)))
+            if curr_right < 520:
+                diff = target_wide - curr_right
+                new_center = max(260, sizes[1] - diff)
+                self.main_splitter.setSizes([sizes[0], new_center, target_wide])
+            else:
+                target_norm = 360
+                diff = curr_right - target_norm
+                new_center = sizes[1] + diff
+                self.main_splitter.setSizes([sizes[0], new_center, target_norm])
+
+    def eventFilter(self, watched, event):
+        """Captura eventos del sistema, como doble clic en asas del QSplitter para auto-expandir paneles."""
+        if event.type() == QEvent.MouseButtonDblClick:
+            if hasattr(self, 'main_splitter'):
+                if watched == self.main_splitter.handle(1):
+                    self._on_toggle_left_wide()
+                    return True
+                elif watched == self.main_splitter.handle(2):
+                    self._on_toggle_right_wide()
+                    return True
+        return super().eventFilter(watched, event)
 
     def on_split_view_toggled(self, checked: bool) -> None:
         """Manejador al conmutar el modo comparador Antes / Después."""
@@ -7417,6 +7495,7 @@ class DeveloperTab(QWidget):
 
             for p in categories_dict[cat]:
                 self.combo_presets.addItem(f"  {p.name}", p)
+                self.combo_presets.setItemIcon(self.combo_presets.count() - 1, get_icon("sliders" if p.is_builtin else "file", color="#38bdf8" if p.is_builtin else "#fbbf24", size=13))
                 if select_preset_id and p.id == select_preset_id:
                     target_index = self.combo_presets.count() - 1
 
@@ -7484,7 +7563,11 @@ class DeveloperTab(QWidget):
 
         if hasattr(self, 'sec_presets'):
             if preset and preset.name and "Neutro" not in preset.name:
-                self.sec_presets.set_status_badge(f"● {preset.name}", "#80d8ff")
+                badge_title = preset.name.split("-")[0].strip() if "-" in preset.name else preset.name
+                for em in ("⭐", "🌌", "✨", "🏞️", "🔭", "🏙️", "🌫️", "👤"):
+                    badge_title = badge_title.replace(em, "")
+                badge_title = badge_title.strip()
+                self.sec_presets.set_status_badge(f"● {badge_title}", "#80d8ff")
             else:
                 self.sec_presets.set_status_badge("")
 
