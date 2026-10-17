@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QTabWidget, QListWidget, QListWidgetItem, QProgressBar,
     QMessageBox, QGroupBox, QRadioButton, QSlider, QDoubleSpinBox,
     QComboBox, QSplitter, QTextEdit, QSizePolicy, QCheckBox, QSpinBox,
-    QScrollArea, QProgressDialog
+    QScrollArea, QProgressDialog, QFrame
 )
 from PySide6.QtCore import Qt, Signal, QCoreApplication
 from PySide6.QtGui import QTextCursor, QCursor
@@ -242,6 +242,40 @@ class StackerTab(QWidget):
 
         self.tabs_files = QTabWidget()
         self.tabs_files.setMinimumHeight(160)
+        self.tabs_files.setDocumentMode(True)
+        self.tabs_files.setUsesScrollButtons(False)
+        self.tabs_files.tabBar().setExpanding(True)
+        self.tabs_files.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #1e2230;
+                background-color: #0b0d13;
+                border-radius: 4px;
+                top: -1px;
+            }
+            QTabBar::tab {
+                background-color: #10121a;
+                color: #94a3b8;
+                padding: 6px 4px;
+                border: 1px solid #1e2230;
+                border-bottom: 2px solid transparent;
+                font-weight: 600;
+                font-size: 11px;
+                margin-right: 1px;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+            }
+            QTabBar::tab:selected {
+                background-color: #161b26;
+                color: #38bdf8;
+                border-color: #2b354d;
+                border-bottom: 2px solid #38bdf8;
+            }
+            QTabBar::tab:hover:!selected {
+                background-color: #141722;
+                color: #e2e8f0;
+                border-bottom: 2px solid #334155;
+            }
+        """)
         
         self.list_lights = DropListWidget()
         self.list_lights.itemDoubleClicked.connect(self.on_light_double_clicked)
@@ -268,10 +302,18 @@ class StackerTab(QWidget):
         files_layout.addWidget(self.tabs_files)
 
         # Barra de Control de Calidad y Cribado (Frame Culling) para Lights
-        self.culling_bar = QWidget()
+        self.culling_bar = QFrame()
+        self.culling_bar.setObjectName("cullingBar")
+        self.culling_bar.setStyleSheet("""
+            QFrame#cullingBar {
+                background-color: #10141f;
+                border: 1px solid #1e2638;
+                border-radius: 6px;
+            }
+        """)
         culling_vbox = QVBoxLayout(self.culling_bar)
-        culling_vbox.setContentsMargins(0, 2, 0, 4)
-        culling_vbox.setSpacing(4)
+        culling_vbox.setContentsMargins(6, 6, 6, 6)
+        culling_vbox.setSpacing(6)
 
         # Fila 1: Botones de Acción de Cribado
         row_cull_btns = QHBoxLayout()
@@ -279,38 +321,40 @@ class StackerTab(QWidget):
         row_cull_btns.setSpacing(6)
 
         self.btn_cull_analyze = QPushButton("Analizar Calidad")
-        self.btn_cull_analyze.setIcon(get_icon("search", size=13, color="#80d8ff"))
+        self.btn_cull_analyze.setIcon(get_icon("search", size=13, color="#38bdf8"))
         self.btn_cull_analyze.setCursor(Qt.PointingHandCursor)
         self.btn_cull_analyze.setStyleSheet("""
             QPushButton {
-                background-color: #1a2736;
-                color: #80d8ff;
-                font-weight: bold;
-                border: 1px solid #0288d1;
+                background-color: #0c2338;
+                color: #38bdf8;
+                font-weight: 600;
+                border: 1px solid #0284c7;
                 border-radius: 4px;
-                padding: 4px 8px;
+                padding: 5px 10px;
                 font-size: 11px;
             }
-            QPushButton:hover { background-color: #0288d1; color: #ffffff; }
+            QPushButton:hover { background-color: #0284c7; color: #ffffff; }
+            QPushButton:disabled { background-color: #111827; color: #475569; border-color: #1f2937; }
         """)
         self.btn_cull_analyze.setToolTip("Analiza FWHM, redondez de estrellas (viento/deriva) y presencia de nubes en todo el lote")
         self.btn_cull_analyze.clicked.connect(self.start_culling_analysis)
         row_cull_btns.addWidget(self.btn_cull_analyze)
 
         self.btn_cull_discard = QPushButton("Auto-Descartar")
-        self.btn_cull_discard.setIcon(get_icon("zap", size=13, color="#ff80ab"))
+        self.btn_cull_discard.setIcon(get_icon("zap", size=13, color="#f472b6"))
         self.btn_cull_discard.setCursor(Qt.PointingHandCursor)
         self.btn_cull_discard.setStyleSheet("""
             QPushButton {
-                background-color: #2b1f24;
-                color: #ff80ab;
-                font-weight: bold;
-                border: 1px solid #c2185b;
+                background-color: #2a1520;
+                color: #f472b6;
+                font-weight: 600;
+                border: 1px solid #be185d;
                 border-radius: 4px;
-                padding: 4px 8px;
+                padding: 5px 10px;
                 font-size: 11px;
             }
-            QPushButton:hover { background-color: #c2185b; color: #ffffff; }
+            QPushButton:hover { background-color: #be185d; color: #ffffff; }
+            QPushButton:disabled { background-color: #111827; color: #475569; border-color: #1f2937; }
         """)
         self.btn_cull_discard.setToolTip("Desmarca automáticamente las tomas clasificadas como defectuosas o con estrellas movidas")
         self.btn_cull_discard.clicked.connect(self.auto_discard_defective_frames)
@@ -323,30 +367,50 @@ class StackerTab(QWidget):
         row_cull_opts.setContentsMargins(0, 0, 0, 0)
         row_cull_opts.setSpacing(6)
 
-        self.combo_cull_profile = QComboBox()
-        self.combo_cull_profile.addItem("Gran Angular (Tolerante)", "wide_angle")
-        self.combo_cull_profile.addItem("Equilibrado (Estándar)", "balanced")
-        self.combo_cull_profile.addItem("Exigente (Tracker/Telescopio)", "strict")
-        self.combo_cull_profile.setToolTip(
-            "Criterio óptico para el análisis:\n"
+        lbl_cull_profile = QLabel("Perfil Óptico:")
+        lbl_cull_profile.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 600;")
+        lbl_cull_profile.setToolTip(
+            "Criterio óptico para evaluar la redondez y calidad estelar:\n"
             "• Gran Angular: Ignora la coma/aberración natural de las esquinas y mide trepidación en el centro.\n"
             "• Equilibrado: Recomendado para focales medias (35mm-85mm).\n"
             "• Exigente: Para telescopios y monturas ecuatoriales (estricto en todo el campo)."
         )
+        row_cull_opts.addWidget(lbl_cull_profile)
+
+        self.combo_cull_profile = QComboBox()
+        self.combo_cull_profile.addItem("Gran Angular (Tolerante)", "wide_angle")
+        self.combo_cull_profile.addItem("Equilibrado (Estándar)", "balanced")
+        self.combo_cull_profile.addItem("Exigente (Tracker/Telescopio)", "strict")
+        self.combo_cull_profile.setToolTip(lbl_cull_profile.toolTip())
         self.combo_cull_profile.setStyleSheet("""
             QComboBox {
-                background-color: #1a222d;
-                color: #b0bec5;
-                border: 1px solid #37474f;
+                background-color: #161b26;
+                color: #e2e8f0;
+                border: 1px solid #28324a;
                 border-radius: 4px;
-                padding: 2px 6px;
+                padding: 3px 8px;
                 font-size: 11px;
+            }
+            QComboBox:hover {
+                border-color: #38bdf8;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 18px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #161b26;
+                color: #e2e8f0;
+                selection-background-color: #0284c7;
+                selection-color: #ffffff;
+                border: 1px solid #28324a;
             }
         """)
         row_cull_opts.addWidget(self.combo_cull_profile)
+        row_cull_opts.addStretch(1)
 
         self.lbl_cull_summary = QLabel("")
-        self.lbl_cull_summary.setStyleSheet("font-size: 11px; color: #80cbc4; font-weight: bold;")
+        self.lbl_cull_summary.setStyleSheet("font-size: 11px; color: #38bdf8; font-weight: bold;")
         self.lbl_cull_summary.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         row_cull_opts.addWidget(self.lbl_cull_summary)
 
