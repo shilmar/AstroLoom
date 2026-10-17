@@ -33,8 +33,23 @@
 - **Zoom 1:1 Nativo con Clic Derecho:** Inspección píxel a píxel del sensor original para retoque milimétrico de bordes.
 
 ### 4. Revelador Astrofotográfico Avanzado
+- **Arquitectura de 3 Columnas Pro (Estilo Lightroom Classic / DaVinci):**
+  - *Columna Izquierda:* Navegador miniatura con zoom contextual, Gestor de Presets Astronómicos con catálogo oficial e Historial interactivo de pasos Deshacer/Rehacer.
+  - *Columna Central:* Lienzo de trabajo ultra-amplio centrado, barra de herramientas superior, modo comparador "Antes / Después" con cortina divisible (Split-View horizontal y vertical), avisos vectoriales de recorte (Clipping `J`), pipeta de balance de blancos (`W`) y lupa flotante (`Z`).
+  - *Columna Derecha:* Acordeón colapsable con histograma RGB en vivo interactivo en cabecera, controles paramétricos de procesado y Gestor de Capas y Máscaras.
+  - *Divisores de Recorrido Amplio (Center-Reach):* Separadores interactivos que permiten desplazar los paneles laterales hasta el centro del área de trabajo sin restricciones artificiales ni desbordamientos.
 - **Canal Lineal Puro:** Pipeline optimizado en coma flotante (float32), preservando la linealidad fotométrica hasta la compresión tonal final.
+- **Gestor de Capas con Miniaturas Dinámicas y Altura Adaptativa:**
+  - Miniaturas fotorrealistas en vivo para cada capa (estrellas sobre fondo oscuro, nebulosa a color, terreno y máscaras monocromáticas).
+  - Selector de tamaños **S**, **M** y **L (XL)** con adaptación automática a la relación de aspecto real de la fotografía (horizontal o retrato/vertical).
+  - Redimensionador ergonómico con tirador de arrastre libre (`LayerListResizeHandle`) y cálculo dinámico de altura que muestra todas las capas sin barras de scroll internas ni colapso de espacio.
+- **Curvas Tonales Dedicadas por Capa:** Curva spline interactiva de 32 bits integrada de forma independiente en cada capa (Estrellas, Starless, Suelo, Base), con histograma de fondo armonizado al rango tonal post-estirado y filtrado por máscara espacial.
+- **Deconvolución Óptica Regularizada (Richardson-Lucy):** Modelado analítico de PSF (Moffat 2D y Gaussiano), estimador empírico automático subpíxel desde estrellas no saturadas, deringing perimetral y amortiguación Bayesiana de ruido de fondo.
 - **Separación de Estrellas con StarNet++:** Extracción de capas Starless y Stars-only en espacio lineal, permitiendo trabajar nebulosas y polvo galáctico sin hinchar las estrellas.
+- **Filtro Difusor Digital y Realce de Constelaciones (Star Mist Filter):** Resplandor etéreo con recuperación de color espectral de estrellas prominentes y protección de estrellas débiles.
+- **Estirado Hiperbólico Generalizado (GHS):** Control con punto de simetría (SP), factor de estirado (D) y protección de altas luces (HP) para datos lineales.
+- **Efecto Orton Cósmico y Glow de Polvo Galáctico:** Resplandor suave enfocado en estructuras de gas y polvo interestelar.
+- **Reducción Paramétrica 2D de Contaminación Lumínica (Domo Asimétrico):** Sustracción de cúpulas lumínicas urbanas en el horizonte mediante modelo elíptico 2D.
 - **Estructura Multiescala por Ondículas (À Trous / B-Spline):** Realce selectivo de filamentos de gas y bandas de absorción de la Vía Láctea, junto con atenuación de la capa residual de fondo.
 - **Extracción de Gradientes:** Motor dual integrado con GraXpert AI y ajuste polinómico cuadrático para corregir gradientes luminosos.
 - **Reducción de Ruido Adaptativa:** Múltiples métodos para el fondo (Filtro Bilateral, Filtro Guiado y Non-Local Means) respetando los límites de las estrellas.
@@ -125,7 +140,8 @@
 - **Persistencia de Sesión (.panosess):** Guardado y carga de sesiones panorámicas completas con todas las teselas y configuraciones.
 
 ### 8. Configuración, Rendimiento y Vitrina de Resultados
-- **Interfaz Moderna y Homogénea:** Paneles laterales unificados con ancho mínimo de 420 px, máximo de 520 px y predeterminado de 520 px en todos los módulos, diseño visual armónico en tonos azulados oscuros (`#161622`) y controles compactados verticalmente (selectores en línea en Apilador y Revelador).
+- **Identidad Visual "AstroLoom Studio Pro":** Sistema de diseño oscuro unificado `Cosmic Pro Dark` (`#0b0d13`), iconografía vectorial SVG monocromática de alta precisión (`gui/icons.py`), tipografía moderna con contraste jerárquico y eliminación de elementos informales.
+- **Distribución en 3 Columnas y Paneles Elásticos:** Módulo de revelado con arquitectura ergonómica en 3 columnas (Navegación/Presets, Lienzo central y Ajustes/Capas) con separadores dinámicos que alcanzan el centro del área de trabajo.
 - **Vitrina de Resultados Integrada (Showcase):** Panel visual en la pestaña de Configuración con visor responsivo antialias que exhibe astrofotografía real de paisaje procesada de principio a fin con AstroLoom, acreditación de autoría (*Fotografía y Procesado: Shilmar*) e inspección a resolución nativa.
 - **Aceleración por GPU y JIT Dual:** Soporte automático para NVIDIA CUDA mediante CuPy, compilación JIT de CPU multinúcleo con Numba (kernels paralelos LLVM), y conmutación transparente a CPU estándar si no se dispone de librerías aceleradoras.
 - **Aceleración LibRaw Multihilo:** Desentrelazado Bayer paralelo con LibRaw/rawpy y paralelización de tomas maestras de calibración que acelera la integración entre un 20% y 25%.
@@ -155,9 +171,14 @@ astroloom/
 │   ├── es.json              # Diccionario en español (nativo)
 │   └── en.json              # Diccionario en inglés
 ├── core/
+│   ├── ai_horizon.py        # Detección semántica de horizonte con IA (U²-Net ONNX)
 │   ├── config_manager.py    # Carga y almacenamiento de ajustes JSON
+│   ├── deconvolution.py     # Deconvolución Richardson-Lucy, PSF Moffat 2D y deringing
 │   ├── developer_presets.py # Gestor y catálogo de presets astronómicos (.astropreset)
 │   ├── eclipse.py           # Detección de limbo, alineación subpíxel, fusión HDR y NRGF continuo
+│   ├── eclipse_collage.py   # Motor de composición geométrica y collage de eclipses
+│   ├── frame_culling.py     # Cribado previo inteligente de tomas (FWHM, excentricidad, densidad)
+│   ├── ghs.py               # Algoritmo de estirado hiperbólico generalizado (GHS)
 │   ├── gpu_backend.py       # Detección y gestión de aceleración NVIDIA CUDA / CuPy
 │   ├── graxpert_bridge.py   # Conector CLI con GraXpert AI
 │   ├── i18n.py              # Motor reactivo de internacionalización multilingüe
@@ -166,32 +187,41 @@ astroloom/
 │   │   ├── AdobeRGB1998.icc # Espacio amplio para monitores profesionales e impresión
 │   │   ├── ProPhotoRGB.icc  # Espacio de gamut extendido (ROMM RGB) para astrofotografía
 │   │   └── sRGB.icc         # Espacio estándar universal para web y visualización
+│   ├── light_pollution.py   # Modelo elíptico 2D para sustracción de domo de polución
 │   ├── mask_layers.py       # Modelo de capas y máscaras de ajuste local estilo Photoshop
 │   ├── masking.py           # Algoritmos de segmentación y refinado guiado de máscaras
+│   ├── orton.py             # Efecto Orton cósmico y resplandor de polvo estelar
 │   ├── panorama.py          # Motor de composición panorámica multifila y cosido 2D
 │   ├── project_manager.py   # Serialización y persistencia de proyectos (.mwstack)
+│   ├── psd_export.py        # Generación de archivos PSD de Photoshop multicapa
 │   ├── stacking.py          # Motor de calibración (Dark/Flat/Bias), alineación y apilado
+│   ├── star_diffusion.py    # Filtro difusor digital con recuperación cromática de estrellas
 │   ├── starnet_bridge.py    # Conector y parser CLI con StarNet++ v2
 │   ├── startrails.py        # Motor streaming de trazas, efectos cometa y supresión de satélites
-│   └── stretch.py           # Algoritmos MTF, ondículas À Trous, balance y tono
+│   ├── stretch.py           # Algoritmos MTF, ondículas À Trous, balance y tono
+│   └── substacking.py       # Apilado de ventana deslizante para vídeo time-lapse
 └── gui/
     ├── assets/              # Recursos gráficos y fotografía de demostración
     │   └── showcase_milkyway.jpg
     ├── canvas.py            # Visor interactivo QGraphicsView acelerado con zoom 1:1 y clipping
     ├── dialog_presets.py    # Diálogos de administración y guardado de presets
+    ├── icons.py             # Catálogo y generador dinámico de iconos vectoriales SVG
     ├── main_window.py       # Ventana principal, barra de estado y pestañas maestras
-    ├── tab_developer.py     # Pestaña de revelado, acordeón de 9 secciones y capas
+    ├── tab_developer.py     # Pestaña de revelado profesional en 3 columnas
     ├── tab_eclipse.py       # Pestaña de procesado integral de eclipses solares y lunares (HDR)
     ├── tab_eclipse_collage.py # Pestaña dedicada de diseño de secuencias y collage de eclipses
     ├── tab_panorama.py      # Pestaña de composición panorámica y mosaicos
     ├── tab_settings.py      # Pestaña de configuración de rutas, selector ICC y parámetros
     ├── tab_stacker.py       # Pestaña de apilado dual, calibración y máscaras
     ├── tab_startrails.py    # Pestaña de generación de trazas de estrellas (Startrails)
-    ├── theme.py             # Sistema de diseño global "Cosmic Dark Pro" y paletas
+    ├── theme.py             # Sistema de diseño global "Cosmic Pro Dark" y paletas
     ├── widgets/
     │   ├── collapsible_section.py # Acordeón colapsable con animaciones y badges
-    │   ├── curve_widget.py  # Curvas tonales, histograma logarítmico y botones de clipping
-    │   └── mask_layers_widget.py  # Gestor de capas con orden de pila e identidad cromática
+    │   ├── curve_widget.py  # Curvas tonales interactivas e histogramas
+    │   ├── drop_widgets.py  # Áreas reactivas de arrastrar y soltar archivos
+    │   ├── live_histogram.py # Histograma RGB dinámico en tiempo real
+    │   ├── mask_layers_widget.py # Pila de capas con miniaturas S/M/L y resizer interactivo
+    │   └── precision_slider.py # Deslizadores de alta precisión con entrada numérica directa
     └── worker.py            # Orquestador de tareas en segundo plano multihilo (QThread)
 ```
 

@@ -5,6 +5,52 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-17
+
+### Añadido
+* **Rediseño Integral AstroLoom Studio Pro (Tema Pro Creative Suite - Fases 1 a 3):**
+  - **Nueva Identidad Visual Profesional:** Estética sobria y cinematográfica inspirada en *Adobe Lightroom Classic*, *DaVinci Resolve* y *Capture One*.
+  - **Paleta de Color "Cosmic Pro Dark":** Fondos pizarra oscuros (`#0b0d13`), tarjetas de herramientas `#12151e`, bordes sutiles de precisión `#1e2538`, acentos en cian celestial (`#38bdf8`) y ámbar estelar (`#f59e0b`).
+  - **Iconografía Vectorial Monocromática:** Eliminación de emojis informales en encabezados y botones, reemplazados por una colección nativa de iconos vectoriales SVG de alta definición (`gui/icons.py`).
+  - **Homogeneización Global:** Consistencia visual y jerarquía tipográfica uniforme en los 7 módulos (Apilador, Revelador, Eclipses HDR, Eclipses Collage, Startrails, Panorámicas y Ajustes).
+* **Arquitectura de 3 Columnas Pro en el Módulo Revelador:**
+  - **Columna Izquierda (Navegación e Historial):** Panel colapsable de Navegador/Miniatura general, Gestor de Presets con catálogo oficial e historial de pasos Deshacer/Rehacer.
+  - **Columna Central (Lienzo de Trabajo Centrado):** Lienzo interactivo ultra-amplio con barra de herramientas contextual, cortina divisoria Antes/Después (Split-View horizontal/vertical), avisos de clipping (`J`), pipeta de balance de blancos (`W`) y lupa flotante (`Z`).
+  - **Columna Derecha (Ajustes de Revelado y Pila de Capas):** Acordeón colapsable con histograma RGB dinámico en cabecera, curvas tonales, paneles de procesado astronómico y Gestor de Capas y Máscaras.
+  - **Divisores de Recorrido Amplio (*Center-Reach Splitters*):** Separadores rediseñados que permiten expandir las columnas laterales hacia el centro de la pantalla sin límites artificiales ni desbordamientos horizontales.
+* **Curvas Tonales Interactivas Independientes por Capa:**
+  - Integración de curvas tonales no destructivas dedicadas en cada capa individual (*Estrellas*, *Fondo Nebular / Starless*, *Suelo / Terreno*, *Capa Base* y máscaras de ajuste).
+  - Permite modelar el contraste, sombras, medios tonos y altas luces de forma aislada para cada componente cósmico y terrestre.
+  - Armonización matemática del histograma de fondo de la curva: proyecta fielmente el rango tonal post-estirado de los píxeles de la capa y filtrado por su máscara espacial correspondiente.
+* **Miniaturas Visuales Dinámicas en la Pila de Capas con Tamaños S, M y L (XL):**
+  - Renderizado en vivo de previsualizaciones fotorrealistas para cada capa (estrellas sobre fondo oscuro, nebulosa starless a todo color, silueta de terreno y máscaras monocromáticas para pinceles, luminancia y rango de color HSV).
+  - **Selector de Tamaños S / M / L:**
+    - **S (Compacto):** Fila de 42 px (miniatura de 23×34 px en vertical / 42×28 px en horizontal).
+    - **M (Equilibrado):** Fila de 56 px (miniatura de 32×48 px en vertical / 56×37 px en horizontal).
+    - **L (Amplitud XL):** Fila de 74 px (miniatura generosa de 44×66 px en vertical / 75×50 px en horizontal) para inspección nítida de detalles y máscaras.
+  - **Adaptación Dinámica a la Orientación (Horizontal / Retrato):** Cálculo automático de la relación de aspecto real de la imagen cargada, evitando distorsiones o recortes forzados en fotografías verticales.
+* **Controlador de Altura Adaptativo y Tirador de Arrastre Libre (`LayerListResizeHandle`):**
+  - Reemplazo del divisor rígido por un control interactivo de altura con tirador ergonómico central.
+  - Cálculo automático de altura óptima para mostrar todas las capas sin barras de desplazamiento internas molestas.
+  - Independencia total del panel de propiedades: al desplegar los controles extendidos de la capa *Fondo Nebular (Starless)* (Ajustes de nebulosa, Efecto Orton, Glow de polvo), la lista mantiene su altura completa sin colapsar a una sola línea.
+  - Arrastre interactivo con el ratón hacia abajo para expandir la lista libremente hasta 850 px, y doble clic en el tirador para restaurar el auto-ajuste instantáneo.
+
+### Modificado
+* **Modernización del Gestor de Presets:**
+  - Diálogo modal de administración y guardado de presets adaptado al sistema de diseño oscuro Pro Suite.
+  - Control de ancho mínimo y elisión de texto para prevenir desbordamientos horizontales en el panel izquierdo.
+* **Ergonomía en Pestañas del Apilador:**
+  - Eliminación de los botones de scroll forzados en la barra superior de archivos (*Lights*, *Darks*, *Flats*, *Bias*, *Suelo*) mediante una distribución compacta y elástica.
+  - Incorporación de la etiqueta explicativa *"Perfil óptico:"* en el selector de cribado y gran angular.
+* **Salto de Versión:**
+  - Actualización a **v0.9.0** en `gui/main_window.py`, `gui/tab_settings.py`, `locales/es.json` y `locales/en.json`.
+  - Actualización de documentación en `README.md`, `MANUAL_DE_USUARIO.md` y `ROADMAP.md`.
+
+### Corregido
+* **Visibilidad de Encabezados en Secciones Colapsables:** Corrección de la política de tamaño `QSizePolicy.Preferred` en títulos de `CollapsibleSection` para asegurar la legibilidad del texto en todos los módulos.
+* **Resiliencia en Carga de Imagen Única:** Corrección del error `ValueError: The truth value of an array with more than one element is ambiguous` al cargar archivos en el revelador antes de la división en capas.
+* **Sincronización de Previsualización:** Optimización del ciclo de renderizado en vivo para cambios fluidos al alternar visibilidad de capas o modificar curvas tonales.
+
 ## [0.8.5] - 2026-10-16
 
 ### Añadido

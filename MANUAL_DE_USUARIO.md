@@ -268,21 +268,40 @@ El compositor multicapa de AstroLoom funciona de manera análoga a Adobe Photosh
 * **Máscaras con Inteligencia Artificial:**
   * Pulsa **"Generar Máscara IA"**: el modelo neuronal detecta árboles, montañas, personas y arquitectura, creando un recorte limpio sin halos ni bordes blancos entre el cielo y la tierra.
 
+* **Pila de Capas con Miniaturas Visuales Dinámicas (S / M / L):**
+  - **Previsualización Fotorrealista en Vivo:** Cada fila de la lista muestra una miniatura nítida con el contenido real de la capa: las estrellas aisladas sobre fondo oscuro en la capa de estrellas, el gas y polvo galáctico a todo color en la capa *Starless*, la silueta del paisaje en la capa de suelo, y máscaras monocromáticas en capas de pincel, luminancia o color.
+  - **Selector de Tamaños `[S]`, `[M]`, `[L]`:**
+    - **S (Compacto):** Fila de 42 px, ideal para pantallas pequeñas o proyectos con muchas capas.
+    - **M (Equilibrado):** Fila de 56 px, tamaño estándar para trabajo cómodo.
+    - **L (Amplitud XL):** Fila de 74 px con miniatura de alta resolución (44×66 px en retrato / 75×50 px en apaisado) para inspeccionar núcleos estelares, bordes y detalles finos de un vistazo.
+  - **Detección Automática de Orientación:** Si tu fotografía nocturna fue tomada en vertical (retrato) o en horizontal (paisaje), las miniaturas se adaptan automáticamente a la relación de aspecto real de la imagen sin recortar ni deformar la toma.
+
+* **Ajuste de Altura Adaptativo y Tirador de Arrastre Libre:**
+  - **Altura Automática Óptima:** La lista de capas calcula por defecto la altura exacta para que se vean todas tus capas sin necesidad de barras de desplazamiento internas molestas.
+  - **Tirador Central de Redimensión:** Situado justo debajo de los botones de ordenar capas. Arrastra la barra con el ratón hacia abajo para expandir la lista libremente (hasta 850 px).
+  - **Doble Clic para Restaurar:** Haz doble clic sobre el tirador central para volver instantáneamente a la altura automática calculada.
+  - **Anti-Colapso al Cambiar de Capa:** Al seleccionar una capa con numerosos controles (como *Fondo Nebular / Starless* con sus paneles de Claridad, Efecto Orton y Glow de polvo), la lista mantiene su altura intacta sin comprimirse nunca a una sola línea.
+
+* **Curvas Tonales Dedicadas por Capa:**
+  - Despliega la **"📈 Curva Tonal de Capa"** dentro de cualquier capa (Estrellas, Starless, Suelo, Base o Ajuste local).
+  - Permite modelar el contraste, realzar sombras o comprimir altas luces de forma no destructiva e independiente para ese componente específico de la imagen.
+  - **Histograma Armonizado en Vivo:** El fondo de la curva muestra la distribución fotométrica real de los píxeles de esa capa concreta (después de su estirado y filtrada por su máscara espacial), lo que te permite colocar los nodos de control exactamente donde reside la información que deseas modular.
+
 * **Máscaras de Rango de Color (HSV) con Pipeta Muestreadora:**
-  * **🎯 Muestrear Color en Imagen:** En las capas de tipo Color, activa la pipeta interactiva y pincha directamente sobre el lienzo (nebulosas de emisión H-Alfa, OIII, cúpulas de sodio o airglow).
-  * El sistema calcula de forma instantánea el Matiz (Hue de 0° a 360°) y el umbral de saturación mínima a partir de la muestra en pantalla, activando automáticamente la previsualización de la máscara en rojo rubí.
-  * También dispones de presets astronómicos rápidos: 🔴 H-Alfa (0°), 🔵 OIII (190°), 🟠 Sodio (38°) y 🟢 Airglow (115°).
+  - **🎯 Muestrear Color en Imagen:** En las capas de tipo Color, activa la pipeta interactiva y pincha directamente sobre el lienzo (nebulosas de emisión H-Alfa, OIII, cúpulas de sodio o airglow).
+  - El sistema calcula de forma instantánea el Matiz (Hue de 0° a 360°) y el umbral de saturación mínima a partir de la muestra en pantalla, activando automáticamente la previsualización de la máscara en rojo rubí.
+  - También dispones de presets astronómicos rápidos: 🔴 H-Alfa (0°), 🔵 OIII (190°), 🟠 Sodio (38°) y 🟢 Airglow (115°).
 
 * **Herramientas de Pincel:**
-  * Pinta manualmente en pantalla para añadir o quitar zonas de ajuste local con control de tamaño y suavizado de borde (*feather*).
+  - Pinta manualmente en pantalla para añadir o quitar zonas de ajuste local con control de tamaño y suavizado de borde (*feather*).
 * **Capas Nativas:**
-  * **🌌 Fondo Nebular:** Ajusta selectivamente el polvo de la Vía Láctea.
-  * **⭐ Estrellas:** Ajusta el brillo, nitidez o saturación de las estrellas.
-  * **🏞️ Suelo:** Ajusta el paisaje terrestre.
+  - **🌌 Fondo Nebular:** Ajusta selectivamente el polvo de la Vía Láctea.
+  - **⭐ Estrellas:** Ajusta el brillo, nitidez o saturación de las estrellas.
+  - **🏞️ Suelo:** Ajusta el paisaje terrestre.
 * **Capas de Ajuste Personalizadas:** Crea capas locales para iluminar un árbol, apagar una farola o dar volumen a una nube.
 * **Exportación Profesional:**
-  * **TIFF 16-bit:** Para impresión o archivo maestro de máxima calidad.
-  * **PSD Multicapa (Photoshop):** Exporta el proyecto completo conservando cada capa separada (Cielo, Suelo, Estrellas, Fondo Nebular) y **con sus máscaras de capa reales y editables**, listas para continuar trabajando en Photoshop sin perder nada.
+  - **TIFF 16-bit:** Para impresión o archivo maestro de máxima calidad.
+  - **PSD Multicapa (Photoshop):** Exporta el proyecto completo conservando cada capa separada (Cielo, Suelo, Estrellas, Fondo Nebular) y **con sus máscaras de capa reales y editables**, listas para continuar trabajando en Photoshop sin perder nada.
 
 ---
 
@@ -335,10 +354,17 @@ Permite ensamblar mosaicos gigantes del cielo nocturno (por ejemplo, el arco com
 | Atajo | Acción |
 | :--- | :--- |
 | `Ctrl + Z` | Deshacer el último cambio de parámetros o pincel. |
-| `Ctrl + Y` | Rehacer la acción deshecha. |
+| `Ctrl + Y` / `Ctrl + Shift + Z` | Rehacer la acción deshecha. |
+| `J` | Alternar advertencia de recorte (Clipping: sombras azules, luces rojas). |
+| `Y` | Activar / Desactivar el comparador Antes / Después (Split-View). |
+| `Shift + Y` | Conmutar orientación del comparador Antes / Después (Vertical ↔ Horizontal). |
+| `W` | Activar pipeta interactiva de Balance de Blancos en el lienzo. |
+| `Z` | Activar / Desactivar lupa de inspección flotante con zoom dinámico. |
+| `M` | Conmutar modo de máscara y trazado de suelo. |
 | `Espacio + Arrastre` | Moverse por la imagen (*pan*) en cualquier nivel de zoom. |
 | `Rueda del Ratón` | Zoom continuo interactivo centrado en el cursor. |
 | `Doble Clic en Etiqueta` | Resetea cualquier control deslizante a su valor por defecto. |
+| `Doble Clic en Tirador de Capas` | Restaura la altura óptima automática de la lista de capas. |
 | `Clic Derecho en Canvas` | Muestra el menú contextual de selección de herramientas. |
 | `[ / ]` | Disminuir / Aumentar el tamaño del pincel de máscara. |
 | `Shift + Pincel` | Conmuta temporalmente al modo goma de borrar de la máscara. |
