@@ -4,7 +4,7 @@ gui/widgets/mask_layers_widget.py - Panel interactivo de gestión de capas de m�
 Permite crear, ordenar, editar y previsualizar múltiples máscaras (Pincel, Luminancia, Color y Suelo/Cielo),
 con ajustes locales paramétricos independientes y conciencia de capas StarNet.
 """
-from typing import Optional, List, Dict, Any, Callable
+from typing import Optional, List, Dict, Any, Callable, Tuple
 import cv2
 import numpy as np
 from PySide6.QtCore import Qt, Signal, QSize
@@ -99,13 +99,15 @@ class MaskLayersWidget(QWidget):
         img_getter: Callable[[], Optional[np.ndarray]],
         mask_getter: Callable[[], Optional[np.ndarray]],
         stars_getter: Optional[Callable[[], Optional[np.ndarray]]] = None,
-        starless_getter: Optional[Callable[[], Optional[np.ndarray]]] = None
+        starless_getter: Optional[Callable[[], Optional[np.ndarray]]] = None,
+        layer_image_provider: Optional[Callable[[Any], Tuple[Optional[np.ndarray], Optional[np.ndarray], bool]]] = None
     ) -> None:
         """Configura los proveedores de imagen base, máscara maestra de suelo y capas StarNet."""
         self._image_reference_getter = img_getter
         self._master_mask_getter = mask_getter
         self._stars_getter = stars_getter
         self._starless_getter = starless_getter
+        self._layer_image_provider = layer_image_provider
 
     @staticmethod
     def _make_resettable_label(lbl: QLabel, reset_action, default_desc: str = "") -> QLabel:
@@ -1881,6 +1883,11 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if not layer:
             self.layer_curve_widget.set_histogram_from_image(None)
+            return
+
+        if getattr(self, '_layer_image_provider', None) is not None:
+            img, mask, is_stars = self._layer_image_provider(layer)
+            self.layer_curve_widget.set_histogram_from_image(img, mask=mask, is_stars_layer=is_stars)
             return
 
         img = None

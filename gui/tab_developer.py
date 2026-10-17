@@ -1604,7 +1604,8 @@ class DeveloperTab(QWidget):
             img_getter=lambda: self.preview_proxy if self.preview_proxy is not None else self.image_32bit,
             mask_getter=lambda: self.current_mask,
             stars_getter=lambda: self.proxy_stars if self.proxy_stars is not None else self.image_stars,
-            starless_getter=lambda: self.proxy_starless if self.proxy_starless is not None else self.image_starless
+            starless_getter=lambda: self.proxy_starless if self.proxy_starless is not None else self.image_starless,
+            layer_image_provider=self._get_layer_image_for_histogram
         )
         self.mask_layers_widget.layers_changed.connect(self.update_stretch_preview)
         self.mask_layers_widget.preview_mask_requested.connect(self._on_layer_mask_preview_requested)
@@ -3423,6 +3424,71 @@ class DeveloperTab(QWidget):
             self._commit_action()
             self.update_stretch_preview()
 
+    def _get_layer_image_for_histogram(self, layer) -> tuple[Optional[np.ndarray], Optional[np.ndarray], bool]:
+        """
+        Retorna la imagen de trabajo y máscara espacial correspondiente a la capa seleccionada
+        para renderizar su histograma de fondo en la Curva Tonal de Capa.
+        Retorna: (imagen_rgb_estirada, mascara_espacial_2d, es_capa_de_estrellas)
+        """
+        if self.image_32bit is None:
+            return None, None, False
+
+        m_type = getattr(layer, 'mask_type', '')
+
+        # 1. Capa de Estrellas (StarNet AI)
+        if m_type == MASK_TYPE_IMAGE_STARS:
+            img = getattr(self, '_cached_stars_stretched', None)
+            if img is None:
+                st_src = self.proxy_stars if self.proxy_stars is not None else self.image_stars
+                if st_src is not None:
+                    if getattr(self, "stretch_mode", "mtf") == "ghs":
+                        img = np.clip(
+                            apply_ghs_stretch(
+                                st_src,
+                                sp=self.spin_ghs_sp.value(),
+                                d=self.spin_ghs_d.value(),
+                                b=self.spin_ghs_b.value(),
+                                hp=self.spin_ghs_hp.value(),
+                                lp=self.spin_ghs_lp.value(),
+                                bp=0.0,
+                                color_mode="rgb"
+                            ) * self.star_intensity,
+                            0.0, 1.0
+                        )
+                    else:
+                        img = np.clip(
+                            manual_stretch(st_src, black_point=0.0, midtone=self.spin_mtf.value()) * self.star_intensity,
+                            0.0, 1.0
+                        )
+            return img, None, True
+
+        # 2. Capa de Suelo / Terreno
+        if m_type == MASK_TYPE_IMAGE_GROUND:
+            img = getattr(self, '_cached_rendered_image', None)
+            if img is None:
+                img = getattr(self, '_cached_base_stretched', None)
+            sky_m = self.proxy_mask if self.proxy_mask is not None else self.current_mask
+            gnd_m = np.clip(1.0 - sky_m, 0.0, 1.0) if sky_m is not None else None
+            return img, gnd_m, False
+
+        # 3. Capa de Fondo Nebular (Starless)
+        if m_type == MASK_TYPE_IMAGE_STARLESS:
+            img = getattr(self, '_cached_base_stretched', None)
+            if img is None:
+                img = getattr(self, '_cached_rendered_image', None)
+            sky_m = self.proxy_mask if self.proxy_mask is not None else self.current_mask
+            return img, sky_m, False
+
+        # 4. Capa de Fondo Base
+        if m_type == MASK_TYPE_IMAGE_BASE:
+            img = getattr(self, '_cached_base_stretched', None) or getattr(self, '_cached_rendered_image', None)
+            return img, None, False
+
+        # 5. Capas de ajuste local estándar (Pincel, Gradiente, Luminancia, Color)
+        img = getattr(self, '_cached_rendered_image', None)
+        mask = getattr(layer, 'brush_mask', None) if m_type == MASK_TYPE_BRUSH else None
+        return img, mask, False
+
     def _on_toggle_clipping_shortcut(self) -> None:
         """Alterna los indicadores de recorte con la tecla 'J' ignorando entradas de texto activas."""
         focused = QApplication.focusWidget()
@@ -4704,6 +4770,11 @@ class DeveloperTab(QWidget):
             else:
                 st_stretched = st_img
 
+            if not self.is_zoomed_100:
+                self._cached_base_stretched = stretched
+                self._cached_stars_stretched = st_stretched
+                self._cached_sky_mask = precomputed_mask
+
             stretched = apply_all_mask_layers(
                 stretched,
                 self.mask_layers_widget.layers,
@@ -4713,6 +4784,11 @@ class DeveloperTab(QWidget):
                 crop_rect=crop_rect,
                 full_image_shape=full_shape
             )
+
+        if not self.is_zoomed_100:
+            if not (apply_mask_layers and hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers):
+                self._cached_base_stretched = stretched
+            self._cached_rendered_image = stretched
 
         return np.ascontiguousarray(stretched, dtype=np.float32)
 

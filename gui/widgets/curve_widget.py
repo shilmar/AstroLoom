@@ -204,11 +204,16 @@ class CurveWidget(QWidget):
     # -------------------------------------------------------------
     # Histograma y Avisos de Recorte
     # -------------------------------------------------------------
-    def set_histogram_from_image(self, img_rgb: Optional[np.ndarray]) -> None:
+    def set_histogram_from_image(
+        self,
+        img_rgb: Optional[np.ndarray],
+        mask: Optional[np.ndarray] = None,
+        is_stars_layer: bool = False
+    ) -> None:
         """
         Calcula el histograma de luminancia con compresión logarítmica
         a partir de un submuestreo de la imagen suministrada usando OpenCV.
-        Detecta si existen valores extremos recortados (sombras a 0 o luces a 255).
+        Soporta máscaras espaciales de capa y filtrado de fondo negro para capas de estrellas.
         """
         if img_rgb is None or img_rgb.size == 0:
             self.hist_data = None
@@ -224,9 +229,35 @@ class CurveWidget(QWidget):
         gray = cv2.cvtColor(np.clip(sample, 0.0, 1.0), cv2.COLOR_RGB2GRAY)
         u8 = (gray * 255.0).astype(np.uint8)
 
-        hist = cv2.calcHist([u8], [0], None, [256], [0, 256]).ravel()
+        calc_mask = None
+        if mask is not None and mask.size > 0:
+            m_2d = mask[..., 0] if mask.ndim == 3 else mask
+            h_u8, w_u8 = u8.shape[:2]
+            if m_2d.shape[:2] != (h_u8, w_u8):
+                if m_2d.shape[0] >= 4 and m_2d.shape[1] >= 4 and m_2d.shape[0] // 4 == h_u8 and m_2d.shape[1] // 4 == w_u8:
+                    m_sub = m_2d[::4, ::4]
+                else:
+                    m_sub = cv2.resize(m_2d, (w_u8, h_u8), interpolation=cv2.INTER_NEAREST)
+            else:
+                m_sub = m_2d
+            calc_mask = np.ascontiguousarray((m_sub > 0.08).astype(np.uint8) * 255)
 
-        self.has_shadow_clip = bool(hist[0] > 0)
+        if is_stars_layer:
+            # En capas de estrellas, el 98% del lienzo es cielo negro (0).
+            # Para que el histograma muestre el perfil de brillo de las estrellas
+            # (desde estrellas débiles hasta núcleos saturados), aislamos los píxeles con luz estelar.
+            star_gate = np.ascontiguousarray((u8 > 1).astype(np.uint8) * 255)
+            calc_mask = cv2.bitwise_and(calc_mask, star_gate) if calc_mask is not None else star_gate
+
+        if calc_mask is not None:
+            calc_mask = np.ascontiguousarray(calc_mask, dtype=np.uint8)
+
+        hist = cv2.calcHist([u8], [0], calc_mask, [256], [0, 256]).ravel()
+
+        if is_stars_layer:
+            self.has_shadow_clip = False
+        else:
+            self.has_shadow_clip = bool(hist[0] > 0)
         self.has_highlight_clip = bool(hist[255] > 0)
 
         hist_log = np.log1p(hist)
