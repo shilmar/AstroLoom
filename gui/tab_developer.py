@@ -80,6 +80,7 @@ from core.mask_layers import (
     MASK_TYPE_GROUND, MASK_TYPE_SKY
 )
 from gui.widgets.curve_widget import CurveWidget
+from gui.widgets.live_histogram import LiveRGBHistogramWidget
 from gui.widgets.mask_layers_widget import MaskLayersWidget
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow, PrecisionSpinBox
@@ -217,6 +218,10 @@ class DeveloperTab(QWidget):
         self._undo_debounce_timer.setInterval(500)
         self._undo_debounce_timer.timeout.connect(self._commit_action)
 
+        # Memoria de tamaños para paneles ocultables (Lightroom style)
+        self._last_left_panel_width = 380
+        self._last_right_panel_width = 360
+
         self._setup_ui()
         self._apply_styles()
         self._connect_undo_triggers()
@@ -249,12 +254,12 @@ class DeveloperTab(QWidget):
         self.canvas.files_dropped.connect(self._on_canvas_files_dropped)
 
         # 2. Panel interno de controles con Acordeón Plegable Inteligente
-        left_container = QWidget()
-        left_container_layout = QVBoxLayout(left_container)
+        self.left_container = QWidget()
+        left_container_layout = QVBoxLayout(self.left_container)
         left_container_layout.setContentsMargins(4, 4, 4, 4)
         left_container_layout.setSpacing(6)
-        left_container.setMinimumWidth(440)
-        left_container.setMaximumWidth(540)
+        self.left_container.setMinimumWidth(320)
+        self.left_container.setMaximumWidth(440)
 
         # Carga externa (Siempre fijada arriba)
         self.btn_open_img = QPushButton("Abrir Imagen (TIFF / FITS / RAW)...")
@@ -1581,7 +1586,8 @@ class DeveloperTab(QWidget):
         hidden_gnd_layout.addWidget(btn_reset_gnd)
 
         self.sec_gnd_tone.set_content_widget(w_gnd_tone)
-        left_layout.addWidget(self.sec_gnd_tone)
+        # Ocultar sección de suelo del panel izquierdo (gestionada en la Capa de Suelo de capas)
+        self.sec_gnd_tone.setVisible(False)
 
         # --- SECCIÓN 9: Máscaras y Capas de Ajuste Local ---
         self.sec_masks = CollapsibleSection("Máscaras y Capas de Ajuste Local", is_expanded=False, icon_name="layers")
@@ -1664,7 +1670,7 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.layers_changed.connect(_update_masks_badge)
 
         self.sec_masks.set_content_widget(self.mask_layers_widget)
-        left_layout.addWidget(self.sec_masks)
+        # Nota: self.sec_masks se añade a la columna derecha (right_layout)
 
         left_layout.addStretch(1)
 
@@ -1720,25 +1726,23 @@ class DeveloperTab(QWidget):
         self.txt_log.setFixedHeight(85)
         left_container_layout.addWidget(self.txt_log, 0)
 
-        splitter.addWidget(left_container)
-
-        # Contenedor derecho: Barra de herramientas superior + Canvas
-        right_container = QWidget()
-        right_layout = QVBoxLayout(right_container)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
+        # 3. Contenedor central (Visor y Lienzo interactivo)
+        self.center_container = QWidget()
+        center_layout = QVBoxLayout(self.center_container)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(0)
 
         self.canvas_toolbar = self._create_canvas_toolbar()
-        right_layout.addWidget(self.canvas_toolbar)
+        center_layout.addWidget(self.canvas_toolbar)
         self.crop_toolbar = self._create_crop_toolbar()
         self.crop_toolbar.setVisible(False)
-        right_layout.addWidget(self.crop_toolbar)
+        center_layout.addWidget(self.crop_toolbar)
         self.mask_toolbar = self._create_mask_toolbar()
         self.mask_toolbar.setVisible(False)
-        right_layout.addWidget(self.mask_toolbar)
-        right_layout.addWidget(self.canvas, 1)
+        center_layout.addWidget(self.mask_toolbar)
+        center_layout.addWidget(self.canvas, 1)
         self.canvas_footer = self._create_canvas_footer_bar()
-        right_layout.addWidget(self.canvas_footer)
+        center_layout.addWidget(self.canvas_footer)
 
         # Sincronización bidireccional de Pipeta, Lupa, Recorte y Pincel con la barra de herramientas
         self.canvas.eyedropper_toggled.connect(self._on_canvas_eyedropper_toggled)
@@ -1754,10 +1758,82 @@ class DeveloperTab(QWidget):
         self.canvas.layer_brush_stroke_finished.connect(self._on_layer_brush_stroke_finished)
         self.canvas.layer_brush_radius_changed.connect(self.mask_layers_widget.set_brush_radius_from_canvas)
 
-        splitter.addWidget(right_container)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 10)
-        splitter.setSizes([520, 1400])
+        # 4. Contenedor derecho: Histograma RGB en Vivo + Capas y Máscaras
+        self.right_container = QWidget()
+        right_container_layout = QVBoxLayout(self.right_container)
+        right_container_layout.setContentsMargins(4, 4, 4, 4)
+        right_container_layout.setSpacing(6)
+        self.right_container.setMinimumWidth(320)
+        self.right_container.setMaximumWidth(460)
+
+        # Cabecera de Columna Derecha
+        right_header = QWidget()
+        right_header.setFixedHeight(28)
+        right_header_layout = QHBoxLayout(right_header)
+        right_header_layout.setContentsMargins(6, 2, 6, 2)
+        right_header_layout.setSpacing(6)
+
+        lbl_right_title = QLabel("CAPAS E HISTOGRAMA")
+        lbl_right_title.setStyleSheet("font-weight: 700; font-size: 11px; color: #80d8ff; letter-spacing: 0.6px;")
+        right_header_layout.addWidget(lbl_right_title)
+        right_header_layout.addStretch()
+        right_container_layout.addWidget(right_header, 0)
+
+        # Scroll área para la columna derecha
+        self.right_scroll_area = QScrollArea()
+        self.right_scroll_area.setWidgetResizable(True)
+        self.right_scroll_area.setFrameShape(QFrame.NoFrame)
+        self.right_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.right_scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 4, 0)
+        right_layout.setSpacing(6)
+
+        # Widget Histograma RGB en Vivo
+        self.live_histogram = LiveRGBHistogramWidget(self)
+        self.live_histogram.clippingChanged.connect(self._on_live_histogram_clipping_changed)
+
+        self.sec_histogram = CollapsibleSection("Histograma RGB en Vivo", is_expanded=True, icon_name="activity")
+        self.sec_histogram.set_content_widget(self.live_histogram)
+        right_layout.addWidget(self.sec_histogram)
+
+        # Capas y Máscaras (sec_masks)
+        self.sec_masks.set_expanded(True)
+        right_layout.addWidget(self.sec_masks)
+
+        right_layout.addStretch(1)
+
+        self.right_scroll_area.setWidget(right_panel)
+        right_container_layout.addWidget(self.right_scroll_area, 1)
+
+        # Splitter principal de 3 columnas
+        self.main_splitter = splitter
+        self.main_splitter.setChildrenCollapsible(True)
+
+        self.main_splitter.addWidget(self.left_container)
+        self.main_splitter.addWidget(self.center_container)
+        self.main_splitter.addWidget(self.right_container)
+
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 10)
+        self.main_splitter.setStretchFactor(2, 0)
+        self.main_splitter.setSizes([380, 1100, 360])
+
+        # Atajo global 'Tab' para alternar ambos paneles laterales (Modo Inmersivo / Cine Lightroom)
+        self.shortcut_tab = QShortcut(QKeySequence(Qt.Key_Tab), self)
+        self.shortcut_tab.setContext(Qt.WindowShortcut)
+        self.shortcut_tab.activated.connect(self.toggle_both_panels)
+
+        # Atajos 'F7' y 'F8' para alternar paneles individuales
+        self.shortcut_f7 = QShortcut(QKeySequence(Qt.Key_F7), self)
+        self.shortcut_f7.setContext(Qt.WindowShortcut)
+        self.shortcut_f7.activated.connect(lambda: self.toggle_left_panel())
+
+        self.shortcut_f8 = QShortcut(QKeySequence(Qt.Key_F8), self)
+        self.shortcut_f8.setContext(Qt.WindowShortcut)
+        self.shortcut_f8.activated.connect(lambda: self.toggle_right_panel())
         
         # Atajo global 'M' para alternar herramienta interactiva de Máscara de Suelo
         self.shortcut_mask = QShortcut(QKeySequence(Qt.Key_M), self)
@@ -1819,6 +1895,23 @@ class DeveloperTab(QWidget):
         tb_layout = QHBoxLayout(toolbar)
         tb_layout.setContentsMargins(8, 3, 8, 3)
         tb_layout.setSpacing(6)
+
+        # 0. Botón Ocultar/Mostrar Panel Izquierdo (Lightroom F7 / [)
+        self.btn_toggle_left_panel = QPushButton()
+        self.btn_toggle_left_panel.setIcon(get_icon("panel_left", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=14))
+        self.btn_toggle_left_panel.setCheckable(True)
+        self.btn_toggle_left_panel.setChecked(True)
+        self.btn_toggle_left_panel.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_left_panel.setToolTip("Ocultar / Mostrar panel lateral izquierdo de ajustes (Atajo: F7 o [)")
+        self.btn_toggle_left_panel.setFixedSize(30, 26)
+        self.btn_toggle_left_panel.toggled.connect(self.toggle_left_panel)
+        tb_layout.addWidget(self.btn_toggle_left_panel)
+
+        sep_left = QFrame()
+        sep_left.setFrameShape(QFrame.VLine)
+        sep_left.setFrameShadow(QFrame.Sunken)
+        sep_left.setStyleSheet("color: #3b4252; margin: 4px 2px;")
+        tb_layout.addWidget(sep_left)
 
         # 0a. Botón Deshacer (Undo)
         self.btn_undo = QPushButton("Deshacer")
@@ -2042,6 +2135,24 @@ class DeveloperTab(QWidget):
         # Espaciador elástico
         tb_layout.addStretch()
 
+        # Separador vertical
+        sep_right = QFrame()
+        sep_right.setFrameShape(QFrame.VLine)
+        sep_right.setFrameShadow(QFrame.Sunken)
+        sep_right.setStyleSheet("color: #3b4252; margin: 4px 2px;")
+        tb_layout.addWidget(sep_right)
+
+        # Botón Ocultar/Mostrar Panel Derecho (Lightroom F8 / ])
+        self.btn_toggle_right_panel = QPushButton()
+        self.btn_toggle_right_panel.setIcon(get_icon("panel_right", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=14))
+        self.btn_toggle_right_panel.setCheckable(True)
+        self.btn_toggle_right_panel.setChecked(True)
+        self.btn_toggle_right_panel.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_right_panel.setToolTip("Ocultar / Mostrar panel lateral derecho de capas e histograma (Atajo: F8 o ])")
+        self.btn_toggle_right_panel.setFixedSize(30, 26)
+        self.btn_toggle_right_panel.toggled.connect(self.toggle_right_panel)
+        tb_layout.addWidget(self.btn_toggle_right_panel)
+
         return toolbar
 
     def _create_canvas_footer_bar(self) -> QWidget:
@@ -2108,8 +2219,10 @@ class DeveloperTab(QWidget):
             self.sec_color.set_title(tr("developer.sections.color", "Color y Saturación"))
         if hasattr(self, 'sec_gnd_tone'):
             self.sec_gnd_tone.set_title(tr("developer.sections.ground_tone", "Ajuste Tonal Suelo (Paisaje)"))
+        if hasattr(self, 'sec_histogram'):
+            self.sec_histogram.set_title(tr("developer.sections.histogram", "Histograma RGB en Vivo"))
         if hasattr(self, 'sec_masks'):
-            self.sec_masks.set_title(tr("developer.sections.masks", "Máscaras y Capas de Ajuste Local"))
+            self.sec_masks.set_title(tr("developer.sections.masks", "Capas y Máscaras"))
 
         # Botones de herramientas
         if hasattr(self, 'btn_starnet'):
@@ -2136,6 +2249,10 @@ class DeveloperTab(QWidget):
             self.btn_crop.setText(tr("developer.toolbar.crop", "Recortar (C)"))
         if hasattr(self, 'btn_mask_tool'):
             self.btn_mask_tool.setText(tr("developer.toolbar.ground_mask", "Máscara Suelo (M)"))
+        if hasattr(self, 'btn_toggle_left_panel'):
+            self.btn_toggle_left_panel.setToolTip(tr("developer.toolbar.toggle_left", "Ocultar / Mostrar panel lateral izquierdo de ajustes (Atajo: F7 o [)"))
+        if hasattr(self, 'btn_toggle_right_panel'):
+            self.btn_toggle_right_panel.setToolTip(tr("developer.toolbar.toggle_right", "Ocultar / Mostrar panel lateral derecho de capas e histograma (Atajo: F8 o ])"))
         if hasattr(self, '_update_mask_status_ui'):
             self._update_mask_status_ui()
 
@@ -2808,7 +2925,9 @@ class DeveloperTab(QWidget):
                 self.canvas.set_masking_enabled(True)
 
     def _jump_to_mask_layers(self, target_layer_type: Optional[str] = None) -> None:
-        """Expande la Sección 9 y selecciona la capa especificada para edición contextual."""
+        """Asegura visibilidad del panel derecho, expande la sección de capas y selecciona la capa especificada."""
+        if hasattr(self, 'right_container') and not self.right_container.isVisible():
+            self.toggle_right_panel(True)
         if hasattr(self, 'sec_masks'):
             self.sec_masks.expand()
         if hasattr(self, 'mask_layers_widget') and target_layer_type:
@@ -3594,9 +3713,17 @@ class DeveloperTab(QWidget):
         self.btn_split_orientation.setText("⇋ Vertical" if is_vert else "⥯ Horizontal")
         self.btn_split_orientation.setEnabled(self.canvas.split_view_enabled)
 
+    def _on_live_histogram_clipping_changed(self, clip_s: bool, clip_h: bool) -> None:
+        """Sincroniza el lienzo y la curva tonal cuando se conmutan los triángulos de recorte del histograma."""
+        if hasattr(self, 'curve_widget'):
+            self.curve_widget.set_clipping_state(clip_s, clip_h)
+        self.on_clipping_changed_sync(clip_s, clip_h)
+
     def on_clipping_changed_sync(self, clip_s: bool, clip_h: bool) -> None:
         """Sincroniza el lienzo y el botón de la barra superior cuando cambia el recorte."""
         self.canvas.set_clipping_state(clip_s, clip_h)
+        if hasattr(self, 'live_histogram'):
+            self.live_histogram.set_clipping_states(clip_s, clip_h)
         if hasattr(self, 'btn_toggle_clipping'):
             self.btn_toggle_clipping.blockSignals(True)
             self.btn_toggle_clipping.setChecked(clip_s or clip_h)
@@ -3606,8 +3733,71 @@ class DeveloperTab(QWidget):
         """Manejador al conmutar el botón de recorte en la barra superior."""
         if hasattr(self, 'curve_widget'):
             self.curve_widget.set_clipping_state(checked, checked)
-            estado = "ACTIVADOS (Azul=Negros, Rojo=Blancos)" if checked else "DESACTIVADOS"
-            self.log_message(f"[CANVAS] Indicadores de recorte: {estado}")
+        if hasattr(self, 'live_histogram'):
+            self.live_histogram.set_clipping_states(checked, checked)
+        self.canvas.set_clipping_state(checked, checked)
+        estado = "ACTIVADOS (Azul=Negros, Rojo=Blancos)" if checked else "DESACTIVADOS"
+        self.log_message(f"[CANVAS] Indicadores de recorte: {estado}")
+
+    def toggle_left_panel(self, visible: Optional[bool] = None) -> None:
+        """Muestra u oculta el panel lateral izquierdo de ajustes (estilo Lightroom)."""
+        if not hasattr(self, 'left_container'):
+            return
+        if visible is None:
+            visible = not self.left_container.isVisible()
+
+        # Guardar tamaño previo antes de colapsar
+        if not visible and self.left_container.isVisible() and hasattr(self, 'main_splitter'):
+            sizes = self.main_splitter.sizes()
+            if len(sizes) == 3 and sizes[0] > 50:
+                self._last_left_panel_width = sizes[0]
+
+        self.left_container.setVisible(visible)
+        if hasattr(self, 'btn_toggle_left_panel'):
+            self.btn_toggle_left_panel.blockSignals(True)
+            self.btn_toggle_left_panel.setChecked(visible)
+            self.btn_toggle_left_panel.blockSignals(False)
+
+        # Restaurar tamaño previo al desplegar
+        if visible and hasattr(self, 'main_splitter'):
+            sizes = self.main_splitter.sizes()
+            if len(sizes) == 3 and sizes[0] < 50:
+                sizes[0] = getattr(self, '_last_left_panel_width', 380)
+                self.main_splitter.setSizes(sizes)
+
+    def toggle_right_panel(self, visible: Optional[bool] = None) -> None:
+        """Muestra u oculta el panel lateral derecho de capas e histograma (estilo Lightroom)."""
+        if not hasattr(self, 'right_container'):
+            return
+        if visible is None:
+            visible = not self.right_container.isVisible()
+
+        # Guardar tamaño previo antes de colapsar
+        if not visible and self.right_container.isVisible() and hasattr(self, 'main_splitter'):
+            sizes = self.main_splitter.sizes()
+            if len(sizes) == 3 and sizes[2] > 50:
+                self._last_right_panel_width = sizes[2]
+
+        self.right_container.setVisible(visible)
+        if hasattr(self, 'btn_toggle_right_panel'):
+            self.btn_toggle_right_panel.blockSignals(True)
+            self.btn_toggle_right_panel.setChecked(visible)
+            self.btn_toggle_right_panel.blockSignals(False)
+
+        # Restaurar tamaño previo al desplegar
+        if visible and hasattr(self, 'main_splitter'):
+            sizes = self.main_splitter.sizes()
+            if len(sizes) == 3 and sizes[2] < 50:
+                sizes[2] = getattr(self, '_last_right_panel_width', 360)
+                self.main_splitter.setSizes(sizes)
+
+    def toggle_both_panels(self) -> None:
+        """Alterna simultáneamente ambos paneles laterales (Modo Inmersivo / Cine Lightroom)."""
+        left_vis = self.left_container.isVisible() if hasattr(self, 'left_container') else False
+        right_vis = self.right_container.isVisible() if hasattr(self, 'right_container') else False
+        target_vis = not (left_vis or right_vis)
+        self.toggle_left_panel(target_vis)
+        self.toggle_right_panel(target_vis)
 
     def on_split_view_toggled(self, checked: bool) -> None:
         """Manejador al conmutar el modo comparador Antes / Después."""
@@ -3778,6 +3968,18 @@ class DeveloperTab(QWidget):
                 self._on_toggle_split_orientation_shortcut()
             else:
                 self._on_toggle_split_shortcut()
+            event.accept()
+            return
+        elif event.key() == Qt.Key_Tab:
+            self.toggle_both_panels()
+            event.accept()
+            return
+        elif event.key() in (Qt.Key_F7, Qt.Key_BracketLeft):
+            self.toggle_left_panel()
+            event.accept()
+            return
+        elif event.key() in (Qt.Key_F8, Qt.Key_BracketRight):
+            self.toggle_right_panel()
             event.accept()
             return
         super().keyPressEvent(event)
@@ -4484,6 +4686,8 @@ class DeveloperTab(QWidget):
             # Solo actualizar histograma en vista general para no alterar la escala al hacer zoom 1:1
             if not self.is_zoomed_100:
                 self.curve_widget.set_histogram_from_image(stretched)
+                if hasattr(self, 'live_histogram'):
+                    self.live_histogram.update_from_image(stretched)
             self._update_canvas_info_label()
 
             # Reiniciar temporizador de consolidación de historial (captura scroll de ratón y flechas)

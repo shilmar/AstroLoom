@@ -60,6 +60,7 @@ class CollapsibleSection(QWidget):
     Permite expandir y contraer su contenido al hacer clic en la cabecera.
     """
     toggled = Signal(bool)  # Emite True si se expande, False si se contrae
+    switchToggled = Signal(bool)  # Emite el estado On/Off del switch de cabecera
 
     def __init__(
         self,
@@ -179,6 +180,39 @@ class CollapsibleSection(QWidget):
         if not self._on_reset_callback:
             self.btn_reset.setVisible(False)
         header_layout.addWidget(self.btn_reset)
+
+        # Switch deslizante On/Off en cabecera
+        self.btn_switch = QPushButton()
+        self.btn_switch.setObjectName("SectionSwitch")
+        self.btn_switch.setCheckable(True)
+        self.btn_switch.setChecked(True)
+        self.btn_switch.setFixedSize(30, 16)
+        self.btn_switch.setCursor(Qt.PointingHandCursor)
+        self.btn_switch.setText("●")
+        self.btn_switch.setStyleSheet("""
+            QPushButton#SectionSwitch {
+                background-color: #0284c7;
+                border: 1px solid #38bdf8;
+                border-radius: 8px;
+                color: #ffffff;
+                font-size: 10px;
+                text-align: right;
+                padding-right: 3px;
+                padding-bottom: 1px;
+            }
+            QPushButton#SectionSwitch:!checked {
+                background-color: #1a1e2c;
+                border: 1px solid #2e354a;
+                border-radius: 8px;
+                color: #64748b;
+                text-align: left;
+                padding-left: 3px;
+                padding-bottom: 1px;
+            }
+        """)
+        self.btn_switch.toggled.connect(self._on_switch_toggled)
+        self.btn_switch.setVisible(False)
+        header_layout.addWidget(self.btn_switch)
 
         main_layout.addWidget(self.header)
 
@@ -331,3 +365,28 @@ class CollapsibleSection(QWidget):
 
     def addLayout(self, layout) -> None:
         self.content_layout.addLayout(layout)
+
+    def enable_switch(self, checked: bool = True, on_toggled: Optional[Callable[[bool], None]] = None) -> QPushButton:
+        """Habilita y muestra el switch On/Off en la cabecera del acordeón."""
+        self._switch_enabled = True
+        self.btn_switch.blockSignals(True)
+        self.btn_switch.setChecked(checked)
+        self.btn_switch.blockSignals(False)
+        self.btn_switch.setVisible(True)
+        if on_toggled:
+            self.switchToggled.connect(on_toggled)
+        return self.btn_switch
+
+    def is_switch_checked(self) -> bool:
+        """Retorna True si el switch de la cabecera está activo o si no existe."""
+        if getattr(self, "_switch_enabled", False):
+            return self.btn_switch.isChecked()
+        return True
+
+    def set_switch_checked(self, checked: bool) -> None:
+        """Actualiza el estado del switch de la cabecera."""
+        self.btn_switch.setChecked(checked)
+
+    def _on_switch_toggled(self, checked: bool) -> None:
+        """Emite la señal al alternar el switch."""
+        self.switchToggled.emit(checked)
