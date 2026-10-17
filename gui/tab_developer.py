@@ -3481,11 +3481,31 @@ class DeveloperTab(QWidget):
 
         # 4. Capa de Fondo Base
         if m_type == MASK_TYPE_IMAGE_BASE:
-            img = getattr(self, '_cached_base_stretched', None) or getattr(self, '_cached_rendered_image', None)
+            img = getattr(self, '_cached_base_stretched', None)
+            if img is None:
+                img = getattr(self, '_cached_rendered_image', None)
+            if img is None:
+                b_src = self.preview_proxy if self.preview_proxy is not None else self.image_32bit
+                if b_src is not None:
+                    if getattr(self, "stretch_mode", "mtf") == "ghs":
+                        img = apply_ghs_stretch(
+                            b_src,
+                            sp=self.spin_ghs_sp.value(),
+                            d=self.spin_ghs_d.value(),
+                            b=self.spin_ghs_b.value(),
+                            hp=self.spin_ghs_hp.value(),
+                            lp=self.spin_ghs_lp.value(),
+                            bp=self.spin_ghs_bp.value(),
+                            color_mode=getattr(self, "ghs_color_mode", "luma")
+                        )
+                    else:
+                        img = manual_stretch(b_src, black_point=self.spin_bp.value(), midtone=self.spin_mtf.value())
             return img, None, False
 
         # 5. Capas de ajuste local estándar (Pincel, Gradiente, Luminancia, Color)
         img = getattr(self, '_cached_rendered_image', None)
+        if img is None:
+            img = getattr(self, '_cached_base_stretched', None)
         mask = getattr(layer, 'brush_mask', None) if m_type == MASK_TYPE_BRUSH else None
         return img, mask, False
 
