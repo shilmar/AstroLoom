@@ -29,6 +29,8 @@ from gui.theme import (
 )
 from gui.icons import get_icon, get_svg_pixmap
 from gui.widgets.precision_slider import PrecisionSliderRow, PrecisionSpinBox
+from gui.widgets.curve_widget import CurveWidget
+from gui.widgets.collapsible_section import CollapsibleSection
 
 
 class MaskLayersWidget(QWidget):
@@ -616,6 +618,28 @@ class MaskLayersWidget(QWidget):
         self.lbl_adj_tint = self.row_adj_tint.lbl_value
         self.slider_adj_tint.valueChanged.connect(self._on_slider_adj_tint_changed)
         adj_layout.addWidget(self.row_adj_tint)
+
+        # Curva Tonal de Capa Interactiva
+        self.sec_layer_curve = CollapsibleSection(
+            "Curva Tonal de Capa",
+            is_expanded=False,
+            icon_name="activity",
+            on_reset=self._reset_layer_curve
+        )
+        w_curve = QWidget()
+        curve_layout = QVBoxLayout(w_curve)
+        curve_layout.setContentsMargins(2, 4, 2, 4)
+        curve_layout.setSpacing(4)
+
+        self.layer_curve_widget = CurveWidget()
+        self.layer_curve_widget.setFixedHeight(160)
+        self.layer_curve_widget.curveChanged.connect(self._on_layer_curve_changed)
+        self.layer_curve_widget.curveCommitted.connect(self.ground_slider_released.emit)
+        curve_layout.addWidget(self.layer_curve_widget)
+
+        self.sec_layer_curve.set_content_widget(w_curve)
+        self.sec_layer_curve.toggled.connect(lambda exp: self.update_active_layer_histogram() if exp else None)
+        adj_layout.addWidget(self.sec_layer_curve)
 
         # Botón restablecer ajustes de la capa
         btn_reset_local = QPushButton("Restablecer Ajustes Locales")
@@ -1403,6 +1427,15 @@ class MaskLayersWidget(QWidget):
         self.spin_adj_tint.setValue(layer.tint)
         self.slider_adj_tint.setValue(int(round(layer.tint * 10000.0)))
 
+        # Curva tonal interactiva de capa
+        if hasattr(self, 'layer_curve_widget'):
+            pts = getattr(layer, 'curve_points', None)
+            if pts:
+                self.layer_curve_widget.set_state({"rgb": pts})
+            else:
+                self.layer_curve_widget.reset_curve("rgb")
+            self.update_active_layer_histogram()
+
         self._updating_ui = False
 
         if not layer.enabled or is_sys:
@@ -1599,6 +1632,8 @@ class MaskLayersWidget(QWidget):
             layer.opacity = val / 100.0
             if layer.mask_type == MASK_TYPE_BRUSH:
                 self._last_brush_opacity = layer.opacity
+            elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
+                self.starnet_opacity_changed.emit(layer.opacity)
             self.lbl_opacity.setText(f"{val}%")
             self.layers_changed.emit()
 
@@ -1830,8 +1865,56 @@ class MaskLayersWidget(QWidget):
         layer.saturation = 1.0
         layer.temp = 0.0
         layer.tint = 0.0
+        layer.curve_points = [(0.0, 0.0), (1.0, 1.0)]
+        layer.curve_lut = np.linspace(0.0, 1.0, 256, dtype=np.float32)
+        if hasattr(self, 'layer_curve_widget'):
+            self._updating_ui = True
+            self.layer_curve_widget.reset_curve("rgb")
+            self._updating_ui = False
         self._update_list_and_props_state()
         self.layers_changed.emit()
+
+    def update_active_layer_histogram(self) -> None:
+        """Actualiza el histograma de fondo de la curva según la capa activa."""
+        if not hasattr(self, 'layer_curve_widget') or not hasattr(self, 'sec_layer_curve') or not self.sec_layer_curve.is_expanded:
+            return
+        layer = self.get_selected_layer()
+        if not layer:
+            self.layer_curve_widget.set_histogram_from_image(None)
+            return
+
+        img = None
+        if layer.mask_type == MASK_TYPE_IMAGE_STARS and self._stars_getter:
+            img = self._stars_getter()
+        elif layer.mask_type == MASK_TYPE_IMAGE_STARLESS and self._starless_getter:
+            img = self._starless_getter()
+        elif self._image_reference_getter:
+            img = self._image_reference_getter()
+
+        self.layer_curve_widget.set_histogram_from_image(img)
+
+    def _on_layer_curve_changed(self) -> None:
+        """Actualiza los puntos y LUT de la curva de la capa seleccionada."""
+        if self._updating_ui:
+            return
+        layer = self.get_selected_layer()
+        if layer and hasattr(self, 'layer_curve_widget'):
+            layer.curve_points = [tuple(p) for p in self.layer_curve_widget.points]
+            layer.curve_lut = self.layer_curve_widget.lut.copy()
+            self.layers_changed.emit()
+
+    def _reset_layer_curve(self) -> None:
+        """Restablece la curva tonal de la capa activa a su estado lineal neutro."""
+        layer = self.get_selected_layer()
+        if layer:
+            layer.curve_points = [(0.0, 0.0), (1.0, 1.0)]
+            layer.curve_lut = np.linspace(0.0, 1.0, 256, dtype=np.float32)
+            if hasattr(self, 'layer_curve_widget'):
+                self._updating_ui = True
+                self.layer_curve_widget.reset_curve("rgb")
+                self._updating_ui = False
+            self.layers_changed.emit()
+            self.ground_slider_released.emit()
 
     # Controles Especiales de Tono de Suelo
     def _on_gnd_special_ev_changed(self, val: int) -> None:

@@ -78,14 +78,34 @@ class MaskLayer:
     temp: float = 0.0               # -1.0000 a +1.0000 (factor de balance cálido/frío)
     tint: float = 0.0               # -1.0000 a +1.0000 (factor de balance verde/magenta)
 
+    # Curva tonal interactiva de capa
+    curve_points: List[Tuple[float, float]] = field(default_factory=lambda: [(0.0, 0.0), (1.0, 1.0)])
+    curve_lut: Optional[np.ndarray] = None
+
+    def is_curve_identity(self) -> bool:
+        """Determina si la curva es la diagonal neutra identidad [(0,0), (1,1)]."""
+        if self.curve_points and len(self.curve_points) == 2:
+            p0, p1 = self.curve_points[0], self.curve_points[1]
+            if (abs(p0[0] - 0.0) < 1e-3 and abs(p0[1] - 0.0) < 1e-3 and
+                abs(p1[0] - 1.0) < 1e-3 and abs(p1[1] - 1.0) < 1e-3):
+                return True
+        elif not self.curve_points:
+            return True
+        return False
+
+    def has_curve(self) -> bool:
+        """Indica si la capa tiene aplicada una curva no lineal efectiva."""
+        return not self.is_curve_identity()
+
     # Máscara rasterizada en memoria float32 [0.0, 1.0] (no serializable a JSON)
     custom_mask: Optional[np.ndarray] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serializa la capa a un diccionario JSON preservando la máscara de pincel."""
+        """Serializa la capa a un diccionario JSON preservando la máscara de pincel y curva."""
         d = asdict(self)
         d.pop("custom_mask", None)
         d.pop("brush_mask", None)
+        d.pop("curve_lut", None)
         if self.brush_mask is not None:
             try:
                 u8 = (np.clip(self.brush_mask, 0.0, 1.0) * 255.0).astype(np.uint8)
@@ -100,6 +120,8 @@ class MaskLayer:
     def from_dict(cls, data: Dict[str, Any]) -> "MaskLayer":
         """Instancia una capa a partir de un diccionario JSON."""
         data_clean = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        if "curve_points" in data_clean and data_clean["curve_points"]:
+            data_clean["curve_points"] = [tuple(p) for p in data_clean["curve_points"]]
         inst = cls(**data_clean)
         b64_str = data.get("brush_mask_b64")
         if b64_str:
@@ -110,6 +132,8 @@ class MaskLayer:
                     inst.brush_mask = dec.astype(np.float32) / 255.0
             except Exception:
                 pass
+        if not inst.is_curve_identity() and inst.curve_lut is None:
+            inst.curve_lut = compute_curve_lut_from_points(inst.curve_points)
         return inst
 
 
@@ -204,6 +228,37 @@ def compute_layer_mask(
     return np.clip(m, 0.0, 1.0).astype(np.float32)
 
 
+def compute_curve_lut_from_points(points: Optional[List[Tuple[float, float]]], resolution: int = 256) -> np.ndarray:
+    """Calcula una tabla LUT interpolada monótona PCHIP de 256 niveles a partir de puntos de control."""
+    if not points:
+        return np.linspace(0.0, 1.0, resolution, dtype=np.float32)
+    pts = sorted(points, key=lambda p: p[0])
+    clean_pts = []
+    for p in pts:
+        if not clean_pts or abs(p[0] - clean_pts[-1][0]) > 1e-4:
+            clean_pts.append(p)
+    xs = [float(p[0]) for p in clean_pts]
+    ys = [float(p[1]) for p in clean_pts]
+    if xs[0] > 0.001:
+        xs.insert(0, 0.0)
+        ys.insert(0, ys[0])
+    else:
+        xs[0] = 0.0
+    if xs[-1] < 0.999:
+        xs.append(1.0)
+        ys.append(ys[-1])
+    else:
+        xs[-1] = 1.0
+    grid_x = np.linspace(0.0, 1.0, resolution, dtype=np.float32)
+    try:
+        from scipy.interpolate import PchipInterpolator
+        pchip = PchipInterpolator(xs, ys)
+        lut_arr = np.clip(pchip(grid_x), 0.0, 1.0).astype(np.float32)
+    except Exception:
+        lut_arr = np.clip(np.interp(grid_x, xs, ys), 0.0, 1.0).astype(np.float32)
+    return lut_arr
+
+
 def apply_local_adjustments_to_image(
     image_rgb: np.ndarray,
     effective_mask: np.ndarray,
@@ -249,6 +304,14 @@ def apply_local_adjustments_to_image(
         hsv = cv2.cvtColor(np.clip(adj, 0.0, 1.0), cv2.COLOR_RGB2HSV)
         hsv[..., 1] = np.clip(hsv[..., 1] * layer.saturation, 0.0, 1.0)
         adj = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+
+    # 7. Curva tonal interactiva propia de la capa (LUT de 256 niveles acelerada por hardware)
+    if not layer.is_curve_identity():
+        if layer.curve_lut is None:
+            layer.curve_lut = compute_curve_lut_from_points(layer.curve_points)
+        u8 = (np.clip(adj, 0.0, 1.0) * 255.0).astype(np.uint8)
+        lut_u8 = (np.clip(layer.curve_lut, 0.0, 1.0) * 255.0).astype(np.uint8)
+        adj = (cv2.LUT(u8, lut_u8).astype(np.float32) / 255.0)
 
     adj = np.clip(adj, 0.0, 1.0)
 
@@ -369,7 +432,7 @@ def apply_all_mask_layers(
             has_adj = (abs(layer.temp) > 1e-4 or abs(layer.tint) > 1e-4 or 
                        abs(layer.exposure) > 1e-3 or abs(layer.contrast) > 1e-3 or 
                        abs(layer.saturation - 1.0) > 1e-3 or abs(layer.shadows) > 1e-3 or 
-                       abs(layer.highlights) > 1e-3)
+                       abs(layer.highlights) > 1e-3 or layer.has_curve())
             if has_adj:
                 canvas = apply_local_adjustments_to_image(canvas, np.ones((img_h, img_w), dtype=np.float32), layer)
             if layer.opacity < 0.999:
@@ -410,7 +473,7 @@ def apply_all_mask_layers(
                 # Ajustes cromáticos propios de la capa de estrellas
                 has_adj = (abs(layer.temp) > 1e-4 or abs(layer.tint) > 1e-4 or 
                            abs(layer.exposure) > 1e-3 or abs(layer.contrast) > 1e-3 or 
-                           abs(layer.saturation - 1.0) > 1e-3)
+                           abs(layer.saturation - 1.0) > 1e-3 or layer.has_curve())
                 if has_adj:
                     st = apply_local_adjustments_to_image(st, np.ones((img_h, img_w), dtype=np.float32), layer)
 

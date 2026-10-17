@@ -825,7 +825,8 @@ class DeveloperTab(QWidget):
         curves_layout.addLayout(row_crv_btn)
 
         self.sec_curves.set_content_widget(w_curves)
-        left_layout.addWidget(self.sec_curves)
+        # Curva Tonal migrada directamente al Gestor de Capas (Columna 3) para Estrellas, Starless, Suelo y Base
+        self.sec_curves.setVisible(False)
 
         # --- SECCIÓN 5: StarNet++ AI — Desacoplo y Procesado de Capas ---
         self.sec_starnet = CollapsibleSection("StarNet++ AI — Desacoplo de Estrellas", is_expanded=False, icon_name="star")
@@ -4688,6 +4689,8 @@ class DeveloperTab(QWidget):
                 self.curve_widget.set_histogram_from_image(stretched)
                 if hasattr(self, 'live_histogram'):
                     self.live_histogram.update_from_image(stretched)
+                if hasattr(self, 'mask_layers_widget'):
+                    self.mask_layers_widget.update_active_layer_histogram()
             self._update_canvas_info_label()
 
             # Reiniciar temporizador de consolidación de historial (captura scroll de ratón y flechas)
