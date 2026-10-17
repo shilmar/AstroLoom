@@ -8,12 +8,12 @@ from typing import Optional, List, Dict, Any, Callable, Tuple
 import cv2
 import numpy as np
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QColor, QFont, QCursor
+from PySide6.QtGui import QColor, QFont, QCursor, QImage, QPixmap, QPainter
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QSlider, QDoubleSpinBox,
     QSpinBox, QCheckBox, QComboBox, QLineEdit, QGroupBox,
-    QFrame, QSizePolicy, QMessageBox
+    QFrame, QSizePolicy, QMessageBox, QSplitter, QButtonGroup
 )
 
 from core.mask_layers import (
@@ -23,6 +23,13 @@ from core.mask_layers import (
     MASK_TYPE_IMAGE_BASE, MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_STARS, MASK_TYPE_IMAGE_GROUND,
     SCOPE_TARGET_ALL, SCOPE_TARGET_GROUND, SCOPE_TARGET_STARLESS, SCOPE_TARGET_STARS
 )
+
+# Calibración de dimensiones para los 3 modos de miniaturas de capa
+THUMB_SPECS = {
+    "S": {"width": 30, "height": 20, "row_height": 32, "icon_size": 11, "title_pt": 9},
+    "M": {"width": 42, "height": 28, "row_height": 42, "icon_size": 13, "title_pt": 10},
+    "L": {"width": 60, "height": 40, "row_height": 56, "icon_size": 14, "title_pt": 10},
+}
 from gui.theme import (
     BG_PANEL, BORDER_BASE, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
     TEXT_CYAN, ACCENT_CYAN
@@ -84,6 +91,7 @@ class MaskLayersWidget(QWidget):
         self._master_mask_getter: Optional[Callable[[], Optional[np.ndarray]]] = None
         self._stars_getter: Optional[Callable[[], Optional[np.ndarray]]] = None
         self._starless_getter: Optional[Callable[[], Optional[np.ndarray]]] = None
+        self._layer_image_provider: Optional[Callable[[Any], Tuple[Optional[np.ndarray], Optional[np.ndarray], bool]]] = None
 
         # Memoria de herramienta para Pincel y Máscaras
         self._last_brush_radius: int = 35
@@ -91,6 +99,11 @@ class MaskLayersWidget(QWidget):
         self._last_brush_flow: float = 0.80
         self._last_brush_mode: str = "paint"
         self._last_brush_opacity: float = 1.00
+
+        # Modo de tamaño de miniaturas: "S" (Compacto), "M" (Estándar), "L" (Grande)
+        self._thumb_size_mode: str = "M"
+        self._user_splitter_height: Optional[int] = None
+        self._initial_splitter_set: bool = False
 
         self._setup_ui()
 
@@ -162,35 +175,110 @@ class MaskLayersWidget(QWidget):
 
         main_layout.addLayout(row_create)
 
+        # Splitter vertical interactivo para redimensionar la lista de capas vs panel de ajustes
+        self.splitter_layers = QSplitter(Qt.Vertical)
+        self.splitter_layers.setChildrenCollapsible(False)
+        self.splitter_layers.setStyleSheet("""
+            QSplitter::handle:vertical {
+                height: 6px;
+                background-color: #141722;
+                border-top: 1px solid #1e2538;
+                border-bottom: 1px solid #1e2538;
+                margin: 2px 0px;
+            }
+            QSplitter::handle:vertical:hover {
+                background-color: #0284c7;
+                border-color: #38bdf8;
+            }
+        """)
+
+        # Panel superior: Cabecera con selector S/M/L + Lista de capas + Acciones
+        top_container = QWidget()
+        top_layout = QVBoxLayout(top_container)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(4)
+
+        # Fila de cabecera: Título de la pila + Micro-conmutador de miniaturas [ S | M | L ]
+        row_header = QHBoxLayout()
+        row_header.setContentsMargins(0, 2, 0, 2)
+        row_header.setSpacing(4)
+        
+        lbl_pila = QLabel("Pila de Capas")
+        lbl_pila.setStyleSheet("font-size: 11px; font-weight: bold; color: #cbd5e1;")
+        row_header.addWidget(lbl_pila)
+        row_header.addStretch(1)
+
+        lbl_vista = QLabel("Miniaturas:")
+        lbl_vista.setStyleSheet("font-size: 10px; color: #64748b;")
+        row_header.addWidget(lbl_vista)
+
+        self.btn_group_size = QButtonGroup(self)
+        self.btn_size_s = QPushButton("S")
+        self.btn_size_m = QPushButton("M")
+        self.btn_size_l = QPushButton("L")
+        for btn in (self.btn_size_s, self.btn_size_m, self.btn_size_l):
+            btn.setCheckable(True)
+            btn.setFixedSize(22, 20)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #12151e;
+                    color: #94a3b8;
+                    border: 1px solid #202638;
+                    border-radius: 3px;
+                    font-size: 10px;
+                    font-weight: 600;
+                    padding: 0px;
+                }
+                QPushButton:hover {
+                    background-color: #1a2234;
+                    color: #f1f5f9;
+                }
+                QPushButton:checked {
+                    background-color: #0284c7;
+                    color: #ffffff;
+                    border-color: #38bdf8;
+                    font-weight: bold;
+                }
+            """)
+            self.btn_group_size.addButton(btn)
+            row_header.addWidget(btn)
+
+        self.btn_size_m.setChecked(True)
+        self.btn_size_s.clicked.connect(lambda: self.set_thumbnail_size_mode("S"))
+        self.btn_size_m.clicked.connect(lambda: self.set_thumbnail_size_mode("M"))
+        self.btn_size_l.clicked.connect(lambda: self.set_thumbnail_size_mode("L"))
+        top_layout.addLayout(row_header)
+
         # 2. Lista de capas de máscaras
         self.list_layers = QListWidget()
-        self.list_layers.setFixedHeight(120)
+        self.list_layers.setMinimumHeight(70)
+        self.list_layers.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.list_layers.setStyleSheet("""
             QListWidget {
-                background-color: #12151e;
-                border: 1px solid #282e42;
+                background-color: #0f121a;
+                border: 1px solid #1e2538;
                 border-radius: 5px;
                 padding: 2px;
             }
             QListWidget::item {
-                background-color: #1a1e2b;
-                border: 1px solid #2a3147;
+                background-color: #131722;
+                border: 1px solid #1c2333;
                 border-radius: 4px;
-                padding: 4px 6px;
                 margin-bottom: 2px;
-                color: #e0e6f0;
+                padding: 0px;
             }
             QListWidget::item:selected {
-                background-color: #1a3a5a;
-                border-color: #00acc1;
-                color: #ffffff;
+                background-color: #162033;
+                border: 1px solid #0284c7;
             }
-            QListWidget::item:hover {
-                border-color: #4fc3f7;
+            QListWidget::item:hover:!selected {
+                background-color: #161a26;
+                border-color: #28324a;
             }
         """)
         self.list_layers.currentRowChanged.connect(self._on_layer_selection_changed)
-        main_layout.addWidget(self.list_layers)
+        top_layout.addWidget(self.list_layers, stretch=1)
 
         # 3. Acciones sobre la capa seleccionada (Subir, Bajar, Duplicar, Eliminar)
         row_actions = QHBoxLayout()
@@ -221,7 +309,8 @@ class MaskLayersWidget(QWidget):
         self.btn_delete.clicked.connect(self._delete_selected)
         row_actions.addWidget(self.btn_delete)
 
-        main_layout.addLayout(row_actions)
+        top_layout.addLayout(row_actions)
+        self.splitter_layers.addWidget(top_container)
 
         # 4. Contenedor de edición de la capa seleccionada
         self.container_layer_props = QWidget()
@@ -925,10 +1014,27 @@ class MaskLayersWidget(QWidget):
 
         props_layout.addWidget(self.grp_starless_special)
 
-        main_layout.addWidget(self.container_layer_props)
+        self.splitter_layers.addWidget(self.container_layer_props)
+        self.splitter_layers.splitterMoved.connect(self._on_splitter_moved)
+        self.splitter_layers.setSizes([220, 600])
+        main_layout.addWidget(self.splitter_layers, 1)
 
         # Estado inicial vacío
         self._update_list_and_props_state()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._initial_splitter_set and hasattr(self, 'splitter_layers'):
+            self._initial_splitter_set = True
+            target_top = self._user_splitter_height
+            if target_top is None:
+                target_top = 260 if self._thumb_size_mode == "L" else (170 if self._thumb_size_mode == "S" else 220)
+            self.splitter_layers.setSizes([target_top, 600])
+
+    def _on_splitter_moved(self, pos: int, index: int) -> None:
+        sizes = self.splitter_layers.sizes()
+        if sizes and sizes[0] > 0:
+            self._user_splitter_height = sizes[0]
 
     # =========================================================================
     # GESTIÓN DE CAPAS (AÑADIR, DUPLICAR, ELIMINAR, REORDENAR)
@@ -1175,10 +1281,165 @@ class MaskLayersWidget(QWidget):
                 return l
         return None
 
+    def set_thumbnail_size_mode(self, mode: str) -> None:
+        """Cambia el tamaño de las miniaturas de capa ('S', 'M', 'L')."""
+        if mode not in THUMB_SPECS:
+            return
+        if self._thumb_size_mode == mode:
+            return
+        self._thumb_size_mode = mode
+        if hasattr(self, 'btn_size_s'):
+            self.btn_size_s.setChecked(mode == "S")
+            self.btn_size_m.setChecked(mode == "M")
+            self.btn_size_l.setChecked(mode == "L")
+        
+        # Ajustar altura sugerida del splitter según el modo
+        if hasattr(self, 'splitter_layers'):
+            target_top = 270 if mode == "L" else (170 if mode == "S" else 225)
+            cur_sizes = self.splitter_layers.sizes()
+            bottom_h = cur_sizes[1] if len(cur_sizes) > 1 and cur_sizes[1] > 0 else 600
+            self.splitter_layers.setSizes([target_top, bottom_h])
+            self._user_splitter_height = target_top
+
+        self._rebuild_list_items(select_layer_id=self._selected_layer_id)
+
+    def invalidate_layer_thumbnail(self, layer_id: Optional[str] = None) -> None:
+        """Invalida la caché de miniaturas de una capa específica o de todas las capas."""
+        for layer in self.layers:
+            if layer_id is None or layer.id == layer_id:
+                if hasattr(layer, "_thumb_pixmap_cache"):
+                    layer._thumb_pixmap_cache.clear()
+        if not self._updating_ui:
+            self._rebuild_list_items(select_layer_id=self._selected_layer_id)
+
+    def _on_thumb_double_clicked(self, layer: MaskLayer) -> None:
+        """Al hacer doble clic en la miniatura, conmuta la previsualización de su máscara en el lienzo."""
+        if hasattr(self, 'btn_preview_mask'):
+            self.btn_preview_mask.toggle()
+
+    def _get_layer_thumbnail_pixmap(self, layer: MaskLayer) -> QPixmap:
+        """
+        Genera o recupera de la caché perezosa la miniatura de la capa según el modo actual (S/M/L).
+        Capas de imagen: RGB real a escala.
+        Capas de ajuste/máscaras: Máscara en escala de grises [0..255] (B/N).
+        """
+        mode = self._thumb_size_mode
+        spec = THUMB_SPECS.get(mode, THUMB_SPECS["M"])
+        tw, th = spec["width"], spec["height"]
+
+        cache = getattr(layer, "_thumb_pixmap_cache", None)
+        if cache is None:
+            layer._thumb_pixmap_cache = cache = {}
+
+        cache_key = (mode, layer.enabled, layer.inverted)
+        if cache_key in cache:
+            return cache[cache_key]
+
+        pix = None
+        # --- CASO 1: CAPAS DE IMAGEN (RGB) ---
+        if layer.layer_kind == LAYER_KIND_IMAGE:
+            raw_img = None
+            if self._layer_image_provider is not None:
+                try:
+                    img_prov, _, _ = self._layer_image_provider(layer)
+                    if img_prov is not None:
+                        raw_img = img_prov
+                except Exception:
+                    raw_img = None
+
+            if raw_img is None:
+                if layer.mask_type == MASK_TYPE_IMAGE_STARS:
+                    raw_img = self._stars_getter() if self._stars_getter else None
+                elif layer.mask_type == MASK_TYPE_IMAGE_STARLESS:
+                    raw_img = self._starless_getter() if self._starless_getter else None
+                    if raw_img is None and self._image_reference_getter:
+                        raw_img = self._image_reference_getter()
+                else:
+                    raw_img = self._image_reference_getter() if self._image_reference_getter else None
+
+            if raw_img is not None:
+                try:
+                    small = cv2.resize(raw_img, (tw, th), interpolation=cv2.INTER_AREA)
+                    u8 = (np.clip(small, 0.0, 1.0) * 255.0).astype(np.uint8)
+                    u8_contig = np.ascontiguousarray(u8)
+                    qimg = QImage(u8_contig.data, tw, th, tw * 3, QImage.Format_RGB888)
+                    pix = QPixmap.fromImage(qimg)
+                except Exception:
+                    pix = None
+
+        # --- CASO 2: CAPAS DE AJUSTE / MÁSCARAS (B/N) ---
+        else:
+            m = None
+            if layer.mask_type == MASK_TYPE_BRUSH:
+                m = layer.brush_mask
+            else:
+                base_img = self._image_reference_getter() if self._image_reference_getter else None
+                if base_img is not None:
+                    try:
+                        m = compute_effective_layer_mask(
+                            layer,
+                            base_img,
+                            master_sky_mask=self._master_mask_getter() if self._master_mask_getter else None,
+                            starless_image=self._starless_getter() if self._starless_getter else None,
+                            stars_image=self._stars_getter() if self._stars_getter else None
+                        )
+                    except Exception:
+                        m = None
+
+            if m is not None:
+                try:
+                    if layer.mask_type == MASK_TYPE_BRUSH and layer.inverted:
+                        m_eval = 1.0 - m
+                    else:
+                        m_eval = m
+
+                    small = cv2.resize(m_eval, (tw, th), interpolation=cv2.INTER_AREA)
+                    u8 = (np.clip(small, 0.0, 1.0) * 255.0).astype(np.uint8)
+                    u8_contig = np.ascontiguousarray(u8)
+                    qimg = QImage(u8_contig.data, tw, th, tw, QImage.Format_Grayscale8)
+                    pix = QPixmap.fromImage(qimg)
+                except Exception:
+                    pix = None
+            else:
+                # Placeholder para máscara de pincel vacía
+                pix = QPixmap(tw, th)
+                pix.fill(QColor("#0d1017"))
+                painter = QPainter(pix)
+                painter.setPen(QColor("#222a3d"))
+                painter.drawRect(0, 0, tw - 1, th - 1)
+                b_ico = get_svg_pixmap("brush", color="#3b4866", size=max(10, min(tw, th) - 8))
+                if not b_ico.isNull():
+                    painter.drawPixmap((tw - b_ico.width()) // 2, (th - b_ico.height()) // 2, b_ico)
+                painter.end()
+
+        # Fallback genérico si pix sigue siendo None
+        if pix is None or pix.isNull():
+            pix = QPixmap(tw, th)
+            pix.fill(QColor("#0a0c10"))
+
+        # Si la capa está deshabilitada (ojo apagado), atenuar con opacidad reducida
+        if not layer.enabled:
+            dimmed = QPixmap(pix.size())
+            dimmed.fill(Qt.transparent)
+            p = QPainter(dimmed)
+            p.setOpacity(0.35)
+            p.drawPixmap(0, 0, pix)
+            p.end()
+            pix = dimmed
+
+        cache[cache_key] = pix
+        return pix
+
     def _rebuild_list_items(self, select_layer_id: Optional[str] = None) -> None:
-        """Regenera los elementos de la lista QListWidget con iconos, botón de ojo y estilos acordes a su tipo."""
+        """Regenera los elementos de la lista QListWidget con miniaturas, iconos, botón de ojo y estilos acordes a su tipo."""
         self._updating_ui = True
         self.list_layers.clear()
+
+        spec = THUMB_SPECS.get(self._thumb_size_mode, THUMB_SPECS["M"])
+        tw, th = spec["width"], spec["height"]
+        row_h = spec["row_height"]
+        ico_sz = spec["icon_size"]
+        title_pt = spec["title_pt"]
 
         select_row = -1
         for i, layer in enumerate(self.layers):
@@ -1217,7 +1478,7 @@ class MaskLayersWidget(QWidget):
                 fg_col = "#e0e6f0" if layer.enabled else "#607d8b"
 
             item = QListWidgetItem()
-            item.setSizeHint(QSize(0, 30))
+            item.setSizeHint(QSize(0, row_h))
             self.list_layers.addItem(item)
 
             row_widget = QWidget()
@@ -1226,20 +1487,46 @@ class MaskLayersWidget(QWidget):
             row_layout.setContentsMargins(6, 2, 4, 2)
             row_layout.setSpacing(6)
 
+            # 1. Miniatura visual (RGB para imagen, B/N para máscaras)
+            pix = self._get_layer_thumbnail_pixmap(layer)
+            lbl_thumb = QLabel()
+            lbl_thumb.setFixedSize(tw + 2, th + 2)
+            border_col = "#28324a" if layer.enabled else "#161b26"
+            lbl_thumb.setStyleSheet(f"""
+                QLabel {{
+                    background-color: #07090e;
+                    border: 1px solid {border_col};
+                    border-radius: 3px;
+                }}
+            """)
+            lbl_thumb.setAlignment(Qt.AlignCenter)
+            lbl_thumb.setPixmap(pix)
+            lbl_thumb.setCursor(Qt.PointingHandCursor)
+            lbl_thumb.setToolTip("Miniatura de capa.\nHaz doble clic para previsualizar la máscara en el lienzo.")
+            row_layout.addWidget(lbl_thumb)
+
+            # 2. Micro-icono de tipo
             lbl_icon = QLabel()
             lbl_icon.setStyleSheet("background: transparent;")
-            pix = get_svg_pixmap(icon_name, color=fg_col, size=13)
-            if not pix.isNull():
-                lbl_icon.setPixmap(pix)
-            lbl_icon.setFixedSize(16, 16)
+            pix_ico = get_svg_pixmap(icon_name, color=fg_col, size=ico_sz)
+            if not pix_ico.isNull():
+                lbl_icon.setPixmap(pix_ico)
+            lbl_icon.setFixedSize(ico_sz + 2, ico_sz + 2)
             row_layout.addWidget(lbl_icon)
 
+            # 3. Título de la capa
             bold_css = "font-weight: bold; " if layer.is_system_layer else ""
             lbl_title = QLabel(f"{layer.name}  [{type_tag}]")
+            f = lbl_title.font()
+            f.setPointSize(title_pt)
+            if layer.is_system_layer:
+                f.setBold(True)
+            lbl_title.setFont(f)
             lbl_title.setStyleSheet(f"color: {fg_col}; {bold_css}background: transparent;")
             lbl_title.setCursor(Qt.PointingHandCursor)
             row_layout.addWidget(lbl_title, stretch=1)
 
+            # 4. Botón de visibilidad (Ojo)
             btn_eye = QPushButton()
             eye_color = fg_col if layer.enabled else "#78909c"
             btn_eye.setIcon(get_icon("eye" if layer.enabled else "eye_off", color=eye_color, size=14))
@@ -1264,8 +1551,13 @@ class MaskLayersWidget(QWidget):
             def make_eye_handler(r):
                 return lambda: self._toggle_layer_enabled_at(r)
 
+            def make_thumb_double_click_handler(l):
+                return lambda e: self._on_thumb_double_clicked(l)
+
             row_widget.mousePressEvent = make_click_handler(i)
             lbl_title.mousePressEvent = make_click_handler(i)
+            lbl_thumb.mousePressEvent = make_click_handler(i)
+            lbl_thumb.mouseDoubleClickEvent = make_thumb_double_click_handler(layer)
             btn_eye.clicked.connect(make_eye_handler(i))
 
             row_layout.addWidget(btn_eye)
@@ -1292,6 +1584,7 @@ class MaskLayersWidget(QWidget):
             layer = self.layers[idx]
             new_state = not layer.enabled
             layer.enabled = new_state
+            self.invalidate_layer_thumbnail(layer.id)
 
             if not new_state:
                 if layer.mask_type == MASK_TYPE_BRUSH:
@@ -1330,6 +1623,13 @@ class MaskLayersWidget(QWidget):
         is_starless = (layer is not None and layer.mask_type == MASK_TYPE_IMAGE_STARLESS)
 
         self.container_layer_props.setVisible(has_sel)
+        if has_sel and hasattr(self, 'splitter_layers'):
+            sizes = self.splitter_layers.sizes()
+            if len(sizes) == 2 and sizes[1] <= 1:
+                target_top = self._user_splitter_height
+                if target_top is None:
+                    target_top = 270 if self._thumb_size_mode == "L" else (170 if self._thumb_size_mode == "S" else 225)
+                self.splitter_layers.setSizes([target_top, 600])
         self.btn_move_up.setEnabled(has_sel)
         self.btn_move_down.setEnabled(has_sel)
         self.btn_duplicate.setEnabled(has_sel and not is_sys)
@@ -1602,6 +1902,7 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if layer:
             layer.enabled = checked
+            self.invalidate_layer_thumbnail(layer.id)
             if not checked:
                 # Al desactivar la capa, apagar de inmediato el pincel y limpiar previsualización en lienzo
                 if layer.mask_type == MASK_TYPE_BRUSH:
@@ -1623,6 +1924,8 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if layer:
             layer.inverted = checked
+            self.invalidate_layer_thumbnail(layer.id)
+            self._rebuild_list_items(select_layer_id=layer.id)
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
             self.layers_changed.emit()
@@ -1673,6 +1976,7 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if layer and layer.mask_type == MASK_TYPE_BRUSH:
             layer.brush_mask = None
+            self.invalidate_layer_thumbnail(layer.id)
             self.brush_tool_toggled.emit(True, layer)
             self.set_preview_active(False)
             self.preview_mask_requested.emit(None)
@@ -1697,6 +2001,7 @@ class MaskLayersWidget(QWidget):
             layer.luma_min = self.spin_luma_min.value()
             layer.luma_max = self.spin_luma_max.value()
             layer.feather = self.spin_luma_feather.value()
+            self.invalidate_layer_thumbnail(layer.id)
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
             self.layers_changed.emit()
@@ -1713,6 +2018,7 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if layer and layer.mask_type == MASK_TYPE_COLOR:
             layer.color_hue = float(val)
+            self.invalidate_layer_thumbnail(layer.id)
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
             self.layers_changed.emit()
@@ -1723,6 +2029,7 @@ class MaskLayersWidget(QWidget):
         if layer and layer.mask_type == MASK_TYPE_COLOR:
             layer.color_tolerance = float(self.spin_color_tol.value())
             layer.color_min_sat = float(self.spin_color_sat.value())
+            self.invalidate_layer_thumbnail(layer.id)
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
             self.layers_changed.emit()
@@ -1764,6 +2071,7 @@ class MaskLayersWidget(QWidget):
         if layer and layer.mask_type == MASK_TYPE_COLOR:
             layer.color_hue = float(hue_deg)
             layer.color_min_sat = suggested_sat
+            self.invalidate_layer_thumbnail(layer.id)
             if hasattr(self, 'btn_preview_mask'):
                 if not self.btn_preview_mask.isChecked():
                     self.btn_preview_mask.setChecked(True)

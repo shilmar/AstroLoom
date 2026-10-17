@@ -3416,6 +3416,8 @@ class DeveloperTab(QWidget):
         layer = self.mask_layers_widget.get_selected_layer()
         if layer and layer.mask_type == "brush":
             layer.brush_mask = stroke_mask.copy()
+            if hasattr(self, 'mask_layers_widget'):
+                self.mask_layers_widget.invalidate_layer_thumbnail(layer.id)
             # Si el botón de previsualización NO está activado expresamente, retirar el overlay temporal
             # del trazo para que el usuario pueda apreciar de inmediato los cambios tonales en la imagen
             if hasattr(self, 'mask_layers_widget') and not self.mask_layers_widget.btn_preview_mask.isChecked():
@@ -4302,6 +4304,8 @@ class DeveloperTab(QWidget):
                 self.proxy_mask = np.ascontiguousarray(np.repeat(sm[..., np.newaxis], 3, axis=2), dtype=np.float32)
             else:
                 self.proxy_mask = None
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.invalidate_layer_thumbnail(None)
 
     def load_image_direct(self, filepath: str, mask: np.ndarray = None):
         self.active_filepath = filepath
