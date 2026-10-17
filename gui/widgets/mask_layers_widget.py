@@ -24,11 +24,11 @@ from core.mask_layers import (
     SCOPE_TARGET_ALL, SCOPE_TARGET_GROUND, SCOPE_TARGET_STARLESS, SCOPE_TARGET_STARS
 )
 
-# Calibración de dimensiones para los 3 modos de miniaturas de capa
+# Calibración de dimensiones para los 3 modos de miniaturas de capa (con soporte para horizontal y vertical)
 THUMB_SPECS = {
-    "S": {"width": 30, "height": 20, "row_height": 32, "icon_size": 11, "title_pt": 9},
-    "M": {"width": 42, "height": 28, "row_height": 42, "icon_size": 13, "title_pt": 10},
-    "L": {"width": 60, "height": 40, "row_height": 56, "icon_size": 14, "title_pt": 10},
+    "S": {"width": 30, "height": 20, "max_w": 30, "max_h": 24, "row_height": 32, "icon_size": 11, "title_pt": 9},
+    "M": {"width": 42, "height": 28, "max_w": 42, "max_h": 34, "row_height": 42, "icon_size": 13, "title_pt": 10},
+    "L": {"width": 60, "height": 40, "max_w": 60, "max_h": 46, "row_height": 56, "icon_size": 14, "title_pt": 10},
 }
 from gui.theme import (
     BG_PANEL, BORDER_BASE, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
@@ -1317,21 +1317,75 @@ class MaskLayersWidget(QWidget):
         if hasattr(self, 'btn_preview_mask'):
             self.btn_preview_mask.toggle()
 
+    def _get_image_aspect_ratio(self) -> float:
+        """
+        Determina la relación de aspecto real (ancho / alto) de la imagen de trabajo.
+        Retorna 1.5 (3:2 horizontal) por defecto si aún no hay imagen cargada.
+        """
+        raw = None
+        if self._image_reference_getter:
+            try:
+                raw = self._image_reference_getter()
+            except Exception:
+                raw = None
+        if raw is None and self._starless_getter:
+            try:
+                raw = self._starless_getter()
+            except Exception:
+                raw = None
+        if raw is None and self._stars_getter:
+            try:
+                raw = self._stars_getter()
+            except Exception:
+                raw = None
+        if raw is None and self._master_mask_getter:
+            try:
+                raw = self._master_mask_getter()
+            except Exception:
+                raw = None
+        if raw is not None and hasattr(raw, "shape") and len(raw.shape) >= 2:
+            h, w = raw.shape[:2]
+            if h > 0 and w > 0:
+                return float(w) / float(h)
+        return 1.5
+
+    def _get_thumbnail_dimensions(self) -> Tuple[int, int]:
+        """
+        Calcula las dimensiones (ancho, alto) de la miniatura respetando la orientación
+        y relación de aspecto real de la imagen (horizontal 3:2, vertical 2:3, cuadrada 1:1, etc.).
+        """
+        spec = THUMB_SPECS.get(self._thumb_size_mode, THUMB_SPECS["M"])
+        max_w = spec.get("max_w", spec.get("width", 42))
+        max_h = spec.get("max_h", spec.get("height", 34))
+        ar = self._get_image_aspect_ratio()
+
+        box_ar = max_w / float(max_h)
+        if ar >= box_ar:
+            # Orientación horizontal / panorámica
+            tw = max_w
+            th = max(12, int(round(tw / ar)))
+        else:
+            # Orientación vertical / cuadrada
+            th = max_h
+            tw = max(12, int(round(th * ar)))
+
+        return tw, th
+
     def _get_layer_thumbnail_pixmap(self, layer: MaskLayer) -> QPixmap:
         """
-        Genera o recupera de la caché perezosa la miniatura de la capa según el modo actual (S/M/L).
+        Genera o recupera de la caché perezosa la miniatura de la capa según el modo actual (S/M/L)
+        y la orientación real de la imagen.
         Capas de imagen: RGB real a escala.
         Capas de ajuste/máscaras: Máscara en escala de grises [0..255] (B/N).
         """
         mode = self._thumb_size_mode
-        spec = THUMB_SPECS.get(mode, THUMB_SPECS["M"])
-        tw, th = spec["width"], spec["height"]
+        tw, th = self._get_thumbnail_dimensions()
 
         cache = getattr(layer, "_thumb_pixmap_cache", None)
         if cache is None:
             layer._thumb_pixmap_cache = cache = {}
 
-        cache_key = (mode, layer.enabled, layer.inverted)
+        cache_key = (mode, tw, th, layer.enabled, layer.inverted)
         if cache_key in cache:
             return cache[cache_key]
 
@@ -1436,7 +1490,7 @@ class MaskLayersWidget(QWidget):
         self.list_layers.clear()
 
         spec = THUMB_SPECS.get(self._thumb_size_mode, THUMB_SPECS["M"])
-        tw, th = spec["width"], spec["height"]
+        tw, th = self._get_thumbnail_dimensions()
         row_h = spec["row_height"]
         ico_sz = spec["icon_size"]
         title_pt = spec["title_pt"]
