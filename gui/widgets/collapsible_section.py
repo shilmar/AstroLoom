@@ -143,8 +143,7 @@ class CollapsibleSection(QWidget):
         # Título de la sección
         self.lbl_title = QLabel(self._title_text)
         self.lbl_title.setStyleSheet("font-weight: 600; color: #eceff4; font-size: 12px;")
-        self.lbl_title.setMinimumWidth(0)
-        self.lbl_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.lbl_title.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         header_layout.addWidget(self.lbl_title)
 
         header_layout.addStretch(1)
