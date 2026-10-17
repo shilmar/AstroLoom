@@ -25,10 +25,11 @@ from core.mask_layers import (
 )
 
 # Calibración de dimensiones para los 3 modos de miniaturas de capa (con soporte para horizontal y vertical)
+# Nueva escala generosa: S equivale a la M anterior, M a la L anterior y L es una nueva XL detallada
 THUMB_SPECS = {
-    "S": {"width": 30, "height": 20, "max_w": 30, "max_h": 24, "row_height": 32, "icon_size": 11, "title_pt": 9},
-    "M": {"width": 42, "height": 28, "max_w": 42, "max_h": 34, "row_height": 42, "icon_size": 13, "title_pt": 10},
-    "L": {"width": 60, "height": 40, "max_w": 60, "max_h": 46, "row_height": 56, "icon_size": 14, "title_pt": 10},
+    "S": {"width": 42, "height": 28, "max_w": 42, "max_h": 34, "row_height": 42, "icon_size": 12, "title_pt": 9.5},
+    "M": {"width": 56, "height": 38, "max_w": 56, "max_h": 48, "row_height": 56, "icon_size": 14, "title_pt": 10},
+    "L": {"width": 75, "height": 50, "max_w": 75, "max_h": 66, "row_height": 74, "icon_size": 16, "title_pt": 11},
 }
 from gui.theme import (
     BG_PANEL, BORDER_BASE, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
@@ -38,6 +39,78 @@ from gui.icons import get_icon, get_svg_pixmap
 from gui.widgets.precision_slider import PrecisionSliderRow, PrecisionSpinBox
 from gui.widgets.curve_widget import CurveWidget
 from gui.widgets.collapsible_section import CollapsibleSection
+
+
+class LayerListResizeHandle(QFrame):
+    """
+    Tirador interactivo y elegante para ajustar la altura de la lista de capas.
+    Permite arrastrar hacia arriba/abajo sin restricciones de divisores rígidos,
+    y realizar doble clic para volver al modo auto-ajuste adaptativo.
+    """
+    height_adjusted = Signal(int)
+    reset_auto_fit = Signal()
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setFixedHeight(12)
+        self.setCursor(Qt.SizeVerCursor)
+        self.setToolTip("Arrastra para ajustar la altura de la lista de capas.\nDoble clic para auto-ajustar a todas las capas.")
+        self._dragging = False
+        self._drag_start_y = 0
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        
+        # Línea divisoria tenue
+        painter.setPen(QColor("#1a2030"))
+        painter.drawLine(8, h // 2, w - 8, h // 2)
+
+        # Píldora de agarre central
+        pill_w = 42
+        pill_h = 4
+        pill_x = (w - pill_w) // 2
+        pill_y = (h - pill_h) // 2
+        color = QColor("#38bdf8") if self.underMouse() or self._dragging else QColor("#334155")
+        painter.setBrush(color)
+        painter.setPen(Qt.NoPen)
+        painter.drawRoundedRect(pill_x, pill_y, pill_w, pill_h, 2, 2)
+        painter.end()
+
+    def enterEvent(self, event):
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._dragging = True
+            self._drag_start_y = event.globalPosition().y()
+            self.update()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self._dragging:
+            curr_y = event.globalPosition().y()
+            delta = int(curr_y - self._drag_start_y)
+            self._drag_start_y = curr_y
+            self.height_adjusted.emit(delta)
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._dragging = False
+            self.update()
+            event.accept()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.reset_auto_fit.emit()
+            event.accept()
 
 
 class MaskLayersWidget(QWidget):
@@ -102,8 +175,8 @@ class MaskLayersWidget(QWidget):
 
         # Modo de tamaño de miniaturas: "S" (Compacto), "M" (Estándar), "L" (Grande)
         self._thumb_size_mode: str = "M"
-        self._user_splitter_height: Optional[int] = None
-        self._initial_splitter_set: bool = False
+        self._custom_list_height: bool = False
+        self._user_list_height: Optional[int] = None
 
         self._setup_ui()
 
@@ -174,23 +247,6 @@ class MaskLayersWidget(QWidget):
         row_create.addWidget(self.btn_add_gnd)
 
         main_layout.addLayout(row_create)
-
-        # Splitter vertical interactivo para redimensionar la lista de capas vs panel de ajustes
-        self.splitter_layers = QSplitter(Qt.Vertical)
-        self.splitter_layers.setChildrenCollapsible(False)
-        self.splitter_layers.setStyleSheet("""
-            QSplitter::handle:vertical {
-                height: 6px;
-                background-color: #141722;
-                border-top: 1px solid #1e2538;
-                border-bottom: 1px solid #1e2538;
-                margin: 2px 0px;
-            }
-            QSplitter::handle:vertical:hover {
-                background-color: #0284c7;
-                border-color: #38bdf8;
-            }
-        """)
 
         # Panel superior: Cabecera con selector S/M/L + Lista de capas + Acciones
         top_container = QWidget()
@@ -310,7 +366,13 @@ class MaskLayersWidget(QWidget):
         row_actions.addWidget(self.btn_delete)
 
         top_layout.addLayout(row_actions)
-        self.splitter_layers.addWidget(top_container)
+        main_layout.addWidget(top_container)
+
+        # 3. Tirador interactivo de redimensionado de altura de lista
+        self.resize_handle = LayerListResizeHandle(self)
+        self.resize_handle.height_adjusted.connect(self._on_list_resize_dragged)
+        self.resize_handle.reset_auto_fit.connect(self._on_list_auto_fit_requested)
+        main_layout.addWidget(self.resize_handle)
 
         # 4. Contenedor de edición de la capa seleccionada
         self.container_layer_props = QWidget()
@@ -1013,28 +1075,37 @@ class MaskLayersWidget(QWidget):
         sl_layout.addWidget(self.btn_reset_sl_special)
 
         props_layout.addWidget(self.grp_starless_special)
-
-        self.splitter_layers.addWidget(self.container_layer_props)
-        self.splitter_layers.splitterMoved.connect(self._on_splitter_moved)
-        self.splitter_layers.setSizes([220, 600])
-        main_layout.addWidget(self.splitter_layers, 1)
+        main_layout.addWidget(self.container_layer_props)
 
         # Estado inicial vacío
+        self._update_list_height()
         self._update_list_and_props_state()
 
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        if not self._initial_splitter_set and hasattr(self, 'splitter_layers'):
-            self._initial_splitter_set = True
-            target_top = self._user_splitter_height
-            if target_top is None:
-                target_top = 260 if self._thumb_size_mode == "L" else (170 if self._thumb_size_mode == "S" else 220)
-            self.splitter_layers.setSizes([target_top, 600])
+    def _update_list_height(self) -> None:
+        """Ajusta la altura del list widget de capas según el modo de miniatura y número de capas."""
+        if self._custom_list_height and self._user_list_height is not None:
+            self.list_layers.setFixedHeight(self._user_list_height)
+            return
+        spec = THUMB_SPECS.get(self._thumb_size_mode, THUMB_SPECS["M"])
+        row_h = spec["row_height"]
+        n_layers = max(1, len(self.layers))
+        needed_h = n_layers * row_h + 8
+        auto_h = max(80, min(500, needed_h))
+        self.list_layers.setFixedHeight(auto_h)
 
-    def _on_splitter_moved(self, pos: int, index: int) -> None:
-        sizes = self.splitter_layers.sizes()
-        if sizes and sizes[0] > 0:
-            self._user_splitter_height = sizes[0]
+    def _on_list_resize_dragged(self, delta: int) -> None:
+        """Manejador para el arrastre del tirador de redimensionado de la lista de capas."""
+        self._custom_list_height = True
+        cur_h = self.list_layers.height()
+        new_h = max(70, min(850, cur_h + delta))
+        self._user_list_height = new_h
+        self.list_layers.setFixedHeight(new_h)
+
+    def _on_list_auto_fit_requested(self) -> None:
+        """Restaura el tamaño automático para que quepan todas las capas tras hacer doble clic."""
+        self._custom_list_height = False
+        self._user_list_height = None
+        self._update_list_height()
 
     # =========================================================================
     # GESTIÓN DE CAPAS (AÑADIR, DUPLICAR, ELIMINAR, REORDENAR)
@@ -1293,13 +1364,8 @@ class MaskLayersWidget(QWidget):
             self.btn_size_m.setChecked(mode == "M")
             self.btn_size_l.setChecked(mode == "L")
         
-        # Ajustar altura sugerida del splitter según el modo
-        if hasattr(self, 'splitter_layers'):
-            target_top = 270 if mode == "L" else (170 if mode == "S" else 225)
-            cur_sizes = self.splitter_layers.sizes()
-            bottom_h = cur_sizes[1] if len(cur_sizes) > 1 and cur_sizes[1] > 0 else 600
-            self.splitter_layers.setSizes([target_top, bottom_h])
-            self._user_splitter_height = target_top
+        if not self._custom_list_height:
+            self._update_list_height()
 
         self._rebuild_list_items(select_layer_id=self._selected_layer_id)
 
@@ -1488,6 +1554,7 @@ class MaskLayersWidget(QWidget):
         """Regenera los elementos de la lista QListWidget con miniaturas, iconos, botón de ojo y estilos acordes a su tipo."""
         self._updating_ui = True
         self.list_layers.clear()
+        self._update_list_height()
 
         spec = THUMB_SPECS.get(self._thumb_size_mode, THUMB_SPECS["M"])
         tw, th = self._get_thumbnail_dimensions()
@@ -1677,13 +1744,8 @@ class MaskLayersWidget(QWidget):
         is_starless = (layer is not None and layer.mask_type == MASK_TYPE_IMAGE_STARLESS)
 
         self.container_layer_props.setVisible(has_sel)
-        if has_sel and hasattr(self, 'splitter_layers'):
-            sizes = self.splitter_layers.sizes()
-            if len(sizes) == 2 and sizes[1] <= 1:
-                target_top = self._user_splitter_height
-                if target_top is None:
-                    target_top = 270 if self._thumb_size_mode == "L" else (170 if self._thumb_size_mode == "S" else 225)
-                self.splitter_layers.setSizes([target_top, 600])
+        if hasattr(self, 'resize_handle'):
+            self.resize_handle.setVisible(len(self.layers) > 0)
         self.btn_move_up.setEnabled(has_sel)
         self.btn_move_down.setEnabled(has_sel)
         self.btn_duplicate.setEnabled(has_sel and not is_sys)
