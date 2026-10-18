@@ -101,6 +101,13 @@ from gui.theme import (
     STYLE_RUN_IDLE, STYLE_TRANSFER_BTN, BG_PANEL, BORDER_BASE, TEXT_PRIMARY,
     TEXT_SECONDARY, TEXT_MUTED, TEXT_CYAN, ACCENT_CYAN
 )
+from gui.developer.panels.panel_color_wb import ColorWbPanel
+from gui.developer.panels.panel_deconvolution import DeconvolutionPanel
+from gui.developer.panels.panel_light_pollution import LightPollutionPanel
+from gui.developer.panels.panel_stretching import StretchingPanel
+from gui.developer.panels.panel_effects import EffectsPanel
+from gui.developer.developer_state import DeveloperState
+from gui.developer.pipeline import apply_developer_pipeline
 
 
 class DeveloperTab(QWidget):
@@ -391,387 +398,111 @@ class DeveloperTab(QWidget):
         self.sec_presets.set_content_widget(w_presets)
         left_layout.addWidget(self.sec_presets)
 
-        # --- SECCIÓN 2: Extracción de Fondo y Polución Lumínica (GraXpert AI) ---
-        self.sec_gradients = CollapsibleSection(
-            "Calibración y Gradientes (GraXpert AI)",
-            is_expanded=False,
-            on_reset=self.reset_gradients,
-            icon_name="sparkles"
-        )
-        w_bg = QWidget()
-        layout_bg = QVBoxLayout(w_bg)
-        layout_bg.setContentsMargins(6, 4, 6, 6)
-        layout_bg.setSpacing(8)
+        # --- SECCIÓN 2: Extracción de Fondo y Polución Lumínica (Módulo gui.developer.panels.LightPollutionPanel) ---
+        self.panel_lp = LightPollutionPanel()
+        self.sec_gradients = self.panel_lp.sec_bg
+        self.sec_bg = self.panel_lp.sec_bg
+        self.combo_bg_engine = self.panel_lp.combo_bg_engine
+        self.lbl_smoothing = self.panel_lp.lbl_smoothing
+        self.spin_smoothing = self.panel_lp.spin_smoothing
+        self.btn_extract_bg = self.panel_lp.btn_extract_bg
+        self.row_lp = self.panel_lp.row_lp
+        self.slider_lp = self.panel_lp.slider_lp
+        self.lbl_lp = self.panel_lp.lbl_lp
+        self.btn_lp_expand = self.panel_lp.btn_lp_expand
+        self.btn_lp_auto = self.panel_lp.btn_lp_auto
+        self.btn_lp_center_pipette = self.panel_lp.btn_lp_center_pipette
+        self.w_lp_params = self.panel_lp.w_lp_params
+        self.row_lp_cx = self.panel_lp.row_lp_cx
+        self.slider_lp_cx = self.panel_lp.slider_lp_cx
+        self.spin_lp_cx = self.panel_lp.spin_lp_cx
+        self.lbl_lp_cx = self.panel_lp.lbl_lp_cx
+        self.row_lp_cy = self.panel_lp.row_lp_cy
+        self.slider_lp_cy = self.panel_lp.slider_lp_cy
+        self.spin_lp_cy = self.panel_lp.spin_lp_cy
+        self.lbl_lp_cy = self.panel_lp.lbl_lp_cy
+        self.row_lp_w = self.panel_lp.row_lp_w
+        self.slider_lp_w = self.panel_lp.slider_lp_w
+        self.spin_lp_w = self.panel_lp.spin_lp_w
+        self.lbl_lp_w = self.panel_lp.lbl_lp_w
+        self.row_lp_h = self.panel_lp.row_lp_h
+        self.slider_lp_h = self.panel_lp.slider_lp_h
+        self.spin_lp_h = self.panel_lp.spin_lp_h
+        self.lbl_lp_h = self.panel_lp.lbl_lp_h
+        self.combo_lp_tint = self.panel_lp.combo_lp_tint
+        self.btn_lp_color_pipette = self.panel_lp.btn_lp_color_pipette
+        self.row_lp_tint_strength = self.panel_lp.row_lp_tint_strength
+        self.slider_lp_tint_strength = self.panel_lp.slider_lp_tint_strength
+        self.lbl_lp_tint_strength = self.panel_lp.lbl_lp_tint_strength
+        self.combo_lp_mode = self.panel_lp.combo_lp_mode
+        self.chk_lp_legacy_1d = self.panel_lp.chk_lp_legacy_1d
 
-        row_engine = QHBoxLayout()
-        row_engine.addWidget(QLabel("Motor:"))
-        self.combo_bg_engine = QComboBox()
-        self.combo_bg_engine.addItems(["Polinómico (Paisaje)", "GraXpert AI"])
-        row_engine.addWidget(self.combo_bg_engine)
+        # Conexiones reactivas
+        self.panel_lp.parameter_changed.connect(self._on_lp_parameter_changed)
+        self.panel_lp.extract_bg_requested.connect(self.on_extract_background_clicked)
+        self.panel_lp.auto_detect_lp_requested.connect(self.auto_detect_lp_center)
+        self.panel_lp.center_pipette_toggled.connect(self._on_toggle_lp_center_pipette)
+        self.panel_lp.color_pipette_toggled.connect(self._on_toggle_lp_color_pipette)
+        self.panel_lp.action_committed.connect(self._commit_action)
 
-        self.lbl_smoothing = QLabel("Suavizado:")
-        row_engine.addWidget(self.lbl_smoothing)
-        self.spin_smoothing = QDoubleSpinBox()
-        self.spin_smoothing.setRange(0.1, 1.0)
-        self.spin_smoothing.setSingleStep(0.05)
-        self.spin_smoothing.setValue(0.50)
-        self.spin_smoothing.setFixedWidth(65)
-        row_engine.addWidget(self.spin_smoothing)
-        layout_bg.addLayout(row_engine)
+        left_layout.addWidget(self.panel_lp)
 
-        self.btn_extract_bg = QPushButton("Eliminar Gradientes")
-        self.btn_extract_bg.setIcon(get_icon("sparkles", color="#80d8ff", size=13))
-        self.btn_extract_bg.setStyleSheet("font-weight: bold; color: #80d8ff;")
-        self.btn_extract_bg.clicked.connect(self.on_extract_background_clicked)
-        layout_bg.addWidget(self.btn_extract_bg)
+        # --- SECCIÓN 3: Estirado Tonal y Contraste (Módulo gui.developer.panels.StretchingPanel) ---
+        self.panel_stretch = StretchingPanel()
+        self.sec_stretch = self.panel_stretch.sec_stretch
+        self.btn_mode_mtf = self.panel_stretch.btn_mode_mtf
+        self.btn_mode_ghs = self.panel_stretch.btn_mode_ghs
+        self.grp_stretch_mode = self.panel_stretch.grp_stretch_mode
+        self.w_mtf_container = self.panel_stretch.w_mtf_container
+        self.row_bp = self.panel_stretch.row_bp
+        self.slider_bp = self.panel_stretch.slider_bp
+        self.spin_bp = self.panel_stretch.spin_bp
+        self.row_mtf = self.panel_stretch.row_mtf
+        self.slider_mtf = self.panel_stretch.slider_mtf
+        self.spin_mtf = self.panel_stretch.spin_mtf
+        self.w_ghs_container = self.panel_stretch.w_ghs_container
+        self.btn_auto_ghs = self.panel_stretch.btn_auto_ghs
+        self.btn_ghs_pipette = self.panel_stretch.btn_ghs_pipette
+        self.btn_reset_ghs = self.panel_stretch.btn_reset_ghs
+        self.btn_ghs_luma = self.panel_stretch.btn_ghs_luma
+        self.btn_ghs_rgb = self.panel_stretch.btn_ghs_rgb
+        self.grp_ghs_color = self.panel_stretch.grp_ghs_color
+        self.row_ghs_sp = self.panel_stretch.row_ghs_sp
+        self.slider_ghs_sp = self.panel_stretch.slider_ghs_sp
+        self.spin_ghs_sp = self.panel_stretch.spin_ghs_sp
+        self.lbl_ghs_sp = self.panel_stretch.lbl_ghs_sp
+        self.row_ghs_d = self.panel_stretch.row_ghs_d
+        self.slider_ghs_d = self.panel_stretch.slider_ghs_d
+        self.spin_ghs_d = self.panel_stretch.spin_ghs_d
+        self.lbl_ghs_d = self.panel_stretch.lbl_ghs_d
+        self.row_ghs_b = self.panel_stretch.row_ghs_b
+        self.slider_ghs_b = self.panel_stretch.slider_ghs_b
+        self.spin_ghs_b = self.panel_stretch.spin_ghs_b
+        self.lbl_ghs_b = self.panel_stretch.lbl_ghs_b
+        self.row_ghs_hp = self.panel_stretch.row_ghs_hp
+        self.slider_ghs_hp = self.panel_stretch.slider_ghs_hp
+        self.spin_ghs_hp = self.panel_stretch.spin_ghs_hp
+        self.lbl_ghs_hp = self.panel_stretch.lbl_ghs_hp
+        self.row_ghs_lp = self.panel_stretch.row_ghs_lp
+        self.slider_ghs_lp = self.panel_stretch.slider_ghs_lp
+        self.spin_ghs_lp = self.panel_stretch.spin_ghs_lp
+        self.lbl_ghs_lp = self.panel_stretch.lbl_ghs_lp
+        self.row_ghs_bp = self.panel_stretch.row_ghs_bp
+        self.slider_ghs_bp = self.panel_stretch.slider_ghs_bp
+        self.spin_ghs_bp = self.panel_stretch.spin_ghs_bp
+        self.lbl_ghs_bp = self.panel_stretch.lbl_ghs_bp
+        self.row_contrast = self.panel_stretch.row_contrast
+        self.slider_contrast = self.panel_stretch.slider_contrast
+        self.lbl_contrast = self.panel_stretch.lbl_contrast
 
-        # Cúpula de luz (Contaminación Lumínica) integrada
-        self.row_lp = PrecisionSliderRow("Atenuar Cúpula:", 0, 100, 0, unit="%", label_width=115)
-        self.slider_lp = self.row_lp.slider
-        self.lbl_lp = self.row_lp.lbl_value
-        self.slider_lp.valueChanged.connect(self.on_lp_changed)
-        layout_bg.addWidget(self.row_lp)
+        # Conexiones reactivas
+        self.panel_stretch.parameter_changed.connect(self._on_stretch_parameter_changed)
+        self.panel_stretch.auto_mtf_requested.connect(self.apply_auto_mtf)
+        self.panel_stretch.auto_ghs_requested.connect(self.apply_auto_ghs)
+        self.panel_stretch.ghs_pipette_toggled.connect(self._on_toggle_ghs_pipette)
+        self.panel_stretch.action_committed.connect(self._commit_action)
 
-        # Botonera de herramientas de Cúpula 2D
-        row_lp_tools = QHBoxLayout()
-        row_lp_tools.setSpacing(4)
-        self.btn_lp_expand = QPushButton("Cúpula 2D")
-        self.btn_lp_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#ffd54f", size=12))
-        self.btn_lp_expand.setCheckable(True)
-        self.btn_lp_expand.setChecked(False)
-        self.btn_lp_expand.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #3b4252; color: #ffd54f; border: 1px solid #ffd54f; }"
-        )
-        self.btn_lp_expand.setToolTip("Despliega los controles analíticos avanzados de posición 2D, forma y tinte cromático de la cúpula.")
-        self.btn_lp_expand.toggled.connect(self._on_toggle_lp_expand)
-        row_lp_tools.addWidget(self.btn_lp_expand)
-
-        self.btn_lp_auto = QPushButton("Auto-Detectar")
-        self.btn_lp_auto.setIcon(get_icon("sparkles", color="#80d8ff", size=12))
-        self.btn_lp_auto.setStyleSheet("font-size: 11px; padding: 4px; font-weight: bold; color: #80d8ff;")
-        self.btn_lp_auto.setToolTip("Analiza el resplandor difuso del cielo y sitúa automáticamente el centro de la cúpula urbana.")
-        self.btn_lp_auto.clicked.connect(self.auto_detect_lp_center)
-        row_lp_tools.addWidget(self.btn_lp_auto)
-
-        self.btn_lp_center_pipette = QPushButton("Pinchar Centro")
-        self.btn_lp_center_pipette.setIcon(get_icon("crosshair", color="#94a3b8", active_color="#ffd54f", size=12))
-        self.btn_lp_center_pipette.setCheckable(True)
-        self.btn_lp_center_pipette.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #3b4252; color: #ffd54f; border: 1px solid #ffd54f; }"
-        )
-        self.btn_lp_center_pipette.setToolTip("Activa la pipeta interactiva en el lienzo para situar el foco de la cúpula de polución con un clic.")
-        self.btn_lp_center_pipette.toggled.connect(self._on_toggle_lp_center_pipette)
-        row_lp_tools.addWidget(self.btn_lp_center_pipette)
-        layout_bg.addLayout(row_lp_tools)
-
-        # Contenedor desplegable de parámetros 2D
-        self.w_lp_params = QWidget()
-        self.w_lp_params.setVisible(False)
-        self.w_lp_params.setStyleSheet("background-color: #1e2129; border-radius: 6px;")
-        layout_lp_params = QVBoxLayout(self.w_lp_params)
-        layout_lp_params.setContentsMargins(8, 6, 8, 8)
-        layout_lp_params.setSpacing(6)
-
-        # Fila 1: Centro X y Centro Y
-        self.row_lp_cx = PrecisionSliderRow("Centro X:", 0, 100, 50, scale=100.0, decimals=2, label_width=115)
-        self.slider_lp_cx = self.row_lp_cx.slider
-        self.spin_lp_cx = self.row_lp_cx.spin
-        self.lbl_lp_cx = self.row_lp_cx.lbl_value
-        self.slider_lp_cx.valueChanged.connect(self.on_slider_lp_cx_changed)
-        self.spin_lp_cx.valueChanged.connect(self.on_spin_lp_cx_changed)
-        layout_lp_params.addWidget(self.row_lp_cx)
-
-        self.row_lp_cy = PrecisionSliderRow("Centro Y:", 0, 100, 90, scale=100.0, decimals=2, label_width=115)
-        self.slider_lp_cy = self.row_lp_cy.slider
-        self.spin_lp_cy = self.row_lp_cy.spin
-        self.lbl_lp_cy = self.row_lp_cy.lbl_value
-        self.slider_lp_cy.valueChanged.connect(self.on_slider_lp_cy_changed)
-        self.spin_lp_cy.valueChanged.connect(self.on_spin_lp_cy_changed)
-        layout_lp_params.addWidget(self.row_lp_cy)
-
-        # Fila 2: Ancho W y Alto H
-        self.row_lp_w = PrecisionSliderRow("Ancho:", 5, 200, 60, scale=100.0, decimals=2, label_width=115)
-        self.slider_lp_w = self.row_lp_w.slider
-        self.spin_lp_w = self.row_lp_w.spin
-        self.lbl_lp_w = self.row_lp_w.lbl_value
-        self.slider_lp_w.valueChanged.connect(self.on_slider_lp_w_changed)
-        self.spin_lp_w.valueChanged.connect(self.on_spin_lp_w_changed)
-        layout_lp_params.addWidget(self.row_lp_w)
-
-        self.row_lp_h = PrecisionSliderRow("Alto:", 5, 150, 45, scale=100.0, decimals=2, label_width=115)
-        self.slider_lp_h = self.row_lp_h.slider
-        self.spin_lp_h = self.row_lp_h.spin
-        self.lbl_lp_h = self.row_lp_h.lbl_value
-        self.slider_lp_h.valueChanged.connect(self.on_slider_lp_h_changed)
-        self.spin_lp_h.valueChanged.connect(self.on_spin_lp_h_changed)
-        layout_lp_params.addWidget(self.row_lp_h)
-
-        # Fila 3: Tinte cromático y botón cuentagotas de color
-        row_lp_tint = QHBoxLayout()
-        row_lp_tint.addWidget(QLabel("Tinte:"))
-        self.combo_lp_tint = QComboBox()
-        self.combo_lp_tint.addItem("Vapor de Sodio (Ámbar)", "sodium")
-        self.combo_lp_tint.addItem("LED Urbano Cálido", "warm_led")
-        self.combo_lp_tint.addItem("LED Frío / Mercurio", "cold_led")
-        self.combo_lp_tint.addItem("Atenuación Neutra", "neutral")
-        self.combo_lp_tint.addItem("Personalizado", "custom")
-        self.combo_lp_tint.currentIndexChanged.connect(self._on_lp_tint_combo_changed)
-        row_lp_tint.addWidget(self.combo_lp_tint, stretch=1)
-
-        self.btn_lp_color_pipette = QPushButton("Muestrear Color")
-        self.btn_lp_color_pipette.setIcon(get_icon("pipette", color="#94a3b8", active_color="#ffd54f", size=12))
-        self.btn_lp_color_pipette.setCheckable(True)
-        self.btn_lp_color_pipette.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #3b4252; color: #ffd54f; border: 1px solid #ffd54f; }"
-        )
-        self.btn_lp_color_pipette.setToolTip("Muestrea el tinte cromático exacto pinchando sobre el resplandor de la cúpula en el lienzo.")
-        self.btn_lp_color_pipette.toggled.connect(self._on_toggle_lp_color_pipette)
-        row_lp_tint.addWidget(self.btn_lp_color_pipette)
-        layout_lp_params.addLayout(row_lp_tint)
-
-        # Fila 4: Neutralización cromática
-        self.row_lp_tint_strength = PrecisionSliderRow("Neutralización:", 0, 100, 50, unit="%", label_width=115)
-        self.slider_lp_tint_strength = self.row_lp_tint_strength.slider
-        self.lbl_lp_tint_strength = self.row_lp_tint_strength.lbl_value
-        self.slider_lp_tint_strength.valueChanged.connect(self._on_lp_tint_strength_changed)
-        layout_lp_params.addWidget(self.row_lp_tint_strength)
-
-        # Fila 5: Modo de reducción y Compatibilidad 1D
-        row_lp_mode = QHBoxLayout()
-        row_lp_mode.addWidget(QLabel("Modo:"))
-        self.combo_lp_mode = QComboBox()
-        self.combo_lp_mode.addItem("Atenuación Suave", "attenuate")
-        self.combo_lp_mode.addItem("Sustracción Física", "subtractive")
-        self.combo_lp_mode.currentIndexChanged.connect(self._on_lp_mode_combo_changed)
-        row_lp_mode.addWidget(self.combo_lp_mode, stretch=1)
-
-        self.chk_lp_legacy_1d = QCheckBox("Rampa 1D Clásica")
-        self.chk_lp_legacy_1d.setToolTip("Utiliza el degradado vertical 1D anterior en lugar de la cúpula paramétrica 2D.")
-        self.chk_lp_legacy_1d.setChecked(False)
-        self.chk_lp_legacy_1d.toggled.connect(self._on_lp_legacy_1d_toggled)
-        row_lp_mode.addWidget(self.chk_lp_legacy_1d)
-        layout_lp_params.addLayout(row_lp_mode)
-
-        layout_bg.addWidget(self.w_lp_params)
-
-        self.sec_gradients.set_content_widget(w_bg)
-        left_layout.addWidget(self.sec_gradients)
-
-        # --- SECCIÓN 3: Estirado Tonal y Contraste (MTF / GHS) ---
-        self.sec_stretch = CollapsibleSection(
-            "Estirado Tonal y Contraste",
-            is_expanded=True,
-            on_reset=self.reset_sliders,
-            icon_name="chart"
-        )
-        w_stretch = QWidget()
-        stretch_layout = QVBoxLayout(w_stretch)
-        stretch_layout.setContentsMargins(6, 4, 6, 6)
-        stretch_layout.setSpacing(8)
-
-        # 3.1 Selector de Modo de Estirado: MTF vs GHS
-        row_stretch_mode = QHBoxLayout()
-        row_stretch_mode.setSpacing(4)
-
-        self.btn_mode_mtf = QPushButton("MTF Clásico")
-        self.btn_mode_mtf.setIcon(get_icon("chart", color="#80d8ff", size=12))
-        self.btn_mode_mtf.setCheckable(True)
-        self.btn_mode_mtf.setChecked(True)
-        self.btn_mode_mtf.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #3b4252; color: #80d8ff; border: 1px solid #80d8ff; }"
-        )
-        self.btn_mode_mtf.setToolTip("Estirado estándar por Función de Transferencia de Medios Tonos (MTF).")
-        self.btn_mode_mtf.clicked.connect(lambda: self._set_stretch_mode("mtf"))
-
-        self.btn_mode_ghs = QPushButton("GHS Hiperbólico")
-        self.btn_mode_ghs.setIcon(get_icon("curve", color="#ffb74d", size=12))
-        self.btn_mode_ghs.setCheckable(True)
-        self.btn_mode_ghs.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #3b4252; color: #ffb74d; border: 1px solid #ffb74d; }"
-        )
-        self.btn_mode_ghs.setToolTip("Estirado Hiperbólico Generalizado (Payne & Cranfield).\nControl quirúrgico de contraste en el fondo sin quemar estrellas ni núcleos.")
-        self.btn_mode_ghs.clicked.connect(lambda: self._set_stretch_mode("ghs"))
-
-        self.grp_stretch_mode = QButtonGroup(self)
-        self.grp_stretch_mode.setExclusive(True)
-        self.grp_stretch_mode.addButton(self.btn_mode_mtf)
-        self.grp_stretch_mode.addButton(self.btn_mode_ghs)
-
-        row_stretch_mode.addWidget(self.btn_mode_mtf)
-        row_stretch_mode.addWidget(self.btn_mode_ghs)
-        stretch_layout.addLayout(row_stretch_mode)
-
-        # 3.2 Contenedor MTF
-        self.w_mtf_container = QWidget()
-        mtf_layout = QVBoxLayout(self.w_mtf_container)
-        mtf_layout.setContentsMargins(0, 0, 0, 0)
-        mtf_layout.setSpacing(6)
-
-        btn_row_mtf = QHBoxLayout()
-        btn_auto_mtf = QPushButton("Auto-Estirado MTF")
-        btn_auto_mtf.setIcon(get_icon("sparkles", color="#80d8ff", size=12))
-        btn_auto_mtf.setStyleSheet("font-weight: bold; color: #80d8ff;")
-        btn_auto_mtf.clicked.connect(self.apply_auto_mtf)
-        btn_reset_tone = QPushButton("Restablecer MTF")
-        btn_reset_tone.clicked.connect(self.reset_sliders)
-        btn_row_mtf.addWidget(btn_auto_mtf)
-        btn_row_mtf.addWidget(btn_reset_tone)
-        mtf_layout.addLayout(btn_row_mtf)
-
-        # Sliders de alta precisión para MTF (Punto Negro y Medios Tonos)
-        self.row_bp = PrecisionSliderRow("P. Negro:", 0, 2000, 0, scale=10000.0, decimals=5, label_width=115)
-        self.slider_bp = self.row_bp.slider
-        self.spin_bp = self.row_bp.spin
-        self.spin_bp.setRange(0.0, 0.20000)
-        self.spin_bp.setSingleStep(0.00010)
-        self.slider_bp.valueChanged.connect(self.on_slider_bp_changed)
-        self.spin_bp.valueChanged.connect(self.on_spin_bp_changed)
-        mtf_layout.addWidget(self.row_bp)
-
-        self.row_mtf = PrecisionSliderRow("Medios (m):", 1, 2000, 400, scale=4000.0, decimals=5, label_width=115)
-        self.slider_mtf = self.row_mtf.slider
-        self.spin_mtf = self.row_mtf.spin
-        self.spin_mtf.setRange(0.00010, 0.50000)
-        self.spin_mtf.setSingleStep(0.00050)
-        self.slider_mtf.valueChanged.connect(self.on_slider_mtf_changed)
-        self.spin_mtf.valueChanged.connect(self.on_spin_mtf_changed)
-        mtf_layout.addWidget(self.row_mtf)
-
-        stretch_layout.addWidget(self.w_mtf_container)
-
-        # 3.3 Contenedor GHS (Hiperbólico Generalizado)
-        self.w_ghs_container = QWidget()
-        self.w_ghs_container.setVisible(False)
-        ghs_layout = QVBoxLayout(self.w_ghs_container)
-        ghs_layout.setContentsMargins(0, 0, 0, 0)
-        ghs_layout.setSpacing(6)
-
-        # Botonera superior GHS: Auto-GHS, Cuentagotas SP, Restablecer GHS
-        btn_row_ghs = QHBoxLayout()
-        self.btn_auto_ghs = QPushButton("Auto-GHS")
-        self.btn_auto_ghs.setIcon(get_icon("sparkles", color="#ffb74d", size=12))
-        self.btn_auto_ghs.setStyleSheet("font-weight: bold; color: #ffb74d;")
-        self.btn_auto_ghs.clicked.connect(self.apply_auto_ghs)
-        self.btn_auto_ghs.setToolTip("Calcula y aplica automáticamente los parámetros óptimos de GHS según el histograma")
-
-        self.btn_ghs_pipette = QPushButton("Cuentagotas SP")
-        self.btn_ghs_pipette.setIcon(get_icon("pipette", color="#80d8ff", size=12))
-        self.btn_ghs_pipette.setCheckable(True)
-        self.btn_ghs_pipette.setCursor(Qt.PointingHandCursor)
-        self.btn_ghs_pipette.setStyleSheet("font-weight: bold; color: #80d8ff;")
-        self.btn_ghs_pipette.setToolTip("Haz clic aquí y luego pincha en el fondo de cielo o estructura del lienzo para centrar el Punto de Simetría (SP)")
-        self.btn_ghs_pipette.toggled.connect(self._on_toggle_ghs_pipette)
-
-        self.btn_reset_ghs = QPushButton("Restablecer")
-        self.btn_reset_ghs.clicked.connect(self.reset_ghs)
-
-        btn_row_ghs.addWidget(self.btn_auto_ghs)
-        btn_row_ghs.addWidget(self.btn_ghs_pipette)
-        btn_row_ghs.addWidget(self.btn_reset_ghs)
-        ghs_layout.addLayout(btn_row_ghs)
-
-        # Selector de Modo de Color GHS: Luminancia vs RGB
-        row_ghs_color = QHBoxLayout()
-        row_ghs_color.setSpacing(4)
-        self.btn_ghs_luma = QPushButton("Luminancia (Color)")
-        self.btn_ghs_luma.setIcon(get_icon("chart", color="#80d8ff", size=11))
-        self.btn_ghs_luma.setCheckable(True)
-        self.btn_ghs_luma.setChecked(True)
-        self.btn_ghs_luma.setStyleSheet(
-            "QPushButton { font-size: 10px; padding: 3px; font-weight: bold; border-radius: 3px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #3b4252; color: #80d8ff; border: 1px solid #80d8ff; }"
-        )
-        self.btn_ghs_luma.setToolTip("Preserva la saturación natural y matices estirando solo la luminancia Rec.709")
-        self.btn_ghs_luma.clicked.connect(lambda: self._set_ghs_color_mode("luma"))
-
-        self.btn_ghs_rgb = QPushButton("RGB Enlazado")
-        self.btn_ghs_rgb.setIcon(get_icon("palette", color="#00e676", size=11))
-        self.btn_ghs_rgb.setCheckable(True)
-        self.btn_ghs_rgb.setStyleSheet(
-            "QPushButton { font-size: 10px; padding: 3px; font-weight: bold; border-radius: 3px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #3b4252; color: #00e676; border: 1px solid #00e676; }"
-        )
-        self.btn_ghs_rgb.setToolTip("Aplica la curva GHS uniformemente sobre los canales R, G y B")
-        self.btn_ghs_rgb.clicked.connect(lambda: self._set_ghs_color_mode("rgb"))
-
-        self.grp_ghs_color = QButtonGroup(self)
-        self.grp_ghs_color.setExclusive(True)
-        self.grp_ghs_color.addButton(self.btn_ghs_luma)
-        self.grp_ghs_color.addButton(self.btn_ghs_rgb)
-        row_ghs_color.addWidget(self.btn_ghs_luma)
-        row_ghs_color.addWidget(self.btn_ghs_rgb)
-        ghs_layout.addLayout(row_ghs_color)
-
-        # Fila SP: Punto de Simetría
-        self.row_ghs_sp = PrecisionSliderRow("P. Simetría (SP):", 0, 10000, 200, scale=10000.0, decimals=5, label_width=115)
-        self.slider_ghs_sp = self.row_ghs_sp.slider
-        self.spin_ghs_sp = self.row_ghs_sp.spin
-        self.lbl_ghs_sp = self.row_ghs_sp.lbl_value
-        self.slider_ghs_sp.valueChanged.connect(self.on_slider_ghs_sp_changed)
-        self.spin_ghs_sp.valueChanged.connect(self.on_spin_ghs_sp_changed)
-        ghs_layout.addWidget(self.row_ghs_sp)
-
-        # Fila Factor D
-        self.row_ghs_d = PrecisionSliderRow("Factor D:", 0, 2000, 500, scale=100.0, decimals=2, label_width=115)
-        self.slider_ghs_d = self.row_ghs_d.slider
-        self.spin_ghs_d = self.row_ghs_d.spin
-        self.lbl_ghs_d = self.row_ghs_d.lbl_value
-        self.slider_ghs_d.valueChanged.connect(self.on_slider_ghs_d_changed)
-        self.spin_ghs_d.valueChanged.connect(self.on_spin_ghs_d_changed)
-        ghs_layout.addWidget(self.row_ghs_d)
-
-        # Fila Forma (b)
-        self.row_ghs_b = PrecisionSliderRow("Forma (b):", 0, 1500, 200, scale=100.0, decimals=2, label_width=115)
-        self.slider_ghs_b = self.row_ghs_b.slider
-        self.spin_ghs_b = self.row_ghs_b.spin
-        self.lbl_ghs_b = self.row_ghs_b.lbl_value
-        self.slider_ghs_b.valueChanged.connect(self.on_slider_ghs_b_changed)
-        self.spin_ghs_b.valueChanged.connect(self.on_spin_ghs_b_changed)
-        ghs_layout.addWidget(self.row_ghs_b)
-
-        # Fila Prot. Estrellas (HP)
-        self.row_ghs_hp = PrecisionSliderRow("Prot. Estrellas:", 0, 1000, 0, scale=1000.0, decimals=2, label_width=115)
-        self.slider_ghs_hp = self.row_ghs_hp.slider
-        self.spin_ghs_hp = self.row_ghs_hp.spin
-        self.lbl_ghs_hp = self.row_ghs_hp.lbl_value
-        self.slider_ghs_hp.valueChanged.connect(self.on_slider_ghs_hp_changed)
-        self.spin_ghs_hp.valueChanged.connect(self.on_spin_ghs_hp_changed)
-        ghs_layout.addWidget(self.row_ghs_hp)
-
-        # Fila Prot. Sombras (LP)
-        self.row_ghs_lp = PrecisionSliderRow("Prot. Sombras:", 0, 1000, 0, scale=1000.0, decimals=2, label_width=115)
-        self.slider_ghs_lp = self.row_ghs_lp.slider
-        self.spin_ghs_lp = self.row_ghs_lp.spin
-        self.lbl_ghs_lp = self.row_ghs_lp.lbl_value
-        self.slider_ghs_lp.valueChanged.connect(self.on_slider_ghs_lp_changed)
-        self.spin_ghs_lp.valueChanged.connect(self.on_spin_ghs_lp_changed)
-        ghs_layout.addWidget(self.row_ghs_lp)
-
-        # Fila Punto Negro GHS (BP)
-        self.row_ghs_bp = PrecisionSliderRow("P. Negro GHS:", 0, 2000, 0, scale=10000.0, decimals=5, label_width=115)
-        self.slider_ghs_bp = self.row_ghs_bp.slider
-        self.spin_ghs_bp = self.row_ghs_bp.spin
-        self.lbl_ghs_bp = self.row_ghs_bp.lbl_value
-        self.slider_ghs_bp.valueChanged.connect(self.on_slider_ghs_bp_changed)
-        self.spin_ghs_bp.valueChanged.connect(self.on_spin_ghs_bp_changed)
-        ghs_layout.addWidget(self.row_ghs_bp)
-
-        stretch_layout.addWidget(self.w_ghs_container)
-
-        # 3.4 Contraste General (común para MTF y GHS)
-        self.row_contrast = PrecisionSliderRow("Contraste:", -100, 100, 0, scale=100.0, decimals=2, force_sign=True, label_width=115)
-        self.slider_contrast = self.row_contrast.slider
-        self.lbl_contrast = self.row_contrast.lbl_value
-        self.slider_contrast.valueChanged.connect(self.on_contrast_changed)
-        stretch_layout.addWidget(self.row_contrast)
-
-        self.sec_stretch.set_content_widget(w_stretch)
-        left_layout.addWidget(self.sec_stretch)
+        left_layout.addWidget(self.panel_stretch)
 
         # --- SECCIÓN 4: Curva Tonal Interactiva (RGB / Saturación) ---
         self.sec_curves = CollapsibleSection(
@@ -1061,458 +792,122 @@ class DeveloperTab(QWidget):
         row_pair3.addLayout(col_dn)
         tools_layout.addLayout(row_pair3)
 
-        # Emparejamiento 3.2 - Par 4: Efecto Orton y Resplandor de Polvo Galáctico
-        self.box_orton_tools = QGroupBox("Efecto Orton y Glow Galáctico")
-        self.box_orton_tools.setStyleSheet("""
-            QGroupBox {
-                border: 1px solid #7b1fa2;
-                border-radius: 6px;
-                margin-top: 4px;
-                padding-top: 8px;
-                background-color: #1a1625;
-                font-weight: bold;
-                color: #e1bee7;
-            }
-        """)
-        box_orton_layout = QVBoxLayout(self.box_orton_tools)
-        box_orton_layout.setContentsMargins(6, 4, 6, 6)
-        box_orton_layout.setSpacing(6)
+        # Emparejamiento 3.2 - Efectos Visuales: Orton y Star Diffusion (Módulo gui.developer.panels.EffectsPanel)
+        self.panel_effects = EffectsPanel(self)
+        self.box_orton_tools = self.panel_effects.box_orton_tools
+        self.slider_orton = self.panel_effects.slider_orton
+        self.lbl_orton = self.panel_effects.lbl_orton
+        self.btn_orton_expand = self.panel_effects.btn_orton_expand
+        self.w_orton_advanced = self.panel_effects.w_orton_advanced
+        self.slider_orton_radius = self.panel_effects.slider_orton_radius
+        self.lbl_orton_radius = self.panel_effects.lbl_orton_radius
+        self.slider_orton_threshold = self.panel_effects.slider_orton_threshold
+        self.lbl_orton_threshold = self.panel_effects.lbl_orton_threshold
+        self.combo_orton_tint = self.panel_effects.combo_orton_tint
+        self.combo_orton_mode = self.panel_effects.combo_orton_mode
 
-        # Intensidad Orton
-        row_ort_int = QHBoxLayout()
-        row_ort_int.addWidget(self._make_resettable_label(QLabel("Intensidad Glow:"), lambda: self.slider_orton.setValue(0), "0%"))
-        self.lbl_orton = QLabel("0%")
-        self.lbl_orton.setStyleSheet("color: #ffb74d; font-weight: bold;")
-        self.lbl_orton.setFixedWidth(34)
-        row_ort_int.addWidget(self.lbl_orton)
-        self.slider_orton = QSlider(Qt.Horizontal)
-        self.slider_orton.setRange(0, 100)
-        self.slider_orton.setValue(0)
+        self.box_star_diff_tools = self.panel_effects.box_star_diff_tools
+        self.slider_star_diff = self.panel_effects.slider_star_diff
+        self.lbl_star_diff = self.panel_effects.lbl_star_diff
+        self.btn_star_diff_expand = self.panel_effects.btn_star_diff_expand
+        self.w_star_diff_advanced = self.panel_effects.w_star_diff_advanced
+        self.slider_star_diff_radius = self.panel_effects.slider_star_diff_radius
+        self.lbl_star_diff_radius = self.panel_effects.lbl_star_diff_radius
+        self.slider_star_diff_threshold = self.panel_effects.slider_star_diff_threshold
+        self.lbl_star_diff_threshold = self.panel_effects.lbl_star_diff_threshold
+        self.slider_star_diff_color = self.panel_effects.slider_star_diff_color
+        self.lbl_star_diff_color = self.panel_effects.lbl_star_diff_color
+        self.combo_star_diff_mode = self.panel_effects.combo_star_diff_mode
+
+        # Connect events for bidirectional sync and preview updates
         self.slider_orton.valueChanged.connect(self.on_orton_strength_changed)
-        row_ort_int.addWidget(self.slider_orton, stretch=1)
-
-        self.btn_orton_expand = QPushButton("")
-        self.btn_orton_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#e1bee7", size=13))
-        self.btn_orton_expand.setCheckable(True)
-        self.btn_orton_expand.setChecked(False)
-        self.btn_orton_expand.setToolTip("Despliega los controles avanzados de radio, umbral de polvo, tinte cromático y modo de fusión.")
-        self.btn_orton_expand.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 6px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #4a148c; color: #e1bee7; border: 1px solid #ba68c8; }"
-        )
-        self.btn_orton_expand.toggled.connect(self._on_toggle_orton_expand)
-        row_ort_int.addWidget(self.btn_orton_expand)
-        box_orton_layout.addLayout(row_ort_int)
-
-        # Parámetros avanzados colapsables
-        self.w_orton_advanced = QWidget()
-        self.w_orton_advanced.setVisible(False)
-        w_ort_layout = QVBoxLayout(self.w_orton_advanced)
-        w_ort_layout.setContentsMargins(0, 2, 0, 0)
-        w_ort_layout.setSpacing(6)
-
-        # Fila Radio y Umbral
-        row_ort_ru = QHBoxLayout()
-        row_ort_ru.setSpacing(10)
-
-        col_rad = QVBoxLayout()
-        col_rad.setSpacing(2)
-        row_rad_lbl = QHBoxLayout()
-        row_rad_lbl.addWidget(self._make_resettable_label(QLabel("Radio (Difusión):"), lambda: self.slider_orton_radius.setValue(40), "40 px"))
-        self.lbl_orton_radius = QLabel("40 px")
-        self.lbl_orton_radius.setStyleSheet("color: #ce93d8; font-weight: bold;")
-        row_rad_lbl.addWidget(self.lbl_orton_radius)
-        col_rad.addLayout(row_rad_lbl)
-        self.slider_orton_radius = QSlider(Qt.Horizontal)
-        self.slider_orton_radius.setRange(10, 150)
-        self.slider_orton_radius.setValue(40)
         self.slider_orton_radius.valueChanged.connect(self.on_orton_radius_changed)
-        col_rad.addWidget(self.slider_orton_radius)
-        row_ort_ru.addLayout(col_rad)
-
-        col_thr = QVBoxLayout()
-        col_thr.setSpacing(2)
-        row_thr_lbl = QHBoxLayout()
-        row_thr_lbl.addWidget(self._make_resettable_label(QLabel("Umbral Polvo:"), lambda: self.slider_orton_threshold.setValue(5), "0.05"))
-        self.lbl_orton_threshold = QLabel("0.05")
-        self.lbl_orton_threshold.setStyleSheet("color: #ce93d8; font-weight: bold;")
-        row_thr_lbl.addWidget(self.lbl_orton_threshold)
-        col_thr.addLayout(row_thr_lbl)
-        self.slider_orton_threshold = QSlider(Qt.Horizontal)
-        self.slider_orton_threshold.setRange(0, 50)
-        self.slider_orton_threshold.setValue(5)
         self.slider_orton_threshold.valueChanged.connect(self.on_orton_threshold_changed)
-        col_thr.addWidget(self.slider_orton_threshold)
-        row_ort_ru.addLayout(col_thr)
-        w_ort_layout.addLayout(row_ort_ru)
-
-        # Fila Tinte y Fusión
-        row_ort_tf = QHBoxLayout()
-        row_ort_tf.setSpacing(8)
-
-        col_tint = QVBoxLayout()
-        col_tint.setSpacing(2)
-        col_tint.addWidget(QLabel("Tinte:"))
-        self.combo_orton_tint = QComboBox()
-        self.combo_orton_tint.addItem("Dorado Cálido (Núcleo)", "warm_gold")
-        self.combo_orton_tint.addItem("Luminancia Neutra", "neutral")
-        self.combo_orton_tint.addItem("Azul Frío (Reflexión)", "cool_blue")
-        self.combo_orton_tint.addItem("H-Alfa (Rubí Cósmico)", "halpha")
         self.combo_orton_tint.currentIndexChanged.connect(self._on_orton_tint_changed)
-        col_tint.addWidget(self.combo_orton_tint)
-        row_ort_tf.addLayout(col_tint, stretch=1)
-
-        col_mode = QVBoxLayout()
-        col_mode.setSpacing(2)
-        col_mode.addWidget(QLabel("Fusión:"))
-        self.combo_orton_mode = QComboBox()
-        self.combo_orton_mode.addItem("Luz Suave (Profundidad)", "soft_light")
-        self.combo_orton_mode.addItem("Trama (Velo Etéreo)", "screen")
-        self.combo_orton_mode.addItem("Aditivo (Luminoso)", "additive")
         self.combo_orton_mode.currentIndexChanged.connect(self._on_orton_mode_changed)
-        col_mode.addWidget(self.combo_orton_mode)
-        row_ort_tf.addLayout(col_mode, stretch=1)
 
-        w_ort_layout.addLayout(row_ort_tf)
-        box_orton_layout.addWidget(self.w_orton_advanced)
-        tools_layout.addWidget(self.box_orton_tools)
-
-        # Emparejamiento 3.3: Filtro Difusor y Realce de Constelaciones (Star Mist)
-        self.box_star_diff_tools = QGroupBox("Filtro Difusor y Realce de Constelaciones")
-        self.box_star_diff_tools.setStyleSheet("""
-            QGroupBox {
-                border: 1px solid #fbc02d;
-                border-radius: 6px;
-                margin-top: 4px;
-                padding-top: 8px;
-                background-color: #221f14;
-                font-weight: bold;
-                color: #fff9c4;
-            }
-        """)
-        box_sd_layout = QVBoxLayout(self.box_star_diff_tools)
-        box_sd_layout.setContentsMargins(6, 4, 6, 6)
-        box_sd_layout.setSpacing(6)
-
-        # Intensidad Difusor
-        row_sd_int = QHBoxLayout()
-        row_sd_int.addWidget(self._make_resettable_label(QLabel("Intensidad Difusor:"), lambda: self.slider_star_diff.setValue(0), "0%"))
-        self.lbl_star_diff = QLabel("0%")
-        self.lbl_star_diff.setStyleSheet("color: #ffd54f; font-weight: bold;")
-        self.lbl_star_diff.setFixedWidth(34)
-        row_sd_int.addWidget(self.lbl_star_diff)
-        self.slider_star_diff = QSlider(Qt.Horizontal)
-        self.slider_star_diff.setRange(0, 100)
-        self.slider_star_diff.setValue(0)
         self.slider_star_diff.valueChanged.connect(self.on_star_diff_strength_changed)
-        row_sd_int.addWidget(self.slider_star_diff, stretch=1)
-
-        self.btn_star_diff_expand = QPushButton("")
-        self.btn_star_diff_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#fff9c4", size=13))
-        self.btn_star_diff_expand.setCheckable(True)
-        self.btn_star_diff_expand.setChecked(False)
-        self.btn_star_diff_expand.setToolTip("Despliega controles avanzados de radio de halo, umbral de magnitud, saturación espectral y modo de fusión.")
-        self.btn_star_diff_expand.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 6px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #f57f17; color: #fffde7; border: 1px solid #ffd54f; }"
-        )
-        self.btn_star_diff_expand.toggled.connect(self._on_toggle_star_diff_expand)
-        row_sd_int.addWidget(self.btn_star_diff_expand)
-        box_sd_layout.addLayout(row_sd_int)
-
-        # Opciones avanzadas colapsables
-        self.w_star_diff_advanced = QWidget()
-        self.w_star_diff_advanced.setVisible(False)
-        w_sd_layout = QVBoxLayout(self.w_star_diff_advanced)
-        w_sd_layout.setContentsMargins(0, 2, 0, 0)
-        w_sd_layout.setSpacing(6)
-
-        # Fila Radio y Umbral
-        row_sd_ru = QHBoxLayout()
-        row_sd_ru.setSpacing(10)
-
-        col_sd_rad = QVBoxLayout()
-        col_sd_rad.setSpacing(2)
-        row_sd_rad_lbl = QHBoxLayout()
-        row_sd_rad_lbl.addWidget(self._make_resettable_label(QLabel("Radio (Halo):"), lambda: self.slider_star_diff_radius.setValue(20), "20 px"))
-        self.lbl_star_diff_radius = QLabel("20 px")
-        self.lbl_star_diff_radius.setStyleSheet("color: #ffe082; font-weight: bold;")
-        row_sd_rad_lbl.addWidget(self.lbl_star_diff_radius)
-        col_sd_rad.addLayout(row_sd_rad_lbl)
-        self.slider_star_diff_radius = QSlider(Qt.Horizontal)
-        self.slider_star_diff_radius.setRange(5, 60)
-        self.slider_star_diff_radius.setValue(20)
         self.slider_star_diff_radius.valueChanged.connect(self.on_star_diff_radius_changed)
-        col_sd_rad.addWidget(self.slider_star_diff_radius)
-        row_sd_ru.addLayout(col_sd_rad)
-
-        col_sd_thr = QVBoxLayout()
-        col_sd_thr.setSpacing(2)
-        row_sd_thr_lbl = QHBoxLayout()
-        row_sd_thr_lbl.addWidget(self._make_resettable_label(QLabel("Umbral Magnitud:"), lambda: self.slider_star_diff_threshold.setValue(45), "0.45"))
-        self.lbl_star_diff_threshold = QLabel("0.45")
-        self.lbl_star_diff_threshold.setStyleSheet("color: #ffe082; font-weight: bold;")
-        row_sd_thr_lbl.addWidget(self.lbl_star_diff_threshold)
-        col_sd_thr.addLayout(row_sd_thr_lbl)
-        self.slider_star_diff_threshold = QSlider(Qt.Horizontal)
-        self.slider_star_diff_threshold.setRange(15, 85)
-        self.slider_star_diff_threshold.setValue(45)
         self.slider_star_diff_threshold.valueChanged.connect(self.on_star_diff_threshold_changed)
-        col_sd_thr.addWidget(self.slider_star_diff_threshold)
-        row_sd_ru.addLayout(col_sd_thr)
-        w_sd_layout.addLayout(row_sd_ru)
-
-        # Fila Color Espectral y Modo
-        row_sd_cm = QHBoxLayout()
-        row_sd_cm.setSpacing(10)
-
-        col_sd_col = QVBoxLayout()
-        col_sd_col.setSpacing(2)
-        row_sd_col_lbl = QHBoxLayout()
-        row_sd_col_lbl.addWidget(self._make_resettable_label(QLabel("Color Espectral:"), lambda: self.slider_star_diff_color.setValue(50), "50%"))
-        self.lbl_star_diff_color = QLabel("50%")
-        self.lbl_star_diff_color.setStyleSheet("color: #ffe082; font-weight: bold;")
-        row_sd_col_lbl.addWidget(self.lbl_star_diff_color)
-        col_sd_col.addLayout(row_sd_col_lbl)
-        self.slider_star_diff_color = QSlider(Qt.Horizontal)
-        self.slider_star_diff_color.setRange(0, 100)
-        self.slider_star_diff_color.setValue(50)
         self.slider_star_diff_color.valueChanged.connect(self.on_star_diff_color_changed)
-        col_sd_col.addWidget(self.slider_star_diff_color)
-        row_sd_cm.addLayout(col_sd_col)
-
-        col_sd_mode = QVBoxLayout()
-        col_sd_mode.setSpacing(2)
-        col_sd_mode.addWidget(QLabel("Fusión:"))
-        self.combo_star_diff_mode = QComboBox()
-        self.combo_star_diff_mode.addItem("Trama (Velo Etéreo)", "screen")
-        self.combo_star_diff_mode.addItem("Luz Suave (Aterciopelado)", "soft_light")
-        self.combo_star_diff_mode.addItem("Aditivo (Luminoso)", "additive")
         self.combo_star_diff_mode.currentIndexChanged.connect(self._on_star_diff_mode_changed)
-        col_sd_mode.addWidget(self.combo_star_diff_mode)
-        row_sd_cm.addLayout(col_sd_mode)
-        w_sd_layout.addLayout(row_sd_cm)
 
-        box_sd_layout.addWidget(self.w_star_diff_advanced)
+        self.panel_effects.action_committed.connect(self._commit_action)
+
+        tools_layout.addWidget(self.box_orton_tools)
         tools_layout.addWidget(self.box_star_diff_tools)
 
         self.sec_starnet.set_content_widget(w_starnet)
         left_layout.addWidget(self.sec_starnet)
         self._set_starnet_tools_enabled(False)
 
-        # --- SECCIÓN 5b: Deconvolución Óptica y Enfoque (Richardson-Lucy) ---
-        self.sec_deconv = CollapsibleSection(
-            "Deconvolución Óptica y Enfoque (R-L)",
-            is_expanded=False,
-            on_reset=self.reset_deconv,
-            icon_name="microscope"
-        )
-        w_deconv = QWidget()
-        deconv_layout = QVBoxLayout(w_deconv)
-        deconv_layout.setContentsMargins(6, 4, 6, 6)
-        deconv_layout.setSpacing(6)
+        # --- SECCIÓN 5b: Deconvolución Óptica y Enfoque (Módulo gui.developer.panels.DeconvolutionPanel) ---
+        self.panel_deconv = DeconvolutionPanel()
+        self.sec_deconv = self.panel_deconv.sec_deconv
+        self.btn_auto_psf = self.panel_deconv.btn_auto_psf
+        self.lbl_psf_status = self.panel_deconv.lbl_psf_status
+        self.row_deconv_iter = self.panel_deconv.row_deconv_iter
+        self.slider_deconv_iter = self.panel_deconv.slider_deconv_iter
+        self.lbl_deconv_iter = self.panel_deconv.lbl_deconv_iter
+        self.btn_deconv_expand = self.panel_deconv.btn_deconv_expand
+        self.row_deconv_fwhm = self.panel_deconv.row_deconv_fwhm
+        self.slider_deconv_fwhm = self.panel_deconv.slider_deconv_fwhm
+        self.lbl_deconv_fwhm = self.panel_deconv.lbl_deconv_fwhm
+        self.w_deconv_advanced = self.panel_deconv.w_deconv_advanced
+        self.row_deconv_deringing = self.panel_deconv.row_deconv_deringing
+        self.slider_deconv_deringing = self.panel_deconv.slider_deconv_deringing
+        self.lbl_deconv_deringing = self.panel_deconv.lbl_deconv_deringing
+        self.row_deconv_damping = self.panel_deconv.row_deconv_damping
+        self.slider_deconv_damping = self.panel_deconv.slider_deconv_damping
+        self.lbl_deconv_damping = self.panel_deconv.lbl_deconv_damping
+        self.row_deconv_aspect = self.panel_deconv.row_deconv_aspect
+        self.slider_deconv_aspect = self.panel_deconv.slider_deconv_aspect
+        self.lbl_deconv_aspect = self.panel_deconv.lbl_deconv_aspect
+        self.row_deconv_angle = self.panel_deconv.row_deconv_angle
+        self.slider_deconv_angle = self.panel_deconv.slider_deconv_angle
+        self.lbl_deconv_angle = self.panel_deconv.lbl_deconv_angle
+        self.combo_deconv_model = self.panel_deconv.combo_deconv_model
+        self.combo_deconv_scope = self.panel_deconv.combo_deconv_scope
+        self.chk_deconv_luma_only = self.panel_deconv.chk_deconv_luma_only
 
-        # 1. Botón de Estimación Automática de PSF y Estado
-        self.btn_auto_psf = QPushButton("Auto-Estimar PSF de Estrellas")
-        self.btn_auto_psf.setIcon(get_icon("crosshair", color="#90caf9", size=14))
-        self.btn_auto_psf.setToolTip("Analiza estrellas aisladas no saturadas de la imagen para determinar el diámetro FWHM y relación de aspecto de la PSF.")
-        self.btn_auto_psf.setStyleSheet(
-            "QPushButton { font-weight: bold; padding: 6px; background: #1c2836; border: 1px solid #1e88e5; border-radius: 4px; color: #90caf9; }"
-            "QPushButton:hover { background: #22374e; border-color: #42a5f5; }"
-        )
-        self.btn_auto_psf.setCursor(Qt.PointingHandCursor)
-        self.btn_auto_psf.clicked.connect(self.on_auto_detect_psf_clicked)
-        deconv_layout.addWidget(self.btn_auto_psf)
+        # Conexiones reactivas del panel de deconvolución
+        self.panel_deconv.parameter_changed.connect(self._on_deconv_parameter_changed)
+        self.panel_deconv.auto_psf_requested.connect(self.on_auto_detect_psf_clicked)
+        self.panel_deconv.action_committed.connect(self._commit_action)
 
-        self.lbl_psf_status = QLabel("PSF: Moffat 2D (FWHM: 3.0 px | Aspecto: 1.00)")
-        self.lbl_psf_status.setWordWrap(True)
-        self.lbl_psf_status.setStyleSheet("color: #90caf9; font-size: 11px; padding-left: 2px;")
-        deconv_layout.addWidget(self.lbl_psf_status)
+        left_layout.addWidget(self.panel_deconv)
 
-        # 2. Control Principal: Iteraciones R-L
-        self.row_deconv_iter = PrecisionSliderRow("Iteraciones (R-L):", 0, 40, 0, special_zero_text="0 (Off)", label_width=115)
-        self.slider_deconv_iter = self.row_deconv_iter.slider
-        self.lbl_deconv_iter = self.row_deconv_iter.lbl_value
+        # --- SECCIONES 6 Y 7: Balance de Blancos y Color/Saturación (Módulo gui.developer.panels.ColorWbPanel) ---
+        self.panel_color_wb = ColorWbPanel()
+        self.sec_wb = self.panel_color_wb.sec_wb
+        self.row_temp = self.panel_color_wb.row_temp
+        self.slider_temp = self.panel_color_wb.slider_temp
+        self.spin_temp = self.panel_color_wb.spin_temp
+        self.lbl_temp = self.panel_color_wb.lbl_temp
+        self.row_tint = self.panel_color_wb.row_tint
+        self.slider_tint = self.panel_color_wb.slider_tint
+        self.spin_tint = self.panel_color_wb.spin_tint
+        self.lbl_tint = self.panel_color_wb.lbl_tint
+        self.btn_panel_pipette = self.panel_color_wb.btn_panel_pipette
+        self.btn_pipette = self.panel_color_wb.btn_pipette
 
-        self.btn_deconv_expand = QPushButton("")
-        self.btn_deconv_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#e3f2fd", size=13))
-        self.btn_deconv_expand.setCheckable(True)
-        self.btn_deconv_expand.setChecked(False)
-        self.btn_deconv_expand.setToolTip("Despliega controles avanzados de FWHM, antianillos (deringing), amortiguación de ruido, elipticidad y ámbito.")
-        self.btn_deconv_expand.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 6px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #1976d2; color: #e3f2fd; border: 1px solid #42a5f5; }"
-        )
-        self.btn_deconv_expand.toggled.connect(self._on_toggle_deconv_expand)
-        self.row_deconv_iter.layout().addWidget(self.btn_deconv_expand)
+        self.sec_color = self.panel_color_wb.sec_color
+        self.row_sat_sky = self.panel_color_wb.row_sat_sky
+        self.slider_sat_sky = self.panel_color_wb.slider_sat_sky
+        self.lbl_sat_sky = self.panel_color_wb.lbl_sat_sky
+        self.row_sat_gnd = self.panel_color_wb.row_sat_gnd
+        self.slider_sat_gnd = self.panel_color_wb.slider_sat_gnd
+        self.lbl_sat_gnd = self.panel_color_wb.lbl_sat_gnd
+        self.row_vibrance = self.panel_color_wb.row_vibrance
+        self.slider_vibrance = self.panel_color_wb.slider_vibrance
+        self.lbl_vibrance = self.panel_color_wb.lbl_vibrance
 
-        self.row_deconv_iter.valueChanged.connect(self.on_deconv_iterations_changed)
-        self.row_deconv_iter.sliderReleased.connect(self.update_stretch_preview)
-        deconv_layout.addWidget(self.row_deconv_iter)
+        # Conexiones reactivas del panel
+        self.panel_color_wb.parameter_changed.connect(self._on_color_wb_parameter_changed)
+        self.panel_color_wb.pipette_toggled.connect(self._on_toggle_wb_pipette)
+        self.panel_color_wb.action_committed.connect(self._commit_action)
 
-        # 3. Control Principal: FWHM
-        self.row_deconv_fwhm = PrecisionSliderRow("FWHM (PSF):", 10, 80, 30, scale=10.0, decimals=1, unit=" px", label_width=115)
-        self.slider_deconv_fwhm = self.row_deconv_fwhm.slider
-        self.lbl_deconv_fwhm = self.row_deconv_fwhm.lbl_value
-        self.row_deconv_fwhm.valueChanged.connect(self.on_deconv_fwhm_changed)
-        deconv_layout.addWidget(self.row_deconv_fwhm)
-
-        # 4. Panel Avanzado Desplegable
-        self.w_deconv_advanced = QWidget()
-        self.w_deconv_advanced.setVisible(False)
-        w_dadv_layout = QVBoxLayout(self.w_deconv_advanced)
-        w_dadv_layout.setContentsMargins(0, 4, 0, 2)
-        w_dadv_layout.setSpacing(6)
-
-        # Controles avanzados con PrecisionSliderRow
-        self.row_deconv_deringing = PrecisionSliderRow("Antianillos:", 0, 40, 8, scale=1000.0, decimals=3, label_width=115)
-        self.slider_deconv_deringing = self.row_deconv_deringing.slider
-        self.lbl_deconv_deringing = self.row_deconv_deringing.lbl_value
-        self.row_deconv_deringing.valueChanged.connect(self.on_deconv_deringing_changed)
-        w_dadv_layout.addWidget(self.row_deconv_deringing)
-
-        self.row_deconv_damping = PrecisionSliderRow("Amortiguación:", 0, 100, 25, unit="%", label_width=115)
-        self.slider_deconv_damping = self.row_deconv_damping.slider
-        self.lbl_deconv_damping = self.row_deconv_damping.lbl_value
-        self.row_deconv_damping.valueChanged.connect(self.on_deconv_damping_changed)
-        w_dadv_layout.addWidget(self.row_deconv_damping)
-
-        self.row_deconv_aspect = PrecisionSliderRow("Aspecto PSF:", 100, 250, 100, scale=100.0, decimals=2, unit="x", label_width=115)
-        self.slider_deconv_aspect = self.row_deconv_aspect.slider
-        self.lbl_deconv_aspect = self.row_deconv_aspect.lbl_value
-        self.row_deconv_aspect.valueChanged.connect(self.on_deconv_aspect_changed)
-        w_dadv_layout.addWidget(self.row_deconv_aspect)
-
-        self.row_deconv_angle = PrecisionSliderRow("Ángulo PSF:", -90, 90, 0, unit="°", force_sign=True, label_width=115)
-        self.slider_deconv_angle = self.row_deconv_angle.slider
-        self.lbl_deconv_angle = self.row_deconv_angle.lbl_value
-        self.row_deconv_angle.valueChanged.connect(self.on_deconv_angle_changed)
-        w_dadv_layout.addWidget(self.row_deconv_angle)
-
-        # Fila Modelo PSF y Ámbito de Aplicación
-        row_mod_scp = QHBoxLayout()
-        row_mod_scp.setSpacing(10)
-
-        col_mod = QVBoxLayout()
-        col_mod.setSpacing(2)
-        col_mod.addWidget(QLabel("Perfil PSF:"))
-        self.combo_deconv_model = QComboBox()
-        self.combo_deconv_model.addItem("Moffat 2D (Astrofísica)", "moffat")
-        self.combo_deconv_model.addItem("Gaussiana 2D", "gaussian")
-        self.combo_deconv_model.currentIndexChanged.connect(self._on_deconv_model_changed)
-        col_mod.addWidget(self.combo_deconv_model)
-        row_mod_scp.addLayout(col_mod)
-
-        col_scp = QVBoxLayout()
-        col_scp.setSpacing(2)
-        col_scp.addWidget(QLabel("Ámbito:"))
-        self.combo_deconv_scope = QComboBox()
-        self.combo_deconv_scope.addItem("Toda la Imagen", "all")
-        self.combo_deconv_scope.addItem("Solo Estrellas", "stars_only")
-        self.combo_deconv_scope.addItem("Solo Fondo / Nebulosa", "background_only")
-        self.combo_deconv_scope.currentIndexChanged.connect(self._on_deconv_scope_changed)
-        col_scp.addWidget(self.combo_deconv_scope)
-        row_mod_scp.addLayout(col_scp)
-        w_dadv_layout.addLayout(row_mod_scp)
-
-        # Checkbox Solo Luminancia
-        self.chk_deconv_luma_only = QCheckBox("Solo Luminancia (Preservar color)")
-        self.chk_deconv_luma_only.setChecked(True)
-        self.chk_deconv_luma_only.toggled.connect(self._on_deconv_luma_only_toggled)
-        self.chk_deconv_luma_only.setStyleSheet("color: #b0bec5; font-size: 11px;")
-        w_dadv_layout.addWidget(self.chk_deconv_luma_only)
-
-        deconv_layout.addWidget(self.w_deconv_advanced)
-
-        self.sec_deconv.set_content_widget(w_deconv)
-        left_layout.addWidget(self.sec_deconv)
-
-        # --- SECCIÓN 6: Balance de Blancos (Precisión Fina) ---
-        self.sec_wb = CollapsibleSection(
-            "Balance de Blancos y Calibración",
-            is_expanded=True,
-            on_reset=self.reset_wb,
-            icon_name="thermometer"
-        )
-        w_wb = QWidget()
-        wb_layout = QVBoxLayout(w_wb)
-        wb_layout.setContentsMargins(6, 4, 6, 6)
-        wb_layout.setSpacing(8)
-
-        # Sliders de alta precisión para Balance de Blancos
-        self.row_temp = PrecisionSliderRow("Temperatura:", -1000, 1000, 0, scale=1000.0, decimals=3, force_sign=True, label_width=115)
-        self.slider_temp = self.row_temp.slider
-        self.spin_temp = self.row_temp.spin
-        self.lbl_temp = self.row_temp.lbl_value
-        self.slider_temp.valueChanged.connect(self.on_temp_changed)
-        self.spin_temp.valueChanged.connect(self.on_spin_temp_changed)
-        wb_layout.addWidget(self.row_temp)
-
-        self.row_tint = PrecisionSliderRow("Tinte (V/M):", -1000, 1000, 0, scale=1000.0, decimals=3, force_sign=True, label_width=115)
-        self.slider_tint = self.row_tint.slider
-        self.spin_tint = self.row_tint.spin
-        self.lbl_tint = self.row_tint.lbl_value
-        self.slider_tint.valueChanged.connect(self.on_tint_changed)
-        self.spin_tint.valueChanged.connect(self.on_spin_tint_changed)
-        wb_layout.addWidget(self.row_tint)
-
-        row_wb_btn = QHBoxLayout()
-        self.btn_panel_pipette = QPushButton("Pipeta WB (W)")
-        self.btn_panel_pipette.setIcon(get_icon("pipette", color="#80d8ff", size=13))
-        self.btn_panel_pipette.setCheckable(True)
-        self.btn_panel_pipette.setCursor(Qt.PointingHandCursor)
-        self.btn_panel_pipette.setStyleSheet("font-weight: bold; color: #80d8ff;")
-        self.btn_panel_pipette.setToolTip("Activa la pipeta para calibrar el balance de blancos haciendo clic sobre un fondo neutro en la imagen (Atajo: W)")
-        self.btn_panel_pipette.toggled.connect(self._on_toggle_wb_pipette)
-        row_wb_btn.addWidget(self.btn_panel_pipette)
-        self.btn_pipette = self.btn_panel_pipette
-
-        btn_reset_wb = QPushButton("Restablecer")
-        btn_reset_wb.clicked.connect(self.reset_wb)
-        row_wb_btn.addWidget(btn_reset_wb)
-        wb_layout.addLayout(row_wb_btn)
-
-        self.sec_wb.set_content_widget(w_wb)
-        left_layout.addWidget(self.sec_wb)
-
-        # --- SECCIÓN 7: Color: Saturación e Intensidad ---
-        self.sec_color = CollapsibleSection(
-            "Color y Saturación",
-            is_expanded=True,
-            on_reset=self.reset_saturation,
-            icon_name="palette"
-        )
-        w_sat = QWidget()
-        sat_layout = QVBoxLayout(w_sat)
-        sat_layout.setContentsMargins(6, 4, 6, 6)
-        sat_layout.setSpacing(8)
-
-        # Sliders de alta precisión para Saturación y Vibranza
-        self.row_sat_sky = PrecisionSliderRow("Sat. Cielo:", 0, 250, 100, scale=100.0, decimals=2, unit="x", label_width=115)
-        self.slider_sat_sky = self.row_sat_sky.slider
-        self.lbl_sat_sky = self.row_sat_sky.lbl_value
-        self.slider_sat_sky.valueChanged.connect(self.on_sat_sky_changed)
-        sat_layout.addWidget(self.row_sat_sky)
-
-        self.row_sat_gnd = PrecisionSliderRow("Sat. Suelo:", 0, 250, 100, scale=100.0, decimals=2, unit="x", label_width=115)
-        self.slider_sat_gnd = self.row_sat_gnd.slider
-        self.lbl_sat_gnd = self.row_sat_gnd.lbl_value
-        self.slider_sat_gnd.valueChanged.connect(self.on_sat_gnd_changed)
-        sat_layout.addWidget(self.row_sat_gnd)
-
-        self.row_vibrance = PrecisionSliderRow("Vibranza:", -100, 100, 0, scale=100.0, decimals=2, force_sign=True, label_width=115)
-        self.slider_vibrance = self.row_vibrance.slider
-        self.lbl_vibrance = self.row_vibrance.lbl_value
-        self.slider_vibrance.valueChanged.connect(self.on_vibrance_changed)
-
-        btn_reset_sat = QPushButton("Restablecer")
-        btn_reset_sat.setToolTip("Restablecer Saturación y Vibranza")
-        btn_reset_sat.clicked.connect(self.reset_saturation)
-        self.row_vibrance.layout().addWidget(btn_reset_sat)
-        sat_layout.addWidget(self.row_vibrance)
-
-        self.sec_color.set_content_widget(w_sat)
-        left_layout.addWidget(self.sec_color)
+        left_layout.addWidget(self.panel_color_wb)
 
         # --- SECCIÓN 8: Ajuste Tonal Suelo (Paisaje) ---
         self.sec_gnd_tone = CollapsibleSection(
@@ -3027,12 +2422,12 @@ class DeveloperTab(QWidget):
 
             self.current_mask = new_mask
             self._mask_source_name = "Trazos"
+            self._generate_preview_proxy()
+            self.update_stretch_preview()
             self.canvas.set_refined_mask(self.current_mask, mode="bicolor")
             self.canvas.set_scribbles_visible(False)
             self.canvas.set_mask_visible(True)
             self._set_mask_overlay_ui_state(True)
-            self._generate_preview_proxy()
-            self.update_stretch_preview()
             self._update_mask_status_ui()
             self._record_mask_action(old_m, self.current_mask, "Generar Máscara")
 
@@ -3321,13 +2716,12 @@ class DeveloperTab(QWidget):
         old_m = self.current_mask.copy() if self.current_mask is not None else None
         self.current_mask = np.ascontiguousarray(np.clip(mask, 0.0, 1.0), dtype=np.float32)
         self._mask_source_name = source_desc
+        self._generate_preview_proxy()
+        self.update_stretch_preview()
         self.canvas.set_refined_mask(self.current_mask, mode="bicolor")
         self.canvas.set_scribbles_visible(False)
         self.canvas.set_mask_visible(True)
         self._set_mask_overlay_ui_state(True)
-
-        self._generate_preview_proxy()
-        self.update_stretch_preview()
         self._update_mask_status_ui()
         self._record_mask_action(old_m, self.current_mask, f"Cargar Máscara ({source_desc})")
         self.log_message(f"✓ [MÁSCARA] Máscara cargada y aplicada con éxito desde: {source_desc}.")
@@ -4740,373 +4134,71 @@ class DeveloperTab(QWidget):
             round(float(self.star_intensity), 4)
         )
 
-        if is_preview and self._cache_pre_layers_key == stage2_key and self._cache_pre_layers_stretched is not None:
-            stretched = self._cache_pre_layers_stretched
-            st_stretched = self._cache_pre_layers_stars
+        use_cached_pre = (is_preview and self._cache_pre_layers_key == stage2_key and self._cache_pre_layers_stretched is not None)
+        pre_stretched_base = self._cache_pre_layers_stretched if use_cached_pre else None
+        pre_stretched_stars = self._cache_pre_layers_stars if use_cached_pre else None
+
+        # Resolve starless and stars image slices
+        if is_zoomed:
+            x1, y1, x2, y2 = self._zoom_crop_rect
+            st_img = self.image_stars[y1:y2, x1:x2].copy() if self.image_stars is not None else None
+            sl_img = self.image_starless[y1:y2, x1:x2].copy() if self.image_starless is not None else None
+        elif is_full_res:
+            st_img = self.image_stars
+            sl_img = self.image_starless
         else:
-            # 1. Balance de blancos
-            img = apply_white_balance(target_img, self.temp_val, self.tint_val)
+            st_img = self.proxy_stars if self.proxy_stars is not None else self.image_stars
+            sl_img = self.proxy_starless if self.proxy_starless is not None else self.image_starless
 
-            # 2. Saturación diferencial cielo / suelo
-            if self.sat_sky_val != 1.0 or self.sat_gnd_val != 1.0:
-                hsv = cv2.cvtColor(np.clip(img, 0.0, 1.0), cv2.COLOR_RGB2HSV)
-                if precomputed_mask is None or self.sat_sky_val == self.sat_gnd_val:
-                    hsv[..., 1] = np.clip(hsv[..., 1] * self.sat_sky_val, 0.0, 1.0)
-                    img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
-                else:
-                    hsv_sky = hsv.copy()
-                    hsv_sky[..., 1] = np.clip(hsv_sky[..., 1] * self.sat_sky_val, 0.0, 1.0)
-                    rgb_sky = cv2.cvtColor(hsv_sky, cv2.COLOR_HSV2RGB)
+        # Build DeveloperState snapshot
+        state = DeveloperState.from_dict(self._capture_state())
 
-                    hsv_gnd = hsv.copy()
-                    hsv_gnd[..., 1] = np.clip(hsv_gnd[..., 1] * self.sat_gnd_val, 0.0, 1.0)
-                    rgb_gnd = cv2.cvtColor(hsv_gnd, cv2.COLOR_HSV2RGB)
-
-                    img = (rgb_sky * precomputed_mask) + (rgb_gnd * (1.0 - precomputed_mask))
-
-            # 3. Intensidad
-            if abs(self.vibrance_val) > 1e-4:
-                img = adjust_vibrance(img, self.vibrance_val)
-
-            # 4. Reducción Paramétrica 2D de Cúpula de Contaminación Lumínica
-            if self.lp_reduction > 1e-4:
-                mask_2d = precomputed_mask[..., 0] if precomputed_mask is not None else None
-                tint_rgb = LP_PRESET_TINTS.get(self.lp_tint_type, getattr(self, 'lp_custom_tint', (1.0, 0.68, 0.22)))
-                img = apply_parametric_light_pollution(
-                    img,
-                    strength=self.lp_reduction,
-                    center_x=self.lp_center_x,
-                    center_y=self.lp_center_y,
-                    width=self.lp_width,
-                    height=self.lp_height,
-                    tint_rgb=tint_rgb,
-                    tint_strength=self.lp_tint_strength,
-                    sky_mask=mask_2d,
-                    mode=self.lp_mode,
-                    legacy_1d=self.lp_legacy_1d
-                )
-
-            # 5. Ajuste Tonal Diferencial para el Suelo
-            if precomputed_mask is not None:
-                has_gnd_tone_change = (
-                    abs(self.gnd_ev_val) > 1e-4 or 
-                    self.gnd_shadows_val > 1e-4 or 
-                    abs(self.gnd_bp_val) > 1e-4
-                )
-                if has_gnd_tone_change:
-                    gnd_part = img.copy()
-
-                    if abs(self.gnd_ev_val) > 1e-4:
-                        gnd_part = gnd_part * (2.0 ** self.gnd_ev_val)
-
-                    if self.gnd_shadows_val > 1e-4:
-                        lift_curve = (1.0 - np.clip(gnd_part, 0.0, 1.0)) ** 2
-                        gnd_part = gnd_part * (1.0 + self.gnd_shadows_val * lift_curve)
-
-                    if abs(self.gnd_bp_val) > 1e-4:
-                        if self.gnd_bp_val < 0.0:
-                            gnd_part = np.clip(gnd_part - self.gnd_bp_val, 0.0, 1.0)
-                        else:
-                            gnd_part = np.clip((gnd_part - self.gnd_bp_val) / max(1e-4, 1.0 - self.gnd_bp_val), 0.0, 1.0)
-
-                    img = (img * precomputed_mask) + (gnd_part * (1.0 - precomputed_mask))
-
-            # 6. Estirado Tonal (MTF o GHS)
-            if getattr(self, "stretch_mode", "mtf") == "ghs":
-                stretched = apply_ghs_stretch(
-                    img,
-                    sp=self.spin_ghs_sp.value(),
-                    d=self.spin_ghs_d.value(),
-                    b=self.spin_ghs_b.value(),
-                    hp=self.spin_ghs_hp.value(),
-                    lp=self.spin_ghs_lp.value(),
-                    bp=self.spin_ghs_bp.value(),
-                    color_mode=getattr(self, "ghs_color_mode", "luma")
-                )
-            else:
-                bp_val = self.spin_bp.value()
-                m_val = self.spin_mtf.value()
-                stretched = manual_stretch(img, black_point=bp_val, midtone=m_val)
-
-            # 7. Curvas Tonales (LUT RGB)
+        # Collect tone curves
+        curve_luts = {}
+        if hasattr(self, 'curve_widget'):
             if not self.curve_widget.is_identity("rgb"):
-                curved = apply_curve_lut(stretched, self.curve_widget.get_lut("rgb"))
-                if precomputed_mask is not None:
-                    stretched = (curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
-                else:
-                    stretched = curved
-
-            # 7b. Curva Selectiva Tono vs Saturación (Hue vs Sat)
+                curve_luts["rgb"] = self.curve_widget.get_lut("rgb")
             if not self.curve_widget.is_identity("hue_sat"):
-                hsv_curved = apply_hue_vs_sat_curve(stretched, self.curve_widget.get_lut("hue_sat"))
-                if precomputed_mask is not None:
-                    stretched = (hsv_curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
-                else:
-                    stretched = hsv_curved
-
-            # 7c. Curva Selectiva Luminancia vs Saturación (Luma vs Sat)
+                curve_luts["hue_sat"] = self.curve_widget.get_lut("hue_sat")
             if not self.curve_widget.is_identity("luma_sat"):
-                luma_curved = apply_luma_vs_sat_curve(stretched, self.curve_widget.get_lut("luma_sat"))
-                if precomputed_mask is not None:
-                    stretched = (luma_curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
-                else:
-                    stretched = luma_curved
+                curve_luts["luma_sat"] = self.curve_widget.get_lut("luma_sat")
 
-            # 8. Contraste específico del Fondo (Starless)
-            if abs(self.contrast_starless_val) > 1e-4:
-                if precomputed_mask is not None and np.any(precomputed_mask > 0.5):
-                    sky_median = float(np.median(stretched[precomputed_mask > 0.5]))
-                else:
-                    sky_median = float(np.median(stretched))
+        # Get PSF kernel
+        psf_kernel = self._get_current_deconv_psf() if hasattr(self, '_get_current_deconv_psf') else None
 
-                sn_contrasted = adjust_contrast(stretched, self.contrast_starless_val, pivot=sky_median)
-                if precomputed_mask is not None:
-                    stretched = (sn_contrasted * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
-                else:
-                    stretched = sn_contrasted
+        # Mask layers
+        mask_layers = self.mask_layers_widget.layers if (apply_mask_layers and hasattr(self, 'mask_layers_widget')) else None
 
-            # 9. Contraste Global
-            if abs(self.contrast_val) > 1e-4:
-                stretched = adjust_contrast(stretched, self.contrast_val, pivot=None)
+        is_scrubbing = getattr(self, '_is_scrubbing_heavy_slider', False)
 
-            # 9a. Deconvolución Óptica Regularizada (Richardson-Lucy / PSF)
-            if getattr(self, "deconv_iterations", 0) > 0:
-                is_draft_deconv = (not is_full_res and getattr(self, '_is_scrubbing_heavy_slider', False))
-                orig_h_dec, orig_w_dec = stretched.shape[:2]
-                if is_draft_deconv:
-                    dw_dec = max(32, orig_w_dec // 2)
-                    dh_dec = max(32, orig_h_dec // 2)
-                    in_deconv = cv2.resize(stretched, (dw_dec, dh_dec), interpolation=cv2.INTER_AREA)
-                    in_mask_dec = cv2.resize(precomputed_mask, (dw_dec, dh_dec), interpolation=cv2.INTER_AREA) if precomputed_mask is not None else None
-                else:
-                    in_deconv = stretched
-                    in_mask_dec = precomputed_mask
+        final_img, base_stretched, stars_stretched = apply_developer_pipeline(
+            target_img=target_img,
+            state=state,
+            precomputed_mask=precomputed_mask,
+            image_stars=st_img,
+            image_starless=sl_img,
+            mask_layers=mask_layers,
+            curve_luts=curve_luts,
+            psf_kernel=psf_kernel,
+            is_preview=is_preview,
+            is_scrubbing=is_scrubbing,
+            crop_rect=crop_rect,
+            full_shape=full_shape,
+            return_intermediate=True,
+            precomputed_stretched_base=pre_stretched_base,
+            precomputed_stretched_stars=pre_stretched_stars,
+        )
 
-                psf_kernel = self._get_current_deconv_psf()
-                if is_draft_deconv:
-                    k_w = max(3, (psf_kernel.shape[1] // 2) | 1)
-                    k_h = max(3, (psf_kernel.shape[0] // 2) | 1)
-                    psf_kernel = cv2.resize(psf_kernel, (k_w, k_h), interpolation=cv2.INTER_AREA)
-                    psf_kernel = psf_kernel / max(1e-7, float(np.sum(psf_kernel)))
+        if is_preview and not is_scrubbing:
+            self._cache_pre_layers_key = stage2_key
+            self._cache_pre_layers_stretched = base_stretched
+            self._cache_pre_layers_stars = stars_stretched
+            self._cached_base_stretched = base_stretched
+            self._cached_stars_stretched = stars_stretched
+            self._cached_sky_mask = precomputed_mask
+            self._cached_rendered_image = final_img
 
-                star_mask = None
-                if self.deconv_scope in ["stars_only", "background_only"]:
-                    if hasattr(self, 'image_stars') and self.image_stars is not None:
-                        st_ref = self.image_stars if in_deconv.shape[:2] == self.image_stars.shape[:2] else self.proxy_stars
-                        if st_ref is not None:
-                            if is_draft_deconv and st_ref.shape[:2] != (dh_dec, dw_dec):
-                                st_ref_scaled = cv2.resize(st_ref, (dw_dec, dh_dec), interpolation=cv2.INTER_AREA)
-                            else:
-                                st_ref_scaled = st_ref
-                            star_mask = (np.mean(st_ref_scaled, axis=2) > 0.05).astype(np.float32)
-                    if star_mask is None:
-                        gray_s = cv2.cvtColor(in_deconv, cv2.COLOR_RGB2GRAY) if (in_deconv.ndim == 3 and in_deconv.shape[2] == 3) else in_deconv
-                        k_th = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-                        tophat = cv2.morphologyEx(gray_s, cv2.MORPH_TOPHAT, k_th)
-                        star_mask = (tophat > 0.02).astype(np.float32)
-
-                deconvolved = richardson_lucy_deconvolve(
-                    in_deconv,
-                    psf_kernel=psf_kernel,
-                    iterations=self.deconv_iterations,
-                    deringing=self.deconv_deringing,
-                    damping=self.deconv_damping,
-                    luminance_only=self.deconv_luma_only,
-                    star_mask=star_mask,
-                    target_scope=self.deconv_scope
-                )
-                if in_mask_dec is not None:
-                    res_deconv = (deconvolved * in_mask_dec) + (in_deconv * (1.0 - in_mask_dec))
-                else:
-                    res_deconv = deconvolved
-
-                if is_draft_deconv:
-                    stretched = cv2.resize(res_deconv, (orig_w_dec, orig_h_dec), interpolation=cv2.INTER_LINEAR)
-                else:
-                    stretched = res_deconv
-
-            # 9b. Efecto Orton y Resplandor de Polvo Galáctico (si no se está usando capa starless desacoplada)
-            has_active_starless = (self.image_starless is not None and hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.has_image_layers())
-            if self.orton_strength > 1e-4 and not has_active_starless:
-                is_draft_ort = (not is_full_res and getattr(self, '_is_scrubbing_heavy_slider', False))
-                orig_h_ort, orig_w_ort = stretched.shape[:2]
-                if is_draft_ort:
-                    dw_ort = max(32, orig_w_ort // 2)
-                    dh_ort = max(32, orig_h_ort // 2)
-                    in_ort = cv2.resize(stretched, (dw_ort, dh_ort), interpolation=cv2.INTER_AREA)
-                    in_mask_ort = cv2.resize(precomputed_mask, (dw_ort, dh_ort), interpolation=cv2.INTER_AREA) if precomputed_mask is not None else None
-                else:
-                    in_ort = stretched
-                    in_mask_ort = precomputed_mask
-
-                mask_2d = in_mask_ort[..., 0] if in_mask_ort is not None else None
-                res_ort = apply_astronomical_orton(
-                    in_ort,
-                    strength=self.orton_strength,
-                    radius=self.orton_radius * (0.5 if is_draft_ort else 1.0),
-                    threshold=self.orton_threshold,
-                    exponent=1.0,
-                    tint_type=self.orton_tint_type,
-                    custom_tint=getattr(self, 'orton_custom_tint', (1.0, 0.85, 0.55)),
-                    tint_strength=self.orton_tint_strength,
-                    blend_mode=self.orton_mode,
-                    sky_mask=mask_2d,
-                    is_starless=False
-                )
-                if is_draft_ort:
-                    stretched = cv2.resize(res_ort, (orig_w_ort, orig_h_ort), interpolation=cv2.INTER_LINEAR)
-                else:
-                    stretched = res_ort
-
-            # 9c. Filtro Difusor y Realce de Constelaciones (en modo imagen única / sin capas StarNet)
-            if self.star_diff_strength > 1e-4 and not has_active_starless:
-                is_draft_sd = (not is_full_res and getattr(self, '_is_scrubbing_heavy_slider', False))
-                orig_h_sd, orig_w_sd = stretched.shape[:2]
-                if is_draft_sd:
-                    dw_sd = max(32, orig_w_sd // 2)
-                    dh_sd = max(32, orig_h_sd // 2)
-                    in_sd = cv2.resize(stretched, (dw_sd, dh_sd), interpolation=cv2.INTER_AREA)
-                    in_mask_sd = cv2.resize(precomputed_mask, (dw_sd, dh_sd), interpolation=cv2.INTER_AREA) if precomputed_mask is not None else None
-                else:
-                    in_sd = stretched
-                    in_mask_sd = precomputed_mask
-
-                mask_2d = in_mask_sd[..., 0] if in_mask_sd is not None else None
-                res_sd = apply_star_diffusion(
-                    in_sd,
-                    strength=self.star_diff_strength,
-                    radius=self.star_diff_radius * (0.5 if is_draft_sd else 1.0),
-                    threshold=self.star_diff_threshold,
-                    color_boost=self.star_diff_color_boost,
-                    halo_mode=self.star_diff_mode,
-                    sky_mask=mask_2d,
-                    stars_layer=None
-                )
-                if is_draft_sd:
-                    stretched = cv2.resize(res_sd, (orig_w_sd, orig_h_sd), interpolation=cv2.INTER_LINEAR)
-                else:
-                    stretched = res_sd
-
-            # Preparación de la capa de estrellas para composición
-            if is_zoomed:
-                x1, y1, x2, y2 = self._zoom_crop_rect
-                st_img = self.image_stars[y1:y2, x1:x2].copy() if self.image_stars is not None else None
-            elif is_full_res:
-                st_img = self.image_stars
-            else:
-                st_img = self.proxy_stars if self.proxy_stars is not None else self.image_stars
-
-            if st_img is not None and hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.has_image_layers():
-                if getattr(self, "stretch_mode", "mtf") == "ghs":
-                    st_stretched = np.clip(
-                        apply_ghs_stretch(
-                            st_img,
-                            sp=self.spin_ghs_sp.value(),
-                            d=self.spin_ghs_d.value(),
-                            b=self.spin_ghs_b.value(),
-                            hp=self.spin_ghs_hp.value(),
-                            lp=self.spin_ghs_lp.value(),
-                            bp=0.0,
-                            color_mode="rgb"
-                        ) * self.star_intensity,
-                        0.0, 1.0
-                    )
-                else:
-                    st_stretched = np.clip(
-                        manual_stretch(st_img, black_point=0.0, midtone=self.spin_mtf.value()) * self.star_intensity,
-                        0.0, 1.0
-                    )
-                if self.star_diff_strength > 1e-4:
-                    is_draft_sd = (not is_full_res and getattr(self, '_is_scrubbing_heavy_slider', False))
-                    orig_h_sd, orig_w_sd = st_stretched.shape[:2]
-                    if is_draft_sd:
-                        dw_sd = max(32, orig_w_sd // 2)
-                        dh_sd = max(32, orig_h_sd // 2)
-                        in_sd = cv2.resize(st_stretched, (dw_sd, dh_sd), interpolation=cv2.INTER_AREA)
-                        in_mask_sd = cv2.resize(precomputed_mask, (dw_sd, dh_sd), interpolation=cv2.INTER_AREA) if precomputed_mask is not None else None
-                    else:
-                        in_sd = st_stretched
-                        in_mask_sd = precomputed_mask
-
-                    mask_2d = in_mask_sd[..., 0] if in_mask_sd is not None else None
-                    res_sd = apply_star_diffusion(
-                        in_sd,
-                        strength=self.star_diff_strength,
-                        radius=self.star_diff_radius * (0.5 if is_draft_sd else 1.0),
-                        threshold=self.star_diff_threshold,
-                        color_boost=self.star_diff_color_boost,
-                        halo_mode=self.star_diff_mode,
-                        sky_mask=mask_2d,
-                        stars_layer=in_sd
-                    )
-                    if is_draft_sd:
-                        st_stretched = cv2.resize(res_sd, (orig_w_sd, orig_h_sd), interpolation=cv2.INTER_LINEAR)
-                    else:
-                        st_stretched = res_sd
-            elif st_img is not None:
-                st_stretched = np.clip(st_img * self.star_intensity, 0.0, 1.0)
-                if self.star_diff_strength > 1e-4:
-                    is_draft_sd = (not is_full_res and getattr(self, '_is_scrubbing_heavy_slider', False))
-                    orig_h_sd, orig_w_sd = st_stretched.shape[:2]
-                    if is_draft_sd:
-                        dw_sd = max(32, orig_w_sd // 2)
-                        dh_sd = max(32, orig_h_sd // 2)
-                        in_sd = cv2.resize(st_stretched, (dw_sd, dh_sd), interpolation=cv2.INTER_AREA)
-                        in_mask_sd = cv2.resize(precomputed_mask, (dw_sd, dh_sd), interpolation=cv2.INTER_AREA) if precomputed_mask is not None else None
-                    else:
-                        in_sd = st_stretched
-                        in_mask_sd = precomputed_mask
-
-                    mask_2d = in_mask_sd[..., 0] if in_mask_sd is not None else None
-                    res_sd = apply_star_diffusion(
-                        in_sd,
-                        strength=self.star_diff_strength,
-                        radius=self.star_diff_radius * (0.5 if is_draft_sd else 1.0),
-                        threshold=self.star_diff_threshold,
-                        color_boost=self.star_diff_color_boost,
-                        halo_mode=self.star_diff_mode,
-                        sky_mask=mask_2d,
-                        stars_layer=in_sd
-                    )
-                    if is_draft_sd:
-                        st_stretched = cv2.resize(res_sd, (orig_w_sd, orig_h_sd), interpolation=cv2.INTER_LINEAR)
-                    else:
-                        st_stretched = res_sd
-            else:
-                st_stretched = st_img
-
-            if is_preview and not getattr(self, '_is_scrubbing_heavy_slider', False):
-                self._cache_pre_layers_key = stage2_key
-                self._cache_pre_layers_stretched = stretched
-                self._cache_pre_layers_stars = st_stretched
-                self._cached_base_stretched = stretched
-                self._cached_stars_stretched = st_stretched
-                self._cached_sky_mask = precomputed_mask
-
-        # 10. Aplicación de Capas y Máscaras Locales (Compositor Multicapa estilo Photoshop)
-        if apply_mask_layers and hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers:
-            if is_zoomed:
-                x1, y1, x2, y2 = self._zoom_crop_rect
-                sl_img = self.image_starless[y1:y2, x1:x2].copy() if self.image_starless is not None else None
-            elif is_full_res:
-                sl_img = self.image_starless
-            else:
-                sl_img = self.proxy_starless if self.proxy_starless is not None else self.image_starless
-
-            stretched = apply_all_mask_layers(
-                stretched,
-                self.mask_layers_widget.layers,
-                master_sky_mask=precomputed_mask,
-                starless_image=sl_img,
-                stars_image=st_stretched,
-                crop_rect=crop_rect,
-                full_image_shape=full_shape
-            )
-
-        if is_preview:
-            self._cached_rendered_image = stretched
-
-        return np.ascontiguousarray(stretched, dtype=np.float32)
+        return final_img
 
     def update_stretch_preview(self, immediate: bool = False):
         if immediate:
@@ -5466,6 +4558,23 @@ class DeveloperTab(QWidget):
         if self.deconv_iterations > 0:
             self.update_stretch_preview()
 
+    def _on_deconv_parameter_changed(self):
+        """Sincroniza el estado del panel modular de Deconvolución con el revelador."""
+        if hasattr(self, 'panel_deconv'):
+            self.deconv_iterations = self.panel_deconv.deconv_iterations
+            self.deconv_fwhm = self.panel_deconv.deconv_fwhm
+            self.deconv_deringing = self.panel_deconv.deconv_deringing
+            self.deconv_damping = self.panel_deconv.deconv_damping
+            self.deconv_aspect_ratio = self.panel_deconv.deconv_aspect_ratio
+            self.deconv_angle_deg = self.panel_deconv.deconv_angle_deg
+            self.deconv_model = self.panel_deconv.deconv_model
+            self.deconv_scope = self.panel_deconv.deconv_scope
+            self.deconv_luma_only = self.panel_deconv.deconv_luma_only
+            self._cached_psf = None
+            self._cached_psf_key = ()
+        if self.deconv_iterations > 0:
+            self.update_stretch_preview()
+
     def _on_deconv_model_changed(self, idx: int):
         model = self.combo_deconv_model.itemData(idx) or ("moffat" if idx == 0 else "gaussian")
         self.deconv_model = model
@@ -5663,6 +4772,16 @@ class DeveloperTab(QWidget):
             self.combo_layer.blockSignals(False)
         self.update_stretch_preview()
 
+    def _on_color_wb_parameter_changed(self):
+        """Sincroniza el estado del panel modular de Color/WB con el revelador y actualiza la vista."""
+        if hasattr(self, 'panel_color_wb'):
+            self.temp_val = self.panel_color_wb.temp_val
+            self.tint_val = self.panel_color_wb.tint_val
+            self.sat_sky_val = self.panel_color_wb.sat_sky_val
+            self.sat_gnd_val = self.panel_color_wb.sat_gnd_val
+            self.vibrance_val = self.panel_color_wb.vibrance_val
+        self.update_stretch_preview()
+
     def on_temp_changed(self, val: int):
         self.temp_val = val / 1000.0
         if hasattr(self, 'spin_temp'):
@@ -5818,24 +4937,43 @@ class DeveloperTab(QWidget):
         self.spin_mtf.blockSignals(False)
         self.slider_mtf.blockSignals(False)
 
+    def _on_stretch_parameter_changed(self):
+        """Sincroniza el estado del panel modular de Estirado con el revelador."""
+        if hasattr(self, 'panel_stretch'):
+            self.stretch_mode = self.panel_stretch.stretch_mode
+            self.ghs_color_mode = self.panel_stretch.ghs_color_mode
+            self.bp_val = self.panel_stretch.bp_val
+            self.mtf_val = self.panel_stretch.mtf_val
+            self.contrast_val = self.panel_stretch.contrast_val
+            self.ghs_sp_val = self.panel_stretch.ghs_sp_val
+            self.ghs_d_val = self.panel_stretch.ghs_d_val
+            self.ghs_b_val = self.panel_stretch.ghs_b_val
+            self.ghs_hp_val = self.panel_stretch.ghs_hp_val
+            self.ghs_lp_val = self.panel_stretch.ghs_lp_val
+            self.ghs_bp_val = self.panel_stretch.ghs_bp_val
+        self.update_stretch_preview()
+
     def _set_stretch_mode(self, mode: str):
         """Alterna el modo de estirado entre MTF clásico y GHS hiperbólico."""
         if mode not in ("mtf", "ghs"):
             return
         self.stretch_mode = mode
-        if hasattr(self, 'btn_mode_mtf'):
-            self.btn_mode_mtf.blockSignals(True)
-            self.btn_mode_mtf.setChecked(mode == "mtf")
-            self.btn_mode_mtf.blockSignals(False)
-        if hasattr(self, 'btn_mode_ghs'):
-            self.btn_mode_ghs.blockSignals(True)
-            self.btn_mode_ghs.setChecked(mode == "ghs")
-            self.btn_mode_ghs.blockSignals(False)
+        if hasattr(self, 'panel_stretch'):
+            self.panel_stretch.set_stretch_mode(mode)
+        else:
+            if hasattr(self, 'btn_mode_mtf'):
+                self.btn_mode_mtf.blockSignals(True)
+                self.btn_mode_mtf.setChecked(mode == "mtf")
+                self.btn_mode_mtf.blockSignals(False)
+            if hasattr(self, 'btn_mode_ghs'):
+                self.btn_mode_ghs.blockSignals(True)
+                self.btn_mode_ghs.setChecked(mode == "ghs")
+                self.btn_mode_ghs.blockSignals(False)
 
-        if hasattr(self, 'w_mtf_container'):
-            self.w_mtf_container.setVisible(mode == "mtf")
-        if hasattr(self, 'w_ghs_container'):
-            self.w_ghs_container.setVisible(mode == "ghs")
+            if hasattr(self, 'w_mtf_container'):
+                self.w_mtf_container.setVisible(mode == "mtf")
+            if hasattr(self, 'w_ghs_container'):
+                self.w_ghs_container.setVisible(mode == "ghs")
 
         self.update_stretch_preview()
         self._commit_action()
@@ -5845,14 +4983,17 @@ class DeveloperTab(QWidget):
         if mode not in ("luma", "rgb"):
             return
         self.ghs_color_mode = mode
-        if hasattr(self, 'btn_ghs_luma'):
-            self.btn_ghs_luma.blockSignals(True)
-            self.btn_ghs_luma.setChecked(mode == "luma")
-            self.btn_ghs_luma.blockSignals(False)
-        if hasattr(self, 'btn_ghs_rgb'):
-            self.btn_ghs_rgb.blockSignals(True)
-            self.btn_ghs_rgb.setChecked(mode == "rgb")
-            self.btn_ghs_rgb.blockSignals(False)
+        if hasattr(self, 'panel_stretch'):
+            self.panel_stretch.set_ghs_color_mode(mode)
+        else:
+            if hasattr(self, 'btn_ghs_luma'):
+                self.btn_ghs_luma.blockSignals(True)
+                self.btn_ghs_luma.setChecked(mode == "luma")
+                self.btn_ghs_luma.blockSignals(False)
+            if hasattr(self, 'btn_ghs_rgb'):
+                self.btn_ghs_rgb.blockSignals(True)
+                self.btn_ghs_rgb.setChecked(mode == "rgb")
+                self.btn_ghs_rgb.blockSignals(False)
 
         self.update_stretch_preview()
         self._commit_action()
@@ -6216,6 +5357,21 @@ class DeveloperTab(QWidget):
             self.spin_lp_h.blockSignals(True)
             self.spin_lp_h.setValue(h)
             self.spin_lp_h.blockSignals(False)
+        self.update_stretch_preview()
+
+    def _on_lp_parameter_changed(self):
+        """Sincroniza el estado del panel modular de Contaminación Lumínica con el revelador."""
+        if hasattr(self, 'panel_lp'):
+            self.lp_reduction = self.panel_lp.lp_reduction
+            self.lp_center_x = self.panel_lp.lp_center_x
+            self.lp_center_y = self.panel_lp.lp_center_y
+            self.lp_width = self.panel_lp.lp_width
+            self.lp_height = self.panel_lp.lp_height
+            self.lp_tint_type = self.panel_lp.lp_tint_type
+            self.lp_custom_tint = self.panel_lp.lp_custom_tint
+            self.lp_tint_strength = self.panel_lp.lp_tint_strength
+            self.lp_mode = self.panel_lp.lp_mode
+            self.lp_legacy_1d = self.panel_lp.lp_legacy_1d
         self.update_stretch_preview()
 
     def _on_lp_tint_combo_changed(self, idx: int):
