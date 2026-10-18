@@ -139,13 +139,14 @@ if HAS_NUMBA:
 
 def load_image_as_float32(filepath: str, color_space: str = None) -> np.ndarray:
     """Carga imágenes optimizando memoria con operaciones in-place y espacio de color configurado."""
+    if color_space is None:
+        from core.config_manager import get_config_val
+        color_space = get_config_val("icc_profile", "srgb")
+
     ext = os.path.splitext(filepath)[1].lower()
 
     if ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw']:
         from core.icc_manager import get_rawpy_colorspace
-        if color_space is None:
-            from core.config_manager import get_config_val
-            color_space = get_config_val("icc_profile", "srgb")
         raw_cs = get_rawpy_colorspace(color_space)
 
         with rawpy.imread(filepath) as raw:

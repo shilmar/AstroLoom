@@ -130,6 +130,7 @@ class DeveloperTab(QWidget):
 
         self.current_mask = None      
         self.active_filepath = None
+        self.current_color_space = "srgb"
         self.gx_worker = None
         self.sn_worker = None
         
@@ -3140,7 +3141,13 @@ class DeveloperTab(QWidget):
             return
         h, w = self.image_32bit.shape[:2]
         mp = (w * h) / 1e6
-        self.lbl_canvas_info.setText(f"{w} × {h} px ({mp:.1f} MP)  |  32-bit Float  |  sRGB")
+        cs_labels = {
+            "srgb": "sRGB",
+            "adobe": "Adobe RGB (1998)",
+            "prophoto": "ProPhoto RGB"
+        }
+        cs_name = cs_labels.get(getattr(self, 'current_color_space', 'srgb'), 'sRGB')
+        self.lbl_canvas_info.setText(f"{w} × {h} px ({mp:.1f} MP)  |  32-bit Float  |  {cs_name}")
 
     def keyPressEvent(self, event) -> None:
         """Captura directa de teclas rápidas 'M', 'J', 'Y', 'Shift+Y', 'C' y controles interactivos."""
@@ -3406,7 +3413,20 @@ class DeveloperTab(QWidget):
         self.slider_ond_bg.setEnabled(False)
         
         try:
-            raw_img = load_image_as_float32(filepath, color_space="srgb")
+            from core.config_manager import get_config_val
+            from core.icc_manager import (
+                extract_icc_profile,
+                identify_colorspace_from_icc,
+                normalize_colorspace_name
+            )
+            configured_cs = normalize_colorspace_name(get_config_val("icc_profile", "srgb"))
+            embedded_icc = extract_icc_profile(filepath) if filepath.lower().endswith(('.tif', '.tiff')) else None
+            if embedded_icc:
+                self.current_color_space = identify_colorspace_from_icc(embedded_icc)
+            else:
+                self.current_color_space = configured_cs
+
+            raw_img = load_image_as_float32(filepath, color_space=self.current_color_space)
             
             # Saneamiento preventivo de NaNs e infinitos
             if np.isnan(raw_img).any() or np.isinf(raw_img).any():
@@ -5586,8 +5606,8 @@ class DeveloperTab(QWidget):
 
                     stretched_stars = np.ascontiguousarray(st_stretched, dtype=np.float32)
 
-                # Obtener bytes del perfil de color ICC seleccionado en configuración
-                target_cs = normalize_colorspace_name(get_config_val("icc_profile", "srgb"))
+                # Obtener bytes del perfil de color ICC seleccionado en configuración o detectado
+                target_cs = getattr(self, 'current_color_space', normalize_colorspace_name(get_config_val("icc_profile", "srgb")))
                 icc_bytes = get_icc_profile_bytes(target_cs)
 
                 adj_layers = self.mask_layers_widget.layers if hasattr(self, 'mask_layers_widget') else None
@@ -5627,16 +5647,18 @@ class DeveloperTab(QWidget):
                 desc = "JPEG 8-bit"
             elif "32-bit" in selected_filter:
                 out32 = np.ascontiguousarray(np.clip(processed, 0.0, 1.0), dtype=np.float32)
-                save_tiff_with_icc(p, out32, compression='zlib', photometric='rgb', source_color_space='srgb')
+                src_cs = getattr(self, 'current_color_space', 'srgb')
+                save_tiff_with_icc(p, out32, compression='zlib', photometric='rgb', source_color_space=src_cs)
                 desc = "TIFF 32-bit float (ICC)"
             else:
                 u16 = np.ascontiguousarray((np.clip(processed, 0.0, 1.0) * 65535.0), dtype=np.uint16)
-                save_tiff_with_icc(p, u16, compression='zlib', photometric='rgb', source_color_space='srgb')
+                src_cs = getattr(self, 'current_color_space', 'srgb')
+                save_tiff_with_icc(p, u16, compression='zlib', photometric='rgb', source_color_space=src_cs)
                 desc = "TIFF 16-bit (ICC)"
 
             from core.config_manager import get_config_val
             from core.icc_manager import normalize_colorspace_name
-            target_cs = normalize_colorspace_name(get_config_val("icc_profile", "srgb"))
+            target_cs = getattr(self, 'current_color_space', normalize_colorspace_name(get_config_val("icc_profile", "srgb")))
             icc_labels = {"srgb": "sRGB", "adobe": "Adobe RGB (1998)", "prophoto": "ProPhoto RGB"}
             icc_desc_str = icc_labels.get(target_cs, "sRGB")
 
