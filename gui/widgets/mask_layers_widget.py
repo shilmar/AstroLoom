@@ -7,7 +7,7 @@ con ajustes locales paramétricos independientes y conciencia de capas StarNet.
 from typing import Optional, List, Dict, Any, Callable, Tuple
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtCore import Qt, Signal, QSize, QTimer
 from PySide6.QtGui import QColor, QFont, QCursor, QImage, QPixmap, QPainter
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -177,6 +177,12 @@ class MaskLayersWidget(QWidget):
         self._thumb_size_mode: str = "M"
         self._custom_list_height: bool = False
         self._user_list_height: Optional[int] = None
+
+        # Temporizador para reconstrucción diferida de miniaturas en lista tras interacción continua
+        self._thumb_rebuild_timer = QTimer(self)
+        self._thumb_rebuild_timer.setSingleShot(True)
+        self._thumb_rebuild_timer.setInterval(250)
+        self._thumb_rebuild_timer.timeout.connect(self._on_mask_param_interaction_finished)
 
         self._setup_ui()
 
@@ -410,6 +416,7 @@ class MaskLayersWidget(QWidget):
         self.slider_opacity.setRange(0, 100)
         self.slider_opacity.setValue(100)
         self.slider_opacity.valueChanged.connect(self._on_opacity_changed)
+        self.slider_opacity.sliderReleased.connect(self.ground_slider_released.emit)
         row_op.addWidget(self.slider_opacity, stretch=1)
         props_layout.addLayout(row_op)
 
@@ -505,6 +512,7 @@ class MaskLayersWidget(QWidget):
         self.spin_luma_min.setSingleStep(0.05)
         self.spin_luma_min.setValue(0.0)
         self.spin_luma_min.valueChanged.connect(self._on_luma_param_changed)
+        self.spin_luma_min.editingFinished.connect(self._on_mask_param_interaction_finished)
         row_luma_thresh.addWidget(self.spin_luma_min)
 
         row_luma_thresh.addWidget(QLabel("Máx:"))
@@ -513,6 +521,7 @@ class MaskLayersWidget(QWidget):
         self.spin_luma_max.setSingleStep(0.05)
         self.spin_luma_max.setValue(1.0)
         self.spin_luma_max.valueChanged.connect(self._on_luma_param_changed)
+        self.spin_luma_max.editingFinished.connect(self._on_mask_param_interaction_finished)
         row_luma_thresh.addWidget(self.spin_luma_max)
 
         row_luma_thresh.addWidget(QLabel("Borde:"))
@@ -521,6 +530,7 @@ class MaskLayersWidget(QWidget):
         self.spin_luma_feather.setSingleStep(0.02)
         self.spin_luma_feather.setValue(0.08)
         self.spin_luma_feather.valueChanged.connect(self._on_luma_param_changed)
+        self.spin_luma_feather.editingFinished.connect(self._on_mask_param_interaction_finished)
         row_luma_thresh.addWidget(self.spin_luma_feather)
 
         luma_layout.addLayout(row_luma_thresh)
@@ -564,6 +574,7 @@ class MaskLayersWidget(QWidget):
         self.slider_hue.setRange(0, 360)
         self.slider_hue.setValue(0)
         self.slider_hue.valueChanged.connect(self._on_hue_slider_changed)
+        self.slider_hue.sliderReleased.connect(self._on_mask_param_interaction_finished)
         row_hue.addWidget(self.slider_hue, stretch=1)
         color_layout.addLayout(row_hue)
 
@@ -610,6 +621,7 @@ class MaskLayersWidget(QWidget):
         self.spin_color_tol.setValue(30)
         self.spin_color_tol.setSuffix("°")
         self.spin_color_tol.valueChanged.connect(self._on_color_param_changed)
+        self.spin_color_tol.editingFinished.connect(self._on_mask_param_interaction_finished)
         row_tol_sat.addWidget(self.spin_color_tol)
 
         row_tol_sat.addWidget(QLabel("Sat. Mín:"))
@@ -618,6 +630,7 @@ class MaskLayersWidget(QWidget):
         self.spin_color_sat.setSingleStep(0.05)
         self.spin_color_sat.setValue(0.08)
         self.spin_color_sat.valueChanged.connect(self._on_color_param_changed)
+        self.spin_color_sat.editingFinished.connect(self._on_mask_param_interaction_finished)
         row_tol_sat.addWidget(self.spin_color_sat)
 
         color_layout.addLayout(row_tol_sat)
@@ -726,6 +739,7 @@ class MaskLayersWidget(QWidget):
         self.slider_adj_ev = self.row_adj_ev.slider
         self.lbl_adj_ev = self.row_adj_ev.lbl_value
         self.slider_adj_ev.valueChanged.connect(self._on_adj_ev_changed)
+        self.row_adj_ev.sliderReleased.connect(self.ground_slider_released.emit)
         adj_layout.addWidget(self.row_adj_ev)
 
         # Contraste
@@ -733,6 +747,7 @@ class MaskLayersWidget(QWidget):
         self.slider_adj_contrast = self.row_adj_contrast.slider
         self.lbl_adj_contrast = self.row_adj_contrast.lbl_value
         self.slider_adj_contrast.valueChanged.connect(self._on_adj_contrast_changed)
+        self.row_adj_contrast.sliderReleased.connect(self.ground_slider_released.emit)
         adj_layout.addWidget(self.row_adj_contrast)
 
         # Sombras
@@ -740,6 +755,7 @@ class MaskLayersWidget(QWidget):
         self.slider_adj_shadows = self.row_adj_shadows.slider
         self.lbl_adj_shadows = self.row_adj_shadows.lbl_value
         self.slider_adj_shadows.valueChanged.connect(self._on_adj_shadows_changed)
+        self.row_adj_shadows.sliderReleased.connect(self.ground_slider_released.emit)
         adj_layout.addWidget(self.row_adj_shadows)
 
         # Luces
@@ -747,6 +763,7 @@ class MaskLayersWidget(QWidget):
         self.slider_adj_highlights = self.row_adj_highlights.slider
         self.lbl_adj_highlights = self.row_adj_highlights.lbl_value
         self.slider_adj_highlights.valueChanged.connect(self._on_adj_highlights_changed)
+        self.row_adj_highlights.sliderReleased.connect(self.ground_slider_released.emit)
         adj_layout.addWidget(self.row_adj_highlights)
 
         # Saturación
@@ -754,6 +771,7 @@ class MaskLayersWidget(QWidget):
         self.slider_adj_sat = self.row_adj_sat.slider
         self.lbl_adj_sat = self.row_adj_sat.lbl_value
         self.slider_adj_sat.valueChanged.connect(self._on_adj_sat_changed)
+        self.row_adj_sat.sliderReleased.connect(self.ground_slider_released.emit)
         adj_layout.addWidget(self.row_adj_sat)
 
         # Temperatura WB
@@ -762,6 +780,7 @@ class MaskLayersWidget(QWidget):
         self.spin_adj_temp = self.row_adj_temp.spin
         self.lbl_adj_temp = self.row_adj_temp.lbl_value
         self.slider_adj_temp.valueChanged.connect(self._on_slider_adj_temp_changed)
+        self.row_adj_temp.sliderReleased.connect(self.ground_slider_released.emit)
         adj_layout.addWidget(self.row_adj_temp)
 
         # Tinte WB
@@ -770,6 +789,7 @@ class MaskLayersWidget(QWidget):
         self.spin_adj_tint = self.row_adj_tint.spin
         self.lbl_adj_tint = self.row_adj_tint.lbl_value
         self.slider_adj_tint.valueChanged.connect(self._on_slider_adj_tint_changed)
+        self.row_adj_tint.sliderReleased.connect(self.ground_slider_released.emit)
         adj_layout.addWidget(self.row_adj_tint)
 
         # Curva Tonal de Capa Interactiva
@@ -1369,12 +1389,24 @@ class MaskLayersWidget(QWidget):
 
         self._rebuild_list_items(select_layer_id=self._selected_layer_id)
 
-    def invalidate_layer_thumbnail(self, layer_id: Optional[str] = None) -> None:
+    def invalidate_layer_thumbnail(self, layer_id: Optional[str] = None, rebuild_now: bool = True) -> None:
         """Invalida la caché de miniaturas de una capa específica o de todas las capas."""
         for layer in self.layers:
             if layer_id is None or layer.id == layer_id:
                 if hasattr(layer, "_thumb_pixmap_cache"):
                     layer._thumb_pixmap_cache.clear()
+        if rebuild_now and not self._updating_ui:
+            if hasattr(self, '_thumb_rebuild_timer') and self._thumb_rebuild_timer.isActive():
+                self._thumb_rebuild_timer.stop()
+            self._rebuild_list_items(select_layer_id=self._selected_layer_id)
+        elif not rebuild_now and not self._updating_ui:
+            if hasattr(self, '_thumb_rebuild_timer'):
+                self._thumb_rebuild_timer.start(250)
+
+    def _on_mask_param_interaction_finished(self) -> None:
+        """Al finalizar el arrastre del ratón o la edición de parámetros de máscara, actualiza la miniatura."""
+        if hasattr(self, '_thumb_rebuild_timer') and self._thumb_rebuild_timer.isActive():
+            self._thumb_rebuild_timer.stop()
         if not self._updating_ui:
             self._rebuild_list_items(select_layer_id=self._selected_layer_id)
 
@@ -1722,6 +1754,7 @@ class MaskLayersWidget(QWidget):
                 self.starnet_visibility_changed.emit(False)
 
             self._rebuild_list_items(select_layer_id=layer.id)
+            self.update_active_layer_histogram()
             self.layers_changed.emit()
 
     def _on_layer_selection_changed(self, row: int) -> None:
@@ -2033,6 +2066,7 @@ class MaskLayersWidget(QWidget):
                     self.starnet_visibility_changed.emit(True)
             elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
                 self.starnet_visibility_changed.emit(False)
+            self.update_active_layer_histogram()
             self.layers_changed.emit()
 
     def _on_layer_invert_toggled(self, checked: bool) -> None:
@@ -2117,7 +2151,7 @@ class MaskLayersWidget(QWidget):
             layer.luma_min = self.spin_luma_min.value()
             layer.luma_max = self.spin_luma_max.value()
             layer.feather = self.spin_luma_feather.value()
-            self.invalidate_layer_thumbnail(layer.id)
+            self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
             self.layers_changed.emit()
@@ -2125,6 +2159,7 @@ class MaskLayersWidget(QWidget):
     def _set_luma_preset(self, l_min: float, l_max: float) -> None:
         self.spin_luma_min.setValue(l_min)
         self.spin_luma_max.setValue(l_max)
+        self._on_mask_param_interaction_finished()
 
     # Controles de Rango de Color
     def _on_hue_slider_changed(self, val: int) -> None:
@@ -2134,7 +2169,7 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if layer and layer.mask_type == MASK_TYPE_COLOR:
             layer.color_hue = float(val)
-            self.invalidate_layer_thumbnail(layer.id)
+            self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
             self.layers_changed.emit()
@@ -2145,7 +2180,7 @@ class MaskLayersWidget(QWidget):
         if layer and layer.mask_type == MASK_TYPE_COLOR:
             layer.color_tolerance = float(self.spin_color_tol.value())
             layer.color_min_sat = float(self.spin_color_sat.value())
-            self.invalidate_layer_thumbnail(layer.id)
+            self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
             self.layers_changed.emit()
@@ -2153,6 +2188,7 @@ class MaskLayersWidget(QWidget):
     def _set_color_preset(self, hue: int, tol: int) -> None:
         self.slider_hue.setValue(hue)
         self.spin_color_tol.setValue(tol)
+        self._on_mask_param_interaction_finished()
 
     def _update_color_swatch(self, hue: int) -> None:
         """Actualiza la insignia de color HSV de muestra según el matiz."""
@@ -2202,6 +2238,7 @@ class MaskLayersWidget(QWidget):
         if layer:
             layer.exposure = val / 100.0
             self.lbl_adj_ev.setText(f"{layer.exposure:+.2f} EV")
+            self.update_active_layer_histogram()
             self.layers_changed.emit()
 
     def _on_adj_contrast_changed(self, val: int) -> None:
@@ -2210,6 +2247,7 @@ class MaskLayersWidget(QWidget):
         if layer:
             layer.contrast = val / 100.0
             self.lbl_adj_contrast.setText(f"{layer.contrast:+.2f}")
+            self.update_active_layer_histogram()
             self.layers_changed.emit()
 
     def _on_adj_shadows_changed(self, val: int) -> None:
@@ -2218,6 +2256,7 @@ class MaskLayersWidget(QWidget):
         if layer:
             layer.shadows = val / 100.0
             self.lbl_adj_shadows.setText(f"{layer.shadows:+.2f}")
+            self.update_active_layer_histogram()
             self.layers_changed.emit()
 
     def _on_adj_highlights_changed(self, val: int) -> None:
@@ -2226,6 +2265,7 @@ class MaskLayersWidget(QWidget):
         if layer:
             layer.highlights = val / 100.0
             self.lbl_adj_highlights.setText(f"{layer.highlights:+.2f}")
+            self.update_active_layer_histogram()
             self.layers_changed.emit()
 
     def _on_adj_sat_changed(self, val: int) -> None:
@@ -2234,6 +2274,7 @@ class MaskLayersWidget(QWidget):
         if layer:
             layer.saturation = val / 100.0
             self.lbl_adj_sat.setText(f"{layer.saturation:.2f}x")
+            self.update_active_layer_histogram()
             self.layers_changed.emit()
 
     def _on_spin_adj_temp_changed(self, val: float) -> None:
@@ -2245,6 +2286,7 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if layer:
             layer.temp = float(val)
+            self.update_active_layer_histogram()
             self.layers_changed.emit()
 
     def _on_slider_adj_temp_changed(self, val: int) -> None:
@@ -2256,6 +2298,7 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if layer:
             layer.temp = float_val
+            self.update_active_layer_histogram()
             self.layers_changed.emit()
 
     def _on_spin_adj_tint_changed(self, val: float) -> None:
@@ -2267,6 +2310,7 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if layer:
             layer.tint = float(val)
+            self.update_active_layer_histogram()
             self.layers_changed.emit()
 
     def _on_slider_adj_tint_changed(self, val: int) -> None:
@@ -2278,6 +2322,7 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if layer:
             layer.tint = float_val
+            self.update_active_layer_histogram()
             self.layers_changed.emit()
 
     def _reset_local_adjustments(self) -> None:
@@ -2298,6 +2343,8 @@ class MaskLayersWidget(QWidget):
             self.layer_curve_widget.reset_curve("rgb")
             self._updating_ui = False
         self._update_list_and_props_state()
+        self.update_active_layer_histogram()
+        self.ground_slider_released.emit()
         self.layers_changed.emit()
 
     def update_active_layer_histogram(self) -> None:

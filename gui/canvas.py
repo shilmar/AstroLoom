@@ -259,15 +259,15 @@ class MaskCanvas(QWidget):
             fast_sample = self.orig_rgb[::4, ::4]
             p_hi = float(np.percentile(fast_sample, 99.5)) if np.max(fast_sample) > 0 else 1.0
             norm = np.clip(self.orig_rgb / max(p_hi, 1e-4), 0.0, 1.0)
-            display = (np.power(norm, 0.4) * 255.0).astype(np.uint8)
+            display = cv2.convertScaleAbs(np.power(norm, 0.4), alpha=255.0)
         else:
             if display_stretched.dtype == np.uint8:
                 display = display_stretched
             else:
-                display = (np.clip(display_stretched, 0.0, 1.0) * 255.0).astype(np.uint8)
+                display = cv2.convertScaleAbs(np.clip(display_stretched, 0.0, 1.0), alpha=255.0)
 
         self._cached_display_u8 = np.ascontiguousarray(display, dtype=np.uint8)
-        qimg = QImage(self._cached_display_u8.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+        qimg = QImage(self._cached_display_u8.data, w, h, 3 * w, QImage.Format_RGB888)
         self.base_pixmap = QPixmap.fromImage(qimg)
 
         # Si los indicadores de recorte están activos, actualizar su capa inmediatamente

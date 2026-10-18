@@ -100,7 +100,7 @@ def apply_astronomical_orton(
     sigma2 = max(2.5, float(radius * 2.5))
 
     # Optimizamos el cálculo reduciendo resolución si sigma es muy amplio
-    if min(h, w) > 800 and sigma1 > 20.0:
+    if (min(h, w) > 400 and sigma1 > 10.0) or (min(h, w) > 800 and sigma1 > 20.0):
         scale = 0.5
         small_w = max(64, int(w * scale))
         small_h = max(64, int(h * scale))

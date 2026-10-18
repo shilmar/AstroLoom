@@ -77,7 +77,8 @@ from core.mask_layers import (
     MaskLayer, apply_all_mask_layers,
     MASK_TYPE_IMAGE_BASE, MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_STARS,
     MASK_TYPE_IMAGE_GROUND, MASK_TYPE_BRUSH, MASK_TYPE_LUMA, MASK_TYPE_COLOR,
-    MASK_TYPE_GROUND, MASK_TYPE_SKY
+    MASK_TYPE_GROUND, MASK_TYPE_SKY,
+    apply_pre_curve_adjustments, get_canvas_below_layer, compute_effective_layer_mask
 )
 from gui.widgets.curve_widget import CurveWidget
 from gui.widgets.live_histogram import LiveRGBHistogramWidget
@@ -217,6 +218,28 @@ class DeveloperTab(QWidget):
         self._undo_debounce_timer.setSingleShot(True)
         self._undo_debounce_timer.setInterval(500)
         self._undo_debounce_timer.timeout.connect(self._commit_action)
+
+        # Temporizadores de renderizado reactivo y coalescencia de eventos (60 FPS)
+        self._preview_throttle_timer = QTimer(self)
+        self._preview_throttle_timer.setSingleShot(True)
+        self._preview_throttle_timer.setInterval(16)
+        self._preview_throttle_timer.timeout.connect(self._do_update_stretch_preview)
+
+        self._hist_throttle_timer = QTimer(self)
+        self._hist_throttle_timer.setSingleShot(True)
+        self._hist_throttle_timer.setInterval(70)
+        self._hist_throttle_timer.timeout.connect(self._refresh_histograms_now)
+
+        self._is_rendering_preview: bool = False
+        self._last_rendered_preview: Optional[np.ndarray] = None
+
+        # Cachés multinivel de aceleración en memoria RAM
+        self._cache_starless_key: Optional[tuple] = None
+        self._cache_starless_linear: Optional[np.ndarray] = None
+        self._cache_pre_layers_key: Optional[tuple] = None
+        self._cache_pre_layers_stretched: Optional[np.ndarray] = None
+        self._cache_pre_layers_stars: Optional[np.ndarray] = None
+        self._is_scrubbing_heavy_slider: bool = False
 
         # Memoria de tamaños para paneles ocultables (Lightroom style)
         self._last_left_panel_width = 380
@@ -3430,6 +3453,8 @@ class DeveloperTab(QWidget):
         """
         Retorna la imagen de trabajo y máscara espacial correspondiente a la capa seleccionada
         para renderizar su histograma de fondo en la Curva Tonal de Capa.
+        Aplica los ajustes locales pre-curva de la capa (Exposición, Sombras, Luces, Contraste,
+        Saturación, Balance de Blancos) para reflejar dinámicamente los valores que entran a la curva.
         Retorna: (imagen_rgb_estirada, mascara_espacial_2d, es_capa_de_estrellas)
         """
         if self.image_32bit is None:
@@ -3462,13 +3487,17 @@ class DeveloperTab(QWidget):
                             manual_stretch(st_src, black_point=0.0, midtone=self.spin_mtf.value()) * self.star_intensity,
                             0.0, 1.0
                         )
+            if img is not None:
+                img = apply_pre_curve_adjustments(img, layer)
             return img, None, True
 
         # 2. Capa de Suelo / Terreno
         if m_type == MASK_TYPE_IMAGE_GROUND:
-            img = getattr(self, '_cached_rendered_image', None)
+            img = getattr(self, '_cached_base_stretched', None)
             if img is None:
-                img = getattr(self, '_cached_base_stretched', None)
+                img = getattr(self, '_cached_rendered_image', None)
+            if img is not None:
+                img = apply_pre_curve_adjustments(img, layer)
             sky_m = self.proxy_mask if self.proxy_mask is not None else self.current_mask
             gnd_m = np.clip(1.0 - sky_m, 0.0, 1.0) if sky_m is not None else None
             return img, gnd_m, False
@@ -3478,14 +3507,24 @@ class DeveloperTab(QWidget):
             img = getattr(self, '_cached_base_stretched', None)
             if img is None:
                 img = getattr(self, '_cached_rendered_image', None)
-            sky_m = self.proxy_mask if self.proxy_mask is not None else self.current_mask
+            if img is not None:
+                img = apply_pre_curve_adjustments(img, layer)
+            # Si existe una capa de suelo activa que ya procesa el terreno de forma independiente,
+            # aislamos el histograma estrictamente al cielo nocturno usando sky_mask.
+            # Si la capa de suelo está desactivada o no existe, la capa starless actúa como base
+            # global y su histograma abarca el rango tonal completo del lienzo.
+            has_active_ground = False
+            if hasattr(self, 'mask_layers_widget'):
+                has_active_ground = any(
+                    getattr(l, 'mask_type', '') == MASK_TYPE_IMAGE_GROUND and getattr(l, 'enabled', True)
+                    for l in self.mask_layers_widget.layers
+                )
+            sky_m = (self.proxy_mask if self.proxy_mask is not None else self.current_mask) if has_active_ground else None
             return img, sky_m, False
 
         # 4. Capa de Fondo Base
         if m_type == MASK_TYPE_IMAGE_BASE:
             img = getattr(self, '_cached_base_stretched', None)
-            if img is None:
-                img = getattr(self, '_cached_rendered_image', None)
             if img is None:
                 b_src = self.preview_proxy if self.preview_proxy is not None else self.image_32bit
                 if b_src is not None:
@@ -3502,13 +3541,48 @@ class DeveloperTab(QWidget):
                         )
                     else:
                         img = manual_stretch(b_src, black_point=self.spin_bp.value(), midtone=self.spin_mtf.value())
+            if img is None:
+                img = getattr(self, '_cached_rendered_image', None)
+            if img is not None:
+                img = apply_pre_curve_adjustments(img, layer)
             return img, None, False
 
-        # 5. Capas de ajuste local estándar (Pincel, Gradiente, Luminancia, Color)
-        img = getattr(self, '_cached_rendered_image', None)
-        if img is None:
-            img = getattr(self, '_cached_base_stretched', None)
-        mask = getattr(layer, 'brush_mask', None) if m_type == MASK_TYPE_BRUSH else None
+        # 5. Capas de ajuste local estándar (Pincel, Gradiente, Luminancia, Color, etc.)
+        base_canvas = getattr(self, '_cached_base_stretched', None)
+        if base_canvas is None:
+            base_canvas = getattr(self, '_last_rendered_preview', None)
+
+        if base_canvas is not None and hasattr(self, 'mask_layers_widget'):
+            all_layers = getattr(self.mask_layers_widget, 'layers', [])
+            sky_m = self.proxy_mask if self.proxy_mask is not None else self.current_mask
+            stars_img = getattr(self, '_cached_stars_stretched', None)
+            if stars_img is None and getattr(self, 'image_stars', None) is not None:
+                stars_img = self.proxy_stars if self.proxy_stars is not None else self.image_stars
+            starless_img = self.proxy_starless if self.proxy_starless is not None else self.image_starless
+
+            img = get_canvas_below_layer(
+                base_canvas,
+                all_layers,
+                layer.id,
+                master_sky_mask=sky_m,
+                starless_image=starless_img,
+                stars_image=stars_img
+            )
+        else:
+            img = getattr(self, '_last_rendered_preview', None) or getattr(self, '_cached_base_stretched', None)
+
+        mask = None
+        if img is not None:
+            sky_m = self.proxy_mask if self.proxy_mask is not None else self.current_mask
+            mask = compute_effective_layer_mask(
+                layer,
+                img,
+                master_sky_mask=sky_m
+            )
+            img = apply_pre_curve_adjustments(img, layer)
+        elif m_type == MASK_TYPE_BRUSH:
+            mask = getattr(layer, 'brush_mask', None)
+
         return img, mask, False
 
     def _on_toggle_clipping_shortcut(self) -> None:
@@ -4245,7 +4319,16 @@ class DeveloperTab(QWidget):
         self.txt_log.append(text)
         self.txt_log.moveCursor(QTextCursor.End)
 
+    def _invalidate_pipeline_caches(self):
+        """Invalida todas las cachés intermedias del pipeline de procesado."""
+        self._cache_starless_key = None
+        self._cache_starless_linear = None
+        self._cache_pre_layers_key = None
+        self._cache_pre_layers_stretched = None
+        self._cache_pre_layers_stars = None
+
     def _generate_preview_proxy(self):
+        self._invalidate_pipeline_caches()
         if self.image_32bit is None:
             self.preview_proxy = None
             self.proxy_starless = None
@@ -4308,6 +4391,7 @@ class DeveloperTab(QWidget):
             self.mask_layers_widget.invalidate_layer_thumbnail(None)
 
     def load_image_direct(self, filepath: str, mask: np.ndarray = None):
+        self._invalidate_pipeline_caches()
         self.active_filepath = filepath
         self.current_mask = mask
         self.image_starless = None
@@ -4397,59 +4481,110 @@ class DeveloperTab(QWidget):
         """Aplica las mejoras lineales a la capa StarNet (Denoise, Claridad, Dehaze, Ondículas)."""
         if starless is None:
             return None
-        processed_starless = starless.copy()
+
+        # Bypass ultra-rápido si todos los filtros lineales están neutros
+        is_neutral = (
+            getattr(self, 'denoise_strength', 0.0) <= 1e-4 and
+            abs(getattr(self, 'clarity_starless_val', 0.0)) <= 1e-4 and
+            abs(getattr(self, 'dehaze_starless_val', 0.0)) <= 1e-4 and
+            abs(getattr(self, 'multiescala_estructura', 0.0)) <= 1e-4 and
+            getattr(self, 'multiescala_fondo', 0.0) <= 1e-4 and
+            getattr(self, 'orton_strength', 0.0) <= 1e-4
+        )
+        if is_neutral:
+            return starless
+
+        # Verificación en caché de RAM Nivel 1 (Linear Stage)
+        cache_key = (
+            id(starless),
+            id(mask_3d),
+            is_full_res,
+            round(float(getattr(self, 'denoise_strength', 0.0)), 4),
+            round(float(getattr(self, 'clarity_starless_val', 0.0)), 4),
+            round(float(getattr(self, 'dehaze_starless_val', 0.0)), 4),
+            round(float(getattr(self, 'multiescala_estructura', 0.0)), 4),
+            round(float(getattr(self, 'multiescala_fondo', 0.0)), 4),
+            round(float(getattr(self, 'orton_strength', 0.0)), 4),
+            round(float(getattr(self, 'orton_radius', 40.0)), 2),
+            round(float(getattr(self, 'orton_threshold', 0.05)), 4),
+            getattr(self, 'orton_tint_type', 'warm_gold'),
+            getattr(self, 'orton_custom_tint', (1.0, 0.85, 0.55)),
+            round(float(getattr(self, 'orton_tint_strength', 0.5)), 4),
+            getattr(self, 'orton_mode', 'screen')
+        )
+        if not is_full_res and self._cache_starless_key == cache_key and self._cache_starless_linear is not None:
+            return self._cache_starless_linear
+
+        is_draft = (not is_full_res and getattr(self, '_is_scrubbing_heavy_slider', False))
+        orig_h, orig_w = starless.shape[:2]
+        if is_draft:
+            draft_w = max(32, orig_w // 2)
+            draft_h = max(32, orig_h // 2)
+            proc_starless = cv2.resize(starless, (draft_w, draft_h), interpolation=cv2.INTER_AREA)
+            proc_mask_3d = cv2.resize(mask_3d, (draft_w, draft_h), interpolation=cv2.INTER_AREA) if mask_3d is not None else None
+        else:
+            proc_starless = starless.copy()
+            proc_mask_3d = mask_3d
 
         # 1. Reducción de Ruido
         if self.denoise_strength > 1e-4:
             denoised = apply_denoise(
-                processed_starless,
+                proc_starless,
                 strength=self.denoise_strength,
-                is_full_res=is_full_res
+                is_full_res=(is_full_res and not is_draft)
             )
-            if mask_3d is not None:
-                processed_starless = (denoised * mask_3d) + (processed_starless * (1.0 - mask_3d))
+            if proc_mask_3d is not None:
+                proc_starless = (denoised * proc_mask_3d) + (proc_starless * (1.0 - proc_mask_3d))
             else:
-                processed_starless = denoised
+                proc_starless = denoised
 
         # 2. Claridad y Borrar Neblina
         if abs(self.clarity_starless_val) > 1e-4:
-            clarified = apply_clarity(processed_starless, strength=self.clarity_starless_val)
-            if mask_3d is not None:
-                processed_starless = (clarified * mask_3d) + (processed_starless * (1.0 - mask_3d))
+            clarified = apply_clarity(proc_starless, strength=self.clarity_starless_val)
+            if proc_mask_3d is not None:
+                proc_starless = (clarified * proc_mask_3d) + (proc_starless * (1.0 - proc_mask_3d))
             else:
-                processed_starless = clarified
+                proc_starless = clarified
 
         if abs(self.dehaze_starless_val) > 1e-4:
-            dehazed = apply_dehaze(processed_starless, strength=self.dehaze_starless_val)
-            if mask_3d is not None:
-                processed_starless = (dehazed * mask_3d) + (processed_starless * (1.0 - mask_3d))
+            dehazed = apply_dehaze(proc_starless, strength=self.dehaze_starless_val)
+            if proc_mask_3d is not None:
+                proc_starless = (dehazed * proc_mask_3d) + (proc_starless * (1.0 - proc_mask_3d))
             else:
-                processed_starless = dehazed
+                proc_starless = dehazed
 
         # 3. Ondículas sobre la capa de fondo
         if abs(self.multiescala_estructura) > 1e-4 or self.multiescala_fondo > 1e-4:
-            processed_starless = realce_multiescala_ondiculas(
-                processed_starless,
+            proc_starless = realce_multiescala_ondiculas(
+                proc_starless,
                 fuerza_estructura=self.multiescala_estructura,
                 reduccion_fondo=self.multiescala_fondo,
-                sky_mask=mask_3d[..., 0] if mask_3d is not None else None
+                sky_mask=proc_mask_3d[..., 0] if proc_mask_3d is not None else None
             )
 
         # 4. Efecto Orton y Resplandor de Polvo Galáctico sobre Fondo Nebular
         if self.orton_strength > 1e-4:
-            processed_starless = apply_astronomical_orton(
-                processed_starless,
+            proc_starless = apply_astronomical_orton(
+                proc_starless,
                 strength=self.orton_strength,
-                radius=self.orton_radius,
+                radius=self.orton_radius * (0.5 if is_draft else 1.0),
                 threshold=self.orton_threshold,
                 exponent=1.0,
                 tint_type=self.orton_tint_type,
                 custom_tint=getattr(self, 'orton_custom_tint', (1.0, 0.85, 0.55)),
                 tint_strength=self.orton_tint_strength,
                 blend_mode=self.orton_mode,
-                sky_mask=mask_3d[..., 0] if mask_3d is not None else None,
+                sky_mask=proc_mask_3d[..., 0] if proc_mask_3d is not None else None,
                 is_starless=True
             )
+
+        if is_draft:
+            processed_starless = cv2.resize(proc_starless, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+        else:
+            processed_starless = proc_starless
+            if not is_full_res:
+                self._cache_starless_key = cache_key
+                self._cache_starless_linear = processed_starless
 
         return processed_starless
 
@@ -4531,221 +4666,337 @@ class DeveloperTab(QWidget):
         self,
         target_img: np.ndarray,
         precomputed_mask: Optional[np.ndarray] = None,
-        apply_mask_layers: bool = True
+        apply_mask_layers: bool = True,
+        is_preview: bool = True
     ) -> np.ndarray:
         if target_img is None:
             return None
 
-        # 1. Balance de blancos
-        img = apply_white_balance(target_img, self.temp_val, self.tint_val)
+        is_full_res = (self.image_32bit is not None and target_img.shape[:2] == self.image_32bit.shape[:2])
+        is_zoomed = (self.is_zoomed_100 and getattr(self, '_zoom_crop_rect', None) is not None)
+        full_shape = self.image_32bit.shape[:2] if self.image_32bit is not None else None
+        crop_rect = getattr(self, '_zoom_crop_rect', None) if is_zoomed else None
 
-        # 2. Saturación diferencial cielo / suelo
-        if self.sat_sky_val != 1.0 or self.sat_gnd_val != 1.0:
-            hsv = cv2.cvtColor(np.clip(img, 0.0, 1.0), cv2.COLOR_RGB2HSV)
-            if precomputed_mask is None or self.sat_sky_val == self.sat_gnd_val:
-                hsv[..., 1] = np.clip(hsv[..., 1] * self.sat_sky_val, 0.0, 1.0)
-                img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
-            else:
-                hsv_sky = hsv.copy()
-                hsv_sky[..., 1] = np.clip(hsv_sky[..., 1] * self.sat_sky_val, 0.0, 1.0)
-                rgb_sky = cv2.cvtColor(hsv_sky, cv2.COLOR_HSV2RGB)
+        curve_state = tuple((m, tuple(pts)) for m, pts in sorted(self.curve_widget.get_state().items())) if hasattr(self, 'curve_widget') else ()
 
-                hsv_gnd = hsv.copy()
-                hsv_gnd[..., 1] = np.clip(hsv_gnd[..., 1] * self.sat_gnd_val, 0.0, 1.0)
-                rgb_gnd = cv2.cvtColor(hsv_gnd, cv2.COLOR_HSV2RGB)
+        stage2_key = (
+            id(target_img),
+            id(precomputed_mask),
+            is_full_res,
+            is_zoomed,
+            crop_rect,
+            round(float(self.temp_val), 4),
+            round(float(self.tint_val), 4),
+            round(float(self.sat_sky_val), 4),
+            round(float(self.sat_gnd_val), 4),
+            round(float(self.vibrance_val), 4),
+            round(float(self.lp_reduction), 4),
+            round(float(self.lp_center_x), 4),
+            round(float(self.lp_center_y), 4),
+            round(float(self.lp_width), 4),
+            round(float(self.lp_height), 4),
+            getattr(self, 'lp_tint_type', 'sodium'),
+            getattr(self, 'lp_custom_tint', (1.0, 0.68, 0.22)),
+            round(float(getattr(self, 'lp_tint_strength', 0.5)), 4),
+            getattr(self, 'lp_mode', 'attenuate'),
+            getattr(self, 'lp_legacy_1d', False),
+            round(float(self.gnd_ev_val), 4),
+            round(float(self.gnd_shadows_val), 4),
+            round(float(self.gnd_bp_val), 4),
+            getattr(self, "stretch_mode", "mtf"),
+            getattr(self, "ghs_color_mode", "luma"),
+            round(float(self.spin_ghs_sp.value()), 5) if hasattr(self, 'spin_ghs_sp') else 0.0,
+            round(float(self.spin_ghs_d.value()), 4) if hasattr(self, 'spin_ghs_d') else 0.0,
+            round(float(self.spin_ghs_b.value()), 4) if hasattr(self, 'spin_ghs_b') else 0.0,
+            round(float(self.spin_ghs_hp.value()), 4) if hasattr(self, 'spin_ghs_hp') else 0.0,
+            round(float(self.spin_ghs_lp.value()), 4) if hasattr(self, 'spin_ghs_lp') else 0.0,
+            round(float(self.spin_ghs_bp.value()), 5) if hasattr(self, 'spin_ghs_bp') else 0.0,
+            round(float(self.spin_bp.value()), 5) if hasattr(self, 'spin_bp') else 0.0,
+            round(float(self.spin_mtf.value()), 5) if hasattr(self, 'spin_mtf') else 0.0,
+            curve_state,
+            round(float(self.contrast_starless_val), 4),
+            round(float(self.contrast_val), 4),
+            getattr(self, "deconv_iterations", 0),
+            round(float(getattr(self, "deconv_fwhm", 3.0)), 2),
+            round(float(getattr(self, "deconv_deringing", 0.08)), 4),
+            round(float(getattr(self, "deconv_damping", 0.25)), 4),
+            round(float(getattr(self, "deconv_aspect", 1.0)), 2),
+            round(float(getattr(self, "deconv_angle", 0.0)), 2),
+            getattr(self, "deconv_model", "gaussian"),
+            getattr(self, "deconv_scope", "full"),
+            getattr(self, "deconv_luma_only", True),
+            round(float(self.orton_strength), 4),
+            round(float(self.orton_radius), 2),
+            round(float(self.orton_threshold), 4),
+            getattr(self, 'orton_tint_type', 'warm_gold'),
+            getattr(self, 'orton_custom_tint', (1.0, 0.85, 0.55)),
+            round(float(getattr(self, 'orton_tint_strength', 0.5)), 4),
+            getattr(self, 'orton_mode', 'screen'),
+            round(float(self.star_diff_strength), 4),
+            round(float(self.star_diff_radius), 2),
+            round(float(self.star_diff_threshold), 4),
+            round(float(self.star_diff_color_boost), 4),
+            getattr(self, 'star_diff_mode', 'natural'),
+            round(float(self.star_intensity), 4)
+        )
 
-                img = (rgb_sky * precomputed_mask) + (rgb_gnd * (1.0 - precomputed_mask))
-
-        # 3. Intensidad
-        if abs(self.vibrance_val) > 1e-4:
-            img = adjust_vibrance(img, self.vibrance_val)
-
-        # 4. Reducción Paramétrica 2D de Cúpula de Contaminación Lumínica
-        if self.lp_reduction > 1e-4:
-            mask_2d = precomputed_mask[..., 0] if precomputed_mask is not None else None
-            tint_rgb = LP_PRESET_TINTS.get(self.lp_tint_type, getattr(self, 'lp_custom_tint', (1.0, 0.68, 0.22)))
-            img = apply_parametric_light_pollution(
-                img,
-                strength=self.lp_reduction,
-                center_x=self.lp_center_x,
-                center_y=self.lp_center_y,
-                width=self.lp_width,
-                height=self.lp_height,
-                tint_rgb=tint_rgb,
-                tint_strength=self.lp_tint_strength,
-                sky_mask=mask_2d,
-                mode=self.lp_mode,
-                legacy_1d=self.lp_legacy_1d
-            )
-
-        # 5. Ajuste Tonal Diferencial para el Suelo
-        if precomputed_mask is not None:
-            has_gnd_tone_change = (
-                abs(self.gnd_ev_val) > 1e-4 or 
-                self.gnd_shadows_val > 1e-4 or 
-                abs(self.gnd_bp_val) > 1e-4
-            )
-            if has_gnd_tone_change:
-                gnd_part = img.copy()
-
-                if abs(self.gnd_ev_val) > 1e-4:
-                    gnd_part = gnd_part * (2.0 ** self.gnd_ev_val)
-
-                if self.gnd_shadows_val > 1e-4:
-                    lift_curve = (1.0 - np.clip(gnd_part, 0.0, 1.0)) ** 2
-                    gnd_part = gnd_part * (1.0 + self.gnd_shadows_val * lift_curve)
-
-                if abs(self.gnd_bp_val) > 1e-4:
-                    if self.gnd_bp_val < 0.0:
-                        gnd_part = np.clip(gnd_part - self.gnd_bp_val, 0.0, 1.0)
-                    else:
-                        gnd_part = np.clip((gnd_part - self.gnd_bp_val) / max(1e-4, 1.0 - self.gnd_bp_val), 0.0, 1.0)
-
-                img = (img * precomputed_mask) + (gnd_part * (1.0 - precomputed_mask))
-
-        # 6. Estirado Tonal (MTF o GHS)
-        if getattr(self, "stretch_mode", "mtf") == "ghs":
-            stretched = apply_ghs_stretch(
-                img,
-                sp=self.spin_ghs_sp.value(),
-                d=self.spin_ghs_d.value(),
-                b=self.spin_ghs_b.value(),
-                hp=self.spin_ghs_hp.value(),
-                lp=self.spin_ghs_lp.value(),
-                bp=self.spin_ghs_bp.value(),
-                color_mode=getattr(self, "ghs_color_mode", "luma")
-            )
+        if is_preview and self._cache_pre_layers_key == stage2_key and self._cache_pre_layers_stretched is not None:
+            stretched = self._cache_pre_layers_stretched
+            st_stretched = self._cache_pre_layers_stars
         else:
-            bp_val = self.spin_bp.value()
-            m_val = self.spin_mtf.value()
-            stretched = manual_stretch(img, black_point=bp_val, midtone=m_val)
+            # 1. Balance de blancos
+            img = apply_white_balance(target_img, self.temp_val, self.tint_val)
 
-        # 7. Curvas Tonales (LUT RGB)
-        if not self.curve_widget.is_identity("rgb"):
-            curved = apply_curve_lut(stretched, self.curve_widget.get_lut("rgb"))
+            # 2. Saturación diferencial cielo / suelo
+            if self.sat_sky_val != 1.0 or self.sat_gnd_val != 1.0:
+                hsv = cv2.cvtColor(np.clip(img, 0.0, 1.0), cv2.COLOR_RGB2HSV)
+                if precomputed_mask is None or self.sat_sky_val == self.sat_gnd_val:
+                    hsv[..., 1] = np.clip(hsv[..., 1] * self.sat_sky_val, 0.0, 1.0)
+                    img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+                else:
+                    hsv_sky = hsv.copy()
+                    hsv_sky[..., 1] = np.clip(hsv_sky[..., 1] * self.sat_sky_val, 0.0, 1.0)
+                    rgb_sky = cv2.cvtColor(hsv_sky, cv2.COLOR_HSV2RGB)
+
+                    hsv_gnd = hsv.copy()
+                    hsv_gnd[..., 1] = np.clip(hsv_gnd[..., 1] * self.sat_gnd_val, 0.0, 1.0)
+                    rgb_gnd = cv2.cvtColor(hsv_gnd, cv2.COLOR_HSV2RGB)
+
+                    img = (rgb_sky * precomputed_mask) + (rgb_gnd * (1.0 - precomputed_mask))
+
+            # 3. Intensidad
+            if abs(self.vibrance_val) > 1e-4:
+                img = adjust_vibrance(img, self.vibrance_val)
+
+            # 4. Reducción Paramétrica 2D de Cúpula de Contaminación Lumínica
+            if self.lp_reduction > 1e-4:
+                mask_2d = precomputed_mask[..., 0] if precomputed_mask is not None else None
+                tint_rgb = LP_PRESET_TINTS.get(self.lp_tint_type, getattr(self, 'lp_custom_tint', (1.0, 0.68, 0.22)))
+                img = apply_parametric_light_pollution(
+                    img,
+                    strength=self.lp_reduction,
+                    center_x=self.lp_center_x,
+                    center_y=self.lp_center_y,
+                    width=self.lp_width,
+                    height=self.lp_height,
+                    tint_rgb=tint_rgb,
+                    tint_strength=self.lp_tint_strength,
+                    sky_mask=mask_2d,
+                    mode=self.lp_mode,
+                    legacy_1d=self.lp_legacy_1d
+                )
+
+            # 5. Ajuste Tonal Diferencial para el Suelo
             if precomputed_mask is not None:
-                stretched = (curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+                has_gnd_tone_change = (
+                    abs(self.gnd_ev_val) > 1e-4 or 
+                    self.gnd_shadows_val > 1e-4 or 
+                    abs(self.gnd_bp_val) > 1e-4
+                )
+                if has_gnd_tone_change:
+                    gnd_part = img.copy()
+
+                    if abs(self.gnd_ev_val) > 1e-4:
+                        gnd_part = gnd_part * (2.0 ** self.gnd_ev_val)
+
+                    if self.gnd_shadows_val > 1e-4:
+                        lift_curve = (1.0 - np.clip(gnd_part, 0.0, 1.0)) ** 2
+                        gnd_part = gnd_part * (1.0 + self.gnd_shadows_val * lift_curve)
+
+                    if abs(self.gnd_bp_val) > 1e-4:
+                        if self.gnd_bp_val < 0.0:
+                            gnd_part = np.clip(gnd_part - self.gnd_bp_val, 0.0, 1.0)
+                        else:
+                            gnd_part = np.clip((gnd_part - self.gnd_bp_val) / max(1e-4, 1.0 - self.gnd_bp_val), 0.0, 1.0)
+
+                    img = (img * precomputed_mask) + (gnd_part * (1.0 - precomputed_mask))
+
+            # 6. Estirado Tonal (MTF o GHS)
+            if getattr(self, "stretch_mode", "mtf") == "ghs":
+                stretched = apply_ghs_stretch(
+                    img,
+                    sp=self.spin_ghs_sp.value(),
+                    d=self.spin_ghs_d.value(),
+                    b=self.spin_ghs_b.value(),
+                    hp=self.spin_ghs_hp.value(),
+                    lp=self.spin_ghs_lp.value(),
+                    bp=self.spin_ghs_bp.value(),
+                    color_mode=getattr(self, "ghs_color_mode", "luma")
+                )
             else:
-                stretched = curved
+                bp_val = self.spin_bp.value()
+                m_val = self.spin_mtf.value()
+                stretched = manual_stretch(img, black_point=bp_val, midtone=m_val)
 
-        # 7b. Curva Selectiva Tono vs Saturación (Hue vs Sat)
-        if not self.curve_widget.is_identity("hue_sat"):
-            hsv_curved = apply_hue_vs_sat_curve(stretched, self.curve_widget.get_lut("hue_sat"))
-            if precomputed_mask is not None:
-                stretched = (hsv_curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
-            else:
-                stretched = hsv_curved
+            # 7. Curvas Tonales (LUT RGB)
+            if not self.curve_widget.is_identity("rgb"):
+                curved = apply_curve_lut(stretched, self.curve_widget.get_lut("rgb"))
+                if precomputed_mask is not None:
+                    stretched = (curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+                else:
+                    stretched = curved
 
-        # 7c. Curva Selectiva Luminancia vs Saturación (Luma vs Sat)
-        if not self.curve_widget.is_identity("luma_sat"):
-            luma_curved = apply_luma_vs_sat_curve(stretched, self.curve_widget.get_lut("luma_sat"))
-            if precomputed_mask is not None:
-                stretched = (luma_curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
-            else:
-                stretched = luma_curved
+            # 7b. Curva Selectiva Tono vs Saturación (Hue vs Sat)
+            if not self.curve_widget.is_identity("hue_sat"):
+                hsv_curved = apply_hue_vs_sat_curve(stretched, self.curve_widget.get_lut("hue_sat"))
+                if precomputed_mask is not None:
+                    stretched = (hsv_curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+                else:
+                    stretched = hsv_curved
 
-        # 8. Contraste específico del Fondo (Starless)
-        if abs(self.contrast_starless_val) > 1e-4:
-            if precomputed_mask is not None and np.any(precomputed_mask > 0.5):
-                sky_median = float(np.median(stretched[precomputed_mask > 0.5]))
-            else:
-                sky_median = float(np.median(stretched))
+            # 7c. Curva Selectiva Luminancia vs Saturación (Luma vs Sat)
+            if not self.curve_widget.is_identity("luma_sat"):
+                luma_curved = apply_luma_vs_sat_curve(stretched, self.curve_widget.get_lut("luma_sat"))
+                if precomputed_mask is not None:
+                    stretched = (luma_curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+                else:
+                    stretched = luma_curved
 
-            sn_contrasted = adjust_contrast(stretched, self.contrast_starless_val, pivot=sky_median)
-            if precomputed_mask is not None:
-                stretched = (sn_contrasted * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
-            else:
-                stretched = sn_contrasted
+            # 8. Contraste específico del Fondo (Starless)
+            if abs(self.contrast_starless_val) > 1e-4:
+                if precomputed_mask is not None and np.any(precomputed_mask > 0.5):
+                    sky_median = float(np.median(stretched[precomputed_mask > 0.5]))
+                else:
+                    sky_median = float(np.median(stretched))
 
-        # 9. Contraste Global
-        if abs(self.contrast_val) > 1e-4:
-            stretched = adjust_contrast(stretched, self.contrast_val, pivot=None)
+                sn_contrasted = adjust_contrast(stretched, self.contrast_starless_val, pivot=sky_median)
+                if precomputed_mask is not None:
+                    stretched = (sn_contrasted * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+                else:
+                    stretched = sn_contrasted
 
-        # 9a. Deconvolución Óptica Regularizada (Richardson-Lucy / PSF)
-        if getattr(self, "deconv_iterations", 0) > 0:
-            psf_kernel = self._get_current_deconv_psf()
-            star_mask = None
-            if self.deconv_scope in ["stars_only", "background_only"]:
-                if hasattr(self, 'image_stars') and self.image_stars is not None:
-                    st_ref = self.image_stars if stretched.shape[:2] == self.image_stars.shape[:2] else self.proxy_stars
-                    if st_ref is not None:
-                        star_mask = (np.mean(st_ref, axis=2) > 0.05).astype(np.float32)
-                if star_mask is None:
-                    gray_s = cv2.cvtColor(stretched, cv2.COLOR_RGB2GRAY) if (stretched.ndim == 3 and stretched.shape[2] == 3) else stretched
-                    k_th = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-                    tophat = cv2.morphologyEx(gray_s, cv2.MORPH_TOPHAT, k_th)
-                    star_mask = (tophat > 0.02).astype(np.float32)
+            # 9. Contraste Global
+            if abs(self.contrast_val) > 1e-4:
+                stretched = adjust_contrast(stretched, self.contrast_val, pivot=None)
 
-            deconvolved = richardson_lucy_deconvolve(
-                stretched,
-                psf_kernel=psf_kernel,
-                iterations=self.deconv_iterations,
-                deringing=self.deconv_deringing,
-                damping=self.deconv_damping,
-                luminance_only=self.deconv_luma_only,
-                star_mask=star_mask,
-                target_scope=self.deconv_scope
-            )
-            if precomputed_mask is not None:
-                stretched = (deconvolved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
-            else:
-                stretched = deconvolved
+            # 9a. Deconvolución Óptica Regularizada (Richardson-Lucy / PSF)
+            if getattr(self, "deconv_iterations", 0) > 0:
+                is_draft_deconv = (not is_full_res and getattr(self, '_is_scrubbing_heavy_slider', False))
+                orig_h_dec, orig_w_dec = stretched.shape[:2]
+                if is_draft_deconv:
+                    dw_dec = max(32, orig_w_dec // 2)
+                    dh_dec = max(32, orig_h_dec // 2)
+                    in_deconv = cv2.resize(stretched, (dw_dec, dh_dec), interpolation=cv2.INTER_AREA)
+                    in_mask_dec = cv2.resize(precomputed_mask, (dw_dec, dh_dec), interpolation=cv2.INTER_AREA) if precomputed_mask is not None else None
+                else:
+                    in_deconv = stretched
+                    in_mask_dec = precomputed_mask
 
-        # 9b. Efecto Orton y Resplandor de Polvo Galáctico (si no se está usando capa starless desacoplada)
-        has_active_starless = (self.image_starless is not None and hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.has_image_layers())
-        if self.orton_strength > 1e-4 and not has_active_starless:
-            mask_2d = precomputed_mask[..., 0] if precomputed_mask is not None else None
-            stretched = apply_astronomical_orton(
-                stretched,
-                strength=self.orton_strength,
-                radius=self.orton_radius,
-                threshold=self.orton_threshold,
-                exponent=1.0,
-                tint_type=self.orton_tint_type,
-                custom_tint=getattr(self, 'orton_custom_tint', (1.0, 0.85, 0.55)),
-                tint_strength=self.orton_tint_strength,
-                blend_mode=self.orton_mode,
-                sky_mask=mask_2d,
-                is_starless=False
-            )
+                psf_kernel = self._get_current_deconv_psf()
+                if is_draft_deconv:
+                    k_w = max(3, (psf_kernel.shape[1] // 2) | 1)
+                    k_h = max(3, (psf_kernel.shape[0] // 2) | 1)
+                    psf_kernel = cv2.resize(psf_kernel, (k_w, k_h), interpolation=cv2.INTER_AREA)
+                    psf_kernel = psf_kernel / max(1e-7, float(np.sum(psf_kernel)))
 
-        # 9c. Filtro Difusor y Realce de Constelaciones (en modo imagen única / sin capas StarNet)
-        if self.star_diff_strength > 1e-4 and not has_active_starless:
-            mask_2d = precomputed_mask[..., 0] if precomputed_mask is not None else None
-            stretched = apply_star_diffusion(
-                stretched,
-                strength=self.star_diff_strength,
-                radius=self.star_diff_radius,
-                threshold=self.star_diff_threshold,
-                color_boost=self.star_diff_color_boost,
-                halo_mode=self.star_diff_mode,
-                sky_mask=mask_2d,
-                stars_layer=None
-            )
+                star_mask = None
+                if self.deconv_scope in ["stars_only", "background_only"]:
+                    if hasattr(self, 'image_stars') and self.image_stars is not None:
+                        st_ref = self.image_stars if in_deconv.shape[:2] == self.image_stars.shape[:2] else self.proxy_stars
+                        if st_ref is not None:
+                            if is_draft_deconv and st_ref.shape[:2] != (dh_dec, dw_dec):
+                                st_ref_scaled = cv2.resize(st_ref, (dw_dec, dh_dec), interpolation=cv2.INTER_AREA)
+                            else:
+                                st_ref_scaled = st_ref
+                            star_mask = (np.mean(st_ref_scaled, axis=2) > 0.05).astype(np.float32)
+                    if star_mask is None:
+                        gray_s = cv2.cvtColor(in_deconv, cv2.COLOR_RGB2GRAY) if (in_deconv.ndim == 3 and in_deconv.shape[2] == 3) else in_deconv
+                        k_th = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+                        tophat = cv2.morphologyEx(gray_s, cv2.MORPH_TOPHAT, k_th)
+                        star_mask = (tophat > 0.02).astype(np.float32)
 
-        # 10. Aplicación de Capas y Máscaras Locales (Compositor Multicapa estilo Photoshop)
-        if apply_mask_layers and hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers:
-            is_full_res = (self.image_32bit is not None and stretched.shape[:2] == self.image_32bit.shape[:2])
-            is_zoomed = (self.is_zoomed_100 and getattr(self, '_zoom_crop_rect', None) is not None)
-            full_shape = self.image_32bit.shape[:2] if self.image_32bit is not None else None
+                deconvolved = richardson_lucy_deconvolve(
+                    in_deconv,
+                    psf_kernel=psf_kernel,
+                    iterations=self.deconv_iterations,
+                    deringing=self.deconv_deringing,
+                    damping=self.deconv_damping,
+                    luminance_only=self.deconv_luma_only,
+                    star_mask=star_mask,
+                    target_scope=self.deconv_scope
+                )
+                if in_mask_dec is not None:
+                    res_deconv = (deconvolved * in_mask_dec) + (in_deconv * (1.0 - in_mask_dec))
+                else:
+                    res_deconv = deconvolved
 
+                if is_draft_deconv:
+                    stretched = cv2.resize(res_deconv, (orig_w_dec, orig_h_dec), interpolation=cv2.INTER_LINEAR)
+                else:
+                    stretched = res_deconv
+
+            # 9b. Efecto Orton y Resplandor de Polvo Galáctico (si no se está usando capa starless desacoplada)
+            has_active_starless = (self.image_starless is not None and hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.has_image_layers())
+            if self.orton_strength > 1e-4 and not has_active_starless:
+                is_draft_ort = (not is_full_res and getattr(self, '_is_scrubbing_heavy_slider', False))
+                orig_h_ort, orig_w_ort = stretched.shape[:2]
+                if is_draft_ort:
+                    dw_ort = max(32, orig_w_ort // 2)
+                    dh_ort = max(32, orig_h_ort // 2)
+                    in_ort = cv2.resize(stretched, (dw_ort, dh_ort), interpolation=cv2.INTER_AREA)
+                    in_mask_ort = cv2.resize(precomputed_mask, (dw_ort, dh_ort), interpolation=cv2.INTER_AREA) if precomputed_mask is not None else None
+                else:
+                    in_ort = stretched
+                    in_mask_ort = precomputed_mask
+
+                mask_2d = in_mask_ort[..., 0] if in_mask_ort is not None else None
+                res_ort = apply_astronomical_orton(
+                    in_ort,
+                    strength=self.orton_strength,
+                    radius=self.orton_radius * (0.5 if is_draft_ort else 1.0),
+                    threshold=self.orton_threshold,
+                    exponent=1.0,
+                    tint_type=self.orton_tint_type,
+                    custom_tint=getattr(self, 'orton_custom_tint', (1.0, 0.85, 0.55)),
+                    tint_strength=self.orton_tint_strength,
+                    blend_mode=self.orton_mode,
+                    sky_mask=mask_2d,
+                    is_starless=False
+                )
+                if is_draft_ort:
+                    stretched = cv2.resize(res_ort, (orig_w_ort, orig_h_ort), interpolation=cv2.INTER_LINEAR)
+                else:
+                    stretched = res_ort
+
+            # 9c. Filtro Difusor y Realce de Constelaciones (en modo imagen única / sin capas StarNet)
+            if self.star_diff_strength > 1e-4 and not has_active_starless:
+                is_draft_sd = (not is_full_res and getattr(self, '_is_scrubbing_heavy_slider', False))
+                orig_h_sd, orig_w_sd = stretched.shape[:2]
+                if is_draft_sd:
+                    dw_sd = max(32, orig_w_sd // 2)
+                    dh_sd = max(32, orig_h_sd // 2)
+                    in_sd = cv2.resize(stretched, (dw_sd, dh_sd), interpolation=cv2.INTER_AREA)
+                    in_mask_sd = cv2.resize(precomputed_mask, (dw_sd, dh_sd), interpolation=cv2.INTER_AREA) if precomputed_mask is not None else None
+                else:
+                    in_sd = stretched
+                    in_mask_sd = precomputed_mask
+
+                mask_2d = in_mask_sd[..., 0] if in_mask_sd is not None else None
+                res_sd = apply_star_diffusion(
+                    in_sd,
+                    strength=self.star_diff_strength,
+                    radius=self.star_diff_radius * (0.5 if is_draft_sd else 1.0),
+                    threshold=self.star_diff_threshold,
+                    color_boost=self.star_diff_color_boost,
+                    halo_mode=self.star_diff_mode,
+                    sky_mask=mask_2d,
+                    stars_layer=None
+                )
+                if is_draft_sd:
+                    stretched = cv2.resize(res_sd, (orig_w_sd, orig_h_sd), interpolation=cv2.INTER_LINEAR)
+                else:
+                    stretched = res_sd
+
+            # Preparación de la capa de estrellas para composición
             if is_zoomed:
                 x1, y1, x2, y2 = self._zoom_crop_rect
                 st_img = self.image_stars[y1:y2, x1:x2].copy() if self.image_stars is not None else None
-                sl_img = self.image_starless[y1:y2, x1:x2].copy() if self.image_starless is not None else None
-                crop_rect = (x1, y1, x2, y2)
             elif is_full_res:
                 st_img = self.image_stars
-                sl_img = self.image_starless
-                crop_rect = None
             else:
                 st_img = self.proxy_stars if self.proxy_stars is not None else self.image_stars
-                sl_img = self.proxy_starless if self.proxy_starless is not None else self.image_starless
-                crop_rect = None
-            
-            # Si hay capas de imagen especiales activas, preparamos las estrellas estiradas con el MTF
-            # y moduladas por la intensidad estelar relativa (self.star_intensity) para el modo Screen
-            if st_img is not None and self.mask_layers_widget.has_image_layers():
+
+            if st_img is not None and hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.has_image_layers():
                 if getattr(self, "stretch_mode", "mtf") == "ghs":
                     st_stretched = np.clip(
                         apply_ghs_stretch(
@@ -4766,38 +5017,81 @@ class DeveloperTab(QWidget):
                         0.0, 1.0
                     )
                 if self.star_diff_strength > 1e-4:
-                    mask_2d = precomputed_mask[..., 0] if precomputed_mask is not None else None
-                    st_stretched = apply_star_diffusion(
-                        st_stretched,
+                    is_draft_sd = (not is_full_res and getattr(self, '_is_scrubbing_heavy_slider', False))
+                    orig_h_sd, orig_w_sd = st_stretched.shape[:2]
+                    if is_draft_sd:
+                        dw_sd = max(32, orig_w_sd // 2)
+                        dh_sd = max(32, orig_h_sd // 2)
+                        in_sd = cv2.resize(st_stretched, (dw_sd, dh_sd), interpolation=cv2.INTER_AREA)
+                        in_mask_sd = cv2.resize(precomputed_mask, (dw_sd, dh_sd), interpolation=cv2.INTER_AREA) if precomputed_mask is not None else None
+                    else:
+                        in_sd = st_stretched
+                        in_mask_sd = precomputed_mask
+
+                    mask_2d = in_mask_sd[..., 0] if in_mask_sd is not None else None
+                    res_sd = apply_star_diffusion(
+                        in_sd,
                         strength=self.star_diff_strength,
-                        radius=self.star_diff_radius,
+                        radius=self.star_diff_radius * (0.5 if is_draft_sd else 1.0),
                         threshold=self.star_diff_threshold,
                         color_boost=self.star_diff_color_boost,
                         halo_mode=self.star_diff_mode,
                         sky_mask=mask_2d,
-                        stars_layer=st_stretched
+                        stars_layer=in_sd
                     )
+                    if is_draft_sd:
+                        st_stretched = cv2.resize(res_sd, (orig_w_sd, orig_h_sd), interpolation=cv2.INTER_LINEAR)
+                    else:
+                        st_stretched = res_sd
             elif st_img is not None:
                 st_stretched = np.clip(st_img * self.star_intensity, 0.0, 1.0)
                 if self.star_diff_strength > 1e-4:
-                    mask_2d = precomputed_mask[..., 0] if precomputed_mask is not None else None
-                    st_stretched = apply_star_diffusion(
-                        st_stretched,
+                    is_draft_sd = (not is_full_res and getattr(self, '_is_scrubbing_heavy_slider', False))
+                    orig_h_sd, orig_w_sd = st_stretched.shape[:2]
+                    if is_draft_sd:
+                        dw_sd = max(32, orig_w_sd // 2)
+                        dh_sd = max(32, orig_h_sd // 2)
+                        in_sd = cv2.resize(st_stretched, (dw_sd, dh_sd), interpolation=cv2.INTER_AREA)
+                        in_mask_sd = cv2.resize(precomputed_mask, (dw_sd, dh_sd), interpolation=cv2.INTER_AREA) if precomputed_mask is not None else None
+                    else:
+                        in_sd = st_stretched
+                        in_mask_sd = precomputed_mask
+
+                    mask_2d = in_mask_sd[..., 0] if in_mask_sd is not None else None
+                    res_sd = apply_star_diffusion(
+                        in_sd,
                         strength=self.star_diff_strength,
-                        radius=self.star_diff_radius,
+                        radius=self.star_diff_radius * (0.5 if is_draft_sd else 1.0),
                         threshold=self.star_diff_threshold,
                         color_boost=self.star_diff_color_boost,
                         halo_mode=self.star_diff_mode,
                         sky_mask=mask_2d,
-                        stars_layer=st_stretched
+                        stars_layer=in_sd
                     )
+                    if is_draft_sd:
+                        st_stretched = cv2.resize(res_sd, (orig_w_sd, orig_h_sd), interpolation=cv2.INTER_LINEAR)
+                    else:
+                        st_stretched = res_sd
             else:
                 st_stretched = st_img
 
-            if not self.is_zoomed_100:
+            if is_preview and not getattr(self, '_is_scrubbing_heavy_slider', False):
+                self._cache_pre_layers_key = stage2_key
+                self._cache_pre_layers_stretched = stretched
+                self._cache_pre_layers_stars = st_stretched
                 self._cached_base_stretched = stretched
                 self._cached_stars_stretched = st_stretched
                 self._cached_sky_mask = precomputed_mask
+
+        # 10. Aplicación de Capas y Máscaras Locales (Compositor Multicapa estilo Photoshop)
+        if apply_mask_layers and hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers:
+            if is_zoomed:
+                x1, y1, x2, y2 = self._zoom_crop_rect
+                sl_img = self.image_starless[y1:y2, x1:x2].copy() if self.image_starless is not None else None
+            elif is_full_res:
+                sl_img = self.image_starless
+            else:
+                sl_img = self.proxy_starless if self.proxy_starless is not None else self.image_starless
 
             stretched = apply_all_mask_layers(
                 stretched,
@@ -4809,71 +5103,100 @@ class DeveloperTab(QWidget):
                 full_image_shape=full_shape
             )
 
-        if not self.is_zoomed_100:
-            if not (apply_mask_layers and hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers):
-                self._cached_base_stretched = stretched
+        if is_preview:
             self._cached_rendered_image = stretched
 
         return np.ascontiguousarray(stretched, dtype=np.float32)
 
-    def update_stretch_preview(self):
-        base_to_render, active_mask = self._compose_active_base(for_export=False)
-        if base_to_render is None:
-            return
-
-        if self.view_layer_mode == 2:
-            if getattr(self, "stretch_mode", "mtf") == "ghs":
-                stretched = apply_ghs_stretch(
-                    base_to_render,
-                    sp=self.spin_ghs_sp.value(),
-                    d=self.spin_ghs_d.value(),
-                    b=self.spin_ghs_b.value(),
-                    hp=self.spin_ghs_hp.value(),
-                    lp=self.spin_ghs_lp.value(),
-                    bp=self.spin_ghs_bp.value(),
-                    color_mode=getattr(self, "ghs_color_mode", "luma")
-                )
-            else:
-                stretched = manual_stretch(base_to_render, black_point=self.spin_bp.value(), midtone=self.spin_mtf.value())
+    def update_stretch_preview(self, immediate: bool = False):
+        if immediate:
+            if hasattr(self, '_preview_throttle_timer'):
+                self._preview_throttle_timer.stop()
+            self._do_update_stretch_preview()
+            self._refresh_histograms_now()
         else:
-            stretched = self._apply_pipeline_on_image(base_to_render, precomputed_mask=active_mask)
+            if hasattr(self, '_preview_throttle_timer'):
+                self._preview_throttle_timer.start(16)
+            else:
+                self._do_update_stretch_preview()
+                self._refresh_histograms_now()
 
-        if stretched is not None:
-            self.canvas.load_image(base_to_render, display_stretched=stretched)
+    def _refresh_histograms_now(self):
+        if getattr(self, '_hist_throttle_timer', None) is not None:
+            self._hist_throttle_timer.stop()
+        stretched = getattr(self, '_last_rendered_preview', None)
+        if stretched is None or self.is_zoomed_100:
+            return
+        if hasattr(self, 'curve_widget'):
+            self.curve_widget.set_histogram_from_image(stretched)
+        if hasattr(self, 'live_histogram'):
+            self.live_histogram.update_from_image(stretched)
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.update_active_layer_histogram()
 
-            # Sincronización del comparador Antes / Después en modo Zoom 1:1
-            if self.is_zoomed_100 and self.canvas.split_view_enabled:
-                if getattr(self, "initial_stretch_mode", "mtf") == "ghs":
-                    stretched_before = apply_ghs_stretch(
+    def _do_update_stretch_preview(self):
+        if getattr(self, '_is_rendering_preview', False):
+            return
+        self._is_rendering_preview = True
+        try:
+            base_to_render, active_mask = self._compose_active_base(for_export=False)
+            if base_to_render is None:
+                return
+
+            if self.view_layer_mode == 2:
+                if getattr(self, "stretch_mode", "mtf") == "ghs":
+                    stretched = apply_ghs_stretch(
                         base_to_render,
-                        sp=getattr(self, "initial_ghs_sp", 0.02),
-                        d=getattr(self, "initial_ghs_d", 5.0),
-                        b=getattr(self, "initial_ghs_b", 2.0),
-                        hp=getattr(self, "initial_ghs_hp", 0.0),
-                        lp=getattr(self, "initial_ghs_lp", 0.0),
-                        bp=getattr(self, "initial_ghs_bp", 0.0),
-                        color_mode=getattr(self, "initial_ghs_color_mode", "luma")
+                        sp=self.spin_ghs_sp.value(),
+                        d=self.spin_ghs_d.value(),
+                        b=self.spin_ghs_b.value(),
+                        hp=self.spin_ghs_hp.value(),
+                        lp=self.spin_ghs_lp.value(),
+                        bp=self.spin_ghs_bp.value(),
+                        color_mode=getattr(self, "ghs_color_mode", "luma")
                     )
                 else:
-                    stretched_before = manual_stretch(base_to_render, black_point=self.initial_bp, midtone=self.initial_mtf)
-                disp_b = (np.clip(stretched_before, 0.0, 1.0) * 255.0).astype(np.uint8)
-                h_b, w_b = disp_b.shape[:2]
-                disp_bc = np.ascontiguousarray(disp_b, dtype=np.uint8)
-                qimg_b = QImage(disp_bc.data, w_b, h_b, 3 * w_b, QImage.Format_RGB888).copy()
-                self.canvas.set_before_pixmap(QPixmap.fromImage(qimg_b))
+                    stretched = manual_stretch(base_to_render, black_point=self.spin_bp.value(), midtone=self.spin_mtf.value())
+            else:
+                stretched = self._apply_pipeline_on_image(base_to_render, precomputed_mask=active_mask)
 
-            # Solo actualizar histograma en vista general para no alterar la escala al hacer zoom 1:1
-            if not self.is_zoomed_100:
-                self.curve_widget.set_histogram_from_image(stretched)
-                if hasattr(self, 'live_histogram'):
-                    self.live_histogram.update_from_image(stretched)
-                if hasattr(self, 'mask_layers_widget'):
-                    self.mask_layers_widget.update_active_layer_histogram()
-            self._update_canvas_info_label()
+            if stretched is not None:
+                self._last_rendered_preview = stretched
+                self.canvas.load_image(base_to_render, display_stretched=stretched)
 
-            # Reiniciar temporizador de consolidación de historial (captura scroll de ratón y flechas)
-            if not self._is_undoing_or_redoing and hasattr(self, '_undo_debounce_timer'):
-                self._undo_debounce_timer.start(500)
+                # Sincronización del comparador Antes / Después en modo Zoom 1:1
+                if self.is_zoomed_100 and self.canvas.split_view_enabled:
+                    if getattr(self, "initial_stretch_mode", "mtf") == "ghs":
+                        stretched_before = apply_ghs_stretch(
+                            base_to_render,
+                            sp=getattr(self, "initial_ghs_sp", 0.02),
+                            d=getattr(self, "initial_ghs_d", 5.0),
+                            b=getattr(self, "initial_ghs_b", 2.0),
+                            hp=getattr(self, "initial_ghs_hp", 0.0),
+                            lp=getattr(self, "initial_ghs_lp", 0.0),
+                            bp=getattr(self, "initial_ghs_bp", 0.0),
+                            color_mode=getattr(self, "initial_ghs_color_mode", "luma")
+                        )
+                    else:
+                        stretched_before = manual_stretch(base_to_render, black_point=self.initial_bp, midtone=self.initial_mtf)
+                    disp_b = cv2.convertScaleAbs(np.clip(stretched_before, 0.0, 1.0), alpha=255.0)
+                    h_b, w_b = disp_b.shape[:2]
+                    disp_bc = np.ascontiguousarray(disp_b, dtype=np.uint8)
+                    qimg_b = QImage(disp_bc.data, w_b, h_b, 3 * w_b, QImage.Format_RGB888)
+                    self.canvas.set_before_pixmap(QPixmap.fromImage(qimg_b))
+
+                # Actualización diferida del histograma durante arrastre
+                if not self.is_zoomed_100 and hasattr(self, '_hist_throttle_timer'):
+                    if not self._hist_throttle_timer.isActive():
+                        self._hist_throttle_timer.start(70)
+
+                self._update_canvas_info_label()
+
+                # Reiniciar temporizador de consolidación de historial (captura scroll de ratón y flechas)
+                if not self._is_undoing_or_redoing and hasattr(self, '_undo_debounce_timer'):
+                    self._undo_debounce_timer.start(500)
+        finally:
+            self._is_rendering_preview = False
 
     def run_starnet(self):
         if self.image_32bit is None:
@@ -5475,7 +5798,7 @@ class DeveloperTab(QWidget):
 
         bp_suggested, m_suggested = calculate_mtf_params(target, target_background=0.20)
         self.sync_controls(bp_suggested, m_suggested)
-        self.update_stretch_preview()
+        self.update_stretch_preview(immediate=True)
         self.log_message(f"Auto-MTF aplicado (Punto Negro: {bp_suggested:.5f}, MTF m: {m_suggested:.5f}).")
 
     def sync_controls(self, bp: float, m: float):
@@ -6387,7 +6710,7 @@ class DeveloperTab(QWidget):
                 sm = cv2.GaussianBlur(clean_m, (ksize, ksize), sigmaX=ksize / 3.0)
                 full_mask = np.ascontiguousarray(np.repeat(sm[..., np.newaxis], 3, axis=2), dtype=np.float32)
 
-            processed = self._apply_pipeline_on_image(full_base, precomputed_mask=full_mask)
+            processed = self._apply_pipeline_on_image(full_base, precomputed_mask=full_mask, is_preview=False)
 
             ext = os.path.splitext(p)[1].lower()
             if ext == '.psd' or "Photoshop" in selected_filter:
@@ -6401,7 +6724,8 @@ class DeveloperTab(QWidget):
                 stretched_base = self._apply_pipeline_on_image(
                     self.image_32bit, 
                     precomputed_mask=None, 
-                    apply_mask_layers=False
+                    apply_mask_layers=False,
+                    is_preview=False
                 )
 
                 # 2. Suelo desarrollado (con ajustes diferenciales de suelo/EV/sombras sin capas superpuestas)
@@ -6411,7 +6735,8 @@ class DeveloperTab(QWidget):
                     ground_dev = self._apply_pipeline_on_image(
                         self.image_32bit, 
                         precomputed_mask=zero_mask, 
-                        apply_mask_layers=False
+                        apply_mask_layers=False,
+                        is_preview=False
                     )
 
                 # 3. Capas StarNet desacopladas (Starless puro estirado y Estrellas estiradas)
@@ -6428,7 +6753,8 @@ class DeveloperTab(QWidget):
                     stretched_starless = self._apply_pipeline_on_image(
                         starless_full,
                         precomputed_mask=full_mask if full_mask is not None else None,
-                        apply_mask_layers=False
+                        apply_mask_layers=False,
+                        is_preview=False
                     )
 
                     # Estirar la capa de estrellas directamente desde self.image_stars con MTF o GHS
@@ -6783,6 +7109,8 @@ class DeveloperTab(QWidget):
         for w in widgets_to_block:
             w.blockSignals(False)
 
+        self._invalidate_pipeline_caches()
+
         if hasattr(self, '_update_mask_status_ui'):
             self._update_mask_status_ui()
 
@@ -6938,39 +7266,101 @@ class DeveloperTab(QWidget):
         ]
         for s in all_sliders:
             if s is not None:
-                s.sliderReleased.connect(self._commit_action)
+                s.sliderReleased.connect(self._on_slider_interaction_finished)
 
-        self.spin_bp.editingFinished.connect(self._commit_action)
-        self.spin_mtf.editingFinished.connect(self._commit_action)
-        self.spin_ghs_sp.editingFinished.connect(self._commit_action)
-        self.spin_ghs_d.editingFinished.connect(self._commit_action)
-        self.spin_ghs_b.editingFinished.connect(self._commit_action)
-        self.spin_ghs_hp.editingFinished.connect(self._commit_action)
-        self.spin_ghs_lp.editingFinished.connect(self._commit_action)
-        self.spin_ghs_bp.editingFinished.connect(self._commit_action)
-        self.spin_lp_cx.editingFinished.connect(self._commit_action)
-        self.spin_lp_cy.editingFinished.connect(self._commit_action)
-        self.spin_lp_w.editingFinished.connect(self._commit_action)
-        self.spin_lp_h.editingFinished.connect(self._commit_action)
-        self.combo_lp_tint.activated.connect(lambda _: self._commit_action())
-        self.combo_lp_mode.activated.connect(lambda _: self._commit_action())
-        self.chk_lp_legacy_1d.toggled.connect(lambda _: self._commit_action())
-        self.combo_orton_tint.activated.connect(lambda _: self._commit_action())
-        self.combo_orton_mode.activated.connect(lambda _: self._commit_action())
+        heavy_sliders = [
+            getattr(self, 'slider_denoise', None),
+            getattr(self, 'slider_ond_est', None),
+            getattr(self, 'slider_ond_bg', None),
+            getattr(self, 'slider_clarity', None),
+            getattr(self, 'slider_dehaze', None),
+            getattr(self, 'slider_contrast_starless', None),
+            getattr(self, 'slider_orton', None),
+            getattr(self, 'slider_orton_radius', None),
+            getattr(self, 'slider_orton_threshold', None),
+            getattr(self, 'slider_star_diff', None),
+            getattr(self, 'slider_star_diff_radius', None),
+            getattr(self, 'slider_star_diff_threshold', None),
+            getattr(self, 'slider_star_diff_color', None),
+            getattr(self, 'slider_deconv_iter', None),
+            getattr(self, 'slider_deconv_fwhm', None),
+            getattr(self, 'slider_deconv_deringing', None),
+            getattr(self, 'slider_deconv_damping', None),
+            getattr(self, 'slider_deconv_aspect', None),
+            getattr(self, 'slider_deconv_angle', None),
+        ]
+        for s in heavy_sliders:
+            if s is not None:
+                s.sliderPressed.connect(self._on_heavy_slider_pressed)
+
+        if hasattr(self, 'mask_layers_widget'):
+            mask_heavy_sliders = [
+                getattr(self.mask_layers_widget, 'slider_sl_clarity', None),
+                getattr(self.mask_layers_widget, 'slider_sl_dehaze', None),
+                getattr(self.mask_layers_widget, 'slider_sl_ond_est', None),
+                getattr(self.mask_layers_widget, 'slider_sl_ond_bg', None),
+                getattr(self.mask_layers_widget, 'slider_sl_contrast', None),
+                getattr(self.mask_layers_widget, 'slider_sl_denoise', None),
+                getattr(self.mask_layers_widget, 'slider_sl_orton_strength', None),
+                getattr(self.mask_layers_widget, 'slider_sl_orton_radius', None),
+                getattr(self.mask_layers_widget, 'slider_sl_orton_threshold', None),
+                getattr(self.mask_layers_widget, 'slider_sl_star_diff_strength', None),
+                getattr(self.mask_layers_widget, 'slider_sl_star_diff_radius', None),
+                getattr(self.mask_layers_widget, 'slider_sl_star_diff_threshold', None),
+                getattr(self.mask_layers_widget, 'slider_sl_star_diff_color', None),
+            ]
+            for s in mask_heavy_sliders:
+                if s is not None:
+                    s.sliderPressed.connect(self._on_heavy_slider_pressed)
+                    s.sliderReleased.connect(self._on_slider_interaction_finished)
+
+        self.spin_bp.editingFinished.connect(self._on_control_committed)
+        self.spin_mtf.editingFinished.connect(self._on_control_committed)
+        self.spin_ghs_sp.editingFinished.connect(self._on_control_committed)
+        self.spin_ghs_d.editingFinished.connect(self._on_control_committed)
+        self.spin_ghs_b.editingFinished.connect(self._on_control_committed)
+        self.spin_ghs_hp.editingFinished.connect(self._on_control_committed)
+        self.spin_ghs_lp.editingFinished.connect(self._on_control_committed)
+        self.spin_ghs_bp.editingFinished.connect(self._on_control_committed)
+        self.spin_lp_cx.editingFinished.connect(self._on_control_committed)
+        self.spin_lp_cy.editingFinished.connect(self._on_control_committed)
+        self.spin_lp_w.editingFinished.connect(self._on_control_committed)
+        self.spin_lp_h.editingFinished.connect(self._on_control_committed)
+        self.combo_lp_tint.activated.connect(lambda _: self._on_control_committed())
+        self.combo_lp_mode.activated.connect(lambda _: self._on_control_committed())
+        self.chk_lp_legacy_1d.toggled.connect(lambda _: self._on_control_committed())
+        self.combo_orton_tint.activated.connect(lambda _: self._on_control_committed())
+        self.combo_orton_mode.activated.connect(lambda _: self._on_control_committed())
         if hasattr(self, 'combo_star_diff_mode'):
-            self.combo_star_diff_mode.activated.connect(lambda _: self._commit_action())
+            self.combo_star_diff_mode.activated.connect(lambda _: self._on_control_committed())
         if hasattr(self, 'combo_deconv_model'):
-            self.combo_deconv_model.activated.connect(lambda _: self._commit_action())
+            self.combo_deconv_model.activated.connect(lambda _: self._on_control_committed())
         if hasattr(self, 'combo_deconv_scope'):
-            self.combo_deconv_scope.activated.connect(lambda _: self._commit_action())
+            self.combo_deconv_scope.activated.connect(lambda _: self._on_control_committed())
         if hasattr(self, 'chk_deconv_luma_only'):
-            self.chk_deconv_luma_only.toggled.connect(lambda _: self._commit_action())
-        self.spin_temp.editingFinished.connect(self._commit_action)
-        self.spin_tint.editingFinished.connect(self._commit_action)
-        self.combo_layer.activated.connect(lambda _: self._commit_action())
+            self.chk_deconv_luma_only.toggled.connect(lambda _: self._on_control_committed())
+        self.spin_temp.editingFinished.connect(self._on_control_committed)
+        self.spin_tint.editingFinished.connect(self._on_control_committed)
+        self.combo_layer.activated.connect(lambda _: self._on_control_committed())
 
         if hasattr(self, 'curve_widget'):
-            self.curve_widget.curveCommitted.connect(self._commit_action)
+            self.curve_widget.curveCommitted.connect(self._on_control_committed)
+
+    def _on_heavy_slider_pressed(self):
+        """Activa el modo de proxy borrador ultra-fluido (50% resolución) durante el arrastre continuo."""
+        self._is_scrubbing_heavy_slider = True
+
+    def _on_slider_interaction_finished(self):
+        """Finaliza inmediatamente el renderizado y los histogramas al soltar el ratón y consolida en historial."""
+        self._is_scrubbing_heavy_slider = False
+        self.update_stretch_preview(immediate=True)
+        self._commit_action()
+
+    def _on_control_committed(self):
+        """Finaliza inmediatamente el renderizado y consolida en historial tras editar spinboxes o combos."""
+        self._is_scrubbing_heavy_slider = False
+        self.update_stretch_preview(immediate=True)
+        self._commit_action()
 
     def _capture_state(self) -> dict:
         """Captura una instantánea paramétrica ligera (~1 KB) de todos los ajustes del revelador."""
@@ -7091,7 +7481,7 @@ class DeveloperTab(QWidget):
                 self.canvas.set_native_image_size((w, h))
                 self._generate_preview_proxy()
                 self._generate_before_reference()
-                self.update_stretch_preview()
+                self.update_stretch_preview(immediate=True)
                 self._update_canvas_info_label()
                 self._update_mask_status_ui()
                 self.log_message(f"↺ Deshacer recorte: Restaurada imagen original ({w}x{h} px)")
@@ -7106,7 +7496,7 @@ class DeveloperTab(QWidget):
                 self.current_mask = target.get("old_mask")
                 self.canvas.set_refined_mask(self.current_mask)
                 self._generate_preview_proxy()
-                self.update_stretch_preview()
+                self.update_stretch_preview(immediate=True)
                 self._update_mask_status_ui()
                 self.log_message("↺ Deshacer: Cambio de máscara revertido")
             else:
@@ -7146,7 +7536,7 @@ class DeveloperTab(QWidget):
                 self.canvas.set_native_image_size((w, h))
                 self._generate_preview_proxy()
                 self._generate_before_reference()
-                self.update_stretch_preview()
+                self.update_stretch_preview(immediate=True)
                 self._update_canvas_info_label()
                 self._update_mask_status_ui()
                 self.log_message(f"↻ Rehacer recorte: Recorte restaurado ({w}x{h} px)")
@@ -7161,7 +7551,7 @@ class DeveloperTab(QWidget):
                 self.current_mask = target.get("new_mask")
                 self.canvas.set_refined_mask(self.current_mask)
                 self._generate_preview_proxy()
-                self.update_stretch_preview()
+                self.update_stretch_preview(immediate=True)
                 self._update_mask_status_ui()
                 self.log_message("↻ Rehacer: Cambio de máscara restablecido")
             else:
@@ -7530,7 +7920,7 @@ class DeveloperTab(QWidget):
                 self.canvas.set_refined_mask(None)
                 self.canvas.set_mask_visible(False)
 
-        self.update_stretch_preview()
+        self.update_stretch_preview(immediate=True)
 
     def _update_undo_redo_buttons(self):
         """Actualiza la disponibilidad visual y tooltips de los botones Deshacer y Rehacer."""

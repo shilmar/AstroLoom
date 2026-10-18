@@ -5,6 +5,16 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-19
+
+### Corregido
+* **Histograma Reactivo en Curvas Tonales por Capa:**
+  - Sincronización en tiempo real del histograma de fondo en el editor de curvas al mover los deslizadores de exposición, contraste, saturación y temperatura de cada capa (`apply_pre_curve_adjustments`).
+  - Reactividad inmediata tanto en arrastre continuo (`sliderMoved`) como al soltar el ratón (`sliderReleased`), permitiendo previsualizar el cambio de distribución tonal sin retraso.
+  - Filtrado espacial adaptativo para la capa *Fondo Nebular (Starless)*: cuando la máscara de suelo está deshabilitada se computa sobre el lienzo estirado completo, y cuando está activa se aísla exclusivamente sobre el cielo nocturno.
+* **Rendimiento de Dibujado en Canvas:**
+  - Optimización de re-renderizado y reducción de redundancias en operaciones de composición y visualización con zoom en el lienzo interactivo.
+
 ## [0.9.0] - 2026-10-17
 
 ### Añadido

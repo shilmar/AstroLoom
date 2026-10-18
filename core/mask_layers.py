@@ -259,21 +259,18 @@ def compute_curve_lut_from_points(points: Optional[List[Tuple[float, float]]], r
     return lut_arr
 
 
-def apply_local_adjustments_to_image(
-    image_rgb: np.ndarray,
-    effective_mask: np.ndarray,
-    layer: MaskLayer
-) -> np.ndarray:
+def apply_pre_curve_adjustments(image_rgb: np.ndarray, layer: MaskLayer) -> np.ndarray:
     """
-    Aplica los controles locales de una capa sobre image_rgb ponderados por effective_mask y opacidad.
+    Aplica secuencialmente los ajustes pre-curva de la capa (Balance de Blancos, Exposición EV,
+    Sombras, Luces, Contraste, Saturación) sin aplicar la curva tonal LUT ni ponderación de máscara.
+    Útil para alimentar histogramas interactivos de entrada a la curva tonal.
     """
-    if not layer.enabled or layer.opacity <= 1e-4:
-        return image_rgb
-
-    # Ponderación global de la máscara por opacidad
-    weight = np.clip(effective_mask * layer.opacity, 0.0, 1.0).astype(np.float32)
-    if np.max(weight) <= 1e-4:
-        return image_rgb
+    has_adj = (abs(layer.temp) > 1e-4 or abs(layer.tint) > 1e-4 or 
+               abs(layer.exposure) > 1e-3 or abs(layer.shadows) > 1e-3 or 
+               abs(layer.highlights) > 1e-3 or abs(layer.contrast) > 1e-3 or 
+               abs(layer.saturation - 1.0) > 1e-3)
+    if not has_adj:
+        return np.clip(image_rgb, 0.0, 1.0).astype(np.float32)
 
     adj = np.clip(image_rgb, 0.0, 1.0).astype(np.float32)
 
@@ -304,6 +301,27 @@ def apply_local_adjustments_to_image(
         hsv = cv2.cvtColor(np.clip(adj, 0.0, 1.0), cv2.COLOR_RGB2HSV)
         hsv[..., 1] = np.clip(hsv[..., 1] * layer.saturation, 0.0, 1.0)
         adj = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+
+    return np.clip(adj, 0.0, 1.0).astype(np.float32)
+
+
+def apply_local_adjustments_to_image(
+    image_rgb: np.ndarray,
+    effective_mask: np.ndarray,
+    layer: MaskLayer
+) -> np.ndarray:
+    """
+    Aplica los controles locales de una capa sobre image_rgb ponderados por effective_mask y opacidad.
+    """
+    if not layer.enabled or layer.opacity <= 1e-4:
+        return image_rgb
+
+    # Ponderación global de la máscara por opacidad
+    weight = np.clip(effective_mask * layer.opacity, 0.0, 1.0).astype(np.float32)
+    if np.max(weight) <= 1e-4:
+        return image_rgb
+
+    adj = apply_pre_curve_adjustments(image_rgb, layer)
 
     # 7. Curva tonal interactiva propia de la capa (LUT de 256 niveles acelerada por hardware)
     if not layer.is_curve_identity():
