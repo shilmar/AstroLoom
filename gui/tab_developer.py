@@ -3506,9 +3506,12 @@ class DeveloperTab(QWidget):
 
         is_draft = (not is_full_res and getattr(self, '_is_scrubbing_heavy_slider', False))
         orig_h, orig_w = starless.shape[:2]
-        if is_draft:
-            draft_w = max(32, orig_w // 2)
-            draft_h = max(32, orig_h // 2)
+        # Si starless ya proviene del nivel draft (<= 800 px) de la pirámide de resolución,
+        # NO volvemos a reducirlo a la mitad para evitar doble submuestreo destructivo (400 px).
+        if is_draft and max(orig_w, orig_h) > 800:
+            scale_d = 800.0 / float(max(orig_w, orig_h))
+            draft_w = max(32, int(orig_w * scale_d))
+            draft_h = max(32, int(orig_h * scale_d))
             proc_starless = cv2.resize(starless, (draft_w, draft_h), interpolation=cv2.INTER_AREA)
             proc_mask_3d = cv2.resize(mask_3d, (draft_w, draft_h), interpolation=cv2.INTER_AREA) if mask_3d is not None else None
         else:
@@ -3567,7 +3570,7 @@ class DeveloperTab(QWidget):
                 is_starless=True
             )
 
-        if is_draft:
+        if is_draft and proc_starless.shape[:2] != (orig_h, orig_w):
             processed_starless = cv2.resize(proc_starless, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
         else:
             processed_starless = proc_starless
@@ -6014,13 +6017,15 @@ class DeveloperTab(QWidget):
     # -------------------------------------------------------------
     def _connect_undo_triggers(self):
         """Conecta los eventos de finalización de interacción para registrar acciones en el historial."""
-        all_sliders = [
-            self.slider_lp, self.slider_lp_cx, self.slider_lp_cy,
-            self.slider_lp_w, self.slider_lp_h, self.slider_lp_tint_strength,
-            self.slider_stars, self.slider_contrast_starless,
-            self.slider_clarity, self.slider_dehaze, self.slider_ond_est,
-            self.slider_ond_bg, self.slider_denoise, 
-            self.slider_orton, self.slider_orton_radius, self.slider_orton_threshold,
+        heavy_sliders = [
+            getattr(self, 'slider_clarity', None),
+            getattr(self, 'slider_dehaze', None),
+            getattr(self, 'slider_ond_est', None),
+            getattr(self, 'slider_ond_bg', None),
+            getattr(self, 'slider_denoise', None),
+            getattr(self, 'slider_orton', None),
+            getattr(self, 'slider_orton_radius', None),
+            getattr(self, 'slider_orton_threshold', None),
             getattr(self, 'slider_star_diff', None),
             getattr(self, 'slider_star_diff_radius', None),
             getattr(self, 'slider_star_diff_threshold', None),
@@ -6031,25 +6036,40 @@ class DeveloperTab(QWidget):
             getattr(self, 'slider_deconv_damping', None),
             getattr(self, 'slider_deconv_aspect', None),
             getattr(self, 'slider_deconv_angle', None),
+        ]
+        for s in heavy_sliders:
+            if s is not None:
+                s.sliderPressed.connect(self._on_heavy_slider_pressed)
+                s.sliderReleased.connect(self._on_slider_interaction_finished)
+
+        # Deslizadores de cálculo ligero (contraste, balance, tono, curvas, estrellas)
+        # conservan la máxima fidelidad visual (Preview Proxy <= 1600px) en tiempo real
+        light_sliders = [
+            self.slider_contrast_starless,
+            self.slider_stars,
             self.slider_temp, self.slider_tint, self.slider_sat_sky,
             self.slider_sat_gnd, self.slider_vibrance, self.slider_contrast,
             self.slider_bp, self.slider_mtf,
             self.slider_ghs_sp, self.slider_ghs_d, self.slider_ghs_b,
             self.slider_ghs_hp, self.slider_ghs_lp, self.slider_ghs_bp,
             self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp,
+            getattr(self, 'slider_lp', None),
+            getattr(self, 'slider_lp_cx', None),
+            getattr(self, 'slider_lp_cy', None),
+            getattr(self, 'slider_lp_w', None),
+            getattr(self, 'slider_lp_h', None),
+            getattr(self, 'slider_lp_tint_strength', None),
         ]
-        for s in all_sliders:
+        for s in light_sliders:
             if s is not None:
-                s.sliderPressed.connect(self._on_heavy_slider_pressed)
                 s.sliderReleased.connect(self._on_slider_interaction_finished)
 
         if hasattr(self, 'mask_layers_widget'):
-            mask_sliders = [
+            mask_heavy_sliders = [
                 getattr(self.mask_layers_widget, 'slider_sl_clarity', None),
                 getattr(self.mask_layers_widget, 'slider_sl_dehaze', None),
                 getattr(self.mask_layers_widget, 'slider_sl_ond_est', None),
                 getattr(self.mask_layers_widget, 'slider_sl_ond_bg', None),
-                getattr(self.mask_layers_widget, 'slider_sl_contrast', None),
                 getattr(self.mask_layers_widget, 'slider_sl_denoise', None),
                 getattr(self.mask_layers_widget, 'slider_sl_orton_strength', None),
                 getattr(self.mask_layers_widget, 'slider_sl_orton_radius', None),
@@ -6058,6 +6078,14 @@ class DeveloperTab(QWidget):
                 getattr(self.mask_layers_widget, 'slider_sl_star_diff_radius', None),
                 getattr(self.mask_layers_widget, 'slider_sl_star_diff_threshold', None),
                 getattr(self.mask_layers_widget, 'slider_sl_star_diff_color', None),
+            ]
+            for s in mask_heavy_sliders:
+                if s is not None:
+                    s.sliderPressed.connect(self._on_heavy_slider_pressed)
+                    s.sliderReleased.connect(self._on_slider_interaction_finished)
+
+            mask_light_sliders = [
+                getattr(self.mask_layers_widget, 'slider_sl_contrast', None),
                 getattr(self.mask_layers_widget, 'slider_sl_ev', None),
                 getattr(self.mask_layers_widget, 'slider_sl_sh', None),
                 getattr(self.mask_layers_widget, 'slider_sl_bp', None),
@@ -6066,9 +6094,8 @@ class DeveloperTab(QWidget):
                 getattr(self.mask_layers_widget, 'slider_sl_sat', None),
                 getattr(self.mask_layers_widget, 'slider_sl_vib', None),
             ]
-            for s in mask_sliders:
+            for s in mask_light_sliders:
                 if s is not None:
-                    s.sliderPressed.connect(self._on_heavy_slider_pressed)
                     s.sliderReleased.connect(self._on_slider_interaction_finished)
 
         self.spin_bp.editingFinished.connect(self._on_control_committed)

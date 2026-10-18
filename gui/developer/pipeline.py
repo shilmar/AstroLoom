@@ -261,23 +261,25 @@ def apply_developer_pipeline(
                 sky_median = float(np.median(stretched[precomputed_mask > 0.5]))
             else:
                 sky_median = float(np.median(stretched))
-            sn_contrasted = adjust_contrast(stretched, state.contrast_starless_val, pivot=sky_median)
+            sn_contrasted = adjust_contrast(stretched, contrast_starless, pivot=sky_median)
             if precomputed_mask is not None:
                 stretched = (sn_contrasted * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
             else:
                 stretched = sn_contrasted
 
         # 9. Contraste Global
-        if abs(state.contrast_val) > 1e-4:
-            stretched = adjust_contrast(stretched, state.contrast_val, pivot=None)
+        contrast_global = state.contrast_val / 100.0
+        if abs(contrast_global) > 1e-4:
+            stretched = adjust_contrast(stretched, contrast_global, pivot=None)
 
         # 10. Deconvolución Óptica Regularizada (Richardson-Lucy / PSF)
         if state.deconv_iterations > 0:
             is_draft_deconv = is_scrubbing
             orig_h_dec, orig_w_dec = stretched.shape[:2]
-            if is_draft_deconv:
-                dw_dec = max(32, orig_w_dec // 2)
-                dh_dec = max(32, orig_h_dec // 2)
+            if is_draft_deconv and max(orig_w_dec, orig_h_dec) > 800:
+                scale_dec = 800.0 / float(max(orig_w_dec, orig_h_dec))
+                dw_dec = max(32, int(orig_w_dec * scale_dec))
+                dh_dec = max(32, int(orig_h_dec * scale_dec))
                 in_deconv = cv2.resize(stretched, (dw_dec, dh_dec), interpolation=cv2.INTER_AREA)
                 in_mask_dec = (
                     cv2.resize(precomputed_mask, (dw_dec, dh_dec), interpolation=cv2.INTER_AREA)
@@ -339,7 +341,7 @@ def apply_developer_pipeline(
             else:
                 res_deconv = deconvolved
 
-            if is_draft_deconv:
+            if is_draft_deconv and in_deconv.shape[:2] != (orig_h_dec, orig_w_dec):
                 stretched = cv2.resize(res_deconv, (orig_w_dec, orig_h_dec), interpolation=cv2.INTER_LINEAR)
             else:
                 stretched = res_deconv
@@ -352,9 +354,10 @@ def apply_developer_pipeline(
         if orton_strength > 1e-4 and not has_active_starless:
             is_draft_ort = is_scrubbing
             orig_h_ort, orig_w_ort = stretched.shape[:2]
-            if is_draft_ort:
-                dw_ort = max(32, orig_w_ort // 2)
-                dh_ort = max(32, orig_h_ort // 2)
+            if is_draft_ort and max(orig_w_ort, orig_h_ort) > 800:
+                scale_ort = 800.0 / float(max(orig_w_ort, orig_h_ort))
+                dw_ort = max(32, int(orig_w_ort * scale_ort))
+                dh_ort = max(32, int(orig_h_ort * scale_ort))
                 in_ort = cv2.resize(stretched, (dw_ort, dh_ort), interpolation=cv2.INTER_AREA)
                 in_mask_ort = (
                     cv2.resize(precomputed_mask, (dw_ort, dh_ort), interpolation=cv2.INTER_AREA)
@@ -392,7 +395,7 @@ def apply_developer_pipeline(
                 sky_mask=mask_2d,
                 is_starless=False,
             )
-            if is_draft_ort:
+            if is_draft_ort and in_ort.shape[:2] != (orig_h_ort, orig_w_ort):
                 stretched = cv2.resize(res_ort, (orig_w_ort, orig_h_ort), interpolation=cv2.INTER_LINEAR)
             else:
                 stretched = res_ort
@@ -409,9 +412,10 @@ def apply_developer_pipeline(
         if star_diff_strength > 1e-4 and not has_active_starless:
             is_draft_sd = is_scrubbing
             orig_h_sd, orig_w_sd = stretched.shape[:2]
-            if is_draft_sd:
-                dw_sd = max(32, orig_w_sd // 2)
-                dh_sd = max(32, orig_h_sd // 2)
+            if is_draft_sd and max(orig_w_sd, orig_h_sd) > 800:
+                scale_sd = 800.0 / float(max(orig_w_sd, orig_h_sd))
+                dw_sd = max(32, int(orig_w_sd * scale_sd))
+                dh_sd = max(32, int(orig_h_sd * scale_sd))
                 in_sd = cv2.resize(stretched, (dw_sd, dh_sd), interpolation=cv2.INTER_AREA)
                 in_mask_sd = (
                     cv2.resize(precomputed_mask, (dw_sd, dh_sd), interpolation=cv2.INTER_AREA)
@@ -433,7 +437,7 @@ def apply_developer_pipeline(
                 sky_mask=mask_2d,
                 stars_layer=None,
             )
-            if is_draft_sd:
+            if is_draft_sd and in_sd.shape[:2] != (orig_h_sd, orig_w_sd):
                 stretched = cv2.resize(res_sd, (orig_w_sd, orig_h_sd), interpolation=cv2.INTER_LINEAR)
             else:
                 stretched = res_sd
