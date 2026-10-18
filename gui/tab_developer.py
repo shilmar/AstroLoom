@@ -106,6 +106,9 @@ from gui.developer.panels.panel_deconvolution import DeconvolutionPanel
 from gui.developer.panels.panel_light_pollution import LightPollutionPanel
 from gui.developer.panels.panel_stretching import StretchingPanel
 from gui.developer.panels.panel_effects import EffectsPanel
+from gui.developer.panels.panel_presets import PresetsPanel
+from gui.developer.panels.panel_ground_sky import GroundSkyPanel
+from gui.developer.panels.panel_starnet import StarNetPanel
 from gui.developer.developer_state import DeveloperState
 from gui.developer.pipeline import ResolutionPyramid, apply_developer_pipeline
 from gui.developer.async_worker import AsyncPipelineManager
@@ -331,90 +334,22 @@ class DeveloperTab(QWidget):
         left_layout.setContentsMargins(0, 0, 4, 0)
         left_layout.setSpacing(6)
 
-        # --- SECCIÓN 1: Estilos y Presets de Revelado ---
-        self.sec_presets = CollapsibleSection("Presets y Estilos de Revelado", is_expanded=False, icon_name="sliders")
-        w_presets = QWidget()
-        presets_layout = QVBoxLayout(w_presets)
-        presets_layout.setContentsMargins(6, 4, 6, 6)
-        presets_layout.setSpacing(6)
+        # --- SECCIÓN 1: Estilos y Presets de Revelado (Módulo gui.developer.panels.PresetsPanel) ---
+        self.panel_presets = PresetsPanel()
+        self.sec_presets = self.panel_presets.sec_presets
+        self.combo_presets = self.panel_presets.combo_presets
+        self.lbl_preset_desc = self.panel_presets.lbl_preset_desc
+        self.combo_preset_scope = self.panel_presets.combo_preset_scope
+        self.btn_apply_preset = self.panel_presets.btn_apply_preset
+        self.btn_save_preset = self.panel_presets.btn_save_preset
+        self.btn_manage_presets = self.panel_presets.btn_manage_presets
 
-        # Fila 1: Selector de Preset (ancho completo)
-        self.combo_presets = QComboBox()
-        self.combo_presets.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.combo_presets.setMinimumContentsLength(8)
-        self.combo_presets.setToolTip("Selecciona un estilo astronómico preestablecido oficial o personalizado")
-        self.combo_presets.currentIndexChanged.connect(self._on_preset_combo_changed)
-        presets_layout.addWidget(self.combo_presets)
+        self.panel_presets.preset_changed.connect(self._on_preset_combo_changed)
+        self.panel_presets.apply_requested.connect(self.apply_selected_preset)
+        self.panel_presets.save_requested.connect(self.open_save_preset_dialog)
+        self.panel_presets.manage_requested.connect(self.open_preset_manager_dialog)
 
-        # Fila 2: Descripción corta del preset seleccionado
-        self.lbl_preset_desc = QLabel("")
-        self.lbl_preset_desc.setWordWrap(True)
-        self.lbl_preset_desc.setStyleSheet("color: #90a4ae; font-size: 11px; font-style: italic;")
-        presets_layout.addWidget(self.lbl_preset_desc)
-
-        # Fila 3: Modo de Aplicación + Botón Aplicar en la misma línea (ahorro vertical)
-        row_mode_apply = QHBoxLayout()
-        row_mode_apply.setSpacing(6)
-
-        self.combo_preset_scope = QComboBox()
-        self.combo_preset_scope.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.combo_preset_scope.setMinimumContentsLength(8)
-        self.combo_preset_scope.addItem("Todo (Sin estirado)", SCOPE_ALL)
-        self.combo_preset_scope.addItem("Solo Color y WB", SCOPE_COLOR)
-        self.combo_preset_scope.addItem("Solo Estrellas y Filtros", SCOPE_DETAILS)
-        self.combo_preset_scope.addItem("Solo Contraste y Suelo", SCOPE_TONE)
-        self.combo_preset_scope.setToolTip("Elige qué controles aplicar del preset (el estirado MTF y el punto negro de la imagen se respetan siempre)")
-        row_mode_apply.addWidget(self.combo_preset_scope, stretch=1)
-
-        self.btn_apply_preset = QPushButton("Aplicar")
-        self.btn_apply_preset.setIcon(get_icon("sparkles", color="#ffffff", size=12))
-        self.btn_apply_preset.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.btn_apply_preset.setFixedWidth(84)
-        self.btn_apply_preset.setStyleSheet("""
-            QPushButton {
-                font-weight: bold;
-                font-size: 11px;
-                background-color: #00838f;
-                color: #ffffff;
-                border: 1px solid #00acc1;
-                border-radius: 5px;
-                padding: 4px 6px;
-            }
-            QPushButton:hover {
-                background-color: #0097a7;
-                border-color: #26c6da;
-            }
-            QPushButton:pressed {
-                background-color: #006064;
-            }
-            QPushButton:disabled {
-                background-color: #152528;
-                color: #43656b;
-                border-color: #1f373b;
-            }
-        """)
-        self.btn_apply_preset.setToolTip("Aplica el preset seleccionado a la imagen actual según el modo elegido")
-        self.btn_apply_preset.clicked.connect(self.apply_selected_preset)
-        row_mode_apply.addWidget(self.btn_apply_preset)
-        presets_layout.addLayout(row_mode_apply)
-
-        # Fila 4: Botones Guardar Actual y Administrar
-        row_preset_btns = QHBoxLayout()
-        self.btn_save_preset = QPushButton("Guardar...")
-        self.btn_save_preset.setIcon(get_icon("save", color="#94a3b8", hover_color="#38bdf8", size=12))
-        self.btn_save_preset.setToolTip("Guarda los ajustes y deslizadores actuales como un nuevo preset")
-        self.btn_save_preset.clicked.connect(self.open_save_preset_dialog)
-        row_preset_btns.addWidget(self.btn_save_preset)
-
-        self.btn_manage_presets = QPushButton("Gestor Presets...")
-        self.btn_manage_presets.setIcon(get_icon("settings", color="#94a3b8", hover_color="#38bdf8", size=12))
-        self.btn_manage_presets.setToolTip("Abre el administrador para importar, exportar, inspeccionar o eliminar presets")
-        self.btn_manage_presets.clicked.connect(self.open_preset_manager_dialog)
-        row_preset_btns.addWidget(self.btn_manage_presets)
-        presets_layout.addLayout(row_preset_btns)
-
-        self.sec_presets.set_content_widget(w_presets)
-        left_layout.addWidget(self.sec_presets)
+        left_layout.addWidget(self.panel_presets)
 
         # --- SECCIÓN 2: Extracción de Fondo y Polución Lumínica (Módulo gui.developer.panels.LightPollutionPanel) ---
         self.panel_lp = LightPollutionPanel()
@@ -606,212 +541,32 @@ class DeveloperTab(QWidget):
         # Curva Tonal migrada directamente al Gestor de Capas (Columna 3) para Estrellas, Starless, Suelo y Base
         self.sec_curves.setVisible(False)
 
-        # --- SECCIÓN 5: StarNet++ AI — Desacoplo y Procesado de Capas ---
-        self.sec_starnet = CollapsibleSection("StarNet++ AI — Desacoplo de Estrellas", is_expanded=False, icon_name="star")
-        w_starnet = QWidget()
-        layout_starnet = QVBoxLayout(w_starnet)
-        layout_starnet.setContentsMargins(6, 4, 6, 6)
-        layout_starnet.setSpacing(8)
+        # --- SECCIÓN 5: StarNet++ AI — Desacoplo de Estrellas (Módulo gui.developer.panels.StarNetPanel) ---
+        self.panel_starnet = StarNetPanel(self, resettable_label_factory=self._make_resettable_label)
+        self.sec_starnet = self.panel_starnet.sec_starnet
+        self.spin_stride = self.panel_starnet.spin_stride
+        self.btn_starnet = self.panel_starnet.btn_starnet
+        self.card_starnet_info = self.panel_starnet.card_starnet_info
+        self.lbl_starnet_info = self.panel_starnet.lbl_starnet_info
+        self.btn_go_to_masks_starnet = self.panel_starnet.btn_go_to_masks_starnet
+        self.container_starnet_tools = self.panel_starnet.container_starnet_tools
+        self.combo_layer = self.panel_starnet.combo_layer
+        self.slider_stars = self.panel_starnet.slider_stars
+        self.lbl_stars = self.panel_starnet.lbl_stars
+        self.slider_clarity = self.panel_starnet.slider_clarity
+        self.lbl_clarity = self.panel_starnet.lbl_clarity
+        self.slider_dehaze = self.panel_starnet.slider_dehaze
+        self.lbl_dehaze = self.panel_starnet.lbl_dehaze
+        self.slider_ond_est = self.panel_starnet.slider_ond_est
+        self.lbl_ond_est = self.panel_starnet.lbl_ond_est
+        self.slider_ond_bg = self.panel_starnet.slider_ond_bg
+        self.lbl_ond_bg = self.panel_starnet.lbl_ond_bg
+        self.slider_contrast_starless = self.panel_starnet.slider_contrast_starless
+        self.lbl_contrast_starless = self.panel_starnet.lbl_contrast_starless
+        self.slider_denoise = self.panel_starnet.slider_denoise
+        self.lbl_denoise = self.panel_starnet.lbl_denoise
 
-        # 1. Disparador de Ejecución
-        row_sn = QHBoxLayout()
-        row_sn.addWidget(QLabel("Paso (Stride):"))
-        self.spin_stride = QSpinBox()
-        self.spin_stride.setRange(64, 512)
-        self.spin_stride.setSingleStep(64)
-        self.spin_stride.setValue(256)
-        self.spin_stride.setFixedWidth(65)
-        row_sn.addWidget(self.spin_stride)
-
-        self.btn_starnet = QPushButton("Separar Estrellas con StarNet")
-        self.btn_starnet.setIcon(get_icon("star", color="#b388ff", size=13))
-        self.btn_starnet.setStyleSheet("font-weight: bold; color: #b388ff;")
-        self.btn_starnet.clicked.connect(self.run_starnet)
-        row_sn.addWidget(self.btn_starnet)
-        layout_starnet.addLayout(row_sn)
-
-        # 2. Tarjeta informativa y acceso directo al Gestor de Capas
-        self.card_starnet_info = QFrame()
-        self.card_starnet_info.setStyleSheet("""
-            QFrame {
-                background-color: #1a1e2d;
-                border: 1px solid #33384c;
-                border-radius: 6px;
-                padding: 6px;
-            }
-        """)
-        layout_card_sn = QVBoxLayout(self.card_starnet_info)
-        layout_card_sn.setContentsMargins(8, 8, 8, 8)
-        layout_card_sn.setSpacing(8)
-
-        self.lbl_starnet_info = QLabel(
-            "Ejecuta StarNet para desacoplar las estrellas del fondo cósmico.\n"
-            "Se generarán automáticamente las capas 'Fondo Nebular' y 'Estrellas' en el Gestor de Capas (Sección 9), donde podrás ajustar de forma contextual su presencia, claridad, contraste y reducción de ruido."
-        )
-        self.lbl_starnet_info.setWordWrap(True)
-        self.lbl_starnet_info.setStyleSheet("color: #b0bec5; font-size: 11px; line-height: 1.4;")
-        layout_card_sn.addWidget(self.lbl_starnet_info)
-
-        self.btn_go_to_masks_starnet = QPushButton("Gestionar Capas en Columna 3")
-        self.btn_go_to_masks_starnet.setIcon(get_icon("layers", color="#b388ff", size=13))
-        self.btn_go_to_masks_starnet.setCursor(Qt.PointingHandCursor)
-        self.btn_go_to_masks_starnet.setStyleSheet("""
-            QPushButton {
-                background-color: #2b1f3d;
-                color: #ce93d8;
-                border: 1px solid #7b1fa2;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #3b2854;
-                border-color: #ba68c8;
-                color: #ffffff;
-            }
-        """)
-        self.btn_go_to_masks_starnet.clicked.connect(lambda: self._jump_to_mask_layers(MASK_TYPE_IMAGE_STARLESS))
-        self.btn_go_to_masks_starnet.setVisible(False)
-        layout_card_sn.addWidget(self.btn_go_to_masks_starnet)
-
-        layout_starnet.addWidget(self.card_starnet_info)
-
-        # 3. Contenedor de herramientas dependientes en memoria (oculto de la UI para mantener compatibilidad con presets)
-        self.container_starnet_tools = QWidget()
-        self.container_starnet_tools.setVisible(False)
-        tools_layout = QVBoxLayout(self.container_starnet_tools)
-        tools_layout.setContentsMargins(0, 0, 0, 0)
-        tools_layout.setSpacing(8)
-
-        # Capas y Estrellas
-        row_view = QHBoxLayout()
-        row_view.addWidget(QLabel("Capa visible:"))
-        self.combo_layer = QComboBox()
-        self.combo_layer.addItems(["Compuesta (Normal)", "Solo Fondo (Starless)", "Solo Estrellas"])
-        self.combo_layer.currentIndexChanged.connect(self.on_layer_mode_changed)
-        row_view.addWidget(self.combo_layer)
-
-        row_view.addSpacing(10)
-        row_view.addWidget(self._make_resettable_label(QLabel("Estrellas:"), lambda: self.slider_stars.setValue(100), "100%"))
-        self.lbl_stars = QLabel("100%")
-        self.lbl_stars.setStyleSheet("color: #ffd54f; font-weight: bold;")
-        row_view.addWidget(self.lbl_stars)
-        tools_layout.addLayout(row_view)
-
-        self.slider_stars = QSlider(Qt.Horizontal)
-        self.slider_stars.setRange(0, 200)
-        self.slider_stars.setValue(100)
-        self.slider_stars.valueChanged.connect(self.on_stars_slider_changed)
-        tools_layout.addWidget(self.slider_stars)
-
-        # Emparejamiento 3.2 - Par 1: Claridad Fondo (izq) y Borrar Neblina (der)
-        row_pair1 = QHBoxLayout()
-        row_pair1.setSpacing(14)
-
-        col_clarity = QVBoxLayout()
-        col_clarity.setSpacing(4)
-        row_cl_lbl = QHBoxLayout()
-        row_cl_lbl.addWidget(self._make_resettable_label(QLabel("Claridad Fondo:"), lambda: self.slider_clarity.setValue(0), "0.00"))
-        self.lbl_clarity = QLabel("0.00")
-        self.lbl_clarity.setStyleSheet("color: #80d8ff; font-weight: bold;")
-        row_cl_lbl.addWidget(self.lbl_clarity)
-        col_clarity.addLayout(row_cl_lbl)
-        self.slider_clarity = QSlider(Qt.Horizontal)
-        self.slider_clarity.setRange(-200, 200)
-        self.slider_clarity.setValue(0)
-        self.slider_clarity.valueChanged.connect(self.on_clarity_changed)
-        col_clarity.addWidget(self.slider_clarity)
-        row_pair1.addLayout(col_clarity)
-
-        col_dehaze = QVBoxLayout()
-        col_dehaze.setSpacing(4)
-        row_dh_lbl = QHBoxLayout()
-        row_dh_lbl.addWidget(self._make_resettable_label(QLabel("Borrar Neblina:"), lambda: self.slider_dehaze.setValue(0), "0.00"))
-        self.lbl_dehaze = QLabel("0.00")
-        self.lbl_dehaze.setStyleSheet("color: #80d8ff; font-weight: bold;")
-        row_dh_lbl.addWidget(self.lbl_dehaze)
-        col_dehaze.addLayout(row_dh_lbl)
-        self.slider_dehaze = QSlider(Qt.Horizontal)
-        self.slider_dehaze.setRange(-200, 200)
-        self.slider_dehaze.setValue(0)
-        self.slider_dehaze.valueChanged.connect(self.on_dehaze_changed)
-        col_dehaze.addWidget(self.slider_dehaze)
-        row_pair1.addLayout(col_dehaze)
-        tools_layout.addLayout(row_pair1)
-
-        # Emparejamiento 3.2 - Par 2: Estructura Ondículas (izq) y Atenuar Fondo (der)
-        row_pair2 = QHBoxLayout()
-        row_pair2.setSpacing(14)
-
-        col_ond = QVBoxLayout()
-        col_ond.setSpacing(4)
-        row_ond_lbl = QHBoxLayout()
-        row_ond_lbl.addWidget(self._make_resettable_label(QLabel("Estructura (Ondículas):"), lambda: self.slider_ond_est.setValue(0), "0.00"))
-        self.lbl_ond_est = QLabel("0.00")
-        self.lbl_ond_est.setStyleSheet("color: #b388ff; font-weight: bold;")
-        row_ond_lbl.addWidget(self.lbl_ond_est)
-        col_ond.addLayout(row_ond_lbl)
-        self.slider_ond_est = QSlider(Qt.Horizontal)
-        self.slider_ond_est.setRange(-100, 100)
-        self.slider_ond_est.setValue(0)
-        self.slider_ond_est.valueChanged.connect(self.on_ond_estructura_changed)
-        col_ond.addWidget(self.slider_ond_est)
-        row_pair2.addLayout(col_ond)
-
-        col_ond_bg = QVBoxLayout()
-        col_ond_bg.setSpacing(4)
-        row_ondbg_lbl = QHBoxLayout()
-        row_ondbg_lbl.addWidget(self._make_resettable_label(QLabel("Atenuar Fondo:"), lambda: self.slider_ond_bg.setValue(0), "0%"))
-        self.lbl_ond_bg = QLabel("0%")
-        self.lbl_ond_bg.setStyleSheet("color: #b388ff; font-weight: bold;")
-        row_ondbg_lbl.addWidget(self.lbl_ond_bg)
-        col_ond_bg.addLayout(row_ondbg_lbl)
-        self.slider_ond_bg = QSlider(Qt.Horizontal)
-        self.slider_ond_bg.setRange(0, 100)
-        self.slider_ond_bg.setValue(0)
-        self.slider_ond_bg.valueChanged.connect(self.on_ond_fondo_changed)
-        col_ond_bg.addWidget(self.slider_ond_bg)
-        row_pair2.addLayout(col_ond_bg)
-        tools_layout.addLayout(row_pair2)
-
-        # Emparejamiento 3.2 - Par 3: Contraste Starless (izq) y Reducción de Ruido (der)
-        row_pair3 = QHBoxLayout()
-        row_pair3.setSpacing(14)
-
-        col_cs = QVBoxLayout()
-        col_cs.setSpacing(4)
-        row_cs_lbl = QHBoxLayout()
-        row_cs_lbl.addWidget(self._make_resettable_label(QLabel("Contraste Fondo:"), lambda: self.slider_contrast_starless.setValue(0), "0.00"))
-        self.lbl_contrast_starless = QLabel("0.00")
-        self.lbl_contrast_starless.setStyleSheet("color: #a5d6a7; font-weight: bold;")
-        row_cs_lbl.addWidget(self.lbl_contrast_starless)
-        col_cs.addLayout(row_cs_lbl)
-        self.slider_contrast_starless = QSlider(Qt.Horizontal)
-        self.slider_contrast_starless.setRange(-100, 100)
-        self.slider_contrast_starless.setValue(0)
-        self.slider_contrast_starless.valueChanged.connect(self.on_contrast_starless_changed)
-        col_cs.addWidget(self.slider_contrast_starless)
-        row_pair3.addLayout(col_cs)
-
-        col_dn = QVBoxLayout()
-        col_dn.setSpacing(4)
-        row_dn_lbl = QHBoxLayout()
-        row_dn_lbl.addWidget(self._make_resettable_label(QLabel("Reducción Ruido:"), lambda: self.slider_denoise.setValue(0), "0%"))
-        self.lbl_denoise = QLabel("0%")
-        self.lbl_denoise.setStyleSheet("color: #a5d6a7; font-weight: bold;")
-        row_dn_lbl.addWidget(self.lbl_denoise)
-        col_dn.addLayout(row_dn_lbl)
-        self.slider_denoise = QSlider(Qt.Horizontal)
-        self.slider_denoise.setRange(0, 100)
-        self.slider_denoise.setValue(0)
-        self.slider_denoise.valueChanged.connect(self.on_denoise_changed)
-        col_dn.addWidget(self.slider_denoise)
-        row_pair3.addLayout(col_dn)
-        tools_layout.addLayout(row_pair3)
-
-        # Emparejamiento 3.2 - Efectos Visuales: Orton y Star Diffusion (Módulo gui.developer.panels.EffectsPanel)
-        self.panel_effects = EffectsPanel(self)
+        self.panel_effects = self.panel_starnet.panel_effects
         self.box_orton_tools = self.panel_effects.box_orton_tools
         self.slider_orton = self.panel_effects.slider_orton
         self.lbl_orton = self.panel_effects.lbl_orton
@@ -837,7 +592,18 @@ class DeveloperTab(QWidget):
         self.lbl_star_diff_color = self.panel_effects.lbl_star_diff_color
         self.combo_star_diff_mode = self.panel_effects.combo_star_diff_mode
 
-        # Connect events for bidirectional sync and preview updates
+        # Conectar eventos de StarNet y Efectos
+        self.panel_starnet.run_starnet_requested.connect(self.run_starnet)
+        self.panel_starnet.jump_to_masks_requested.connect(lambda: self._jump_to_mask_layers(MASK_TYPE_IMAGE_STARLESS))
+        self.combo_layer.currentIndexChanged.connect(self.on_layer_mode_changed)
+        self.slider_stars.valueChanged.connect(self.on_stars_slider_changed)
+        self.slider_clarity.valueChanged.connect(self.on_clarity_changed)
+        self.slider_dehaze.valueChanged.connect(self.on_dehaze_changed)
+        self.slider_ond_est.valueChanged.connect(self.on_ond_estructura_changed)
+        self.slider_ond_bg.valueChanged.connect(self.on_ond_fondo_changed)
+        self.slider_contrast_starless.valueChanged.connect(self.on_contrast_starless_changed)
+        self.slider_denoise.valueChanged.connect(self.on_denoise_changed)
+
         self.slider_orton.valueChanged.connect(self.on_orton_strength_changed)
         self.slider_orton_radius.valueChanged.connect(self.on_orton_radius_changed)
         self.slider_orton_threshold.valueChanged.connect(self.on_orton_threshold_changed)
@@ -852,11 +618,7 @@ class DeveloperTab(QWidget):
 
         self.panel_effects.action_committed.connect(self._commit_action)
 
-        tools_layout.addWidget(self.box_orton_tools)
-        tools_layout.addWidget(self.box_star_diff_tools)
-
-        self.sec_starnet.set_content_widget(w_starnet)
-        left_layout.addWidget(self.sec_starnet)
+        left_layout.addWidget(self.panel_starnet)
         self._set_starnet_tools_enabled(False)
 
         # --- SECCIÓN 5b: Deconvolución Óptica y Enfoque (Módulo gui.developer.panels.DeconvolutionPanel) ---
@@ -927,111 +689,32 @@ class DeveloperTab(QWidget):
 
         left_layout.addWidget(self.panel_color_wb)
 
-        # --- SECCIÓN 8: Ajuste Tonal Suelo (Paisaje) ---
-        self.sec_gnd_tone = CollapsibleSection(
-            "Ajuste Tonal Suelo (Paisaje)",
-            is_expanded=False,
-            on_reset=self.reset_gnd_tone,
-            icon_name="mountain"
-        )
-        w_gnd_tone = QWidget()
-        gnd_tone_layout = QVBoxLayout(w_gnd_tone)
-        gnd_tone_layout.setContentsMargins(6, 4, 6, 6)
-        gnd_tone_layout.setSpacing(8)
+        # --- SECCIÓN 8: Ajuste Tonal Suelo (Paisaje) (Módulo gui.developer.panels.GroundSkyPanel) ---
+        self.panel_ground_sky = GroundSkyPanel()
+        self.sec_gnd_tone = self.panel_ground_sky.sec_gnd_tone
+        self.lbl_gnd_mask_status = self.panel_ground_sky.lbl_gnd_mask_status
+        self.btn_edit_ground_mask = self.panel_ground_sky.btn_edit_ground_mask
+        self.card_gnd_info = self.panel_ground_sky.card_gnd_info
+        self.lbl_gnd_info = self.panel_ground_sky.lbl_gnd_info
+        self.btn_go_to_ground_layer = self.panel_ground_sky.btn_go_to_ground_layer
+        self._hidden_gnd_container = self.panel_ground_sky._hidden_gnd_container
+        self.lbl_gnd_ev = self.panel_ground_sky.lbl_gnd_ev
+        self.slider_gnd_ev = self.panel_ground_sky.slider_gnd_ev
+        self.lbl_gnd_sh = self.panel_ground_sky.lbl_gnd_sh
+        self.slider_gnd_sh = self.panel_ground_sky.slider_gnd_sh
+        self.lbl_gnd_bp = self.panel_ground_sky.lbl_gnd_bp
+        self.slider_gnd_bp = self.panel_ground_sky.slider_gnd_bp
 
-        # Acceso y estado de la Máscara de Suelo
-        row_mask_status = QHBoxLayout()
-        self.lbl_gnd_mask_status = QLabel("Sin máscara de suelo activa")
-        self.lbl_gnd_mask_status.setStyleSheet("color: #ffb74d; font-size: 11px;")
-        row_mask_status.addWidget(self.lbl_gnd_mask_status, stretch=1)
-
-        self.btn_edit_ground_mask = QPushButton("Crear / Editar Máscara...")
-        self.btn_edit_ground_mask.setIcon(get_icon("brush", color="#80d8ff", size=13))
-        self.btn_edit_ground_mask.setCursor(Qt.PointingHandCursor)
-        self.btn_edit_ground_mask.setToolTip("Abre la herramienta de trazado interactivo de máscara en el visor (Atajo: M)")
-        self.btn_edit_ground_mask.clicked.connect(self._open_mask_tool_from_section)
-        row_mask_status.addWidget(self.btn_edit_ground_mask)
-        gnd_tone_layout.addLayout(row_mask_status)
-
-        # Tarjeta informativa y acceso directo a la Capa de Suelo
-        self.card_gnd_info = QFrame()
-        self.card_gnd_info.setStyleSheet("""
-            QFrame {
-                background-color: #152219;
-                border: 1px solid #2e7d32;
-                border-radius: 6px;
-                padding: 6px;
-            }
-        """)
-        layout_card_gnd = QVBoxLayout(self.card_gnd_info)
-        layout_card_gnd.setContentsMargins(8, 8, 8, 8)
-        layout_card_gnd.setSpacing(8)
-
-        self.lbl_gnd_info = QLabel(
-            "Los ajustes tonales de la superficie terrestre (Exposición, Sombras, Punto Negro y Balance de Blancos dedicado) "
-            "se gestionan ahora de forma centralizada e intuitiva en la Capa de Suelo dentro del Gestor de Capas (Sección 9)."
-        )
-        self.lbl_gnd_info.setWordWrap(True)
-        self.lbl_gnd_info.setStyleSheet("color: #c8e6c9; font-size: 11px; line-height: 1.4;")
-        layout_card_gnd.addWidget(self.lbl_gnd_info)
-
-        self.btn_go_to_ground_layer = QPushButton("Abrir Capa de Suelo en Sección 9")
-        self.btn_go_to_ground_layer.setIcon(get_icon("mountain", color="#a5d6a7", size=13))
-        self.btn_go_to_ground_layer.setCursor(Qt.PointingHandCursor)
-        self.btn_go_to_ground_layer.setStyleSheet("""
-            QPushButton {
-                background-color: #1b3822;
-                color: #a5d6a7;
-                border: 1px solid #43a047;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #254d2f;
-                border-color: #81c784;
-                color: #ffffff;
-            }
-        """)
-        self.btn_go_to_ground_layer.clicked.connect(lambda: self._jump_to_mask_layers(MASK_TYPE_IMAGE_GROUND))
-        layout_card_gnd.addWidget(self.btn_go_to_ground_layer)
-
-        gnd_tone_layout.addWidget(self.card_gnd_info)
-
-        # Controles en memoria (ocultos de la interfaz para mantener compatibilidad con presets)
-        self._hidden_gnd_container = QWidget()
-        self._hidden_gnd_container.setVisible(False)
-        hidden_gnd_layout = QVBoxLayout(self._hidden_gnd_container)
-
-        self.lbl_gnd_ev = QLabel("0.00 EV")
-        self.slider_gnd_ev = QSlider(Qt.Horizontal)
-        self.slider_gnd_ev.setRange(-200, 300)
-        self.slider_gnd_ev.setValue(0)
+        self.panel_ground_sky.edit_mask_requested.connect(self._open_mask_tool_from_section)
+        self.panel_ground_sky.go_to_layer_requested.connect(lambda: self._jump_to_mask_layers(MASK_TYPE_IMAGE_GROUND))
+        self.panel_ground_sky.reset_requested.connect(self.reset_gnd_tone)
         self.slider_gnd_ev.valueChanged.connect(self.on_gnd_ev_changed)
-        hidden_gnd_layout.addWidget(self.slider_gnd_ev)
-
-        self.lbl_gnd_sh = QLabel("0%")
-        self.slider_gnd_sh = QSlider(Qt.Horizontal)
-        self.slider_gnd_sh.setRange(0, 100)
-        self.slider_gnd_sh.setValue(0)
         self.slider_gnd_sh.valueChanged.connect(self.on_gnd_shadows_changed)
-        hidden_gnd_layout.addWidget(self.slider_gnd_sh)
-
-        self.lbl_gnd_bp = QLabel("0.000")
-        self.slider_gnd_bp = QSlider(Qt.Horizontal)
-        self.slider_gnd_bp.setRange(-50, 100)
-        self.slider_gnd_bp.setValue(0)
         self.slider_gnd_bp.valueChanged.connect(self.on_gnd_bp_changed)
-        hidden_gnd_layout.addWidget(self.slider_gnd_bp)
 
-        btn_reset_gnd = QPushButton("Restablecer Tono Suelo")
-        btn_reset_gnd.clicked.connect(self.reset_gnd_tone)
-        hidden_gnd_layout.addWidget(btn_reset_gnd)
-
-        self.sec_gnd_tone.set_content_widget(w_gnd_tone)
         # Ocultar sección de suelo del panel izquierdo (gestionada en la Capa de Suelo de capas)
         self.sec_gnd_tone.setVisible(False)
+        left_layout.addWidget(self.panel_ground_sky)
 
         # --- SECCIÓN 9: Máscaras y Capas de Ajuste Local ---
         self.sec_masks = CollapsibleSection("Máscaras y Capas de Ajuste Local", is_expanded=False, icon_name="layers")
