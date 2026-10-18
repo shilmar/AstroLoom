@@ -107,7 +107,8 @@ from gui.developer.panels.panel_light_pollution import LightPollutionPanel
 from gui.developer.panels.panel_stretching import StretchingPanel
 from gui.developer.panels.panel_effects import EffectsPanel
 from gui.developer.developer_state import DeveloperState
-from gui.developer.pipeline import apply_developer_pipeline
+from gui.developer.pipeline import ResolutionPyramid, apply_developer_pipeline
+from gui.developer.async_worker import AsyncPipelineManager
 
 
 class DeveloperTab(QWidget):
@@ -237,6 +238,21 @@ class DeveloperTab(QWidget):
         self._hist_throttle_timer.setInterval(70)
         self._hist_throttle_timer.timeout.connect(self._refresh_histograms_now)
 
+        # Temporizador de refinamiento progresivo (Draft 60 FPS -> Alta Calidad)
+        self._refine_timer = QTimer(self)
+        self._refine_timer.setSingleShot(True)
+        self._refine_timer.setInterval(120)
+        self._refine_timer.timeout.connect(self._on_refine_preview_timeout)
+
+        # Pirámides multi-escala para previsualización instantánea (ResolutionPyramid)
+        self.pyramid_image: Optional[ResolutionPyramid] = None
+        self.pyramid_starless: Optional[ResolutionPyramid] = None
+        self.pyramid_stars: Optional[ResolutionPyramid] = None
+        self.draft_proxy: Optional[np.ndarray] = None
+        self.draft_starless: Optional[np.ndarray] = None
+        self.draft_stars: Optional[np.ndarray] = None
+        self.draft_mask: Optional[np.ndarray] = None
+
         self._is_rendering_preview: bool = False
         self._last_rendered_preview: Optional[np.ndarray] = None
 
@@ -247,6 +263,8 @@ class DeveloperTab(QWidget):
         self._cache_pre_layers_stretched: Optional[np.ndarray] = None
         self._cache_pre_layers_stars: Optional[np.ndarray] = None
         self._is_scrubbing_heavy_slider: bool = False
+        self._is_slider_pressed: bool = False
+        self.async_pipeline = AsyncPipelineManager(self)
 
         # Memoria de tamaños para paneles ocultables (Lightroom style)
         self._last_left_panel_width = 380
@@ -3724,15 +3742,39 @@ class DeveloperTab(QWidget):
     def _generate_preview_proxy(self):
         self._invalidate_pipeline_caches()
         if self.image_32bit is None:
+            self.pyramid_image = None
+            self.pyramid_starless = None
+            self.pyramid_stars = None
             self.preview_proxy = None
+            self.draft_proxy = None
             self.proxy_starless = None
+            self.draft_starless = None
             self.proxy_stars = None
+            self.draft_stars = None
             self.proxy_mask = None
+            self.draft_mask = None
             return
 
         h, w = self.image_32bit.shape[:2]
-        max_dim = 1600.0
-        scale = min(1.0, max_dim / max(h, w))
+
+        # Pirámides de resolución multi-escala (Level 1: <=1600px Preview, Level 2: <=800px Draft 60 FPS)
+        self.pyramid_image = ResolutionPyramid(self.image_32bit, max_preview_dim=1600, max_levels=4)
+        self.preview_proxy = self.pyramid_image.preview
+        self.draft_proxy = self.pyramid_image.draft
+
+        if self.image_starless is not None:
+            self.pyramid_starless = ResolutionPyramid(self.image_starless, max_preview_dim=1600, max_levels=4)
+            self.proxy_starless = self.pyramid_starless.preview
+            self.draft_starless = self.pyramid_starless.draft
+
+            self.pyramid_stars = ResolutionPyramid(self.image_stars, max_preview_dim=1600, max_levels=4)
+            self.proxy_stars = self.pyramid_stars.preview
+            self.draft_stars = self.pyramid_stars.draft
+        else:
+            self.pyramid_starless = None
+            self.draft_starless = None
+            self.pyramid_stars = None
+            self.draft_stars = None
 
         clean_mask = None
         if self.current_mask is not None:
@@ -3743,44 +3785,27 @@ class DeveloperTab(QWidget):
             if clean_mask.shape != (h, w):
                 clean_mask = cv2.resize(clean_mask, (w, h), interpolation=cv2.INTER_LINEAR)
 
-        if scale < 1.0:
-            pw = (int(w * scale) // 4) * 4
-            ph = (int(h * scale) // 4) * 4
-            self.preview_proxy = np.ascontiguousarray(
-                cv2.resize(self.image_32bit, (pw, ph), interpolation=cv2.INTER_AREA), dtype=np.float32
-            )
-            if self.image_starless is not None:
-                self.proxy_starless = np.ascontiguousarray(
-                    cv2.resize(self.image_starless, (pw, ph), interpolation=cv2.INTER_AREA), dtype=np.float32
-                )
-                self.proxy_stars = np.ascontiguousarray(
-                    cv2.resize(self.image_stars, (pw, ph), interpolation=cv2.INTER_AREA), dtype=np.float32
-                )
-            else:
-                self.proxy_starless = None
-                self.proxy_stars = None
+            # Máscara nivel Preview (Level 1)
+            ph, pw = self.preview_proxy.shape[:2]
+            m_small = cv2.resize(clean_mask, (pw, ph), interpolation=cv2.INTER_LINEAR)
+            ksize = int(max(7, (min(ph, pw) // 150) | 1))
+            if ksize % 2 == 0: 
+                ksize += 1
+            sm = cv2.GaussianBlur(m_small, (ksize, ksize), sigmaX=ksize / 3.0)
+            self.proxy_mask = np.ascontiguousarray(np.repeat(sm[..., np.newaxis], 3, axis=2), dtype=np.float32)
 
-            if clean_mask is not None:
-                m_small = cv2.resize(clean_mask, (pw, ph), interpolation=cv2.INTER_LINEAR)
-                ksize = int(max(7, (min(ph, pw) // 150) | 1))
-                if ksize % 2 == 0: 
-                    ksize += 1
-                sm = cv2.GaussianBlur(m_small, (ksize, ksize), sigmaX=ksize / 3.0)
-                self.proxy_mask = np.ascontiguousarray(np.repeat(sm[..., np.newaxis], 3, axis=2), dtype=np.float32)
-            else:
-                self.proxy_mask = None
+            # Máscara nivel Draft (Level 2)
+            dh, dw = self.draft_proxy.shape[:2]
+            m_draft = cv2.resize(clean_mask, (dw, dh), interpolation=cv2.INTER_LINEAR)
+            ksize_d = int(max(5, (min(dh, dw) // 150) | 1))
+            if ksize_d % 2 == 0:
+                ksize_d += 1
+            sm_d = cv2.GaussianBlur(m_draft, (ksize_d, ksize_d), sigmaX=ksize_d / 3.0)
+            self.draft_mask = np.ascontiguousarray(np.repeat(sm_d[..., np.newaxis], 3, axis=2), dtype=np.float32)
         else:
-            self.preview_proxy = np.ascontiguousarray(self.image_32bit, dtype=np.float32)
-            self.proxy_starless = self.image_starless.copy() if self.image_starless is not None else None
-            self.proxy_stars = self.image_stars.copy() if self.image_stars is not None else None
-            if clean_mask is not None:
-                ksize = int(max(15, (min(h, w) // 150) | 1))
-                if ksize % 2 == 0: 
-                    ksize += 1
-                sm = cv2.GaussianBlur(clean_mask, (ksize, ksize), sigmaX=ksize / 3.0)
-                self.proxy_mask = np.ascontiguousarray(np.repeat(sm[..., np.newaxis], 3, axis=2), dtype=np.float32)
-            else:
-                self.proxy_mask = None
+            self.proxy_mask = None
+            self.draft_mask = None
+
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.invalidate_layer_thumbnail(None)
 
@@ -4022,8 +4047,17 @@ class DeveloperTab(QWidget):
                 mask_3d = None
             crop_active = True
         else:
-            starless, stars, base = self.proxy_starless, self.proxy_stars, self.preview_proxy
-            mask_3d = self.proxy_mask
+            is_scrubbing = getattr(self, '_is_scrubbing_heavy_slider', False)
+            if is_scrubbing and getattr(self, 'draft_proxy', None) is not None:
+                starless = self.draft_starless
+                stars = self.draft_stars
+                base = self.draft_proxy
+                mask_3d = self.draft_mask
+            else:
+                starless = self.proxy_starless
+                stars = self.proxy_stars
+                base = self.preview_proxy
+                mask_3d = self.proxy_mask
             crop_active = False
             self._zoom_crop_rect = None
 
@@ -4204,14 +4238,28 @@ class DeveloperTab(QWidget):
         if immediate:
             if hasattr(self, '_preview_throttle_timer'):
                 self._preview_throttle_timer.stop()
+            if hasattr(self, '_refine_timer'):
+                self._refine_timer.stop()
             self._do_update_stretch_preview()
             self._refresh_histograms_now()
         else:
+            if getattr(self, '_is_slider_pressed', False):
+                self._is_scrubbing_heavy_slider = True
+
+            if hasattr(self, '_refine_timer') and getattr(self, '_is_scrubbing_heavy_slider', False):
+                self._refine_timer.start(120)
+
             if hasattr(self, '_preview_throttle_timer'):
                 self._preview_throttle_timer.start(16)
             else:
                 self._do_update_stretch_preview()
                 self._refresh_histograms_now()
+
+    def _on_refine_preview_timeout(self):
+        """Refina progresivamente la previsualización al nivel de alta calidad cuando cesa el arrastre."""
+        if getattr(self, '_is_scrubbing_heavy_slider', False):
+            self._is_scrubbing_heavy_slider = False
+            self.update_stretch_preview(immediate=True)
 
     def _refresh_histograms_now(self):
         if getattr(self, '_hist_throttle_timer', None) is not None:
@@ -6422,35 +6470,11 @@ class DeveloperTab(QWidget):
         ]
         for s in all_sliders:
             if s is not None:
+                s.sliderPressed.connect(self._on_heavy_slider_pressed)
                 s.sliderReleased.connect(self._on_slider_interaction_finished)
 
-        heavy_sliders = [
-            getattr(self, 'slider_denoise', None),
-            getattr(self, 'slider_ond_est', None),
-            getattr(self, 'slider_ond_bg', None),
-            getattr(self, 'slider_clarity', None),
-            getattr(self, 'slider_dehaze', None),
-            getattr(self, 'slider_contrast_starless', None),
-            getattr(self, 'slider_orton', None),
-            getattr(self, 'slider_orton_radius', None),
-            getattr(self, 'slider_orton_threshold', None),
-            getattr(self, 'slider_star_diff', None),
-            getattr(self, 'slider_star_diff_radius', None),
-            getattr(self, 'slider_star_diff_threshold', None),
-            getattr(self, 'slider_star_diff_color', None),
-            getattr(self, 'slider_deconv_iter', None),
-            getattr(self, 'slider_deconv_fwhm', None),
-            getattr(self, 'slider_deconv_deringing', None),
-            getattr(self, 'slider_deconv_damping', None),
-            getattr(self, 'slider_deconv_aspect', None),
-            getattr(self, 'slider_deconv_angle', None),
-        ]
-        for s in heavy_sliders:
-            if s is not None:
-                s.sliderPressed.connect(self._on_heavy_slider_pressed)
-
         if hasattr(self, 'mask_layers_widget'):
-            mask_heavy_sliders = [
+            mask_sliders = [
                 getattr(self.mask_layers_widget, 'slider_sl_clarity', None),
                 getattr(self.mask_layers_widget, 'slider_sl_dehaze', None),
                 getattr(self.mask_layers_widget, 'slider_sl_ond_est', None),
@@ -6464,8 +6488,15 @@ class DeveloperTab(QWidget):
                 getattr(self.mask_layers_widget, 'slider_sl_star_diff_radius', None),
                 getattr(self.mask_layers_widget, 'slider_sl_star_diff_threshold', None),
                 getattr(self.mask_layers_widget, 'slider_sl_star_diff_color', None),
+                getattr(self.mask_layers_widget, 'slider_sl_ev', None),
+                getattr(self.mask_layers_widget, 'slider_sl_sh', None),
+                getattr(self.mask_layers_widget, 'slider_sl_bp', None),
+                getattr(self.mask_layers_widget, 'slider_sl_temp', None),
+                getattr(self.mask_layers_widget, 'slider_sl_tint', None),
+                getattr(self.mask_layers_widget, 'slider_sl_sat', None),
+                getattr(self.mask_layers_widget, 'slider_sl_vib', None),
             ]
-            for s in mask_heavy_sliders:
+            for s in mask_sliders:
                 if s is not None:
                     s.sliderPressed.connect(self._on_heavy_slider_pressed)
                     s.sliderReleased.connect(self._on_slider_interaction_finished)
@@ -6503,17 +6534,24 @@ class DeveloperTab(QWidget):
             self.curve_widget.curveCommitted.connect(self._on_control_committed)
 
     def _on_heavy_slider_pressed(self):
-        """Activa el modo de proxy borrador ultra-fluido (50% resolución) durante el arrastre continuo."""
+        """Activa el modo de proxy borrador ultra-fluido (Draft 60 FPS) durante el arrastre continuo."""
+        self._is_slider_pressed = True
         self._is_scrubbing_heavy_slider = True
 
     def _on_slider_interaction_finished(self):
         """Finaliza inmediatamente el renderizado y los histogramas al soltar el ratón y consolida en historial."""
+        if hasattr(self, '_refine_timer'):
+            self._refine_timer.stop()
+        self._is_slider_pressed = False
         self._is_scrubbing_heavy_slider = False
         self.update_stretch_preview(immediate=True)
         self._commit_action()
 
     def _on_control_committed(self):
         """Finaliza inmediatamente el renderizado y consolida en historial tras editar spinboxes o combos."""
+        if hasattr(self, '_refine_timer'):
+            self._refine_timer.stop()
+        self._is_slider_pressed = False
         self._is_scrubbing_heavy_slider = False
         self.update_stretch_preview(immediate=True)
         self._commit_action()

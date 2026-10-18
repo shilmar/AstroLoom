@@ -19,6 +19,7 @@ import cv2
 import time
 import numpy as np
 from typing import Optional, List, Dict, Any, Tuple, Callable
+from core.gpu_backend import is_gpu_enabled, is_opencl_available
 
 
 def generate_moffat_psf(
@@ -255,7 +256,8 @@ def richardson_lucy_deconvolve(
     star_mask: Optional[np.ndarray] = None,
     target_scope: str = "all",
     progress_callback: Optional[Callable[[int, str], None]] = None,
-    abort_flag: Optional[Callable[[], bool]] = None
+    abort_flag: Optional[Callable[[], bool]] = None,
+    use_gpu: bool = True
 ) -> np.ndarray:
     """
     Aplica deconvolución de Richardson-Lucy (R-L) con regularización bayesiana y protección antianillos.
@@ -268,6 +270,7 @@ def richardson_lucy_deconvolve(
     :param luminance_only: Si es True, deconvoluciona solo la luminancia para preservar la pureza espectral.
     :param star_mask: Máscara binaria opcional de estrellas (1.0 = estrella, 0.0 = fondo).
     :param target_scope: 'all' (imagen completa), 'stars_only' (solo estrellas), 'background_only' (solo nebulosa).
+    :param use_gpu: Si es True, utiliza aceleración por hardware (OpenCL / UMat) con respaldo automático en CPU.
     """
     iterations = max(1, min(int(iterations), 60))
     deringing = max(0.0, min(float(deringing), 0.1))
@@ -275,6 +278,17 @@ def richardson_lucy_deconvolve(
 
     h_img, w_img = image_rgb.shape[:2]
     psf_flipped = cv2.flip(psf_kernel, -1)
+
+    # 0. Configuración de aceleración GPU (OpenCL Transparent API / UMat)
+    use_opencl = use_gpu and is_gpu_enabled() and is_opencl_available()
+    psf_umat = None
+    psf_flip_umat = None
+    if use_opencl:
+        try:
+            psf_umat = cv2.UMat(psf_kernel)
+            psf_flip_umat = cv2.UMat(psf_flipped)
+        except Exception:
+            use_opencl = False
 
     # 1. Separación de canal de trabajo (Luminancia)
     is_color = (image_rgb.ndim == 3 and image_rgb.shape[2] == 3)
@@ -316,14 +330,23 @@ def richardson_lucy_deconvolve(
             pct = int(((it + 1) / float(iterations)) * 100.0)
             progress_callback(pct, f"Deconvolución Richardson-Lucy: iteración {it + 1}/{iterations}")
 
-        # Convolución con la PSF
-        conv = cv2.filter2D(est, -1, psf_kernel, borderType=cv2.BORDER_REFLECT)
-
-        # Cociente entre la imagen observada y la estimación actual
-        ratio = work_channel / (conv + 1e-6)
-
-        # Retroproyección con la PSF traspuesta
-        b_proj = cv2.filter2D(ratio, -1, psf_flipped, borderType=cv2.BORDER_REFLECT)
+        # Convolución con la PSF (acelerada por OpenCL UMat con respaldo transparente en CPU)
+        if use_opencl:
+            try:
+                u_est = cv2.UMat(est)
+                conv = cv2.filter2D(u_est, -1, psf_umat, borderType=cv2.BORDER_REFLECT).get()
+                ratio = work_channel / (conv + 1e-6)
+                u_ratio = cv2.UMat(ratio)
+                b_proj = cv2.filter2D(u_ratio, -1, psf_flip_umat, borderType=cv2.BORDER_REFLECT).get()
+            except Exception:
+                use_opencl = False  # Respaldo automático en CPU
+                conv = cv2.filter2D(est, -1, psf_kernel, borderType=cv2.BORDER_REFLECT)
+                ratio = work_channel / (conv + 1e-6)
+                b_proj = cv2.filter2D(ratio, -1, psf_flipped, borderType=cv2.BORDER_REFLECT)
+        else:
+            conv = cv2.filter2D(est, -1, psf_kernel, borderType=cv2.BORDER_REFLECT)
+            ratio = work_channel / (conv + 1e-6)
+            b_proj = cv2.filter2D(ratio, -1, psf_flipped, borderType=cv2.BORDER_REFLECT)
 
         # Factor de corrección con amortiguación bayesiana de ruido
         delta = b_proj - 1.0

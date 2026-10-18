@@ -32,23 +32,41 @@ class ResolutionPyramid:
 
     Provides multi-scale mipmap representations:
     - Level 0: 100% scale (Native full resolution)
-    - Level 1: 50% scale (Viewport preview)
-    - Level 2: 25% scale (Ultra-fast 60fps real-time slider scrubbing)
-    - Level 3: 12.5% scale (Thumbnails & Histograms)
+    - Level 1: Preview scale (max_dim <= 1600 px) for crisp interactive rendering on 1080p/1440p viewports.
+    - Level 2: Draft scale (max_dim <= 800 px) for ultra-fast 60fps real-time slider scrubbing.
+    - Level 3: Thumbnail scale (max_dim <= 400 px) for thumbnails & histograms.
     """
 
-    def __init__(self, full_res_image: np.ndarray, max_levels: int = 4):
+    def __init__(self, full_res_image: np.ndarray, max_preview_dim: int = 1600, max_levels: int = 4):
         if full_res_image is None:
             raise ValueError("full_res_image cannot be None")
         self.levels: List[np.ndarray] = [full_res_image]
-        current = full_res_image
-        for _ in range(1, max_levels):
-            h, w = current.shape[:2]
-            if w <= 320 or h <= 240:
+
+        h, w = full_res_image.shape[:2]
+        max_dim = max(h, w)
+
+        # Level 1: Preview (clamped to max_preview_dim)
+        if max_dim > max_preview_dim:
+            scale_preview = max_preview_dim / float(max_dim)
+            pw = (int(w * scale_preview) // 4) * 4
+            ph = (int(h * scale_preview) // 4) * 4
+            lvl1 = cv2.resize(full_res_image, (pw, ph), interpolation=cv2.INTER_AREA)
+            self.levels.append(np.ascontiguousarray(lvl1, dtype=np.float32))
+        else:
+            self.levels.append(full_res_image)
+
+        # Level 2+: Halved downsampling from Level 1
+        current = self.levels[1]
+        for _ in range(2, max_levels):
+            ch, cw = current.shape[:2]
+            if cw <= 200 or ch <= 150:
                 break
-            # Anti-aliased area interpolation
-            current = cv2.resize(current, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
-            self.levels.append(current)
+            nw = (cw // 2 // 2) * 2
+            nh = (ch // 2 // 2) * 2
+            if nw == 0 or nh == 0:
+                break
+            current = cv2.resize(current, (nw, nh), interpolation=cv2.INTER_AREA)
+            self.levels.append(np.ascontiguousarray(current, dtype=np.float32))
 
     def get_level(self, level: int) -> np.ndarray:
         """Retrieve image at specific mipmap level."""
@@ -65,13 +83,18 @@ class ResolutionPyramid:
 
     @property
     def preview(self) -> np.ndarray:
-        """Level 1 (50% scale) for crisp interactive rendering on 1080p/1440p viewports."""
+        """Level 1 (max_dim <= 1600 px) for crisp interactive rendering on 1080p/1440p viewports."""
         return self.levels[1] if len(self.levels) > 1 else self.levels[0]
 
     @property
     def draft(self) -> np.ndarray:
-        """Level 2 (25% scale) for ultra-fast 60fps real-time dragging of heavy filters."""
+        """Level 2 (max_dim <= 800 px) for ultra-fast 60fps real-time dragging of heavy filters."""
         return self.levels[2] if len(self.levels) > 2 else self.levels[-1]
+
+    @property
+    def thumb(self) -> np.ndarray:
+        """Lowest mipmap level for fast thumbnail and histogram calculations."""
+        return self.levels[-1]
 
 
 def get_psf_for_state(state: DeveloperState) -> np.ndarray:
