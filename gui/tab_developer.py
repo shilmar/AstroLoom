@@ -109,6 +109,7 @@ from gui.developer.panels.panel_effects import EffectsPanel
 from gui.developer.panels.panel_presets import PresetsPanel
 from gui.developer.panels.panel_ground_sky import GroundSkyPanel
 from gui.developer.panels.panel_starnet import StarNetPanel
+from gui.developer.panels.panel_crop import CropToolbar
 from gui.developer.developer_state import DeveloperState
 from gui.developer.pipeline import ResolutionPyramid, apply_developer_pipeline
 from gui.developer.async_worker import AsyncPipelineManager
@@ -1403,142 +1404,28 @@ class DeveloperTab(QWidget):
 
     def _create_crop_toolbar(self) -> QWidget:
         """Crea la barra de herramientas interactiva de recorte y nivelación de horizonte."""
-        toolbar = QWidget()
+        toolbar = CropToolbar(self, resettable_label_factory=self._make_resettable_label)
         toolbar.setObjectName("crop_toolbar")
         toolbar.setFixedHeight(40)
 
-        tb_layout = QHBoxLayout(toolbar)
-        tb_layout.setContentsMargins(10, 3, 10, 3)
-        tb_layout.setSpacing(8)
+        self.combo_crop_ratio = toolbar.combo_crop_ratio
+        self.btn_crop_flip_ratio = toolbar.btn_crop_flip_ratio
+        self.slider_crop_angle = toolbar.slider_crop_angle
+        self.lbl_crop_angle_val = toolbar.lbl_crop_angle_val
+        self.btn_crop_reset_angle = toolbar.btn_crop_reset_angle
+        self.combo_crop_guides = toolbar.combo_crop_guides
+        self.lbl_crop_dimensions = toolbar.lbl_crop_dimensions
+        self.btn_crop_reset = toolbar.btn_crop_reset
+        self.btn_crop_cancel = toolbar.btn_crop_cancel
+        self.btn_crop_apply = toolbar.btn_crop_apply
 
-        # 1. Título / Icono
-        lbl_title = QLabel("Recorte:")
-        lbl_title.setStyleSheet("font-weight: bold; color: #80d8ff; font-size: 11px;")
-        tb_layout.addWidget(lbl_title)
-
-        # 2. Selector de Proporción de Aspecto
-        lbl_prop = QLabel("Proporción:")
-        lbl_prop.setStyleSheet("color: #c0caf5; font-size: 11px;")
-        tb_layout.addWidget(lbl_prop)
-        self.combo_crop_ratio = QComboBox()
-        self.combo_crop_ratio.setToolTip("Define la relación de aspecto del marco de recorte")
-        self.combo_crop_ratio.addItems([
-            "Libre",
-            "Original",
-            "1:1 (Cuadrado)",
-            "16:9 (Panorámico)",
-            "3:2 (Fotografía)",
-            "4:3 (Estándar)",
-            "5:4 (Gran Formato)",
-            "2:1 (Panorámico 2:1)",
-            "9:16 (Vertical)",
-            "2:3 (Vertical 35mm)",
-            "4:5 (Vertical IG)",
-        ])
-        self.combo_crop_ratio.currentIndexChanged.connect(self._on_crop_ratio_changed)
-        tb_layout.addWidget(self.combo_crop_ratio)
-
-        # 3. Botón Invertir orientación de la proporción
-        self.btn_crop_flip_ratio = QPushButton("Invertir (X)")
-        self.btn_crop_flip_ratio.setIcon(get_icon("sliders", size=12))
-        self.btn_crop_flip_ratio.setToolTip("Invierte la orientación de la proporción (Horizontal ⇄ Vertical)\nAtajo: X")
-        self.btn_crop_flip_ratio.setCursor(Qt.PointingHandCursor)
-        self.btn_crop_flip_ratio.clicked.connect(self._on_crop_flip_ratio)
-        tb_layout.addWidget(self.btn_crop_flip_ratio)
-
-        # Separador vertical
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.VLine)
-        sep1.setFrameShadow(QFrame.Sunken)
-        sep1.setStyleSheet("color: #3b4252; margin: 4px 2px;")
-        tb_layout.addWidget(sep1)
-
-        # 4. Nivelación de Horizonte / Ángulo de rotación
-        lbl_ang = self._make_resettable_label(QLabel("Ángulo:"), lambda: self.slider_crop_angle.setValue(0), "0.0°")
-        lbl_ang.setStyleSheet("color: #c0caf5; font-size: 11px;")
-        tb_layout.addWidget(lbl_ang)
-        self.slider_crop_angle = QSlider(Qt.Horizontal)
-        self.slider_crop_angle.setRange(-450, 450)  # -45.0° a +45.0°
-        self.slider_crop_angle.setValue(0)
-        self.slider_crop_angle.setFixedWidth(120)
-        self.slider_crop_angle.setToolTip("Nivela el horizonte rotando la imagen en tiempo real (-45° a +45°)")
-        self.slider_crop_angle.valueChanged.connect(self._on_crop_angle_changed)
-        tb_layout.addWidget(self.slider_crop_angle)
-
-        self.lbl_crop_angle_val = QLabel("0.0°")
-        self.lbl_crop_angle_val.setStyleSheet("color: #88c0d0; font-weight: bold; min-width: 38px; font-size: 11px;")
-        tb_layout.addWidget(self.lbl_crop_angle_val)
-
-        self.btn_crop_reset_angle = QPushButton("0°")
-        self.btn_crop_reset_angle.setFixedWidth(28)
-        self.btn_crop_reset_angle.setToolTip("Restablece el ángulo de nivelación a 0°")
-        self.btn_crop_reset_angle.setCursor(Qt.PointingHandCursor)
-        self.btn_crop_reset_angle.clicked.connect(lambda: self.slider_crop_angle.setValue(0))
-        tb_layout.addWidget(self.btn_crop_reset_angle)
-
-        # Separador vertical
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.VLine)
-        sep2.setFrameShadow(QFrame.Sunken)
-        sep2.setStyleSheet("color: #3b4252; margin: 4px 2px;")
-        tb_layout.addWidget(sep2)
-
-        # 5. Guías de composición
-        lbl_gui = QLabel("Guías:")
-        lbl_gui.setStyleSheet("color: #c0caf5; font-size: 11px;")
-        tb_layout.addWidget(lbl_gui)
-        self.combo_crop_guides = QComboBox()
-        self.combo_crop_guides.addItems([
-            "Regla de Tercios",
-            "Cuadrícula 6×6",
-            "Sin Guías"
-        ])
-        self.combo_crop_guides.currentIndexChanged.connect(self._on_crop_guides_changed)
-        tb_layout.addWidget(self.combo_crop_guides)
-
-        # 6. Etiqueta informativa de dimensiones
-        self.lbl_crop_dimensions = QLabel("0 × 0 px")
-        self.lbl_crop_dimensions.setStyleSheet("color: #ffd54f; font-weight: bold; font-size: 11px; margin-left: 4px;")
-        tb_layout.addWidget(self.lbl_crop_dimensions)
-
-        tb_layout.addStretch()
-
-        # 7. Botones de acción: Restablecer, Cancelar, Aplicar
-        self.btn_crop_reset = QPushButton("Restablecer")
-        self.btn_crop_reset.setIcon(get_icon("refresh", size=13))
-        self.btn_crop_reset.setToolTip("Restablece el marco de recorte al tamaño completo de la imagen")
-        self.btn_crop_reset.setCursor(Qt.PointingHandCursor)
-        self.btn_crop_reset.clicked.connect(self._reset_crop)
-        tb_layout.addWidget(self.btn_crop_reset)
-
-        self.btn_crop_cancel = QPushButton("Cancelar (Esc)")
-        self.btn_crop_cancel.setIcon(get_icon("x", color="#f87171", size=13))
-        self.btn_crop_cancel.setToolTip("Cancela el recorte y descarta los cambios (Esc)")
-        self.btn_crop_cancel.setCursor(Qt.PointingHandCursor)
-        self.btn_crop_cancel.clicked.connect(self._cancel_crop)
-        tb_layout.addWidget(self.btn_crop_cancel)
-
-        self.btn_crop_apply = QPushButton("Aplicar Recorte (Intro)")
-        self.btn_crop_apply.setIcon(get_icon("check", color="#ffffff", size=13))
-        self.btn_crop_apply.setStyleSheet("""
-            QPushButton {
-                background-color: #2e7d32;
-                color: #ffffff;
-                font-weight: bold;
-                border: 1px solid #4caf50;
-                border-radius: 4px;
-                padding: 3px 10px;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #388e3c;
-                border-color: #81c784;
-            }
-        """)
-        self.btn_crop_apply.setToolTip("Aplica el recorte y la nivelación permanentemente a la imagen (Enter / Intro o Doble clic)")
-        self.btn_crop_apply.setCursor(Qt.PointingHandCursor)
-        self.btn_crop_apply.clicked.connect(self._apply_crop)
-        tb_layout.addWidget(self.btn_crop_apply)
+        toolbar.ratio_changed.connect(self._on_crop_ratio_changed)
+        toolbar.flip_ratio_clicked.connect(self._on_crop_flip_ratio)
+        toolbar.angle_changed.connect(self._on_crop_angle_changed)
+        toolbar.guides_changed.connect(self._on_crop_guides_changed)
+        toolbar.reset_clicked.connect(self._reset_crop)
+        toolbar.cancel_clicked.connect(self._cancel_crop)
+        toolbar.apply_clicked.connect(self._apply_crop)
 
         return toolbar
 

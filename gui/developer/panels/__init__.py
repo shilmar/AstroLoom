@@ -7,6 +7,7 @@ from gui.developer.panels.panel_effects import EffectsPanel
 from gui.developer.panels.panel_presets import PresetsPanel
 from gui.developer.panels.panel_ground_sky import GroundSkyPanel
 from gui.developer.panels.panel_starnet import StarNetPanel
+from gui.developer.panels.panel_crop import CropToolbar
 
 __all__ = [
     "ColorWbPanel",
@@ -17,4 +18,5 @@ __all__ = [
     "PresetsPanel",
     "GroundSkyPanel",
     "StarNetPanel",
+    "CropToolbar",
 ]
