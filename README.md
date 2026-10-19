@@ -1,6 +1,6 @@
 # AstroLoom
 
-**AstroLoom** (anteriormente *Apilator*) es una suite y estación de trabajo especializada de posprocesado, apilado, mosaicos panorámicos y revelado para **astrofotografía de paisaje (nightscapes)**, **mosaicos gigapíxel**, **circumpolares / trazas de estrellas (startrails)** y **eclipses (solares y lunares)**. Permite desacoplar el movimiento del cielo respecto al horizonte terrestre, aplicar integración estadística Kappa-Sigma en coma flotante de 32 bits, componer panorámicas multifila con corte óptimo de siluetas terrestres (Dual-Zone), componer circumpolares con efectos cometa y supresión automática de satélites, procesar series de bracketing de eclipses con alineación subpíxel de limbo y filtro NRGF continuo, y editar la imagen final en tiempo real con asistencia de redes neuronales (GraXpert y StarNet++ v2).
+**AstroLoom** (anteriormente *Apilator*) es una suite y estación de trabajo especializada de posprocesado, apilado, mosaicos panorámicos y revelado para **astrofotografía de paisaje (nightscapes)**, **mosaicos gigapíxel**, **circumpolares / trazas de estrellas (startrails)** y **eclipses (solares y lunares)**. Permite desacoplar el movimiento del cielo respecto al horizonte terrestre, aplicar integración estadística Kappa-Sigma en coma flotante de 32 bits, componer panorámicas multifila con corte óptimo de siluetas terrestres (Dual-Zone), componer circumpolares con efectos cometa y supresión automática de satélites, procesar series de bracketing de eclipses con alineación subpíxel de limbo y filtro NRGF continuo, y editar la imagen final en tiempo real con asistencia de redes neuronales (StarNet++ v2) y extracción analítica de gradientes de fondo.
 
 > 📖 **¿Nuevo en AstroLoom? Consulta el [Manual de Usuario Completo (Guía Paso a Paso y Parámetros)](MANUAL_DE_USUARIO.md)** para una explicación sencilla y práctica de cada módulo y de todos los controles deslizantes del revelador.
 
@@ -51,7 +51,7 @@
 - **Efecto Orton Cósmico y Glow de Polvo Galáctico:** Resplandor suave enfocado en estructuras de gas y polvo interestelar.
 - **Reducción Paramétrica 2D de Contaminación Lumínica (Domo Asimétrico):** Sustracción de cúpulas lumínicas urbanas en el horizonte mediante modelo elíptico 2D.
 - **Estructura Multiescala por Ondículas (À Trous / B-Spline):** Realce selectivo de filamentos de gas y bandas de absorción de la Vía Láctea, junto con atenuación de la capa residual de fondo.
-- **Extracción de Gradientes:** Motor dual integrado con GraXpert AI y ajuste polinómico cuadrático para corregir gradientes luminosos.
+- **Extracción Analítica de Gradientes:** Modelo polinómico 2D nativo (Grado 1 lineal y Grado 2 cuadrático) inmune a la silueta del suelo mediante máscara de cielo, con corrección síncrona en milisegundos sin artefactos en el horizonte.
 - **Reducción de Ruido Adaptativa:** Múltiples métodos para el fondo (Filtro Bilateral, Filtro Guiado y Non-Local Means) respetando los límites de las estrellas.
 - **Balance de Color Fino y Tonalidad:** Curvas interactivas con histograma integrado en tiempo real, balance de temperatura/tinte calibrado ($\pm0.250$), control de vibranza y saturación diferencial cielo/suelo.
 - **Curvas Selectivas de Color (Hue vs Sat / Luma vs Sat):** Modelado independiente de curvas para saturación selectiva según tonalidad cromática (espectro arcoíris continuo con sincronización circular de extremos rojos) y según luminancia (desaturación suave de sombras oscuras para erradicar ruido de crominancia en el fondo).
@@ -146,7 +146,7 @@
 - **Aceleración por GPU y JIT Dual:** Soporte automático para NVIDIA CUDA mediante CuPy, compilación JIT de CPU multinúcleo con Numba (kernels paralelos LLVM), y conmutación transparente a CPU estándar si no se dispone de librerías aceleradoras.
 - **Aceleración LibRaw Multihilo:** Desentrelazado Bayer paralelo con LibRaw/rawpy y paralelización de tomas maestras de calibración que acelera la integración entre un 20% y 25%.
 - **Estrategias de Memoria Configurables:** Modos automático (umbral del 70% de RAM disponible), memoria RAM intermedia de alta velocidad o volcado temporal a disco SSD para equipos con recursos limitados.
-- **Detección Automática de Binarios:** Localización y validación dinámica de ejecutables externos de StarNet++ CLI y GraXpert con indicadores en tiempo real de disponibilidad.
+- **Detección Automática de Binarios:** Localización y validación dinámica del ejecutable externo StarNet++ CLI con indicadores en tiempo real de disponibilidad.
 - **Indicadores de Recorte (Clipping) Estilo Lightroom:** Alertas visuales interactivas en las esquinas del histograma para sombras empastadas (azul) y luces quemadas (rojo), superposición vectorial acelerada en el lienzo (< 3 ms) y atajo global de teclado **`J`**.
 - **Auto-reparación de Directorios y Configuración Base:** Verificación automática en el arranque de rutas de trabajo con fallback seguro a directorios locales válidos (`config.default.json`), garantizando portabilidad y eliminando errores de carpetas inexistentes o unidades de disco no disponibles.
 
@@ -180,7 +180,6 @@ astroloom/
 │   ├── frame_culling.py     # Cribado previo inteligente de tomas (FWHM, excentricidad, densidad)
 │   ├── ghs.py               # Algoritmo de estirado hiperbólico generalizado (GHS)
 │   ├── gpu_backend.py       # Detección y gestión de aceleración NVIDIA CUDA / CuPy
-│   ├── graxpert_bridge.py   # Conector CLI con GraXpert AI
 │   ├── i18n.py              # Motor reactivo de internacionalización multilingüe
 │   ├── icc_manager.py       # Gestión e incrustación de perfiles ICC en TIFF (Tag 34675)
 │   ├── icc_profiles/        # Perfiles de color ICC estándar embebibles
@@ -241,7 +240,7 @@ astroloom/
   - `psutil` (monitorización de recursos de memoria y CPU)
   - *(Opcional)* `cupy` (aceleración por GPU NVIDIA CUDA)
 - **Binarios Externos:**
-  - Ejecutables de StarNet++ CLI y GraXpert configurados en el entorno.
+  - *(Opcional)* Ejecutable de StarNet++ CLI configurado en el entorno para separación neuronal de estrellas.
 ---
 
 
@@ -287,7 +286,7 @@ python run_app.py
 
 ### 2. Flujo de Revelado
 * Al concluir el apilado, la imagen lineal de 32 bits y su máscara calculada se cargarán automáticamente en la pestaña **2. Revelador / Editor**.
-* Neutraliza gradientes residuales con el motor Polinómico o GraXpert AI.
+* Neutraliza gradientes residuales con el modelo Polinómico (Cuadrático Grado 2 o Lineal Grado 1) con aislamiento estricto de la silueta de suelo.
 * Ejecuta StarNet++ para separar el fondo galáctico de las estrellas.
 * Aplica realce de gas y polvo molecular mediante los controles de Estructura Multiescala (Ondículas) sin deformar el perfil estelar.
 * Ajusta curvas, temperatura de color, tinte y saturación diferencial cielo/suelo.
@@ -352,7 +351,7 @@ python run_app.py
 * [x] Gestión de proyectos y sesiones en disco (.mwstack).
 * [x] Segmentación asistida GrabCut y zoom nativo 1:1.
 * [x] Descomposición y realce multiescala mediante ondículas À Trous.
-* [x] Integración de StarNet++ v2 y GraXpert AI.
+* [x] Integración de StarNet++ v2 y extracción analítica de gradientes de fondo.
 * [x] Rutina específica de apilado y alineación para eclipses solares y lunares (Módulo Eclipses con NRGF continuo y detección subpíxel).
 * [x] Módulo dedicado de Trazas de Estrellas (Startrails) con streaming O(1), efecto cometa, suelo limpio y supresión automática de satélites/aviones.
 * [x] Relleno continuo de saltos entre tomas (Gap Filling) en Startrails.
@@ -395,7 +394,8 @@ python run_app.py
 * [x] Detección Automática de Suelo / Cielo con Red Neuronal Ligera (1-Click Auto Sky/Ground).
 * [ ] Reducción de Distorsión Óptica Periférica de Estrellas en Grandes Angulares (Reduce Star Distortion).
 * [x] Deconvolución Estelar Regularizada (Richardson-Lucy con estimación de PSF).
-* [ ] Histograma RGB Interactivo en Vivo en el Revelador.
+* [x] Histograma RGB Interactivo en Vivo en el Revelador con sincronización de curvas y avisos de clipping.
+* [x] Fusión de Kernels Numba JIT en Composición de Capas, Pivote de Mediana Submuestreado y Deslizamiento Ultrarrápido (Fast Draft Scrubbing).
 * [ ] Anti-parpadeo (Deflicker) y morphing temporal entre fotogramas en Startrails / Time-Lapse.
 * [ ] Estimación de tiempo restante (ETA) y progreso fluido en barras de ejecución.
 ---

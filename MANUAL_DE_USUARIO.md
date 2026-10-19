@@ -119,8 +119,17 @@ Permite aplicar recetas rápidas o guardar tus ajustes favoritos para usarlos en
 ---
 
 ### Sección 2: Contaminación Lumínica y Gradientes
-La atmósfera y las ciudades lejanas crean cúpulas de luz brillante en el horizonte que apagan el brillo de la Vía Láctea. Esta sección elimina esa luz parásita.
+La atmósfera y las ciudades lejanas crean cúpulas de luz brillante en el horizonte que apagan el brillo de la Vía Láctea. Esta sección elimina esa luz parásita mediante dos enfoques complementarios:
 
+#### A. Extracción Analítica de Gradiente (Modelo Polinómico)
+* **Qué hace:** Modela la superficie matemática del fondo del cielo nocturno y la sustrae para dejar el fondo plano y homogéneo.
+* **Modelo Polinómico:**
+  * **Cuadrático (Grado 2) (Recomendado):** Ajusta una superficie parabólica suave capaz de corregir domos luminosos y viñeteo residual simultáneamente.
+  * **Lineal (Grado 1):** Ajusta un plano inclinado bidimensional ideal para gradientes simples en una dirección fija.
+* **Aislamiento del Suelo:** Al pulsar **"Extraer Fondo"**, el algoritmo utiliza automáticamente la máscara de cielo actual para muestrear exclusivamente las zonas celestes, garantizando que siluetas oscuras de árboles o montañas no falseen el cálculo ni originen halos negros en el horizonte.
+* **Velocidad:** Cálculo nativo e instantáneo en milisegundos sin necesidad de binarios externos ni archivos temporales.
+
+#### B. Reducción Paramétrica y Domo 2D
 * **Atenuar Cúpula de Luz (Gradiente 1D):**
   * *Qué hace:* Aplica una atenuación vertical suave que oscurece el resplandor del horizonte devolviendo el contraste a la parte baja del cielo.
 * **Reducción Paramétrica 2D (Domo Elíptico):**

@@ -5,7 +5,36 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
-## [0.9.1] - 2026-10-19
+## [0.10.0] - 2026-10-19
+
+### Añadido
+* **Extracción Analítica de Gradientes de Fondo (Modelo Polinómico 2D):**
+  - Motor matemático nativo en `core/stretch.py` (`extract_background_polynomial`) con selector de grado:
+    - **Cuadrático (Grado 2):** Superficie parabólica 2D para corrección de cúpulas amplias de polución y viñeteo asimétrico.
+    - **Lineal (Grado 1):** Plano inclinado 2D para gradientes direccionales sencillos.
+  - Aislamiento estricto de siluetas terrestres mediante la máscara de cielo (`sky_mask`): evita contaminación por montañas, árboles o edificios oscuros y elimina halos en el horizonte.
+  - Ejecución síncrona inmediata en NumPy (~15–25 ms), sin archivos temporales TIFF en disco ni procesos secundarios.
+
+### Optimizado
+* **Aceleración Masiva del Pipeline del Revelador (CPU / Numba Kernel Fusion):**
+  - **Fusión de Kernels Numba JIT:** Fusión de etapas de ajuste local y composición de capas en coma flotante de 32 bits (`core/mask_layers.py`), eliminando pasadas intermedias y asignaciones innecesarias de memoria RAM.
+  - **Pivote de Contraste Submuestreado:** Estimación de mediana por submuestreo rápido para calcular el centro de contraste sin bloquear la CPU calculando medianas completas sobre millones de píxeles en cada movimiento de ratón.
+  - **Fast Draft Scrubbing & Supresión de Histograma:** Supresión reactiva del cálculo intensivo de histogramas durante el arrastre continuo de deslizadores y recomputación progresiva perezosa (*lazy evaluation*) al soltar.
+  - **Aceleración en Deconvolución Óptica y Wavelets:** Optimización de iteraciones en Richardson-Lucy y descomposición multiescala À Trous.
+
+### Corregido
+* **Aislamiento Cromático en Máscaras de Capa (Color Bleed Fix):**
+  - Corrección en el kernel de composición Numba para evitar que el ajuste de saturación de una capa con máscara de pincel afecte a píxeles no seleccionados fuera de la máscara.
+* **Fidelidad y Gestión de Perfiles de Color ICC:**
+  - Respeto integral del perfil de color de pantalla y perfiles ICC configurados o embebidos en el Revelador, evitando conversiones forzadas a sRGB estándar.
+* **Normalización de Contraste y Fidelidad de Escala:**
+  - Preservación exacta de la fidelidad tonal y rango dinámico durante operaciones de zoom y previsualización.
+
+### Eliminado
+* **Retiro Completo de GraXpert:**
+  - Eliminado el puente externo `core/graxpert_bridge.py` y la clase `GraXpertWorker` en `gui/worker.py`.
+  - Retirada la configuración obsoleta `graxpert_smoothing` de `config.json`, `config.default.json` y `core/config_manager.py`.
+  - Eliminadas dependencias de ejecutables externos para extracción de fondo.
 
 ### Corregido
 * **Histograma Reactivo en Curvas Tonales por Capa:**
