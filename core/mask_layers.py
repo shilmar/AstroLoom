@@ -13,6 +13,88 @@ import numpy as np
 from core.masking import generate_luminance_mask, generate_color_range_mask
 from core.stretch import apply_white_balance, adjust_contrast
 
+try:
+    from numba import njit, prange
+    HAS_NUMBA = True
+except ImportError:
+    HAS_NUMBA = False
+
+if HAS_NUMBA:
+    @njit(parallel=True, fastmath=True)
+    def _numba_fused_layer_adjust(
+        img, mask, weight_scale,
+        gain_r, gain_g, gain_b,
+        shadows, highlights,
+        has_curve, curve_lut
+    ):
+        h, w, c = img.shape
+        out = np.empty_like(img)
+        lut_len = len(curve_lut) - 1 if has_curve else 0
+
+        for i in prange(h):
+            for j in range(w):
+                m = mask[i, j] * weight_scale
+                if m <= 1e-4:
+                    out[i, j, 0] = img[i, j, 0]
+                    out[i, j, 1] = img[i, j, 1]
+                    out[i, j, 2] = img[i, j, 2]
+                    continue
+
+                for k in range(3):
+                    val = img[i, j, k]
+                    if k == 0:
+                        val *= gain_r
+                    elif k == 1:
+                        val *= gain_g
+                    else:
+                        val *= gain_b
+
+                    if val < 0.0:
+                        val = 0.0
+                    elif val > 1.0:
+                        val = 1.0
+
+                    if abs(shadows) > 1e-3:
+                        lift = (1.0 - val) * (1.0 - val)
+                        val = val * (1.0 + shadows * lift)
+
+                    if abs(highlights) > 1e-3:
+                        hi = val * val
+                        val = val + (highlights * hi * 0.4)
+
+                    if val < 0.0:
+                        val = 0.0
+                    elif val > 1.0:
+                        val = 1.0
+
+                    if has_curve:
+                        idx = int(val * lut_len)
+                        if idx < 0:
+                            idx = 0
+                        elif idx > lut_len:
+                            idx = lut_len
+                        val = curve_lut[idx]
+
+                    out[i, j, k] = val * m + img[i, j, k] * (1.0 - m)
+
+        return out
+
+    @njit(parallel=True, fastmath=True)
+    def _numba_screen_blend(canvas, stars, opacity):
+        h, w, c = canvas.shape
+        out = np.empty_like(canvas)
+        for i in prange(h):
+            for j in range(w):
+                for k in range(c):
+                    s = stars[i, j, k] * opacity
+                    if s < 0.0:
+                        s = 0.0
+                    elif s > 1.0:
+                        s = 1.0
+                    cv = canvas[i, j, k]
+                    out[i, j, k] = cv + s - cv * s
+        return out
+
 
 # Ámbitos de aplicación (Target Scope)
 SCOPE_TARGET_ALL = "all"            # Toda la imagen (Compuesta)
@@ -331,6 +413,61 @@ def apply_local_adjustments_to_image(
     if np.max(weight) <= 1e-4:
         return image_rgb
 
+    if HAS_NUMBA:
+        img_in = image_rgb
+        if abs(layer.saturation - 1.0) > 1e-3:
+            hsv = cv2.cvtColor(np.clip(img_in, 0.0, 1.0), cv2.COLOR_RGB2HSV)
+            hsv[..., 1] = np.clip(hsv[..., 1] * layer.saturation, 0.0, 1.0)
+            img_in = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+
+        temp_factor = layer.temp
+        tint_factor = layer.tint
+        if abs(temp_factor) > 1e-4 or abs(tint_factor) > 1e-4:
+            r_gain = 1.0 + (temp_factor * 0.5) + (tint_factor * 0.25)
+            g_gain = 1.0 - (tint_factor * 0.5)
+            b_gain = 1.0 - (temp_factor * 0.5) + (tint_factor * 0.25)
+            mean_gain = (r_gain + g_gain + b_gain) / 3.0
+            r_gain /= mean_gain
+            g_gain /= mean_gain
+            b_gain /= mean_gain
+        else:
+            r_gain = g_gain = b_gain = 1.0
+
+        if abs(layer.exposure) > 1e-3:
+            ev_factor = 2.0 ** layer.exposure
+            r_gain *= ev_factor
+            g_gain *= ev_factor
+            b_gain *= ev_factor
+
+        has_curve = not layer.is_curve_identity()
+        has_contrast = abs(layer.contrast) > 1e-3
+        if has_curve or has_contrast:
+            if has_curve:
+                if layer.curve_lut is None:
+                    layer.curve_lut = compute_curve_lut_from_points(layer.curve_points)
+                lut = layer.curve_lut.copy()
+            else:
+                lut = np.linspace(0.0, 1.0, 256, dtype=np.float32)
+
+            if has_contrast:
+                lut = adjust_contrast(lut, layer.contrast, fast_draft=False)
+            lut = np.ascontiguousarray(np.clip(lut, 0.0, 1.0), dtype=np.float32)
+            use_lut = True
+        else:
+            lut = np.empty(1, dtype=np.float32)
+            use_lut = False
+
+        mask_2d = effective_mask[..., 0] if effective_mask.ndim == 3 else effective_mask
+        img_c = np.ascontiguousarray(np.clip(img_in, 0.0, 1.0), dtype=np.float32)
+        mask_c = np.ascontiguousarray(mask_2d, dtype=np.float32)
+
+        return _numba_fused_layer_adjust(
+            img_c, mask_c, float(layer.opacity),
+            float(r_gain), float(g_gain), float(b_gain),
+            float(layer.shadows), float(layer.highlights),
+            use_lut, lut
+        )
+
     adj = apply_pre_curve_adjustments(image_rgb, layer, fast_draft=fast_draft)
 
     # 7. Curva tonal interactiva propia de la capa (LUT de 256 niveles acelerada por hardware)
@@ -508,8 +645,12 @@ def apply_all_mask_layers(
 
                 # Mezcla Screen (Trama estilo Photoshop): 1 - (1 - canvas) * (1 - st * opacity)
                 # Garantiza que las estrellas no quemen núcleos y se fundan de forma natural
-                st_weighted = np.clip(st * layer.opacity, 0.0, 1.0)
-                canvas = 1.0 - (1.0 - canvas) * (1.0 - st_weighted)
+                if HAS_NUMBA:
+                    st_c = np.ascontiguousarray(st, dtype=np.float32)
+                    canvas = _numba_screen_blend(canvas, st_c, float(layer.opacity))
+                else:
+                    st_weighted = np.clip(st * layer.opacity, 0.0, 1.0)
+                    canvas = 1.0 - (1.0 - canvas) * (1.0 - st_weighted)
 
         else:
             # Capas de ajuste estándar (Pincel, Luminancia, Color, etc.)

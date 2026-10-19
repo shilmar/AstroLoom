@@ -285,10 +285,18 @@ def apply_developer_pipeline(
         # 8. Contraste específico del Fondo (Starless)
         contrast_starless = state.contrast_starless_val / 100.0
         if abs(contrast_starless) > 1e-4:
-            if precomputed_mask is not None and np.any(precomputed_mask > 0.5):
-                sky_median = float(np.median(stretched[precomputed_mask > 0.5]))
+            if is_scrubbing:
+                sample_s = stretched[::8, ::8]
+                if precomputed_mask is not None:
+                    sample_m = precomputed_mask[::8, ::8]
+                    sky_median = float(np.median(sample_s[sample_m > 0.5])) if np.any(sample_m > 0.5) else float(np.median(sample_s))
+                else:
+                    sky_median = float(np.median(sample_s))
             else:
-                sky_median = float(np.median(stretched))
+                if precomputed_mask is not None and np.any(precomputed_mask > 0.5):
+                    sky_median = float(np.median(stretched[precomputed_mask > 0.5]))
+                else:
+                    sky_median = float(np.median(stretched))
             sn_contrasted = adjust_contrast(stretched, contrast_starless, pivot=sky_median, fast_draft=is_scrubbing)
             if precomputed_mask is not None:
                 stretched = (sn_contrasted * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
