@@ -154,12 +154,15 @@ class MaskLayersWidget(QWidget):
     starless_orton_tint_changed = Signal(str)       # "warm_gold", "neutral", "cool_blue", "halpha"
     starless_orton_mode_changed = Signal(str)       # "soft_light", "screen", "additive"
     starless_reset_requested = Signal()          # restablecer ajustes de fondo
+    interaction_started = Signal()
+    interaction_finished = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.layers: List[MaskLayer] = []
         self._selected_layer_id: Optional[str] = None
         self._updating_ui: bool = False
+        self._is_scrubbing: bool = False
         self._image_reference_getter: Optional[Callable[[], Optional[np.ndarray]]] = None
         self._master_mask_getter: Optional[Callable[[], Optional[np.ndarray]]] = None
         self._stars_getter: Optional[Callable[[], Optional[np.ndarray]]] = None
@@ -1097,6 +1100,9 @@ class MaskLayersWidget(QWidget):
         props_layout.addWidget(self.grp_starless_special)
         main_layout.addWidget(self.container_layer_props)
 
+        # Conectar todos los deslizadores para coordinación fluida de interacción
+        self._connect_all_slider_interactions()
+
         # Estado inicial vacío
         self._update_list_height()
         self._update_list_and_props_state()
@@ -1126,6 +1132,41 @@ class MaskLayersWidget(QWidget):
         self._custom_list_height = False
         self._user_list_height = None
         self._update_list_height()
+
+    def get_all_sliders(self) -> List[QSlider]:
+        """Retorna todos los controles deslizantes activos del panel de capas."""
+        sliders = []
+        slider_attrs = [
+            'slider_opacity', 'slider_b_radius', 'slider_b_hardness', 'slider_b_flow',
+            'slider_hue', 'slider_adj_ev', 'slider_adj_contrast', 'slider_adj_shadows',
+            'slider_adj_highlights', 'slider_adj_sat', 'slider_adj_temp', 'slider_adj_tint',
+            'slider_gnd_special_ev', 'slider_gnd_special_sh', 'slider_gnd_special_bp',
+            'slider_stars_special', 'slider_sl_star_diff_strength', 'slider_sl_star_diff_radius',
+            'slider_sl_star_diff_threshold', 'slider_sl_star_diff_color', 'slider_sl_clarity',
+            'slider_sl_dehaze', 'slider_sl_ond_est', 'slider_sl_ond_bg', 'slider_sl_contrast',
+            'slider_sl_denoise', 'slider_sl_orton_strength', 'slider_sl_orton_radius',
+            'slider_sl_orton_threshold'
+        ]
+        for attr in slider_attrs:
+            s = getattr(self, attr, None)
+            if s is not None and isinstance(s, QSlider):
+                sliders.append(s)
+        return sliders
+
+    def _connect_all_slider_interactions(self) -> None:
+        """Conecta eventos de pulsación y liberación para coordinar modo draft e histogramas."""
+        for s in self.get_all_sliders():
+            s.sliderPressed.connect(self._on_slider_interaction_started)
+            s.sliderReleased.connect(self._on_slider_interaction_ended)
+
+    def _on_slider_interaction_started(self) -> None:
+        self._is_scrubbing = True
+        self.interaction_started.emit()
+
+    def _on_slider_interaction_ended(self) -> None:
+        self._is_scrubbing = False
+        self.interaction_finished.emit()
+        self.update_active_layer_histogram()
 
     # =========================================================================
     # GESTIÓN DE CAPAS (AÑADIR, DUPLICAR, ELIMINAR, REORDENAR)
@@ -2349,6 +2390,8 @@ class MaskLayersWidget(QWidget):
 
     def update_active_layer_histogram(self) -> None:
         """Actualiza el histograma de fondo de la curva según la capa activa."""
+        if getattr(self, '_is_scrubbing', False):
+            return
         if not hasattr(self, 'layer_curve_widget') or not hasattr(self, 'sec_layer_curve') or not self.sec_layer_curve.is_expanded:
             return
         layer = self.get_selected_layer()

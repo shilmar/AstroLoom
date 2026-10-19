@@ -259,7 +259,7 @@ def compute_curve_lut_from_points(points: Optional[List[Tuple[float, float]]], r
     return lut_arr
 
 
-def apply_pre_curve_adjustments(image_rgb: np.ndarray, layer: MaskLayer) -> np.ndarray:
+def apply_pre_curve_adjustments(image_rgb: np.ndarray, layer: MaskLayer, fast_draft: bool = False) -> np.ndarray:
     """
     Aplica secuencialmente los ajustes pre-curva de la capa (Balance de Blancos, Exposición EV,
     Sombras, Luces, Contraste, Saturación) sin aplicar la curva tonal LUT ni ponderación de máscara.
@@ -294,7 +294,7 @@ def apply_pre_curve_adjustments(image_rgb: np.ndarray, layer: MaskLayer) -> np.n
 
     # 5. Contraste local
     if abs(layer.contrast) > 1e-3:
-        adj = adjust_contrast(adj, layer.contrast)
+        adj = adjust_contrast(adj, layer.contrast, fast_draft=fast_draft)
 
     # 6. Saturación local
     if abs(layer.saturation - 1.0) > 1e-3:
@@ -308,7 +308,8 @@ def apply_pre_curve_adjustments(image_rgb: np.ndarray, layer: MaskLayer) -> np.n
 def apply_local_adjustments_to_image(
     image_rgb: np.ndarray,
     effective_mask: np.ndarray,
-    layer: MaskLayer
+    layer: MaskLayer,
+    fast_draft: bool = False
 ) -> np.ndarray:
     """
     Aplica los controles locales de una capa sobre image_rgb ponderados por effective_mask y opacidad.
@@ -317,11 +318,20 @@ def apply_local_adjustments_to_image(
         return image_rgb
 
     # Ponderación global de la máscara por opacidad
+    # Omitir procesamiento costoso si todos los controles locales y curvas están en valores neutros
+    has_adj = (abs(layer.temp) > 1e-4 or abs(layer.tint) > 1e-4 or 
+               abs(layer.exposure) > 1e-3 or abs(layer.shadows) > 1e-3 or 
+               abs(layer.highlights) > 1e-3 or abs(layer.contrast) > 1e-3 or 
+               abs(layer.saturation - 1.0) > 1e-3 or not layer.is_curve_identity())
+    if not has_adj:
+        return image_rgb
+
+    # Ponderación global de la máscara por opacidad
     weight = np.clip(effective_mask * layer.opacity, 0.0, 1.0).astype(np.float32)
     if np.max(weight) <= 1e-4:
         return image_rgb
 
-    adj = apply_pre_curve_adjustments(image_rgb, layer)
+    adj = apply_pre_curve_adjustments(image_rgb, layer, fast_draft=fast_draft)
 
     # 7. Curva tonal interactiva propia de la capa (LUT de 256 niveles acelerada por hardware)
     if not layer.is_curve_identity():
@@ -393,7 +403,8 @@ def apply_all_mask_layers(
     starless_image: Optional[np.ndarray] = None,
     stars_image: Optional[np.ndarray] = None,
     crop_rect: Optional[Tuple[int, int, int, int]] = None,
-    full_image_shape: Optional[Tuple[int, int]] = None
+    full_image_shape: Optional[Tuple[int, int]] = None,
+    fast_draft: bool = False
 ) -> np.ndarray:
     """
     Aplica secuencialmente la composición de capas (estilo Photoshop),
@@ -418,7 +429,7 @@ def apply_all_mask_layers(
                 crop_rect=crop_rect,
                 full_image_shape=full_image_shape
             )
-            img = apply_local_adjustments_to_image(img, m_eff, layer)
+            img = apply_local_adjustments_to_image(img, m_eff, layer, fast_draft=fast_draft)
         return img
 
     # =========================================================================
@@ -452,7 +463,7 @@ def apply_all_mask_layers(
                        abs(layer.saturation - 1.0) > 1e-3 or abs(layer.shadows) > 1e-3 or 
                        abs(layer.highlights) > 1e-3 or layer.has_curve())
             if has_adj:
-                canvas = apply_local_adjustments_to_image(canvas, np.ones((img_h, img_w), dtype=np.float32), layer)
+                canvas = apply_local_adjustments_to_image(canvas, np.ones((img_h, img_w), dtype=np.float32), layer, fast_draft=fast_draft)
             if layer.opacity < 0.999:
                 canvas = canvas * layer.opacity
 
@@ -463,7 +474,7 @@ def apply_all_mask_layers(
                 # Si el suelo está encima de las estrellas, restaura el suelo limpio sin estrellas debajo
                 w_3d = eff_m[..., np.newaxis]
                 canvas = (composite_image * w_3d) + (canvas * (1.0 - w_3d))
-                canvas = apply_local_adjustments_to_image(canvas, eff_m, layer)
+                canvas = apply_local_adjustments_to_image(canvas, eff_m, layer, fast_draft=fast_draft)
 
         elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
             # Capa ⭐ Estrellas
@@ -493,7 +504,7 @@ def apply_all_mask_layers(
                            abs(layer.exposure) > 1e-3 or abs(layer.contrast) > 1e-3 or 
                            abs(layer.saturation - 1.0) > 1e-3 or layer.has_curve())
                 if has_adj:
-                    st = apply_local_adjustments_to_image(st, np.ones((img_h, img_w), dtype=np.float32), layer)
+                    st = apply_local_adjustments_to_image(st, np.ones((img_h, img_w), dtype=np.float32), layer, fast_draft=fast_draft)
 
                 # Mezcla Screen (Trama estilo Photoshop): 1 - (1 - canvas) * (1 - st * opacity)
                 # Garantiza que las estrellas no quemen núcleos y se fundan de forma natural
@@ -511,7 +522,7 @@ def apply_all_mask_layers(
                     crop_rect=crop_rect,
                     full_image_shape=full_image_shape
                 )
-                canvas = apply_local_adjustments_to_image(canvas, m_eff, layer)
+                canvas = apply_local_adjustments_to_image(canvas, m_eff, layer, fast_draft=fast_draft)
 
     return np.ascontiguousarray(np.clip(canvas, 0.0, 1.0), dtype=np.float32)
 

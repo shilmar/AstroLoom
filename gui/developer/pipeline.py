@@ -289,7 +289,7 @@ def apply_developer_pipeline(
                 sky_median = float(np.median(stretched[precomputed_mask > 0.5]))
             else:
                 sky_median = float(np.median(stretched))
-            sn_contrasted = adjust_contrast(stretched, contrast_starless, pivot=sky_median)
+            sn_contrasted = adjust_contrast(stretched, contrast_starless, pivot=sky_median, fast_draft=is_scrubbing)
             if precomputed_mask is not None:
                 stretched = (sn_contrasted * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
             else:
@@ -298,7 +298,7 @@ def apply_developer_pipeline(
         # 9. Contraste Global
         contrast_global = state.contrast_val / 100.0
         if abs(contrast_global) > 1e-4:
-            stretched = adjust_contrast(stretched, contrast_global, pivot=None)
+            stretched = adjust_contrast(stretched, contrast_global, pivot=None, fast_draft=is_scrubbing)
         milestone_graded = stretched
 
     if precomputed_spatial_base is None:
@@ -554,6 +554,7 @@ def apply_developer_pipeline(
             stars_image=st_stretched,
             crop_rect=crop_rect,
             full_image_shape=full_shape,
+            fast_draft=is_scrubbing,
         )
 
     final_result = np.ascontiguousarray(stretched, dtype=np.float32)

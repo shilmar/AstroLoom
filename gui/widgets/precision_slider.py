@@ -105,6 +105,7 @@ class PrecisionSliderRow(QWidget):
     [ ● Nombre (fijo) | Slider ultra-fino | Pastilla de valor editable ]
     """
     valueChanged = Signal(int)
+    sliderPressed = Signal()
     sliderReleased = Signal()
     resetRequested = Signal()
 
@@ -165,6 +166,7 @@ class PrecisionSliderRow(QWidget):
         self.slider.setPageStep(int(self.step))
         self.slider.setValue(self.raw_default)
         self.slider.valueChanged.connect(self._on_slider_changed)
+        self.slider.sliderPressed.connect(self.sliderPressed.emit)
         self.slider.sliderReleased.connect(self.sliderReleased.emit)
         self.slider.mouseDoubleClickEvent = lambda e: self.reset()
         layout.addWidget(self.slider, stretch=1)

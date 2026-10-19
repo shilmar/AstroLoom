@@ -6172,39 +6172,13 @@ class DeveloperTab(QWidget):
                 s.sliderReleased.connect(self._on_slider_interaction_finished)
 
         if hasattr(self, 'mask_layers_widget'):
-            mask_heavy_sliders = [
-                getattr(self.mask_layers_widget, 'slider_sl_clarity', None),
-                getattr(self.mask_layers_widget, 'slider_sl_dehaze', None),
-                getattr(self.mask_layers_widget, 'slider_sl_ond_est', None),
-                getattr(self.mask_layers_widget, 'slider_sl_ond_bg', None),
-                getattr(self.mask_layers_widget, 'slider_sl_denoise', None),
-                getattr(self.mask_layers_widget, 'slider_sl_orton_strength', None),
-                getattr(self.mask_layers_widget, 'slider_sl_orton_radius', None),
-                getattr(self.mask_layers_widget, 'slider_sl_orton_threshold', None),
-                getattr(self.mask_layers_widget, 'slider_sl_star_diff_strength', None),
-                getattr(self.mask_layers_widget, 'slider_sl_star_diff_radius', None),
-                getattr(self.mask_layers_widget, 'slider_sl_star_diff_threshold', None),
-                getattr(self.mask_layers_widget, 'slider_sl_star_diff_color', None),
-            ]
-            for s in mask_heavy_sliders:
-                if s is not None:
-                    s.sliderPressed.connect(self._on_heavy_slider_pressed)
-                    s.sliderReleased.connect(self._on_slider_interaction_finished)
-
-            mask_light_sliders = [
-                getattr(self.mask_layers_widget, 'slider_sl_contrast', None),
-                getattr(self.mask_layers_widget, 'slider_sl_ev', None),
-                getattr(self.mask_layers_widget, 'slider_sl_sh', None),
-                getattr(self.mask_layers_widget, 'slider_sl_bp', None),
-                getattr(self.mask_layers_widget, 'slider_sl_temp', None),
-                getattr(self.mask_layers_widget, 'slider_sl_tint', None),
-                getattr(self.mask_layers_widget, 'slider_sl_sat', None),
-                getattr(self.mask_layers_widget, 'slider_sl_vib', None),
-            ]
-            for s in mask_light_sliders:
-                if s is not None:
-                    s.sliderPressed.connect(self._on_heavy_slider_pressed)
-                    s.sliderReleased.connect(self._on_slider_interaction_finished)
+            if hasattr(self.mask_layers_widget, 'interaction_started'):
+                self.mask_layers_widget.interaction_started.connect(self._on_heavy_slider_pressed)
+            if hasattr(self.mask_layers_widget, 'interaction_finished'):
+                self.mask_layers_widget.interaction_finished.connect(self._on_slider_interaction_finished)
+            for s in (self.mask_layers_widget.get_all_sliders() if hasattr(self.mask_layers_widget, 'get_all_sliders') else []):
+                s.sliderPressed.connect(self._on_heavy_slider_pressed)
+                s.sliderReleased.connect(self._on_slider_interaction_finished)
 
         self.spin_bp.editingFinished.connect(self._on_control_committed)
         self.spin_mtf.editingFinished.connect(self._on_control_committed)

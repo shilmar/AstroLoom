@@ -143,7 +143,7 @@ def adjust_vibrance(img_rgb: np.ndarray, vibrance: float = 0.0) -> np.ndarray:
     return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
 
-def adjust_contrast(img_rgb: np.ndarray, contrast: float = 0.0, pivot: float = None) -> np.ndarray:
+def adjust_contrast(img_rgb: np.ndarray, contrast: float = 0.0, pivot: float = None, fast_draft: bool = False) -> np.ndarray:
     """
     Ajuste de contraste sigmoidal en 'S' suave y progresivo en rango [0.0, 1.0].
     Garantiza estrictamente f(0) = 0 y f(1) = 1, eliminando el empaste o recorte
@@ -151,6 +151,8 @@ def adjust_contrast(img_rgb: np.ndarray, contrast: float = 0.0, pivot: float = N
     
     - contrast: [-1.0, 1.0] (0.0 neutro).
     - pivot: punto de inflexión tonal (por defecto 0.35 para proteger sombras profundas).
+    - fast_draft: si es True, utiliza una tabla LUT de 256 niveles acelerada por hardware (OpenCV)
+                  para conseguir >60 FPS durante el arrastre continuo de deslizadores.
     """
     if abs(contrast) < 1e-4:
         return img_rgb
@@ -163,6 +165,13 @@ def adjust_contrast(img_rgb: np.ndarray, contrast: float = 0.0, pivot: float = N
         pivot = float(np.clip(pivot, 0.10, 0.70))
 
     x = np.clip(img_rgb, 0.0, 1.0)
+
+    if fast_draft:
+        pts = np.linspace(0.0, 1.0, 256, dtype=np.float32)
+        lut_f = adjust_contrast(pts, contrast, pivot=pivot, fast_draft=False)
+        u8 = (x * 255.0).astype(np.uint8)
+        lut_u8 = (np.clip(lut_f, 0.0, 1.0) * 255.0).astype(np.uint8)
+        return (cv2.LUT(u8, lut_u8).astype(np.float32) / 255.0)
 
     if contrast > 0:
         # k modula la pendiente: contraste de +0.01 genera un incremento suave e imperceptible
