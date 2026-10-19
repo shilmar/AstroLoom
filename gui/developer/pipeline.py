@@ -248,6 +248,23 @@ def apply_developer_pipeline(
                                 (gnd_part - gnd_bp) / max(1e-4, 1.0 - gnd_bp), 0.0, 1.0
                             )
                     img = (img * precomputed_mask) + (gnd_part * (1.0 - precomputed_mask))
+
+            # 5b. Reducción de Ruido Lineal Multietapa (cuando StarNet no está separado)
+            if image_starless is None and state.denoise_val > 0:
+                dn_strength = state.denoise_val / 100.0
+                dn_color_ratio = getattr(state, 'denoise_color_val', 50) / 50.0
+                dn_color = min(1.0, dn_strength * dn_color_ratio)
+                dn_mask = getattr(state, 'denoise_mask_val', 50) / 100.0
+                if dn_strength > 1e-4:
+                    from core.denoise import apply_astro_denoise
+                    img = apply_astro_denoise(
+                        img,
+                        strength=dn_strength,
+                        color_strength=dn_color,
+                        masking=dn_mask,
+                        sky_mask=precomputed_mask,
+                        is_draft=is_scrubbing
+                    )
             milestone_linear = img
 
         # 6. Estirado Tonal (MTF o GHS)

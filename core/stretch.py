@@ -275,39 +275,15 @@ def _guided_filter(guide: np.ndarray, src: np.ndarray, radius: int, eps: float) 
 def apply_denoise(
     img_rgb: np.ndarray,
     strength: float = 0.0,
-    is_full_res: bool = False
+    is_full_res: bool = False,
+    **kwargs
 ) -> np.ndarray:
     """
-    Aplica reducción de ruido mediante Guided Filter nativo en float32 [0.0, 1.0].
-    Preserva bordes finos, nebulosas y filamentos sin cuantizar ni generar banding.
-    
-    - strength: [0.0, 1.0] (0% a 100%)
-    - is_full_res: escala el radio geométrico para resolución completa nativa.
+    Aplica reducción de ruido multietapa (Luminancia + Croma + Máscara de sombras/bordes).
+    Delega en el motor core.denoise.apply_astro_denoise.
     """
-    if strength <= 1e-4:
-        return img_rgb
-
-    # Factor de escala geométrico para compensar diferencia proxy vs sensor completo
-    scale = 2.5 if is_full_res else 1.0
-
-    # Radio de vecindad: crecimiento progresivo y suave (de 2 a ~6 px en proxy, escalado en full)
-    radius = int(max(2, round((2.0 + 4.0 * (strength ** 0.8)) * scale)))
-
-    # Epsilon: respuesta logarítmica/potencial suave.
-    # En 1% es casi imperceptible (1e-6) y en 100% alcanza un filtrado firme (1.5e-3)
-    # sin lavar detalles estructurales.
-    eps = float(1e-6 * (1500.0 ** strength))
-
-    # Guía en escala de grises float32 (sin cuantizar a uint8)
-    gray_guide = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
-
-    channels = []
-    for c in range(3):
-        ch_denoised = _guided_filter(gray_guide, img_rgb[..., c], radius=radius, eps=eps)
-        channels.append(ch_denoised)
-
-    out = np.stack(channels, axis=-1)
-    return np.clip(out, 0.0, 1.0).astype(np.float32)
+    from core.denoise import apply_astro_denoise
+    return apply_astro_denoise(img_rgb, strength=strength, is_full_res=is_full_res, **kwargs)
     
 def apply_curve_lut(img_rgb: np.ndarray, lut: np.ndarray) -> np.ndarray:
     """

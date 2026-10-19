@@ -49,6 +49,8 @@ class DeveloperState:
     ond_est_val: int = 0
     ond_bg_val: int = 0
     denoise_val: int = 0
+    denoise_color_val: int = 50
+    denoise_mask_val: int = 50
 
     # Orton Effect
     orton_strength: int = 0

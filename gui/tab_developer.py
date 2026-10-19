@@ -206,6 +206,8 @@ class DeveloperTab(QWidget):
         self.view_layer_mode = 0     # 0: Compuesta, 1: Solo Fondo, 2: Solo Estrellas
         self.contrast_starless_val = 0.0
         self.denoise_strength = 0.0  # <-- CORREGIDO: Inicialización obligatoria
+        self.denoise_color_strength = 0.50
+        self.denoise_masking = 0.50
 
         # Parámetros del comparador Antes / Después
         self.initial_bp: float = 0.0
@@ -591,6 +593,12 @@ class DeveloperTab(QWidget):
         self.lbl_contrast_starless = self.panel_starnet.lbl_contrast_starless
         self.slider_denoise = self.panel_starnet.slider_denoise
         self.lbl_denoise = self.panel_starnet.lbl_denoise
+        self.slider_denoise_color = self.panel_starnet.slider_denoise_color
+        self.lbl_denoise_color = self.panel_starnet.lbl_denoise_color
+        self.slider_denoise_mask = self.panel_starnet.slider_denoise_mask
+        self.lbl_denoise_mask = self.panel_starnet.lbl_denoise_mask
+        self.btn_denoise_expand = self.panel_starnet.btn_denoise_expand
+        self.w_denoise_advanced = self.panel_starnet.w_denoise_advanced
 
         self.panel_effects = self.panel_starnet.panel_effects
         self.box_orton_tools = self.panel_effects.box_orton_tools
@@ -629,6 +637,8 @@ class DeveloperTab(QWidget):
         self.slider_ond_bg.valueChanged.connect(self.on_ond_fondo_changed)
         self.slider_contrast_starless.valueChanged.connect(self.on_contrast_starless_changed)
         self.slider_denoise.valueChanged.connect(self.on_denoise_changed)
+        self.slider_denoise_color.valueChanged.connect(self.on_denoise_color_changed)
+        self.slider_denoise_mask.valueChanged.connect(self.on_denoise_mask_changed)
 
         self.slider_orton.valueChanged.connect(self.on_orton_strength_changed)
         self.slider_orton_radius.valueChanged.connect(self.on_orton_radius_changed)
@@ -3552,6 +3562,8 @@ class DeveloperTab(QWidget):
             is_full_res,
             is_draft,
             round(float(getattr(self, 'denoise_strength', 0.0)), 4),
+            round(float(getattr(self, 'denoise_color_strength', 0.5)), 4),
+            round(float(getattr(self, 'denoise_masking', 0.5)), 4),
             round(float(getattr(self, 'clarity_starless_val', 0.0)), 4),
             round(float(getattr(self, 'dehaze_starless_val', 0.0)), 4),
             round(float(getattr(self, 'multiescala_estructura', 0.0)), 4),
@@ -3574,6 +3586,8 @@ class DeveloperTab(QWidget):
             is_full_res,
             is_draft,
             round(float(getattr(self, 'denoise_strength', 0.0)), 4),
+            round(float(getattr(self, 'denoise_color_strength', 0.5)), 4),
+            round(float(getattr(self, 'denoise_masking', 0.5)), 4),
             round(float(getattr(self, 'clarity_starless_val', 0.0)), 4),
             round(float(getattr(self, 'dehaze_starless_val', 0.0)), 4),
             round(float(getattr(self, 'multiescala_estructura', 0.0)), 4),
@@ -3593,11 +3607,18 @@ class DeveloperTab(QWidget):
                 proc_starless = starless.copy()
                 proc_mask_3d = mask_3d
 
-            # 1. Reducción de Ruido
+            # 1. Reducción de Ruido Multietapa (Luminancia + Croma + Máscara)
             if self.denoise_strength > 1e-4:
-                denoised = apply_denoise(
+                dn_color_ratio = getattr(self, 'denoise_color_strength', 0.5) / 0.5
+                dn_color = min(1.0, self.denoise_strength * dn_color_ratio)
+                from core.denoise import apply_astro_denoise
+                denoised = apply_astro_denoise(
                     proc_starless,
                     strength=self.denoise_strength,
+                    color_strength=dn_color,
+                    masking=getattr(self, 'denoise_masking', 0.5),
+                    sky_mask=proc_mask_3d[..., 0] if proc_mask_3d is not None else None,
+                    is_draft=is_draft,
                     is_full_res=(is_full_res and not is_draft)
                 )
                 if proc_mask_3d is not None:
@@ -3784,6 +3805,9 @@ class DeveloperTab(QWidget):
             round(float(self.gnd_ev_val), 4),
             round(float(self.gnd_shadows_val), 4),
             round(float(self.gnd_bp_val), 4),
+            round(float(getattr(self, 'denoise_strength', 0.0)), 4),
+            round(float(getattr(self, 'denoise_color_strength', 0.5)), 4),
+            round(float(getattr(self, 'denoise_masking', 0.5)), 4),
         )
 
         # Hito 1: Parámetros de Estirado (MTF / GHS)
@@ -5318,6 +5342,18 @@ class DeveloperTab(QWidget):
                 self.slider_contrast_starless.value(), val
             )
         self.update_stretch_preview()
+
+    def on_denoise_color_changed(self, val: int):
+        self.denoise_color_strength = val / 100.0
+        if hasattr(self, 'lbl_denoise_color'):
+            self.lbl_denoise_color.setText(f"{val}%")
+        self.update_stretch_preview()
+
+    def on_denoise_mask_changed(self, val: int):
+        self.denoise_masking = val / 100.0
+        if hasattr(self, 'lbl_denoise_mask'):
+            self.lbl_denoise_mask.setText(f"{val}%")
+        self.update_stretch_preview()
         
     def on_ond_estructura_changed(self, val: int):
         self.multiescala_estructura = val / 100.0
@@ -5467,24 +5503,31 @@ class DeveloperTab(QWidget):
         widgets = [
             self.slider_clarity, self.slider_dehaze, self.slider_ond_est,
             self.slider_ond_bg, self.slider_contrast_starless, self.slider_denoise,
+            getattr(self, 'slider_denoise_color', None), getattr(self, 'slider_denoise_mask', None),
             self.slider_orton, self.slider_orton_radius, self.slider_orton_threshold,
             self.combo_orton_tint, self.combo_orton_mode
         ]
         for w in widgets:
-            w.blockSignals(True)
+            if w is not None:
+                w.blockSignals(True)
         self.slider_clarity.setValue(0)
         self.slider_dehaze.setValue(0)
         self.slider_ond_est.setValue(0)
         self.slider_ond_bg.setValue(0)
         self.slider_contrast_starless.setValue(0)
         self.slider_denoise.setValue(0)
+        if hasattr(self, 'slider_denoise_color') and self.slider_denoise_color is not None:
+            self.slider_denoise_color.setValue(50)
+        if hasattr(self, 'slider_denoise_mask') and self.slider_denoise_mask is not None:
+            self.slider_denoise_mask.setValue(50)
         self.slider_orton.setValue(0)
         self.slider_orton_radius.setValue(40)
         self.slider_orton_threshold.setValue(5)
         self.combo_orton_tint.setCurrentIndex(0)
         self.combo_orton_mode.setCurrentIndex(0)
         for w in widgets:
-            w.blockSignals(False)
+            if w is not None:
+                w.blockSignals(False)
 
         self.clarity_starless_val = 0.0
         self.dehaze_starless_val = 0.0
@@ -5492,6 +5535,8 @@ class DeveloperTab(QWidget):
         self.multiescala_fondo = 0.0
         self.contrast_starless_val = 0.0
         self.denoise_strength = 0.0
+        self.denoise_color_strength = 0.50
+        self.denoise_masking = 0.50
         self.orton_strength = 0.0
         self.orton_radius = 40.0
         self.orton_threshold = 0.05
@@ -5504,6 +5549,10 @@ class DeveloperTab(QWidget):
         self.lbl_ond_bg.setText("0%")
         self.lbl_contrast_starless.setText("0.00")
         self.lbl_denoise.setText("0%")
+        if hasattr(self, 'lbl_denoise_color') and self.lbl_denoise_color is not None:
+            self.lbl_denoise_color.setText("50%")
+        if hasattr(self, 'lbl_denoise_mask') and self.lbl_denoise_mask is not None:
+            self.lbl_denoise_mask.setText("50%")
         if hasattr(self, 'lbl_orton'):
             self.lbl_orton.setText("0%")
         if hasattr(self, 'lbl_orton_radius'):
@@ -5882,6 +5931,8 @@ class DeveloperTab(QWidget):
         self.star_intensity = 1.0
         self.view_layer_mode = 0
         self.denoise_strength = 0.0
+        self.denoise_color_strength = 0.50
+        self.denoise_masking = 0.50
         self.gnd_ev_val = 0.0
         self.gnd_shadows_val = 0.0
         self.gnd_bp_val = 0.0
@@ -5894,7 +5945,9 @@ class DeveloperTab(QWidget):
             self.combo_lp_mode, self.chk_lp_legacy_1d,
             self.slider_stars, self.slider_contrast_starless,
             self.slider_clarity, self.slider_dehaze, self.slider_ond_est,
-            self.slider_ond_bg, self.slider_denoise, 
+            self.slider_ond_bg, self.slider_denoise,
+            getattr(self, 'slider_denoise_color', None),
+            getattr(self, 'slider_denoise_mask', None), 
             self.slider_orton, self.slider_orton_radius, self.slider_orton_threshold,
             self.combo_orton_tint, self.combo_orton_mode,
             getattr(self, 'slider_star_diff', None),
@@ -6016,6 +6069,12 @@ class DeveloperTab(QWidget):
 
         self.slider_denoise.setValue(0)
         self.lbl_denoise.setText("0%")
+        if hasattr(self, 'slider_denoise_color') and self.slider_denoise_color is not None:
+            self.slider_denoise_color.setValue(50)
+            self.lbl_denoise_color.setText("50%")
+        if hasattr(self, 'slider_denoise_mask') and self.slider_denoise_mask is not None:
+            self.slider_denoise_mask.setValue(50)
+            self.lbl_denoise_mask.setText("50%")
         
         self._set_starnet_tools_enabled(False)
         if hasattr(self, 'sec_presets'):
@@ -6190,6 +6249,8 @@ class DeveloperTab(QWidget):
             getattr(self, "slider_ond_est", None),
             getattr(self, "slider_ond_bg", None),
             getattr(self, "slider_denoise", None),
+            getattr(self, "slider_denoise_color", None),
+            getattr(self, "slider_denoise_mask", None),
         ]
         for ctrl in controls:
             if ctrl is not None:
@@ -6206,6 +6267,8 @@ class DeveloperTab(QWidget):
             getattr(self, 'slider_ond_est', None),
             getattr(self, 'slider_ond_bg', None),
             getattr(self, 'slider_denoise', None),
+            getattr(self, 'slider_denoise_color', None),
+            getattr(self, 'slider_denoise_mask', None),
             getattr(self, 'slider_orton', None),
             getattr(self, 'slider_orton_radius', None),
             getattr(self, 'slider_orton_threshold', None),
@@ -6569,6 +6632,8 @@ class DeveloperTab(QWidget):
             self.multiescala_estructura = self.panel_starnet.slider_ond_est.value() / 100.0
             self.multiescala_fondo = self.panel_starnet.slider_ond_bg.value() / 100.0
             self.denoise_strength = self.panel_starnet.slider_denoise.value() / 100.0
+            self.denoise_color_strength = getattr(self.panel_starnet, 'slider_denoise_color', None).value() / 100.0 if hasattr(self.panel_starnet, 'slider_denoise_color') else 0.50
+            self.denoise_masking = getattr(self.panel_starnet, 'slider_denoise_mask', None).value() / 100.0 if hasattr(self.panel_starnet, 'slider_denoise_mask') else 0.50
             if hasattr(self, 'panel_effects'):
                 self.orton_strength = self.panel_effects.orton_strength
                 self.orton_radius = self.panel_effects.orton_radius
