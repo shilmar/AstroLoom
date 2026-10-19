@@ -87,7 +87,7 @@ from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow, PrecisionSpinBox
 from gui.icons import get_icon, get_svg_pixmap
 from gui.canvas import MaskCanvas
-from gui.worker import GraXpertWorker, StarNetWorker
+from gui.worker import StarNetWorker
 from core.icc_manager import save_tiff_with_icc
 from core.config_manager import load_config
 from core.i18n import tr, get_i18n
@@ -371,9 +371,8 @@ class DeveloperTab(QWidget):
         self.panel_lp = LightPollutionPanel()
         self.sec_gradients = self.panel_lp.sec_bg
         self.sec_bg = self.panel_lp.sec_bg
+        self.combo_poly_degree = self.panel_lp.combo_poly_degree
         self.combo_bg_engine = self.panel_lp.combo_bg_engine
-        self.lbl_smoothing = self.panel_lp.lbl_smoothing
-        self.spin_smoothing = self.panel_lp.spin_smoothing
         self.btn_extract_bg = self.panel_lp.btn_extract_bg
         self.row_lp = self.panel_lp.row_lp
         self.slider_lp = self.panel_lp.slider_lp
@@ -1366,7 +1365,7 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'sec_presets'):
             self.sec_presets.set_title(tr("developer.sections.presets", "Presets y Estilos de Revelado"))
         if hasattr(self, 'sec_gradients'):
-            self.sec_gradients.set_title(tr("developer.sections.gradients", "Calibración y Gradientes (GraXpert AI)"))
+            self.sec_gradients.set_title(tr("developer.sections.gradients", "Gradientes y Contaminación Lumínica"))
         if hasattr(self, 'sec_stretch'):
             self.sec_stretch.set_title(tr("developer.sections.stretch", "Estirado Tonal y Contraste"))
         if hasattr(self, 'sec_curves'):
@@ -4910,32 +4909,20 @@ class DeveloperTab(QWidget):
         if self.image_32bit is None:
             return
 
-        engine = self.combo_bg_engine.currentText()
-
-        if "Polinómico" in engine:
-            self.log_message("[FONDO] Extrayendo gradiente con modelo Polinómico Cuadrático...")
-            try:
-                corrected = extract_background_polynomial(
-                    self.image_32bit, 
-                    sky_mask=self.current_mask, 
-                    degree=2
-                )
-                self.on_bg_extraction_success(corrected)
-                self.log_message("[FONDO] Gradiente polinómico neutralizado con éxito.")
-            except Exception as e:
-                self.log_message(f"[ERROR FONDO] Fallo en cálculo polinómico: {e}")
-        else:
-            self._set_ai_processing_state(True)
-            self.log_message("=== INICIANDO GRAXPERT ===")
-            self.gx_worker = GraXpertWorker(
-                self.image_32bit,
-                sky_mask=self.current_mask,
-                smoothing=self.spin_smoothing.value()
+        degree = 1 if (hasattr(self, 'combo_poly_degree') and "Lineal" in self.combo_poly_degree.currentText()) else 2
+        deg_label = "Lineal (Grado 1)" if degree == 1 else "Cuadrático (Grado 2)"
+        self.log_message(f"[FONDO] Extrayendo gradiente con modelo Polinómico {deg_label}...")
+        try:
+            corrected = extract_background_polynomial(
+                self.image_32bit, 
+                sky_mask=self.current_mask, 
+                degree=degree
             )
-            self.gx_worker.status_changed.connect(self.log_message)
-            self.gx_worker.finished_success.connect(self.on_bg_extraction_success)
-            self.gx_worker.error_occurred.connect(self.on_bg_extraction_error)
-            self.gx_worker.start()
+            self.on_bg_extraction_success(corrected)
+            self.log_message(f"[FONDO] Gradiente polinómico ({deg_label}) neutralizado con éxito.")
+        except Exception as e:
+            self.log_message(f"[ERROR FONDO] Fallo en cálculo polinómico: {e}")
+            self.on_bg_extraction_error(str(e))
 
     def on_bg_extraction_success(self, corrected_img: np.ndarray):
         self._set_ai_processing_state(False)
@@ -4953,8 +4940,8 @@ class DeveloperTab(QWidget):
         
     def on_bg_extraction_error(self, err_msg: str):
         self._set_ai_processing_state(False)
-        self.log_message(f"[ERROR GRAXPERT] {err_msg}")
-        QMessageBox.warning(self, "Error en GraXpert", err_msg)
+        self.log_message(f"[ERROR FONDO] {err_msg}")
+        QMessageBox.warning(self, "Error en Extracción de Gradiente", err_msg)
 
     def on_lp_changed(self, val: int):
         self.lp_reduction = val / 100.0

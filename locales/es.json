@@ -41,7 +41,7 @@
     "activity_log": "Registro de Actividad:",
     "sections": {
       "presets": "Presets y Estilos de Revelado",
-      "gradients": "Calibración y Gradientes (GraXpert AI)",
+      "gradients": "Gradientes y Contaminación Lumínica",
       "stretch": "Estirado Tonal y Contraste",
       "curves": "Curva Tonal Interactiva (RGB / Saturación)",
       "starnet": "StarNet++ AI — Desacoplo de Estrellas",

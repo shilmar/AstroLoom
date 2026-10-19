@@ -41,7 +41,7 @@
     "activity_log": "Activity Log:",
     "sections": {
       "presets": "Presets & Developing Styles",
-      "gradients": "Calibration & Gradients (GraXpert AI)",
+      "gradients": "Gradients & Light Pollution",
       "stretch": "Tonal Stretch & Contrast",
       "curves": "Interactive Tone Curve (RGB / Saturation)",
       "starnet": "StarNet++ AI — Star Separation",

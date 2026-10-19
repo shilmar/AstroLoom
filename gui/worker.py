@@ -1,6 +1,6 @@
 """
 gui/worker.py - Hilos secundarios de ejecución (QThread) para el pipeline de Apilator,
-incluyendo apilado dual subpíxel, extracción de gradiente GraXpert y StarNet++.
+incluyendo apilado dual subpíxel y StarNet++.
 """
 
 import os
@@ -35,7 +35,6 @@ from core.stacking import (
     StorageModeDecision,
     compose_sky_ground_with_anti_ghosting
 )
-from core.graxpert_bridge import run_graxpert_background_extraction
 from core.starnet_bridge import run_starnet
 from core.icc_manager import (
     extract_icc_profile, 
@@ -607,47 +606,6 @@ class StackingWorker(QThread):
             gc.collect()
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
-                
-
-class GraXpertWorker(QThread):
-    finished_success = Signal(np.ndarray)
-    error_occurred = Signal(str)
-    status_changed = Signal(str)
-    cancelled = Signal()
-
-    def __init__(self, image_rgb: np.ndarray, sky_mask: np.ndarray = None, smoothing: float = 0.5, parent=None):
-        super().__init__(parent)
-        self.image_rgb = image_rgb
-        self.sky_mask = sky_mask
-        self.smoothing = smoothing
-        self._is_cancelled = False
-
-    def cancel(self):
-        self._is_cancelled = True
-
-    def run(self):
-        try:
-            self.status_changed.emit("Invocando GraXpert AI para extracción de fondo...")
-            if self._is_cancelled:
-                self.cancelled.emit()
-                return
-
-            corrected = run_graxpert_background_extraction(
-                self.image_rgb, 
-                sky_mask=self.sky_mask, 
-                smoothing=self.smoothing
-            )
-            if self._is_cancelled:
-                self.cancelled.emit()
-                return
-
-            self.status_changed.emit("Extracción de gradiente completada con éxito.")
-            self.finished_success.emit(corrected)
-        except Exception as e:
-            if not self._is_cancelled:
-                self.error_occurred.emit(str(e))
-            else:
-                self.cancelled.emit()
 
 
 class StarNetWorker(QThread):

@@ -57,26 +57,20 @@ class LightPollutionPanel(QWidget):
         layout_bg.setContentsMargins(6, 4, 6, 6)
         layout_bg.setSpacing(8)
 
-        # Selector de Algoritmo de Fondo
+        # Selector de Modelo Polinómico de Fondo (Astrofotografía de Paisaje)
         row_engine = QHBoxLayout()
-        row_engine.addWidget(QLabel("Motor:"))
-        self.combo_bg_engine = QComboBox()
-        self.combo_bg_engine.addItems(["Polinómico (Paisaje)", "GraXpert AI"])
-        row_engine.addWidget(self.combo_bg_engine)
-
-        self.lbl_smoothing = QLabel("Suavizado:")
-        row_engine.addWidget(self.lbl_smoothing)
-        self.spin_smoothing = QDoubleSpinBox()
-        self.spin_smoothing.setRange(0.1, 1.0)
-        self.spin_smoothing.setSingleStep(0.05)
-        self.spin_smoothing.setValue(0.50)
-        self.spin_smoothing.setFixedWidth(65)
-        row_engine.addWidget(self.spin_smoothing)
+        row_engine.addWidget(QLabel("Modelo:"))
+        self.combo_poly_degree = QComboBox()
+        self.combo_poly_degree.addItems(["Cuadrático (Grado 2)", "Lineal (Grado 1)"])
+        self.combo_poly_degree.setToolTip("Grado 2 (Cuadrático): Modela curvaturas y viñeteo suave.\nGrado 1 (Lineal): Modela rampas y gradientes planos.")
+        row_engine.addWidget(self.combo_poly_degree)
+        self.combo_bg_engine = self.combo_poly_degree  # Alias de compatibilidad
         layout_bg.addLayout(row_engine)
 
         self.btn_extract_bg = QPushButton("Eliminar Gradientes")
         self.btn_extract_bg.setIcon(get_icon("sparkles", color="#80d8ff", size=13))
         self.btn_extract_bg.setStyleSheet("font-weight: bold; color: #80d8ff;")
+        self.btn_extract_bg.setToolTip("Ajusta una superficie analítica inmune a la silueta del suelo y neutraliza el gradiente.")
         self.btn_extract_bg.clicked.connect(self.extract_bg_requested.emit)
         layout_bg.addWidget(self.btn_extract_bg)
 
