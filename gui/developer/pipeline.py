@@ -141,7 +141,11 @@ def apply_developer_pipeline(
     return_intermediate: bool = False,
     precomputed_stretched_base: Optional[np.ndarray] = None,
     precomputed_stretched_stars: Optional[np.ndarray] = None,
-) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]]:
+    precomputed_graded_base: Optional[np.ndarray] = None,
+    precomputed_spatial_base: Optional[np.ndarray] = None,
+    return_milestones: bool = False,
+    is_dragging_deconv: bool = False,
+) -> Union[np.ndarray, Tuple[Any, ...]]:
     """Pure Python headless non-destructive photo development pipeline.
 
     Processes target_img through all 14 astronomical develop stages based on state.
@@ -150,9 +154,17 @@ def apply_developer_pipeline(
     if target_img is None:
         return None
 
-    if precomputed_stretched_base is not None:
+    st_stretched = precomputed_stretched_stars
+    milestone_stretched = precomputed_stretched_base
+    milestone_graded = precomputed_graded_base
+    milestone_spatial = precomputed_spatial_base
+
+    if precomputed_spatial_base is not None:
+        stretched = precomputed_spatial_base
+    elif precomputed_graded_base is not None:
+        stretched = precomputed_graded_base
+    elif precomputed_stretched_base is not None:
         stretched = precomputed_stretched_base
-        st_stretched = precomputed_stretched_stars
     else:
         # 1. Balance de blancos
         temp_val = state.temp_val / 1000.0
@@ -246,7 +258,9 @@ def apply_developer_pipeline(
             )
         else:
             stretched = manual_stretch(img, black_point=state.bp_val, midtone=state.mtf_val)
+        milestone_stretched = stretched
 
+    if precomputed_spatial_base is None and precomputed_graded_base is None:
         # 7. Curvas Tonales (LUT RGB, Hue vs Sat, Luma vs Sat)
         if curve_luts:
             if "rgb" in curve_luts and curve_luts["rgb"] is not None:
@@ -285,10 +299,15 @@ def apply_developer_pipeline(
         contrast_global = state.contrast_val / 100.0
         if abs(contrast_global) > 1e-4:
             stretched = adjust_contrast(stretched, contrast_global, pivot=None)
+        milestone_graded = stretched
 
+    if precomputed_spatial_base is None:
         # 10. Deconvolución Óptica Regularizada (Richardson-Lucy / PSF)
         if state.deconv_iterations > 0:
             is_draft_deconv = is_scrubbing
+            deconv_iters = state.deconv_iterations
+            if is_scrubbing and not is_dragging_deconv:
+                deconv_iters = min(1, state.deconv_iterations)
             orig_h_dec, orig_w_dec = stretched.shape[:2]
             if is_draft_deconv and max(orig_w_dec, orig_h_dec) > 800:
                 scale_dec = 800.0 / float(max(orig_w_dec, orig_h_dec))
@@ -343,7 +362,7 @@ def apply_developer_pipeline(
             deconvolved = richardson_lucy_deconvolve(
                 in_deconv,
                 psf_kernel=active_psf,
-                iterations=state.deconv_iterations,
+                iterations=deconv_iters,
                 deringing=state.deconv_deringing / 100.0,
                 damping=state.deconv_damping / 100.0,
                 luminance_only=state.deconv_luma_only,
@@ -456,8 +475,18 @@ def apply_developer_pipeline(
             else:
                 stretched = res_sd
 
-        # 13. Preparación de la capa de estrellas para composición
+        milestone_spatial = stretched
+
+    # 13. Preparación de la capa de estrellas para composición
+    if st_stretched is None:
         star_intensity = state.stars_val / 100.0
+        star_diff_strength = state.star_diff_strength / 100.0
+        sd_modes = ["screen", "soft_light", "additive"]
+        sd_mode = (
+            sd_modes[state.star_diff_mode_idx]
+            if 0 <= state.star_diff_mode_idx < len(sd_modes)
+            else "screen"
+        )
         if image_stars is not None:
             if mask_layers and len(mask_layers) > 0:
                 if state.stretch_mode == "ghs":
@@ -528,6 +557,8 @@ def apply_developer_pipeline(
         )
 
     final_result = np.ascontiguousarray(stretched, dtype=np.float32)
+    if return_milestones:
+        return final_result, milestone_stretched, milestone_graded, milestone_spatial, st_stretched
     if return_intermediate:
         return final_result, pre_layers_base, pre_layers_stars
     return final_result

@@ -42,3 +42,6 @@ scratch/
 # Modelos de inferencia IA (pesados)
 models/*.onnx
 !models/.gitkeep
+
+# Graphify
+graphify-out/

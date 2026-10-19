@@ -264,11 +264,25 @@ class DeveloperTab(QWidget):
         # Cachés multinivel de aceleración en memoria RAM
         self._cache_starless_key: Optional[tuple] = None
         self._cache_starless_linear: Optional[np.ndarray] = None
+        self._cache_starless_pre_key: Optional[tuple] = None
+        self._cache_starless_pre_img: Optional[np.ndarray] = None
+
+        # Cachés por hitos del pipeline (Milestone Caching)
+        self._cache_ms_stretch_key: Optional[tuple] = None
+        self._cache_ms_stretch_img: Optional[np.ndarray] = None
+        self._cache_ms_graded_key: Optional[tuple] = None
+        self._cache_ms_graded_img: Optional[np.ndarray] = None
+        self._cache_ms_spatial_key: Optional[tuple] = None
+        self._cache_ms_spatial_img: Optional[np.ndarray] = None
+        self._cache_ms_stars_key: Optional[tuple] = None
+        self._cache_ms_stars_img: Optional[np.ndarray] = None
+
         self._cache_pre_layers_key: Optional[tuple] = None
         self._cache_pre_layers_stretched: Optional[np.ndarray] = None
         self._cache_pre_layers_stars: Optional[np.ndarray] = None
         self._is_scrubbing_heavy_slider: bool = False
         self._is_slider_pressed: bool = False
+        self._is_dragging_deconv: bool = False
         self.async_pipeline = AsyncPipelineManager(self)
 
         # Memoria de tamaños para paneles ocultables (Lightroom style)
@@ -3313,6 +3327,16 @@ class DeveloperTab(QWidget):
         """Invalida todas las cachés intermedias del pipeline de procesado."""
         self._cache_starless_key = None
         self._cache_starless_linear = None
+        self._cache_starless_pre_key = None
+        self._cache_starless_pre_img = None
+        self._cache_ms_stretch_key = None
+        self._cache_ms_stretch_img = None
+        self._cache_ms_graded_key = None
+        self._cache_ms_graded_img = None
+        self._cache_ms_spatial_key = None
+        self._cache_ms_spatial_img = None
+        self._cache_ms_stars_key = None
+        self._cache_ms_stars_img = None
         self._cache_pre_layers_key = None
         self._cache_pre_layers_stretched = None
         self._cache_pre_layers_stars = None
@@ -3504,11 +3528,14 @@ class DeveloperTab(QWidget):
         if is_neutral:
             return starless
 
-        # Verificación en caché de RAM Nivel 1 (Linear Stage)
-        cache_key = (
+        is_draft = (not is_full_res and getattr(self, '_is_scrubbing_heavy_slider', False))
+        orig_h, orig_w = starless.shape[:2]
+
+        cache_key_full = (
             id(starless),
             id(mask_3d),
             is_full_res,
+            is_draft,
             round(float(getattr(self, 'denoise_strength', 0.0)), 4),
             round(float(getattr(self, 'clarity_starless_val', 0.0)), 4),
             round(float(getattr(self, 'dehaze_starless_val', 0.0)), 4),
@@ -3522,58 +3549,74 @@ class DeveloperTab(QWidget):
             round(float(getattr(self, 'orton_tint_strength', 0.5)), 4),
             getattr(self, 'orton_mode', 'screen')
         )
-        if not is_full_res and self._cache_starless_key == cache_key and self._cache_starless_linear is not None:
+        if not is_full_res and self._cache_starless_key == cache_key_full and self._cache_starless_linear is not None:
             return self._cache_starless_linear
 
-        is_draft = (not is_full_res and getattr(self, '_is_scrubbing_heavy_slider', False))
-        orig_h, orig_w = starless.shape[:2]
-        # Si starless ya proviene del nivel draft (<= 800 px) de la pirámide de resolución,
-        # NO volvemos a reducirlo a la mitad para evitar doble submuestreo destructivo (400 px).
-        if is_draft and max(orig_w, orig_h) > 800:
-            scale_d = 800.0 / float(max(orig_w, orig_h))
-            draft_w = max(32, int(orig_w * scale_d))
-            draft_h = max(32, int(orig_h * scale_d))
-            proc_starless = cv2.resize(starless, (draft_w, draft_h), interpolation=cv2.INTER_AREA)
-            proc_mask_3d = cv2.resize(mask_3d, (draft_w, draft_h), interpolation=cv2.INTER_AREA) if mask_3d is not None else None
-        else:
-            proc_starless = starless.copy()
+        # Verificación en caché de RAM Nivel 1b (Denoise, Claridad, Ondículas pre-Orton)
+        cache_key_pre = (
+            id(starless),
+            id(mask_3d),
+            is_full_res,
+            is_draft,
+            round(float(getattr(self, 'denoise_strength', 0.0)), 4),
+            round(float(getattr(self, 'clarity_starless_val', 0.0)), 4),
+            round(float(getattr(self, 'dehaze_starless_val', 0.0)), 4),
+            round(float(getattr(self, 'multiescala_estructura', 0.0)), 4),
+            round(float(getattr(self, 'multiescala_fondo', 0.0)), 4),
+        )
+        if not is_full_res and self._cache_starless_pre_key == cache_key_pre and self._cache_starless_pre_img is not None:
+            proc_starless = self._cache_starless_pre_img.copy()
             proc_mask_3d = mask_3d
-
-        # 1. Reducción de Ruido
-        if self.denoise_strength > 1e-4:
-            denoised = apply_denoise(
-                proc_starless,
-                strength=self.denoise_strength,
-                is_full_res=(is_full_res and not is_draft)
-            )
-            if proc_mask_3d is not None:
-                proc_starless = (denoised * proc_mask_3d) + (proc_starless * (1.0 - proc_mask_3d))
+        else:
+            if is_draft and max(orig_w, orig_h) > 800:
+                scale_d = 800.0 / float(max(orig_w, orig_h))
+                draft_w = max(32, int(orig_w * scale_d))
+                draft_h = max(32, int(orig_h * scale_d))
+                proc_starless = cv2.resize(starless, (draft_w, draft_h), interpolation=cv2.INTER_AREA)
+                proc_mask_3d = cv2.resize(mask_3d, (draft_w, draft_h), interpolation=cv2.INTER_AREA) if mask_3d is not None else None
             else:
-                proc_starless = denoised
+                proc_starless = starless.copy()
+                proc_mask_3d = mask_3d
 
-        # 2. Claridad y Borrar Neblina
-        if abs(self.clarity_starless_val) > 1e-4:
-            clarified = apply_clarity(proc_starless, strength=self.clarity_starless_val)
-            if proc_mask_3d is not None:
-                proc_starless = (clarified * proc_mask_3d) + (proc_starless * (1.0 - proc_mask_3d))
-            else:
-                proc_starless = clarified
+            # 1. Reducción de Ruido
+            if self.denoise_strength > 1e-4:
+                denoised = apply_denoise(
+                    proc_starless,
+                    strength=self.denoise_strength,
+                    is_full_res=(is_full_res and not is_draft)
+                )
+                if proc_mask_3d is not None:
+                    proc_starless = (denoised * proc_mask_3d) + (proc_starless * (1.0 - proc_mask_3d))
+                else:
+                    proc_starless = denoised
 
-        if abs(self.dehaze_starless_val) > 1e-4:
-            dehazed = apply_dehaze(proc_starless, strength=self.dehaze_starless_val)
-            if proc_mask_3d is not None:
-                proc_starless = (dehazed * proc_mask_3d) + (proc_starless * (1.0 - proc_mask_3d))
-            else:
-                proc_starless = dehazed
+            # 2. Claridad y Borrar Neblina
+            if abs(self.clarity_starless_val) > 1e-4:
+                clarified = apply_clarity(proc_starless, strength=self.clarity_starless_val)
+                if proc_mask_3d is not None:
+                    proc_starless = (clarified * proc_mask_3d) + (proc_starless * (1.0 - proc_mask_3d))
+                else:
+                    proc_starless = clarified
 
-        # 3. Ondículas sobre la capa de fondo
-        if abs(self.multiescala_estructura) > 1e-4 or self.multiescala_fondo > 1e-4:
-            proc_starless = realce_multiescala_ondiculas(
-                proc_starless,
-                fuerza_estructura=self.multiescala_estructura,
-                reduccion_fondo=self.multiescala_fondo,
-                sky_mask=proc_mask_3d[..., 0] if proc_mask_3d is not None else None
-            )
+            if abs(self.dehaze_starless_val) > 1e-4:
+                dehazed = apply_dehaze(proc_starless, strength=self.dehaze_starless_val)
+                if proc_mask_3d is not None:
+                    proc_starless = (dehazed * proc_mask_3d) + (proc_starless * (1.0 - proc_mask_3d))
+                else:
+                    proc_starless = dehazed
+
+            # 3. Ondículas sobre la capa de fondo
+            if abs(self.multiescala_estructura) > 1e-4 or self.multiescala_fondo > 1e-4:
+                proc_starless = realce_multiescala_ondiculas(
+                    proc_starless,
+                    fuerza_estructura=self.multiescala_estructura,
+                    reduccion_fondo=self.multiescala_fondo,
+                    sky_mask=proc_mask_3d[..., 0] if proc_mask_3d is not None else None
+                )
+
+            if not is_full_res:
+                self._cache_starless_pre_key = cache_key_pre
+                self._cache_starless_pre_img = proc_starless.copy()
 
         # 4. Efecto Orton y Resplandor de Polvo Galáctico sobre Fondo Nebular
         if self.orton_strength > 1e-4:
@@ -3596,7 +3639,7 @@ class DeveloperTab(QWidget):
         else:
             processed_starless = proc_starless
             if not is_full_res:
-                self._cache_starless_key = cache_key
+                self._cache_starless_key = cache_key_full
                 self._cache_starless_linear = processed_starless
 
         return processed_starless
@@ -3701,7 +3744,8 @@ class DeveloperTab(QWidget):
 
         curve_state = tuple((m, tuple(pts)) for m, pts in sorted(self.curve_widget.get_state().items())) if hasattr(self, 'curve_widget') else ()
 
-        stage2_key = (
+        # Hito 1: Parámetros Lineales y Estirado (MTF / GHS)
+        key_stretch = (
             id(target_img),
             id(precomputed_mask),
             is_full_res,
@@ -3735,9 +3779,19 @@ class DeveloperTab(QWidget):
             round(float(self.spin_ghs_bp.value()), 5) if hasattr(self, 'spin_ghs_bp') else 0.0,
             round(float(self.spin_bp.value()), 5) if hasattr(self, 'spin_bp') else 0.0,
             round(float(self.spin_mtf.value()), 5) if hasattr(self, 'spin_mtf') else 0.0,
+        )
+
+        # Hito 2: Parámetros de Curvas y Contraste
+        key_graded = (
+            key_stretch,
             curve_state,
             round(float(self.contrast_starless_val), 4),
             round(float(self.contrast_val), 4),
+        )
+
+        # Hito 3: Parámetros Espaciales (Deconvolución, Orton, Difusión Estelar)
+        key_spatial = (
+            key_graded,
             getattr(self, "deconv_iterations", 0),
             round(float(getattr(self, "deconv_fwhm", 3.0)), 2),
             round(float(getattr(self, "deconv_deringing", 0.08)), 4),
@@ -3759,12 +3813,13 @@ class DeveloperTab(QWidget):
             round(float(self.star_diff_threshold), 4),
             round(float(self.star_diff_color_boost), 4),
             getattr(self, 'star_diff_mode', 'natural'),
-            round(float(self.star_intensity), 4)
         )
 
-        use_cached_pre = (is_preview and self._cache_pre_layers_key == stage2_key and self._cache_pre_layers_stretched is not None)
-        pre_stretched_base = self._cache_pre_layers_stretched if use_cached_pre else None
-        pre_stretched_stars = self._cache_pre_layers_stars if use_cached_pre else None
+        # Determinar hitos en caché reutilizables
+        pre_spatial = self._cache_ms_spatial_img if (is_preview and self._cache_ms_spatial_key == key_spatial) else None
+        pre_graded = self._cache_ms_graded_img if (is_preview and self._cache_ms_graded_key == key_graded and pre_spatial is None) else None
+        pre_stretched = self._cache_ms_stretch_img if (is_preview and self._cache_ms_stretch_key == key_stretch and pre_spatial is None and pre_graded is None) else None
+        pre_stars = self._cache_ms_stars_img if (is_preview and self._cache_ms_stretch_key == key_stretch and self._cache_ms_stars_img is not None) else None
 
         # Resolve starless and stars image slices
         if is_zoomed:
@@ -3803,7 +3858,7 @@ class DeveloperTab(QWidget):
 
         is_scrubbing = getattr(self, '_is_scrubbing_heavy_slider', False)
 
-        final_img, base_stretched, stars_stretched = apply_developer_pipeline(
+        final_img, out_str, out_grd, out_spt, out_stars = apply_developer_pipeline(
             target_img=target_img,
             state=state,
             precomputed_mask=precomputed_mask,
@@ -3816,19 +3871,30 @@ class DeveloperTab(QWidget):
             is_scrubbing=is_scrubbing,
             crop_rect=crop_rect,
             full_shape=full_shape,
-            return_intermediate=True,
-            precomputed_stretched_base=pre_stretched_base,
-            precomputed_stretched_stars=pre_stretched_stars,
+            precomputed_stretched_base=pre_stretched,
+            precomputed_graded_base=pre_graded,
+            precomputed_spatial_base=pre_spatial,
+            precomputed_stretched_stars=pre_stars,
+            return_milestones=True,
+            is_dragging_deconv=getattr(self, '_is_dragging_deconv', False),
         )
 
-        if is_preview and not is_scrubbing:
-            self._cache_pre_layers_key = stage2_key
-            self._cache_pre_layers_stretched = base_stretched
-            self._cache_pre_layers_stars = stars_stretched
-            self._cached_base_stretched = base_stretched
-            self._cached_stars_stretched = stars_stretched
-            self._cached_sky_mask = precomputed_mask
-            self._cached_rendered_image = final_img
+        if is_preview:
+            self._cache_ms_stretch_key = key_stretch
+            self._cache_ms_stretch_img = out_str
+            self._cache_ms_graded_key = key_graded
+            self._cache_ms_graded_img = out_grd
+            self._cache_ms_spatial_key = key_spatial
+            self._cache_ms_spatial_img = out_spt
+            self._cache_ms_stars_img = out_stars
+            if not is_scrubbing:
+                self._cache_pre_layers_key = key_spatial
+                self._cache_pre_layers_stretched = out_spt
+                self._cache_pre_layers_stars = out_stars
+                self._cached_base_stretched = out_spt
+                self._cached_stars_stretched = out_stars
+                self._cached_sky_mask = precomputed_mask
+                self._cached_rendered_image = final_img
 
         return final_img
 
@@ -6062,6 +6128,14 @@ class DeveloperTab(QWidget):
             getattr(self, 'slider_star_diff_radius', None),
             getattr(self, 'slider_star_diff_threshold', None),
             getattr(self, 'slider_star_diff_color', None),
+        ]
+        for s in heavy_sliders:
+            if s is not None:
+                s.sliderPressed.connect(self._on_heavy_slider_pressed)
+                s.sliderReleased.connect(self._on_slider_interaction_finished)
+
+        # Deslizadores de deconvolución (requieren mantener iteraciones de PSF en su propio arrastre)
+        deconv_sliders = [
             getattr(self, 'slider_deconv_iter', None),
             getattr(self, 'slider_deconv_fwhm', None),
             getattr(self, 'slider_deconv_deringing', None),
@@ -6069,9 +6143,9 @@ class DeveloperTab(QWidget):
             getattr(self, 'slider_deconv_aspect', None),
             getattr(self, 'slider_deconv_angle', None),
         ]
-        for s in heavy_sliders:
+        for s in deconv_sliders:
             if s is not None:
-                s.sliderPressed.connect(self._on_heavy_slider_pressed)
+                s.sliderPressed.connect(self._on_deconv_slider_pressed)
                 s.sliderReleased.connect(self._on_slider_interaction_finished)
 
         # Deslizadores de cálculo ligero (contraste, balance, tono, curvas, estrellas)
@@ -6168,6 +6242,13 @@ class DeveloperTab(QWidget):
         """Activa el modo de proxy borrador ultra-fluido (Draft 60 FPS) durante el arrastre continuo."""
         self._is_slider_pressed = True
         self._is_scrubbing_heavy_slider = True
+        self._is_dragging_deconv = False
+
+    def _on_deconv_slider_pressed(self):
+        """Activa el modo de arrastre de deconvolución manteniendo fidelidad del filtro de PSF."""
+        self._is_slider_pressed = True
+        self._is_scrubbing_heavy_slider = True
+        self._is_dragging_deconv = True
 
     def _on_slider_interaction_finished(self):
         """Finaliza inmediatamente el renderizado y los histogramas al soltar el ratón y consolida en historial."""
@@ -6175,6 +6256,7 @@ class DeveloperTab(QWidget):
             self._refine_timer.stop()
         self._is_slider_pressed = False
         self._is_scrubbing_heavy_slider = False
+        self._is_dragging_deconv = False
         self.update_stretch_preview(immediate=True)
         self._commit_action()
 
@@ -6184,6 +6266,7 @@ class DeveloperTab(QWidget):
             self._refine_timer.stop()
         self._is_slider_pressed = False
         self._is_scrubbing_heavy_slider = False
+        self._is_dragging_deconv = False
         self.update_stretch_preview(immediate=True)
         self._commit_action()
 
