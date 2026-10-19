@@ -588,6 +588,10 @@ class StretchingPanel(QWidget):
                 val = int(state["contrast_val"])
                 self.slider_contrast.setValue(val)
                 self.contrast_val = val / 100.0
+                if hasattr(self, 'lbl_contrast') and hasattr(self.lbl_contrast, 'setValue'):
+                    self.lbl_contrast.setValue(self.contrast_val)
+                elif hasattr(self, 'lbl_contrast') and hasattr(self.lbl_contrast, 'setText'):
+                    self.lbl_contrast.setText(f"{self.contrast_val:+.2f}")
         finally:
             self.block_signals(False)
 

@@ -3,7 +3,7 @@
 gui/developer/panels/panel_ground_sky.py - Panel desacoplado de Ajuste Tonal de Suelo y Máscaras de Horizonte.
 Gestiona el estado de la máscara de suelo, acceso a edición interactiva y controles tonales del paisaje.
 """
-from typing import Optional
+from typing import Optional, Dict, Any
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSlider, QFrame
@@ -140,3 +140,37 @@ class GroundSkyPanel(QWidget):
 
         self.sec_gnd_tone.set_content_widget(w_gnd_tone)
         main_layout.addWidget(self.sec_gnd_tone)
+
+    def get_state(self) -> Dict[str, Any]:
+        """Captura el estado de los controles tonales de suelo/paisaje."""
+        return {
+            "gnd_ev_val": self.slider_gnd_ev.value(),
+            "gnd_sh_val": self.slider_gnd_sh.value(),
+            "gnd_bp_val": self.slider_gnd_bp.value(),
+        }
+
+    def set_state(self, state: Dict[str, Any]) -> None:
+        """Restaura los controles tonales de suelo sin emisiones de señal redundantes."""
+        self.block_signals(True)
+        try:
+            if "gnd_ev_val" in state:
+                val = state["gnd_ev_val"]
+                self.slider_gnd_ev.setValue(val)
+                self.lbl_gnd_ev.setText(f"{val / 100.0:+.2f} EV")
+            if "gnd_sh_val" in state:
+                val = state["gnd_sh_val"]
+                self.slider_gnd_sh.setValue(val)
+                self.lbl_gnd_sh.setText(f"{val}%")
+            if "gnd_bp_val" in state:
+                val = state["gnd_bp_val"]
+                self.slider_gnd_bp.setValue(val)
+                self.lbl_gnd_bp.setText(f"{val / 1000.0:+.3f}")
+        finally:
+            self.block_signals(False)
+
+    def block_signals(self, blocked: bool) -> None:
+        """Bloquea las señales de los controles tonales de suelo."""
+        for w in (self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp):
+            if w is not None:
+                w.blockSignals(blocked)
+

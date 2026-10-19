@@ -6176,67 +6176,23 @@ class DeveloperTab(QWidget):
         self._commit_action()
 
     def _capture_state(self) -> dict:
-        """Captura una instantánea paramétrica ligera (~1 KB) de todos los ajustes del revelador."""
-        return {
-            "stretch_mode": getattr(self, "stretch_mode", "mtf"),
-            "ghs_color_mode": getattr(self, "ghs_color_mode", "luma"),
-            "ghs_sp_val": float(self.spin_ghs_sp.value()) if hasattr(self, 'spin_ghs_sp') else 0.02,
-            "ghs_d_val": float(self.spin_ghs_d.value()) if hasattr(self, 'spin_ghs_d') else 5.0,
-            "ghs_b_val": float(self.spin_ghs_b.value()) if hasattr(self, 'spin_ghs_b') else 2.0,
-            "ghs_hp_val": float(self.spin_ghs_hp.value()) if hasattr(self, 'spin_ghs_hp') else 0.0,
-            "ghs_lp_val": float(self.spin_ghs_lp.value()) if hasattr(self, 'spin_ghs_lp') else 0.0,
-            "ghs_bp_val": float(self.spin_ghs_bp.value()) if hasattr(self, 'spin_ghs_bp') else 0.0,
-            "lp_val": self.slider_lp.value(),
-            "lp_cx": float(self.spin_lp_cx.value()) if hasattr(self, 'spin_lp_cx') else 0.50,
-            "lp_cy": float(self.spin_lp_cy.value()) if hasattr(self, 'spin_lp_cy') else 0.90,
-            "lp_w": float(self.spin_lp_w.value()) if hasattr(self, 'spin_lp_w') else 0.60,
-            "lp_h": float(self.spin_lp_h.value()) if hasattr(self, 'spin_lp_h') else 0.45,
-            "lp_tint_idx": self.combo_lp_tint.currentIndex() if hasattr(self, 'combo_lp_tint') else 0,
-            "lp_custom_tint": getattr(self, 'lp_custom_tint', (1.0, 0.68, 0.22)),
-            "lp_tint_strength": self.slider_lp_tint_strength.value() if hasattr(self, 'slider_lp_tint_strength') else 50,
-            "lp_mode_idx": self.combo_lp_mode.currentIndex() if hasattr(self, 'combo_lp_mode') else 0,
-            "lp_legacy_1d": self.chk_lp_legacy_1d.isChecked() if hasattr(self, 'chk_lp_legacy_1d') else False,
-            "orton_strength": self.slider_orton.value() if hasattr(self, 'slider_orton') else 0,
-            "orton_radius": self.slider_orton_radius.value() if hasattr(self, 'slider_orton_radius') else 40,
-            "orton_threshold": self.slider_orton_threshold.value() if hasattr(self, 'slider_orton_threshold') else 5,
-            "orton_tint_idx": self.combo_orton_tint.currentIndex() if hasattr(self, 'combo_orton_tint') else 0,
-            "orton_mode_idx": self.combo_orton_mode.currentIndex() if hasattr(self, 'combo_orton_mode') else 0,
-            "star_diff_strength": self.slider_star_diff.value() if hasattr(self, 'slider_star_diff') else 0,
-            "star_diff_radius": self.slider_star_diff_radius.value() if hasattr(self, 'slider_star_diff_radius') else 20,
-            "star_diff_threshold": self.slider_star_diff_threshold.value() if hasattr(self, 'slider_star_diff_threshold') else 45,
-            "star_diff_color": self.slider_star_diff_color.value() if hasattr(self, 'slider_star_diff_color') else 50,
-            "star_diff_mode_idx": self.combo_star_diff_mode.currentIndex() if hasattr(self, 'combo_star_diff_mode') else 0,
-            "deconv_iterations": self.slider_deconv_iter.value() if hasattr(self, 'slider_deconv_iter') else 0,
-            "deconv_fwhm": self.slider_deconv_fwhm.value() if hasattr(self, 'slider_deconv_fwhm') else 30,
-            "deconv_deringing": self.slider_deconv_deringing.value() if hasattr(self, 'slider_deconv_deringing') else 8,
-            "deconv_damping": self.slider_deconv_damping.value() if hasattr(self, 'slider_deconv_damping') else 25,
-            "deconv_aspect": self.slider_deconv_aspect.value() if hasattr(self, 'slider_deconv_aspect') else 100,
-            "deconv_angle": self.slider_deconv_angle.value() if hasattr(self, 'slider_deconv_angle') else 0,
-            "deconv_model_idx": self.combo_deconv_model.currentIndex() if hasattr(self, 'combo_deconv_model') else 0,
-            "deconv_scope_idx": self.combo_deconv_scope.currentIndex() if hasattr(self, 'combo_deconv_scope') else 0,
-            "deconv_luma_only": self.chk_deconv_luma_only.isChecked() if hasattr(self, 'chk_deconv_luma_only') else True,
-            "layer_idx": self.combo_layer.currentIndex(),
-            "stars_val": self.slider_stars.value(),
-            "contrast_starless_val": self.slider_contrast_starless.value(),
-            "clarity_val": self.slider_clarity.value(),
-            "dehaze_val": self.slider_dehaze.value(),
-            "ond_est_val": self.slider_ond_est.value(),
-            "ond_bg_val": self.slider_ond_bg.value(),
-            "denoise_val": self.slider_denoise.value(),
-            "temp_val": self.slider_temp.value(),
-            "tint_val": self.slider_tint.value(),
-            "sat_sky_val": self.slider_sat_sky.value(),
-            "sat_gnd_val": self.slider_sat_gnd.value(),
-            "vibrance_val": self.slider_vibrance.value(),
-            "contrast_val": self.slider_contrast.value(),
-            "bp_val": float(self.spin_bp.value()),
-            "mtf_val": float(self.spin_mtf.value()),
-            "gnd_ev_val": self.slider_gnd_ev.value(),
-            "gnd_sh_val": self.slider_gnd_sh.value(),
-            "gnd_bp_val": self.slider_gnd_bp.value(),
-            "curves": self.curve_widget.get_state() if hasattr(self, 'curve_widget') else None,
-            "mask_layers": self.mask_layers_widget.get_state() if hasattr(self, 'mask_layers_widget') else None,
-        }
+        """Captura una instantánea paramétrica ligera (~1 KB) delegando en los paneles modulares."""
+        state = {}
+        if hasattr(self, 'panel_stretch'):
+            state.update(self.panel_stretch.get_state())
+        if hasattr(self, 'panel_lp'):
+            state.update(self.panel_lp.get_state())
+        if hasattr(self, 'panel_deconv'):
+            state.update(self.panel_deconv.get_state())
+        if hasattr(self, 'panel_color_wb'):
+            state.update(self.panel_color_wb.get_state())
+        if hasattr(self, 'panel_starnet'):
+            state.update(self.panel_starnet.get_state())
+        if hasattr(self, 'panel_ground_sky'):
+            state.update(self.panel_ground_sky.get_state())
+        state["curves"] = self.curve_widget.get_state() if hasattr(self, 'curve_widget') else None
+        state["mask_layers"] = self.mask_layers_widget.get_state() if hasattr(self, 'mask_layers_widget') else None
+        return state
 
     def _state_different(self, s1: Optional[dict], s2: Optional[dict]) -> bool:
         """Comprueba si dos instantáneas paramétricas presentan diferencias efectivas."""
@@ -6378,315 +6334,84 @@ class DeveloperTab(QWidget):
             self._update_undo_redo_buttons()
 
     def _restore_state(self, state: dict) -> None:
-        """Restaura todos los controles al estado paramétrico especificado y recalcula la vista."""
+        """Restaura todos los controles al estado paramétrico especificado delegando en los paneles modulares."""
         if not state:
             return
 
-        widgets_to_block = [
-            self.slider_lp, self.slider_lp_cx, self.spin_lp_cx,
-            self.slider_lp_cy, self.spin_lp_cy, self.slider_lp_w,
-            self.spin_lp_w, self.slider_lp_h, self.spin_lp_h,
-            self.slider_lp_tint_strength, self.combo_lp_tint,
-            self.combo_lp_mode, self.chk_lp_legacy_1d,
-            self.slider_stars, self.slider_contrast_starless,
-            self.slider_clarity, self.slider_dehaze, self.slider_ond_est,
-            self.slider_ond_bg, self.slider_denoise, 
-            self.slider_orton, self.slider_orton_radius, self.slider_orton_threshold,
-            self.combo_orton_tint, self.combo_orton_mode,
-            getattr(self, 'slider_star_diff', None),
-            getattr(self, 'slider_star_diff_radius', None),
-            getattr(self, 'slider_star_diff_threshold', None),
-            getattr(self, 'slider_star_diff_color', None),
-            getattr(self, 'combo_star_diff_mode', None),
-            getattr(self, 'slider_deconv_iter', None),
-            getattr(self, 'slider_deconv_fwhm', None),
-            getattr(self, 'slider_deconv_deringing', None),
-            getattr(self, 'slider_deconv_damping', None),
-            getattr(self, 'slider_deconv_aspect', None),
-            getattr(self, 'slider_deconv_angle', None),
-            getattr(self, 'combo_deconv_model', None),
-            getattr(self, 'combo_deconv_scope', None),
-            getattr(self, 'chk_deconv_luma_only', None),
-            self.slider_temp, self.slider_tint, self.spin_temp, self.spin_tint,
-            self.slider_sat_sky, self.slider_sat_gnd, self.slider_vibrance,
-            self.slider_contrast, self.combo_layer, self.spin_bp, self.slider_bp,
-            self.spin_mtf, self.slider_mtf,
-            self.spin_ghs_sp, self.slider_ghs_sp,
-            self.spin_ghs_d, self.slider_ghs_d,
-            self.spin_ghs_b, self.slider_ghs_b,
-            self.spin_ghs_hp, self.slider_ghs_hp,
-            self.spin_ghs_lp, self.slider_ghs_lp,
-            self.spin_ghs_bp, self.slider_ghs_bp,
-            self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp,
-        ]
-        for w in widgets_to_block:
-            if w is not None:
-                w.blockSignals(True)
+        if hasattr(self, 'panel_stretch'):
+            self.panel_stretch.set_state(state)
+            self.stretch_mode = self.panel_stretch.stretch_mode
+            self.ghs_color_mode = self.panel_stretch.ghs_color_mode
+            self.bp_val = self.panel_stretch.bp_val
+            self.mtf_val = self.panel_stretch.mtf_val
+            self.contrast_val = self.panel_stretch.contrast_val
+            self.ghs_sp_val = self.panel_stretch.ghs_sp_val
+            self.ghs_d_val = self.panel_stretch.ghs_d_val
+            self.ghs_b_val = self.panel_stretch.ghs_b_val
+            self.ghs_hp_val = self.panel_stretch.ghs_hp_val
+            self.ghs_lp_val = self.panel_stretch.ghs_lp_val
+            self.ghs_bp_val = self.panel_stretch.ghs_bp_val
 
-        if "stretch_mode" in state:
-            self._set_stretch_mode(state["stretch_mode"])
+        if hasattr(self, 'panel_lp'):
+            self.panel_lp.set_state(state)
+            self.lp_reduction = self.panel_lp.lp_reduction
+            self.lp_center_x = self.panel_lp.lp_center_x
+            self.lp_center_y = self.panel_lp.lp_center_y
+            self.lp_width = self.panel_lp.lp_width
+            self.lp_height = self.panel_lp.lp_height
+            self.lp_tint_type = self.panel_lp.lp_tint_type
+            self.lp_custom_tint = self.panel_lp.lp_custom_tint
+            self.lp_tint_strength = self.panel_lp.lp_tint_strength
+            self.lp_mode = self.panel_lp.lp_mode
+            self.lp_legacy_1d = self.panel_lp.lp_legacy_1d
 
-        if "ghs_color_mode" in state:
-            self._set_ghs_color_mode(state["ghs_color_mode"])
+        if hasattr(self, 'panel_deconv'):
+            self.panel_deconv.set_state(state)
+            self.deconv_iterations = self.panel_deconv.deconv_iterations
+            self.deconv_fwhm = self.panel_deconv.deconv_fwhm
+            self.deconv_deringing = self.panel_deconv.deconv_deringing
+            self.deconv_damping = self.panel_deconv.deconv_damping
+            self.deconv_aspect_ratio = self.panel_deconv.deconv_aspect_ratio
+            self.deconv_angle_deg = self.panel_deconv.deconv_angle_deg
+            self.deconv_model = self.panel_deconv.deconv_model
+            self.deconv_scope = self.panel_deconv.deconv_scope
+            self.deconv_luma_only = self.panel_deconv.deconv_luma_only
 
-        if "ghs_sp_val" in state and hasattr(self, 'spin_ghs_sp'):
-            self.spin_ghs_sp.setValue(state["ghs_sp_val"])
-            self.slider_ghs_sp.setValue(int(np.clip(state["ghs_sp_val"] * 10000.0, 0, 10000)))
+        if hasattr(self, 'panel_color_wb'):
+            self.panel_color_wb.set_state(state)
+            self.temp_val = self.panel_color_wb.temp_val
+            self.tint_val = self.panel_color_wb.tint_val
+            self.sat_sky_val = self.panel_color_wb.sat_sky_val
+            self.sat_gnd_val = self.panel_color_wb.sat_gnd_val
+            self.vibrance_val = self.panel_color_wb.vibrance_val
 
-        if "ghs_d_val" in state and hasattr(self, 'spin_ghs_d'):
-            self.spin_ghs_d.setValue(state["ghs_d_val"])
-            self.slider_ghs_d.setValue(int(np.clip(state["ghs_d_val"] * 100.0, 0, 2000)))
+        if hasattr(self, 'panel_starnet'):
+            self.panel_starnet.set_state(state)
+            self.view_layer_mode = self.panel_starnet.combo_layer.currentIndex()
+            self.star_intensity = self.panel_starnet.slider_stars.value() / 100.0
+            self.contrast_starless_val = self.panel_starnet.slider_contrast_starless.value() / 100.0
+            self.clarity_starless_val = self.panel_starnet.slider_clarity.value() / 100.0
+            self.dehaze_starless_val = self.panel_starnet.slider_dehaze.value() / 100.0
+            self.multiescala_estructura = self.panel_starnet.slider_ond_est.value() / 100.0
+            self.multiescala_fondo = self.panel_starnet.slider_ond_bg.value() / 100.0
+            self.denoise_strength = self.panel_starnet.slider_denoise.value() / 100.0
+            if hasattr(self, 'panel_effects'):
+                self.orton_strength = self.panel_effects.orton_strength
+                self.orton_radius = self.panel_effects.orton_radius
+                self.orton_threshold = self.panel_effects.orton_threshold
+                self.orton_tint_type = self.panel_effects.orton_tint_type
+                self.orton_mode = self.panel_effects.orton_mode
+                self.star_diff_strength = self.panel_effects.star_diff_strength
+                self.star_diff_radius = self.panel_effects.star_diff_radius
+                self.star_diff_threshold = self.panel_effects.star_diff_threshold
+                self.star_diff_color_boost = self.panel_effects.star_diff_color_boost
+                self.star_diff_mode = self.panel_effects.star_diff_mode
 
-        if "ghs_b_val" in state and hasattr(self, 'spin_ghs_b'):
-            self.spin_ghs_b.setValue(state["ghs_b_val"])
-            self.slider_ghs_b.setValue(int(np.clip(state["ghs_b_val"] * 100.0, 0, 1500)))
-
-        if "ghs_hp_val" in state and hasattr(self, 'spin_ghs_hp'):
-            self.spin_ghs_hp.setValue(state["ghs_hp_val"])
-            self.slider_ghs_hp.setValue(int(np.clip(state["ghs_hp_val"] * 1000.0, 0, 1000)))
-
-        if "ghs_lp_val" in state and hasattr(self, 'spin_ghs_lp'):
-            self.spin_ghs_lp.setValue(state["ghs_lp_val"])
-            self.slider_ghs_lp.setValue(int(np.clip(state["ghs_lp_val"] * 1000.0, 0, 1000)))
-
-        if "ghs_bp_val" in state and hasattr(self, 'spin_ghs_bp'):
-            self.spin_ghs_bp.setValue(state["ghs_bp_val"])
-            self.slider_ghs_bp.setValue(int(np.clip((state["ghs_bp_val"] / 0.20) * 2000.0, 0, 2000)))
-
-        if "lp_val" in state:
-            self.slider_lp.setValue(state["lp_val"])
-            self.lp_reduction = state["lp_val"] / 100.0
-            self.lbl_lp.setText(f"{state['lp_val']}%")
-
-        if "lp_cx" in state and hasattr(self, 'spin_lp_cx'):
-            self.spin_lp_cx.setValue(state["lp_cx"])
-            self.slider_lp_cx.setValue(int(round(state["lp_cx"] * 100.0)))
-            self.lp_center_x = state["lp_cx"]
-
-        if "lp_cy" in state and hasattr(self, 'spin_lp_cy'):
-            self.spin_lp_cy.setValue(state["lp_cy"])
-            self.slider_lp_cy.setValue(int(round(state["lp_cy"] * 100.0)))
-            self.lp_center_y = state["lp_cy"]
-
-        if "lp_w" in state and hasattr(self, 'spin_lp_w'):
-            self.spin_lp_w.setValue(state["lp_w"])
-            self.slider_lp_w.setValue(int(round(state["lp_w"] * 100.0)))
-            self.lp_width = state["lp_w"]
-
-        if "lp_h" in state and hasattr(self, 'spin_lp_h'):
-            self.spin_lp_h.setValue(state["lp_h"])
-            self.slider_lp_h.setValue(int(round(state["lp_h"] * 100.0)))
-            self.lp_height = state["lp_h"]
-
-        if "lp_tint_idx" in state and hasattr(self, 'combo_lp_tint'):
-            self.combo_lp_tint.setCurrentIndex(state["lp_tint_idx"])
-            self.lp_tint_type = self.combo_lp_tint.currentData()
-
-        if "lp_custom_tint" in state:
-            self.lp_custom_tint = state["lp_custom_tint"]
-
-        if "lp_tint_strength" in state and hasattr(self, 'slider_lp_tint_strength'):
-            self.slider_lp_tint_strength.setValue(state["lp_tint_strength"])
-            self.lp_tint_strength = state["lp_tint_strength"] / 100.0
-            self.lbl_lp_tint_strength.setText(f"{state['lp_tint_strength']}%")
-
-        if "lp_mode_idx" in state and hasattr(self, 'combo_lp_mode'):
-            self.combo_lp_mode.setCurrentIndex(state["lp_mode_idx"])
-            self.lp_mode = self.combo_lp_mode.currentData()
-
-        if "lp_legacy_1d" in state and hasattr(self, 'chk_lp_legacy_1d'):
-            self.chk_lp_legacy_1d.setChecked(state["lp_legacy_1d"])
-            self.lp_legacy_1d = state["lp_legacy_1d"]
-
-        if "orton_strength" in state and hasattr(self, 'slider_orton'):
-            self.slider_orton.setValue(state["orton_strength"])
-            self.orton_strength = state["orton_strength"] / 100.0
-            self.lbl_orton.setText(f"{state['orton_strength']}%")
-
-        if "orton_radius" in state and hasattr(self, 'slider_orton_radius'):
-            self.slider_orton_radius.setValue(state["orton_radius"])
-            self.orton_radius = float(state["orton_radius"])
-            self.lbl_orton_radius.setText(f"{state['orton_radius']} px")
-
-        if "orton_threshold" in state and hasattr(self, 'slider_orton_threshold'):
-            self.slider_orton_threshold.setValue(state["orton_threshold"])
-            self.orton_threshold = state["orton_threshold"] / 100.0
-            self.lbl_orton_threshold.setText(f"{self.orton_threshold:.2f}")
-
-        if "orton_tint_idx" in state and hasattr(self, 'combo_orton_tint'):
-            self.combo_orton_tint.setCurrentIndex(state["orton_tint_idx"])
-            self.orton_tint_type = self.combo_orton_tint.currentData()
-
-        if "orton_mode_idx" in state and hasattr(self, 'combo_orton_mode'):
-            self.combo_orton_mode.setCurrentIndex(state["orton_mode_idx"])
-            self.orton_mode = self.combo_orton_mode.currentData()
-
-        if "star_diff_strength" in state and hasattr(self, 'slider_star_diff'):
-            self.slider_star_diff.setValue(state["star_diff_strength"])
-            self.star_diff_strength = state["star_diff_strength"] / 100.0
-            self.lbl_star_diff.setText(f"{state['star_diff_strength']}%")
-
-        if "star_diff_radius" in state and hasattr(self, 'slider_star_diff_radius'):
-            self.slider_star_diff_radius.setValue(state["star_diff_radius"])
-            self.star_diff_radius = float(state["star_diff_radius"])
-            self.lbl_star_diff_radius.setText(f"{state['star_diff_radius']} px")
-
-        if "star_diff_threshold" in state and hasattr(self, 'slider_star_diff_threshold'):
-            self.slider_star_diff_threshold.setValue(state["star_diff_threshold"])
-            self.star_diff_threshold = state["star_diff_threshold"] / 100.0
-            self.lbl_star_diff_threshold.setText(f"{self.star_diff_threshold:.2f}")
-
-        if "star_diff_color" in state and hasattr(self, 'slider_star_diff_color'):
-            self.slider_star_diff_color.setValue(state["star_diff_color"])
-            self.star_diff_color_boost = state["star_diff_color"] / 100.0
-            self.lbl_star_diff_color.setText(f"{state['star_diff_color']}%")
-
-        if "star_diff_mode_idx" in state and hasattr(self, 'combo_star_diff_mode'):
-            self.combo_star_diff_mode.setCurrentIndex(state["star_diff_mode_idx"])
-            modes = ["screen", "soft_light", "additive"]
-            idx = state["star_diff_mode_idx"]
-            self.star_diff_mode = modes[idx] if 0 <= idx < len(modes) else "screen"
-
-        if "deconv_iterations" in state and hasattr(self, 'slider_deconv_iter'):
-            self.slider_deconv_iter.setValue(state["deconv_iterations"])
-            self.deconv_iterations = int(state["deconv_iterations"])
-            txt = f"{self.deconv_iterations}" if self.deconv_iterations > 0 else "0 (Off)"
-            self.lbl_deconv_iter.setText(txt)
-
-        if "deconv_fwhm" in state and hasattr(self, 'slider_deconv_fwhm'):
-            self.slider_deconv_fwhm.setValue(state["deconv_fwhm"])
-            self.deconv_fwhm = float(state["deconv_fwhm"]) / 10.0
-            self.lbl_deconv_fwhm.setText(f"{self.deconv_fwhm:.1f} px")
-
-        if "deconv_deringing" in state and hasattr(self, 'slider_deconv_deringing'):
-            self.slider_deconv_deringing.setValue(state["deconv_deringing"])
-            self.deconv_deringing = float(state["deconv_deringing"]) / 1000.0
-            self.lbl_deconv_deringing.setText(f"{self.deconv_deringing:.3f}")
-
-        if "deconv_damping" in state and hasattr(self, 'slider_deconv_damping'):
-            self.slider_deconv_damping.setValue(state["deconv_damping"])
-            self.deconv_damping = float(state["deconv_damping"]) / 100.0
-            self.lbl_deconv_damping.setText(f"{state['deconv_damping']}%")
-
-        if "deconv_aspect" in state and hasattr(self, 'slider_deconv_aspect'):
-            self.slider_deconv_aspect.setValue(state["deconv_aspect"])
-            self.deconv_aspect_ratio = float(state["deconv_aspect"]) / 100.0
-            self.lbl_deconv_aspect.setText(f"{self.deconv_aspect_ratio:.2f}x")
-
-        if "deconv_angle" in state and hasattr(self, 'slider_deconv_angle'):
-            self.slider_deconv_angle.setValue(state["deconv_angle"])
-            self.deconv_angle_deg = float(state["deconv_angle"])
-            self.lbl_deconv_angle.setText(f"{state['deconv_angle']}°")
-
-        if "deconv_model_idx" in state and hasattr(self, 'combo_deconv_model'):
-            self.combo_deconv_model.setCurrentIndex(state["deconv_model_idx"])
-            self.deconv_model = self.combo_deconv_model.itemData(state["deconv_model_idx"]) or "moffat"
-
-        if "deconv_scope_idx" in state and hasattr(self, 'combo_deconv_scope'):
-            self.combo_deconv_scope.setCurrentIndex(state["deconv_scope_idx"])
-            self.deconv_scope = self.combo_deconv_scope.itemData(state["deconv_scope_idx"]) or "all"
-
-        if "deconv_luma_only" in state and hasattr(self, 'chk_deconv_luma_only'):
-            self.chk_deconv_luma_only.setChecked(state["deconv_luma_only"])
-            self.deconv_luma_only = bool(state["deconv_luma_only"])
-
-        if "layer_idx" in state:
-            self.combo_layer.setCurrentIndex(state["layer_idx"])
-            self.view_layer_mode = state["layer_idx"]
-
-        if "stars_val" in state:
-            self.slider_stars.setValue(state["stars_val"])
-            self.star_intensity = state["stars_val"] / 100.0
-            self.lbl_stars.setText(f"{state['stars_val']}%")
-
-        if "contrast_starless_val" in state:
-            self.slider_contrast_starless.setValue(state["contrast_starless_val"])
-            self.contrast_starless_val = state["contrast_starless_val"] / 100.0
-            self.lbl_contrast_starless.setText(f"{self.contrast_starless_val:+.2f}")
-
-        if "clarity_val" in state:
-            self.slider_clarity.setValue(state["clarity_val"])
-            self.clarity_starless_val = state["clarity_val"] / 100.0
-            self.lbl_clarity.setText(f"{self.clarity_starless_val:+.2f}")
-
-        if "dehaze_val" in state:
-            self.slider_dehaze.setValue(state["dehaze_val"])
-            self.dehaze_starless_val = state["dehaze_val"] / 100.0
-            self.lbl_dehaze.setText(f"{self.dehaze_starless_val:+.2f}")
-
-        if "ond_est_val" in state:
-            self.slider_ond_est.setValue(state["ond_est_val"])
-            self.multiescala_estructura = state["ond_est_val"] / 100.0
-            self.lbl_ond_est.setText(f"{self.multiescala_estructura:+.2f}")
-
-        if "ond_bg_val" in state:
-            self.slider_ond_bg.setValue(state["ond_bg_val"])
-            self.multiescala_fondo = state["ond_bg_val"] / 100.0
-            self.lbl_ond_bg.setText(f"{state['ond_bg_val']}%")
-
-        if "denoise_val" in state:
-            self.slider_denoise.setValue(state["denoise_val"])
-            self.denoise_strength = state["denoise_val"] / 100.0
-            self.lbl_denoise.setText(f"{state['denoise_val']}%")
-
-        if "temp_val" in state:
-            self.slider_temp.setValue(state["temp_val"])
-            self.temp_val = state["temp_val"] / 1000.0
-            if hasattr(self, 'spin_temp'):
-                self.spin_temp.setValue(self.temp_val)
-
-        if "tint_val" in state:
-            self.slider_tint.setValue(state["tint_val"])
-            self.tint_val = state["tint_val"] / 1000.0
-            if hasattr(self, 'spin_tint'):
-                self.spin_tint.setValue(self.tint_val)
-
-        if "sat_sky_val" in state:
-            self.slider_sat_sky.setValue(state["sat_sky_val"])
-            self.sat_sky_val = state["sat_sky_val"] / 100.0
-            self.lbl_sat_sky.setText(f"{self.sat_sky_val:.2f}x")
-
-        if "sat_gnd_val" in state:
-            self.slider_sat_gnd.setValue(state["sat_gnd_val"])
-            self.sat_gnd_val = state["sat_gnd_val"] / 100.0
-            self.lbl_sat_gnd.setText(f"{self.sat_gnd_val:.2f}x")
-
-        if "vibrance_val" in state:
-            self.slider_vibrance.setValue(state["vibrance_val"])
-            self.vibrance_val = state["vibrance_val"] / 100.0
-            self.lbl_vibrance.setText(f"{self.vibrance_val:+.2f}")
-
-        if "contrast_val" in state:
-            self.slider_contrast.setValue(state["contrast_val"])
-            self.contrast_val = state["contrast_val"] / 100.0
-            self.lbl_contrast.setText(f"{self.contrast_val:+.2f}")
-
-        if "bp_val" in state:
-            self.spin_bp.setValue(state["bp_val"])
-            self.slider_bp.setValue(int(np.clip((state["bp_val"] / 0.20) * 2000.0, 0, 2000)))
-
-        if "mtf_val" in state:
-            self.spin_mtf.setValue(state["mtf_val"])
-            self.slider_mtf.setValue(int(np.clip((state["mtf_val"] / 0.50) * 2000.0, 1, 2000)))
-
-        if "gnd_ev_val" in state:
-            self.slider_gnd_ev.setValue(state["gnd_ev_val"])
-            self.gnd_ev_val = state["gnd_ev_val"] / 100.0
-            self.lbl_gnd_ev.setText(f"{self.gnd_ev_val:+.2f} EV")
-
-        if "gnd_sh_val" in state:
-            self.slider_gnd_sh.setValue(state["gnd_sh_val"])
-            self.gnd_shadows_val = state["gnd_sh_val"] / 100.0
-            self.lbl_gnd_sh.setText(f"{state['gnd_sh_val']}%")
-
-        if "gnd_bp_val" in state:
-            self.slider_gnd_bp.setValue(state["gnd_bp_val"])
-            self.gnd_bp_val = state["gnd_bp_val"] / 1000.0
-            self.lbl_gnd_bp.setText(f"{self.gnd_bp_val:+.3f}")
-
-        for w in widgets_to_block:
-            if w is not None:
-                w.blockSignals(False)
+        if hasattr(self, 'panel_ground_sky'):
+            self.panel_ground_sky.set_state(state)
+            self.gnd_ev_val = self.panel_ground_sky.slider_gnd_ev.value() / 100.0
+            self.gnd_shadows_val = self.panel_ground_sky.slider_gnd_sh.value() / 100.0
+            self.gnd_bp_val = self.panel_ground_sky.slider_gnd_bp.value() / 1000.0
 
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_ground_tone_values(

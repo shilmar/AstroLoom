@@ -1,7 +1,7 @@
 """Orton Glow and Star Diffusion visual effects panels for AstroLoom Developer."""
 from __future__ import annotations
 
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict, Any
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QGroupBox, QSlider, QComboBox
@@ -550,3 +550,88 @@ class EffectsPanel(QWidget):
         """Reset Star Diffusion effect to defaults."""
         self.set_star_diff_values(0, 20, 45, 50, 0)
         self._emit_star_diff_changed()
+
+    def get_state(self) -> Dict[str, Any]:
+        """Captura el estado paramétrico de los efectos Orton y Difusión de estrellas."""
+        return {
+            "orton_strength": self.slider_orton.value(),
+            "orton_radius": self.slider_orton_radius.value(),
+            "orton_threshold": self.slider_orton_threshold.value(),
+            "orton_tint_idx": self.combo_orton_tint.currentIndex(),
+            "orton_mode_idx": self.combo_orton_mode.currentIndex(),
+            "star_diff_strength": self.slider_star_diff.value(),
+            "star_diff_radius": self.slider_star_diff_radius.value(),
+            "star_diff_threshold": self.slider_star_diff_threshold.value(),
+            "star_diff_color": self.slider_star_diff_color.value(),
+            "star_diff_mode_idx": self.combo_star_diff_mode.currentIndex(),
+        }
+
+    def set_state(self, state: Dict[str, Any]) -> None:
+        """Restaura los controles de efectos visuales sin disparar eventos redundantes."""
+        self.block_signals(True)
+        try:
+            if "orton_strength" in state:
+                val = state["orton_strength"]
+                self.slider_orton.setValue(val)
+                self._orton_strength = val / 100.0
+                self.lbl_orton.setText(f"{val}%")
+            if "orton_radius" in state:
+                val = state["orton_radius"]
+                self.slider_orton_radius.setValue(val)
+                self._orton_radius = float(val)
+                self.lbl_orton_radius.setText(f"{val} px")
+            if "orton_threshold" in state:
+                val = state["orton_threshold"]
+                self.slider_orton_threshold.setValue(val)
+                self._orton_threshold = val / 100.0
+                self.lbl_orton_threshold.setText(f"{self._orton_threshold:.2f}")
+            if "orton_tint_idx" in state:
+                idx = state["orton_tint_idx"]
+                self.combo_orton_tint.setCurrentIndex(idx)
+                self._orton_tint_type = self.combo_orton_tint.currentData() or "warm_gold"
+            if "orton_mode_idx" in state:
+                idx = state["orton_mode_idx"]
+                self.combo_orton_mode.setCurrentIndex(idx)
+                self._orton_mode = self.combo_orton_mode.currentData() or "soft_light"
+
+            if "star_diff_strength" in state:
+                val = state["star_diff_strength"]
+                self.slider_star_diff.setValue(val)
+                self._star_diff_strength = val / 100.0
+                self.lbl_star_diff.setText(f"{val}%")
+            if "star_diff_radius" in state:
+                val = state["star_diff_radius"]
+                self.slider_star_diff_radius.setValue(val)
+                self._star_diff_radius = float(val)
+                self.lbl_star_diff_radius.setText(f"{val} px")
+            if "star_diff_threshold" in state:
+                val = state["star_diff_threshold"]
+                self.slider_star_diff_threshold.setValue(val)
+                self._star_diff_threshold = val / 100.0
+                self.lbl_star_diff_threshold.setText(f"{self._star_diff_threshold:.2f}")
+            if "star_diff_color" in state:
+                val = state["star_diff_color"]
+                self.slider_star_diff_color.setValue(val)
+                self._star_diff_color_boost = val / 100.0
+                self.lbl_star_diff_color.setText(f"{val}%")
+            if "star_diff_mode_idx" in state:
+                idx = state["star_diff_mode_idx"]
+                self.combo_star_diff_mode.setCurrentIndex(idx)
+                modes = ["screen", "soft_light", "additive"]
+                self._star_diff_mode = modes[idx] if 0 <= idx < len(modes) else "screen"
+        finally:
+            self.block_signals(False)
+
+    def block_signals(self, blocked: bool) -> None:
+        """Bloquea las señales de los widgets y la emisión reactiva interna."""
+        self._guard = blocked
+        for w in (
+            self.slider_orton, self.slider_orton_radius, self.slider_orton_threshold,
+            self.combo_orton_tint, self.combo_orton_mode,
+            self.slider_star_diff, self.slider_star_diff_radius,
+            self.slider_star_diff_threshold, self.slider_star_diff_color,
+            self.combo_star_diff_mode
+        ):
+            if w is not None:
+                w.blockSignals(blocked)
+

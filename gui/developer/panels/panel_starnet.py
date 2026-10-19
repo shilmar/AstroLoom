@@ -4,7 +4,7 @@ gui/developer/panels/panel_starnet.py - Panel modular de StarNet++ AI y Desacopl
 Encapsula la configuración de stride, ejecución de StarNet, controles de detalle de capa de estrellas
 y fondo cósmico, e integra el submódulo de efectos visuales (Orton y Star Diffusion).
 """
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict, Any
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox,
     QPushButton, QFrame, QComboBox, QSlider
@@ -287,3 +287,72 @@ class StarNetPanel(QWidget):
         for ctrl in controls:
             if ctrl is not None:
                 ctrl.setEnabled(enabled)
+
+    def get_state(self) -> Dict[str, Any]:
+        """Captura el estado de desacoplo de estrellas y fondo cósmico, incluyendo efectos."""
+        state = {
+            "layer_idx": self.combo_layer.currentIndex(),
+            "stars_val": self.slider_stars.value(),
+            "contrast_starless_val": self.slider_contrast_starless.value(),
+            "clarity_val": self.slider_clarity.value(),
+            "dehaze_val": self.slider_dehaze.value(),
+            "ond_est_val": self.slider_ond_est.value(),
+            "ond_bg_val": self.slider_ond_bg.value(),
+            "denoise_val": self.slider_denoise.value(),
+        }
+        if hasattr(self, 'panel_effects'):
+            state.update(self.panel_effects.get_state())
+        return state
+
+    def set_state(self, state: Dict[str, Any]) -> None:
+        """Restaura los controles de StarNet y efectos delegados sin emisiones redundantes."""
+        self.block_signals(True)
+        try:
+            if "layer_idx" in state:
+                self.combo_layer.setCurrentIndex(state["layer_idx"])
+            if "stars_val" in state:
+                val = state["stars_val"]
+                self.slider_stars.setValue(val)
+                self.lbl_stars.setText(f"{val}%")
+            if "contrast_starless_val" in state:
+                val = state["contrast_starless_val"]
+                self.slider_contrast_starless.setValue(val)
+                self.lbl_contrast_starless.setText(f"{val / 100.0:+.2f}")
+            if "clarity_val" in state:
+                val = state["clarity_val"]
+                self.slider_clarity.setValue(val)
+                self.lbl_clarity.setText(f"{val / 100.0:+.2f}")
+            if "dehaze_val" in state:
+                val = state["dehaze_val"]
+                self.slider_dehaze.setValue(val)
+                self.lbl_dehaze.setText(f"{val / 100.0:+.2f}")
+            if "ond_est_val" in state:
+                val = state["ond_est_val"]
+                self.slider_ond_est.setValue(val)
+                self.lbl_ond_est.setText(f"{val / 100.0:+.2f}")
+            if "ond_bg_val" in state:
+                val = state["ond_bg_val"]
+                self.slider_ond_bg.setValue(val)
+                self.lbl_ond_bg.setText(f"{val}%")
+            if "denoise_val" in state:
+                val = state["denoise_val"]
+                self.slider_denoise.setValue(val)
+                self.lbl_denoise.setText(f"{val}%")
+            if hasattr(self, 'panel_effects'):
+                self.panel_effects.set_state(state)
+        finally:
+            self.block_signals(False)
+
+    def block_signals(self, blocked: bool) -> None:
+        """Bloquea las señales de los widgets dependientes de StarNet y sus efectos."""
+        for w in (
+            self.combo_layer, self.slider_stars,
+            self.slider_contrast_starless, self.slider_clarity,
+            self.slider_dehaze, self.slider_ond_est,
+            self.slider_ond_bg, self.slider_denoise
+        ):
+            if w is not None:
+                w.blockSignals(blocked)
+        if hasattr(self, 'panel_effects'):
+            self.panel_effects.block_signals(blocked)
+
