@@ -55,9 +55,23 @@ class ResolutionPyramid:
         else:
             self.levels.append(full_res_image)
 
-        # Level 2+: Halved downsampling from Level 1
-        current = self.levels[1]
-        for _ in range(2, max_levels):
+        # Level 2: Draft (calibrado a max 1000 px para arrastre a 60 FPS en 4K)
+        lvl1 = self.levels[1]
+        h1, w1 = lvl1.shape[:2]
+        max_d1 = max(h1, w1)
+        max_draft_dim = 1000
+        if max_d1 > max_draft_dim:
+            scale_draft = max_draft_dim / float(max_d1)
+            dw = (int(w1 * scale_draft) // 4) * 4
+            dh = (int(h1 * scale_draft) // 4) * 4
+            lvl2 = cv2.resize(lvl1, (dw, dh), interpolation=cv2.INTER_AREA)
+            self.levels.append(np.ascontiguousarray(lvl2, dtype=np.float32))
+        else:
+            self.levels.append(lvl1)
+
+        # Level 3+: Halved downsampling from Level 2
+        current = self.levels[2]
+        for _ in range(3, max_levels):
             ch, cw = current.shape[:2]
             if cw <= 200 or ch <= 150:
                 break

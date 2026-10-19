@@ -930,6 +930,7 @@ class DeveloperTab(QWidget):
 
         self.sec_histogram = CollapsibleSection("Histograma RGB en Vivo", is_expanded=True, icon_name="activity")
         self.sec_histogram.set_content_widget(self.live_histogram)
+        self.sec_histogram.toggled.connect(lambda exp: self._refresh_histograms_now() if exp else None)
         right_layout.addWidget(self.sec_histogram)
 
         # Capas y Máscaras (sec_masks)
@@ -3774,8 +3775,12 @@ class DeveloperTab(QWidget):
             st_img = self.image_stars
             sl_img = self.image_starless
         else:
-            st_img = self.proxy_stars if self.proxy_stars is not None else self.image_stars
-            sl_img = self.proxy_starless if self.proxy_starless is not None else self.image_starless
+            if getattr(self, '_is_scrubbing_heavy_slider', False):
+                st_img = self.draft_stars if self.draft_stars is not None else self.proxy_stars
+                sl_img = self.draft_starless if self.draft_starless is not None else self.proxy_starless
+            else:
+                st_img = self.proxy_stars if self.proxy_stars is not None else self.image_stars
+                sl_img = self.proxy_starless if self.proxy_starless is not None else self.image_starless
 
         # Build DeveloperState snapshot
         state = DeveloperState.from_dict(self._capture_state())
@@ -3857,15 +3862,20 @@ class DeveloperTab(QWidget):
     def _refresh_histograms_now(self):
         if getattr(self, '_hist_throttle_timer', None) is not None:
             self._hist_throttle_timer.stop()
+        # Omitir cálculo síncrono durante arrastre activo para garantizar 60 FPS
+        if getattr(self, '_is_scrubbing_heavy_slider', False) or getattr(self, '_is_slider_pressed', False):
+            return
         stretched = getattr(self, '_last_rendered_preview', None)
         if stretched is None or self.is_zoomed_100:
             return
-        if hasattr(self, 'curve_widget'):
-            self.curve_widget.set_histogram_from_image(stretched)
-        if hasattr(self, 'live_histogram'):
+        # Evaluar estrictamente los histogramas cuyos contenedores están visibles
+        if hasattr(self, 'live_histogram') and self.live_histogram.isVisible():
             self.live_histogram.update_from_image(stretched)
-        if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.update_active_layer_histogram()
+        if hasattr(self, 'curve_widget') and self.curve_widget.isVisible():
+            self.curve_widget.set_histogram_from_image(stretched)
+        if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.isVisible():
+            if getattr(self.mask_layers_widget, 'sec_layer_curve', None) and self.mask_layers_widget.sec_layer_curve.is_expanded:
+                self.mask_layers_widget.update_active_layer_histogram()
 
     def _do_update_stretch_preview(self):
         if getattr(self, '_is_rendering_preview', False):
@@ -3918,9 +3928,9 @@ class DeveloperTab(QWidget):
                     qimg_b = QImage(disp_bc.data, w_b, h_b, 3 * w_b, QImage.Format_RGB888)
                     self.canvas.set_before_pixmap(QPixmap.fromImage(qimg_b))
 
-                # Actualización diferida del histograma durante arrastre
+                # Actualización diferida del histograma durante reposo
                 if not self.is_zoomed_100 and hasattr(self, '_hist_throttle_timer'):
-                    if not self._hist_throttle_timer.isActive():
+                    if not getattr(self, '_is_scrubbing_heavy_slider', False) and not self._hist_throttle_timer.isActive():
                         self._hist_throttle_timer.start(70)
 
                 self._update_canvas_info_label()
@@ -6084,6 +6094,7 @@ class DeveloperTab(QWidget):
         ]
         for s in light_sliders:
             if s is not None:
+                s.sliderPressed.connect(self._on_heavy_slider_pressed)
                 s.sliderReleased.connect(self._on_slider_interaction_finished)
 
         if hasattr(self, 'mask_layers_widget'):
@@ -6118,6 +6129,7 @@ class DeveloperTab(QWidget):
             ]
             for s in mask_light_sliders:
                 if s is not None:
+                    s.sliderPressed.connect(self._on_heavy_slider_pressed)
                     s.sliderReleased.connect(self._on_slider_interaction_finished)
 
         self.spin_bp.editingFinished.connect(self._on_control_committed)
