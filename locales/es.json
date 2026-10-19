@@ -5,9 +5,9 @@
     "version": "1.0"
   },
   "app": {
-    "title": "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.10.0)",
+    "title": "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.10.1)",
     "ready": "Listo para procesar",
-    "engine_badge": "● AstroLoom Engine v0.10.0",
+    "engine_badge": "● AstroLoom Engine v0.10.1",
     "ram_monitor": "RAM: {pct}% ({used:.1f} / {total:.1f} GB)",
     "language": "Idioma",
     "tabs": {

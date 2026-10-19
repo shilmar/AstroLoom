@@ -191,7 +191,9 @@ Esta sección permite separar la fotografía en dos realidades independientes: e
 * **Ondículas (Estructura):** Aumenta el relieve y la tridimensionalidad de las nubes moleculares galácticas.
 * **Ondículas (Fondo):** Suaviza el grano y el ruido de alta frecuencia del fondo del cielo.
 * **Contraste Nebular:** Otorga mayor fuerza y dinamismo a las nubes de gas.
-* **Reducción de Ruido:** Limpia el ruido cromático y de luminancia del fondo estelar.
+* **Reducción de Ruido (Astro Denoise Multietapa):** Limpia el ruido preservando el detalle mediante filtrado bilateral en luminancia y suavizado de crominancia en espacio YCrCb. Mediante el icono de engranaje (⚙️), permite acceder a:
+  * **Ruido Color (Croma):** Filtra manchas térmicas y ruido de color del sensor sin lavar los colores estelares ni los filamentos tenues.
+  * **Máscara Bordes/Sombras:** Pondera la doble máscara inteligente (luminancia invertida para actuar en fondos oscuros de bajo SNR y gradiente Sobel para blindar estrellas y filamentos de contraste).
 
 #### ✨ Efecto Orton y Glow Específico para Polvo Galáctico
 Crea un halo de luz celestial suave y etéreo alrededor de las partes más luminosas de la galaxia, emulando la técnica analógica inventada por Michael Orton.

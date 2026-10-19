@@ -5,6 +5,31 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-19
+
+### Añadido
+* **Motor Multietapa Astro Denoise con Desacoplamiento Cromático y Máscaras Espaciales:**
+  - Separación de canales de luminancia y crominancia en espacio de color YCrCb (`core/denoise.py`).
+  - Suavizado selectivo de crominancia (`denoise_color`) para erradicar ruido de color de sensor y manchas térmicas sin degradar la definición estructural ni los colores de estrellas.
+  - Filtrado bilateral de luminancia guiado por doble máscara adaptativa (`denoise_mask`):
+    - *Máscara de Luminancia Invertida:* Concentra el filtrado en zonas de cielo oscuro de baja relación señal/ruido sin empastar nebulosas ni altas luces.
+    - *Máscara de Gradiente Sobel:* Detecta y blinda estrellas, filamentos y límites de contraste para preservar la nitidez.
+  - Controles avanzados desplegables mediante botón de engranaje (⚙) tanto en el panel acordeón (`panel_starnet.py`) como en la tarjeta de capa *Fondo Nebular (Starless)* en la pila de capas (`mask_layers_widget.py`).
+  - Sincronización bidireccional continua de deslizadores de ruido, compatibilidad con Deshacer / Rehacer y persistencia en presets de revelado.
+* **Previsualización de Estirado en Tiempo Real a >1.000 FPS (Display Transfer Function / 1D LUT):**
+  - Mapeo 1D instantáneo por Look-Up Table (LUT) de 65.536 valores de cuantización (16 bits) para deslizadores de estirado (exposición, contraste, sombras, altas luces y GHS), manteniendo intactos los datos originales en coma flotante de 32 bits en memoria.
+
+### Optimizado
+* **Desacoplamiento y Estabilidad de Previsualización (Anti-Jumping):**
+  - Desacoplamiento de gradientes espaciales y composición de estrellas de la ruta rápida de LUT, eliminando saltos bruscos entre estados y garantizando previsualizaciones estables y continuas.
+
+### Corregido
+* **Alineación Vertical y Estandarización en Pila de Capas:**
+  - Alineación vertical centrada (`Qt.AlignVCenter`) en `PrecisionSlider` para etiquetas, controles deslizantes, indicadores de modificación y cajas de entrada numéricas.
+  - Estandarización del ancho de etiqueta a 130 px en todos los deslizadores de la pila de capas para un alineamiento horizontal limpio y coherente.
+* **Estilos CSS y Colisión de Títulos en Cajas de Grupo:**
+  - Corrección de colisión de títulos en `QGroupBox` (`#sl_star_diff_box` y `#sl_orton_box`) mediante márgenes superiores (`margin-top: 14px`) y rellenos (`padding-top: 14px`), evitando solapamientos y cortes con los bordes de la interfaz.
+
 ## [0.10.0] - 2026-10-19
 
 ### Añadido
