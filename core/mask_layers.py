@@ -22,26 +22,26 @@ except ImportError:
 if HAS_NUMBA:
     @njit(parallel=True, fastmath=True)
     def _numba_fused_layer_adjust(
-        img, mask, weight_scale,
+        orig_img, adj_source, mask, weight_scale,
         gain_r, gain_g, gain_b,
         shadows, highlights,
         has_curve, curve_lut
     ):
-        h, w, c = img.shape
-        out = np.empty_like(img)
+        h, w, c = orig_img.shape
+        out = np.empty_like(orig_img)
         lut_len = len(curve_lut) - 1 if has_curve else 0
 
         for i in prange(h):
             for j in range(w):
                 m = mask[i, j] * weight_scale
                 if m <= 1e-4:
-                    out[i, j, 0] = img[i, j, 0]
-                    out[i, j, 1] = img[i, j, 1]
-                    out[i, j, 2] = img[i, j, 2]
+                    out[i, j, 0] = orig_img[i, j, 0]
+                    out[i, j, 1] = orig_img[i, j, 1]
+                    out[i, j, 2] = orig_img[i, j, 2]
                     continue
 
                 for k in range(3):
-                    val = img[i, j, k]
+                    val = adj_source[i, j, k]
                     if k == 0:
                         val *= gain_r
                     elif k == 1:
@@ -75,7 +75,7 @@ if HAS_NUMBA:
                             idx = lut_len
                         val = curve_lut[idx]
 
-                    out[i, j, k] = val * m + img[i, j, k] * (1.0 - m)
+                    out[i, j, k] = val * m + orig_img[i, j, k] * (1.0 - m)
 
         return out
 
@@ -414,11 +414,14 @@ def apply_local_adjustments_to_image(
         return image_rgb
 
     if HAS_NUMBA:
-        img_in = image_rgb
-        if abs(layer.saturation - 1.0) > 1e-3:
-            hsv = cv2.cvtColor(np.clip(img_in, 0.0, 1.0), cv2.COLOR_RGB2HSV)
+        orig_c = np.ascontiguousarray(np.clip(image_rgb, 0.0, 1.0), dtype=np.float32)
+        has_sat = abs(layer.saturation - 1.0) > 1e-3
+        if has_sat:
+            hsv = cv2.cvtColor(orig_c, cv2.COLOR_RGB2HSV)
             hsv[..., 1] = np.clip(hsv[..., 1] * layer.saturation, 0.0, 1.0)
-            img_in = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+            adj_source = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+        else:
+            adj_source = orig_c
 
         temp_factor = layer.temp
         tint_factor = layer.tint
@@ -458,11 +461,10 @@ def apply_local_adjustments_to_image(
             use_lut = False
 
         mask_2d = effective_mask[..., 0] if effective_mask.ndim == 3 else effective_mask
-        img_c = np.ascontiguousarray(np.clip(img_in, 0.0, 1.0), dtype=np.float32)
         mask_c = np.ascontiguousarray(mask_2d, dtype=np.float32)
 
         return _numba_fused_layer_adjust(
-            img_c, mask_c, float(layer.opacity),
+            orig_c, adj_source, mask_c, float(layer.opacity),
             float(r_gain), float(g_gain), float(b_gain),
             float(layer.shadows), float(layer.highlights),
             use_lut, lut
