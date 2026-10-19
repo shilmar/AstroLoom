@@ -115,8 +115,7 @@ from gui.developer.pipeline import ResolutionPyramid, apply_developer_pipeline
 from gui.developer.async_worker import AsyncPipelineManager
 from core.display_transfer import (
     compute_combined_stf_lut,
-    apply_display_lut16_numba,
-    apply_display_lut16_dual_numba
+    apply_display_lut16_numba
 )
 
 
@@ -292,6 +291,7 @@ class DeveloperTab(QWidget):
         self._cache_pre_layers_stretched: Optional[np.ndarray] = None
         self._cache_pre_layers_stars: Optional[np.ndarray] = None
         self._is_scrubbing_heavy_slider: bool = False
+        self._is_scrubbing_lut_slider: bool = False
         self._is_slider_pressed: bool = False
         self._is_dragging_deconv: bool = False
         self.async_pipeline = AsyncPipelineManager(self)
@@ -3904,9 +3904,9 @@ class DeveloperTab(QWidget):
         if is_preview:
             self._cache_ms_linear_key = key_linear
             self._cache_ms_linear_img = out_lin
-            if out_lin is not None and not is_zoomed:
+            if out_lin is not None and not is_zoomed and not is_scrubbing:
                 self._cache_ms_linear_u16 = np.clip(out_lin * 65535.0, 0, 65535).astype(np.uint16)
-            if st_img is not None and not is_zoomed:
+            if st_img is not None and not is_zoomed and not is_scrubbing:
                 self._cache_ms_stars_u16 = np.clip(st_img * 65535.0, 0, 65535).astype(np.uint16)
             self._cache_ms_stretch_key = key_stretch
             self._cache_ms_stretch_img = out_str
@@ -3939,7 +3939,8 @@ class DeveloperTab(QWidget):
                 self._is_scrubbing_heavy_slider = True
 
             if hasattr(self, '_refine_timer') and getattr(self, '_is_scrubbing_heavy_slider', False):
-                self._refine_timer.start(120)
+                if not getattr(self, '_is_scrubbing_lut_slider', False):
+                    self._refine_timer.start(350)
 
             if hasattr(self, '_preview_throttle_timer'):
                 self._preview_throttle_timer.start(16)
@@ -3971,19 +3972,36 @@ class DeveloperTab(QWidget):
             if getattr(self.mask_layers_widget, 'sec_layer_curve', None) and self.mask_layers_widget.sec_layer_curve.is_expanded:
                 self.mask_layers_widget.update_active_layer_histogram()
 
+    def _is_lut_preview_applicable(self) -> bool:
+        """Determina si la previsualización directa por LUT 1D es segura y matemáticamente idéntica."""
+        if not getattr(self, '_is_scrubbing_lut_slider', False):
+            return False
+        src_u16 = getattr(self, '_cache_ms_linear_u16', None)
+        if src_u16 is None:
+            return False
+        if getattr(self, 'preview_proxy', None) is not None:
+            if src_u16.shape[:2] != self.preview_proxy.shape[:2]:
+                return False
+        if self.view_layer_mode == 2 or self.is_zoomed_100:
+            return False
+        if hasattr(self, 'mask_layers_widget') and len(getattr(self.mask_layers_widget, 'layers', [])) > 0:
+            return False
+        if float(getattr(self, 'orton_strength', 0.0)) > 1e-4:
+            return False
+        if float(getattr(self, 'star_diff_strength', 0.0)) > 1e-4:
+            return False
+        if int(getattr(self, 'deconv_iterations', 0)) > 0:
+            return False
+        return True
+
     def _do_update_stretch_preview(self):
         if getattr(self, '_is_rendering_preview', False):
             return
         self._is_rendering_preview = True
         try:
             # === RUTA ULTRARRÁPIDA DE VISUALIZACIÓN POR LUT (Display Transfer / STF >500 FPS) ===
-            # Activada durante el arrastre continuo de deslizadores de estirado/curvas/contraste
-            is_scrubbing = getattr(self, '_is_scrubbing_heavy_slider', False)
-            if (is_scrubbing and 
-                getattr(self, '_cache_ms_linear_u16', None) is not None and 
-                self.view_layer_mode != 2 and
-                not self.is_zoomed_100):
-                
+            # Activada estrictamente durante el arrastre continuo de deslizadores de estirado/contraste
+            if self._is_lut_preview_applicable():
                 curve_rgb = self.curve_widget.get_lut("rgb") if (hasattr(self, 'curve_widget') and not self.curve_widget.is_identity("rgb")) else None
                 contrast_val = (self.contrast_val / 100.0) if hasattr(self, 'contrast_val') else 0.0
 
@@ -4006,27 +4024,7 @@ class DeveloperTab(QWidget):
                 if getattr(self, '_scrub_display_buf', None) is None or self._scrub_display_buf.shape[:2] != (h, w):
                     self._scrub_display_buf = np.empty((h, w, 3), dtype=np.uint8)
 
-                if (getattr(self, '_cache_ms_stars_u16', None) is not None and 
-                    self.image_stars is not None and 
-                    self.view_layer_mode == 0):
-                    
-                    lut_st = compute_combined_stf_lut(
-                        stretch_mode=getattr(self, "stretch_mode", "mtf"),
-                        bp=0.0,
-                        mtf=float(self.spin_mtf.value()) if hasattr(self, 'spin_mtf') else 0.1,
-                        ghs_sp=getattr(self, 'initial_ghs_sp', 0.02),
-                        ghs_d=getattr(self, 'initial_ghs_d', 5.0)
-                    )
-                    apply_display_lut16_dual_numba(
-                        src_u16,
-                        self._cache_ms_stars_u16,
-                        lut,
-                        lut_st,
-                        float(getattr(self, 'star_intensity', 1.0)),
-                        self._scrub_display_buf
-                    )
-                else:
-                    apply_display_lut16_numba(src_u16, lut, self._scrub_display_buf)
+                apply_display_lut16_numba(src_u16, lut, self._scrub_display_buf)
 
                 before_u8 = None
                 if self.canvas.split_view_enabled:
@@ -6235,16 +6233,25 @@ class DeveloperTab(QWidget):
                 s.sliderPressed.connect(self._on_deconv_slider_pressed)
                 s.sliderReleased.connect(self._on_slider_interaction_finished)
 
-        # Deslizadores de cálculo ligero (contraste, balance, tono, curvas, estrellas)
-        # conservan la máxima fidelidad visual (Preview Proxy <= 1600px) en tiempo real
+        # Deslizadores de estirado tonal y contraste global acelerados por 1D LUT (>1000 FPS)
+        lut_stretch_sliders = [
+            self.slider_contrast,
+            self.slider_bp, self.slider_mtf,
+            self.slider_ghs_sp, self.slider_ghs_d, self.slider_ghs_b,
+            self.slider_ghs_hp, self.slider_ghs_lp, self.slider_ghs_bp,
+        ]
+        for s in lut_stretch_sliders:
+            if s is not None:
+                s.sliderPressed.connect(self._on_lut_slider_pressed)
+                s.sliderReleased.connect(self._on_slider_interaction_finished)
+
+        # Deslizadores de cálculo ligero y corrección previa lineal (balance, saturación, polución, suelo)
+        # evaluados sobre proxy borrador ultra-fluido (Draft 60 FPS) durante el arrastre
         light_sliders = [
             self.slider_contrast_starless,
             self.slider_stars,
             self.slider_temp, self.slider_tint, self.slider_sat_sky,
-            self.slider_sat_gnd, self.slider_vibrance, self.slider_contrast,
-            self.slider_bp, self.slider_mtf,
-            self.slider_ghs_sp, self.slider_ghs_d, self.slider_ghs_b,
-            self.slider_ghs_hp, self.slider_ghs_lp, self.slider_ghs_bp,
+            self.slider_sat_gnd, self.slider_vibrance,
             self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp,
             getattr(self, 'slider_lp', None),
             getattr(self, 'slider_lp_cx', None),
@@ -6299,16 +6306,25 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'curve_widget'):
             self.curve_widget.curveCommitted.connect(self._on_control_committed)
 
+    def _on_lut_slider_pressed(self):
+        """Activa el modo de visualización directa por LUT 1D (>1000 FPS) para estirado y contraste."""
+        self._is_slider_pressed = True
+        self._is_scrubbing_heavy_slider = True
+        self._is_scrubbing_lut_slider = True
+        self._is_dragging_deconv = False
+
     def _on_heavy_slider_pressed(self):
         """Activa el modo de proxy borrador ultra-fluido (Draft 60 FPS) durante el arrastre continuo."""
         self._is_slider_pressed = True
         self._is_scrubbing_heavy_slider = True
+        self._is_scrubbing_lut_slider = False
         self._is_dragging_deconv = False
 
     def _on_deconv_slider_pressed(self):
         """Activa el modo de arrastre de deconvolución manteniendo fidelidad del filtro de PSF."""
         self._is_slider_pressed = True
         self._is_scrubbing_heavy_slider = True
+        self._is_scrubbing_lut_slider = False
         self._is_dragging_deconv = True
 
     def _on_slider_interaction_finished(self):
@@ -6317,6 +6333,7 @@ class DeveloperTab(QWidget):
             self._refine_timer.stop()
         self._is_slider_pressed = False
         self._is_scrubbing_heavy_slider = False
+        self._is_scrubbing_lut_slider = False
         self._is_dragging_deconv = False
         self.update_stretch_preview(immediate=True)
         self._commit_action()
@@ -6327,6 +6344,7 @@ class DeveloperTab(QWidget):
             self._refine_timer.stop()
         self._is_slider_pressed = False
         self._is_scrubbing_heavy_slider = False
+        self._is_scrubbing_lut_slider = False
         self._is_dragging_deconv = False
         self.update_stretch_preview(immediate=True)
         self._commit_action()
