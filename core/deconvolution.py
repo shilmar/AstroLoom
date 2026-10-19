@@ -283,12 +283,6 @@ def richardson_lucy_deconvolve(
     use_opencl = use_gpu and is_gpu_enabled() and is_opencl_available()
     psf_umat = None
     psf_flip_umat = None
-    if use_opencl:
-        try:
-            psf_umat = cv2.UMat(psf_kernel)
-            psf_flip_umat = cv2.UMat(psf_flipped)
-        except Exception:
-            use_opencl = False
 
     # 1. Separación de canal de trabajo (Luminancia)
     is_color = (image_rgb.ndim == 3 and image_rgb.shape[2] == 3)
@@ -319,6 +313,33 @@ def richardson_lucy_deconvolve(
         bright_star_mask = None
         deringing_floor = None
 
+    # Inicialización de tensores persistentes en VRAM para evitar saturación del bus PCIe
+    u_work = None
+    u_est = None
+    eps_umat = None
+    ones_umat = None
+    damp_const_umat = None
+    u_star_mask = None
+    u_inv_star_mask = None
+    u_deringing_floor = None
+
+    if use_opencl:
+        try:
+            psf_umat = cv2.UMat(psf_kernel)
+            psf_flip_umat = cv2.UMat(psf_flipped)
+            u_work = cv2.UMat(work_channel)
+            u_est = cv2.UMat(work_channel)
+            eps_umat = cv2.UMat(np.full_like(work_channel, 1e-6))
+            ones_umat = cv2.UMat(np.ones_like(work_channel))
+            if noise_threshold_sq > 0.0:
+                damp_const_umat = cv2.UMat(np.full_like(work_channel, noise_threshold_sq + 1e-7))
+            if bright_star_mask is not None and deringing_floor is not None:
+                u_star_mask = cv2.UMat(bright_star_mask)
+                u_inv_star_mask = cv2.UMat(1.0 - bright_star_mask)
+                u_deringing_floor = cv2.UMat(deringing_floor)
+        except Exception:
+            use_opencl = False
+
     # 4. Bucle iterativo Richardson-Lucy
     est = work_channel.copy()
 
@@ -330,38 +351,46 @@ def richardson_lucy_deconvolve(
             pct = int(((it + 1) / float(iterations)) * 100.0)
             progress_callback(pct, f"Deconvolución Richardson-Lucy: iteración {it + 1}/{iterations}")
 
-        # Convolución con la PSF (acelerada por OpenCL UMat con respaldo transparente en CPU)
+        # Convolución y corrección persistente en VRAM (OpenCL UMat con fallback automático a CPU)
         if use_opencl:
             try:
-                u_est = cv2.UMat(est)
-                conv = cv2.filter2D(u_est, -1, psf_umat, borderType=cv2.BORDER_REFLECT).get()
-                ratio = work_channel / (conv + 1e-6)
-                u_ratio = cv2.UMat(ratio)
-                b_proj = cv2.filter2D(u_ratio, -1, psf_flip_umat, borderType=cv2.BORDER_REFLECT).get()
+                u_conv = cv2.filter2D(u_est, -1, psf_umat, borderType=cv2.BORDER_REFLECT)
+                u_ratio = cv2.divide(u_work, cv2.add(u_conv, eps_umat))
+                u_bproj = cv2.filter2D(u_ratio, -1, psf_flip_umat, borderType=cv2.BORDER_REFLECT)
+                if noise_threshold_sq > 0.0:
+                    u_delta = cv2.subtract(u_bproj, ones_umat)
+                    u_delta_sq = cv2.multiply(u_delta, u_delta)
+                    u_denom = cv2.add(u_delta_sq, damp_const_umat)
+                    u_damp_w = cv2.divide(u_delta_sq, u_denom)
+                    u_update = cv2.add(ones_umat, cv2.multiply(u_delta, u_damp_w))
+                else:
+                    u_update = u_bproj
+                u_est = cv2.multiply(u_est, u_update)
+                u_est = cv2.min(cv2.max(u_est, 0.0), 1.0)
+                if u_star_mask is not None and u_deringing_floor is not None:
+                    u_clamped = cv2.max(u_est, u_deringing_floor)
+                    u_est = cv2.add(cv2.multiply(u_clamped, u_star_mask), cv2.multiply(u_est, u_inv_star_mask))
             except Exception:
-                use_opencl = False  # Respaldo automático en CPU
-                conv = cv2.filter2D(est, -1, psf_kernel, borderType=cv2.BORDER_REFLECT)
-                ratio = work_channel / (conv + 1e-6)
-                b_proj = cv2.filter2D(ratio, -1, psf_flipped, borderType=cv2.BORDER_REFLECT)
-        else:
+                use_opencl = False
+                est = u_est.get() if u_est is not None else work_channel.copy()
+
+        if not use_opencl:
             conv = cv2.filter2D(est, -1, psf_kernel, borderType=cv2.BORDER_REFLECT)
             ratio = work_channel / (conv + 1e-6)
             b_proj = cv2.filter2D(ratio, -1, psf_flipped, borderType=cv2.BORDER_REFLECT)
+            delta = b_proj - 1.0
+            if noise_threshold_sq > 0.0:
+                delta_sq = delta ** 2
+                damp_weight = delta_sq / (delta_sq + noise_threshold_sq + 1e-7)
+                update_factor = 1.0 + delta * damp_weight
+            else:
+                update_factor = b_proj
+            est = np.clip(est * update_factor, 0.0, 1.0)
+            if bright_star_mask is not None and deringing_floor is not None:
+                est = np.where(bright_star_mask > 0.1, np.maximum(est, deringing_floor), est)
 
-        # Factor de corrección con amortiguación bayesiana de ruido
-        delta = b_proj - 1.0
-        if noise_threshold_sq > 0.0:
-            delta_sq = delta ** 2
-            damp_weight = delta_sq / (delta_sq + noise_threshold_sq + 1e-7)
-            update_factor = 1.0 + delta * damp_weight
-        else:
-            update_factor = b_proj
-
-        est = np.clip(est * update_factor, 0.0, 1.0)
-
-        # Deringing: Erradicar anillos negros en bordes de estrellas
-        if bright_star_mask is not None and deringing_floor is not None:
-            est = np.where(bright_star_mask > 0.1, np.maximum(est, deringing_floor), est)
+    if use_opencl:
+        est = u_est.get()
 
     # 5. Filtrado por ámbito (Solo estrellas / Solo nebulosa) si corresponde
     if target_scope in ["stars_only", "background_only"] and star_mask is not None:

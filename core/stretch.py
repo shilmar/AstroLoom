@@ -536,17 +536,24 @@ def realce_multiescala_ondiculas(
 ) -> np.ndarray:
     """
     Aplica realce de estructuras de gas/polvo y atenuación de cúpula residual.
+    Optimizado para procesar en luminancia con preservación cromática estricta.
     fuerza_estructura: -1.0 a +1.0 (escalas intermedias)
     reduccion_fondo: 0.0 a 1.0 (capa residual de fondo)
     """
     if abs(fuerza_estructura) < 1e-4 and reduccion_fondo < 1e-4:
         return imagen_rgb
 
-    # Descomposición en 5 niveles de escala
-    detalles, residual = descomponer_ondiculas(imagen_rgb, niveles=5)
+    is_color = (imagen_rgb.ndim == 3 and imagen_rgb.shape[2] == 3)
+    if is_color:
+        work_lum = 0.2126 * imagen_rgb[:, :, 0] + 0.7152 * imagen_rgb[:, :, 1] + 0.0722 * imagen_rgb[:, :, 2]
+        work_lum = np.clip(work_lum, 0.0, 1.0).astype(np.float32)
+    else:
+        work_lum = imagen_rgb.astype(np.float32)
 
-    # 1. Modulación de detalles: las escalas 3 y 4 corresponden a las nebulosas y polvo
-    # Se aplica una ganancia suave progresiva
+    # Descomposición monocanal rápida en 5 niveles de escala
+    detalles, residual = descomponer_ondiculas(work_lum, niveles=5)
+
+    # Modulación selectiva de detalles (escalas 3, 4 y 5 para nebulosas y polvo)
     pesos = [
         1.0,                                    # Escala 1 (ruido / micro-estrellas)
         1.0,                                    # Escala 2 (estrellas pequeñas)
@@ -555,28 +562,29 @@ def realce_multiescala_ondiculas(
         1.0 + fuerza_estructura * 0.6           # Escala 5 (carriles anchos de polvo)
     ]
 
-    # Reconstrucción de la suma de detalles
-    suma_detalles = np.zeros_like(imagen_rgb)
+    delta = np.zeros_like(work_lum)
     for d, peso in zip(detalles, pesos):
-        suma_detalles += d * peso
+        if abs(peso - 1.0) > 1e-5:
+            delta += d * (peso - 1.0)
 
-    # 2. Atenuación del plano residual (la cúpula fija)
+    # 2. Atenuación del plano residual (cúpula fija de fondo) con submuestreo de percentil rápido
     if reduccion_fondo > 1e-4:
-        pedestal = np.percentile(residual, 5, axis=(0, 1))
-        residual_atenuado = residual - (residual - pedestal) * (reduccion_fondo * 0.5)
-        residual = residual_atenuado
-
-    reconstruida = np.clip(suma_detalles + residual, 0.0, 1.0)
+        pedestal = float(np.percentile(residual[::4, ::4], 5))
+        delta -= (residual - pedestal) * (reduccion_fondo * 0.5)
 
     # Si hay máscara de cielo, aplicamos selectivamente
     if sky_mask is not None:
-        h, w = imagen_rgb.shape[:2]
+        h, w = work_lum.shape[:2]
         m = cv2.resize(np.squeeze(sky_mask).astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
-        if m.ndim == 2:
-            m = m[..., np.newaxis]
-        return np.clip(reconstruida * m + imagen_rgb * (1.0 - m), 0.0, 1.0).astype(np.float32)
+        delta *= m
 
-    return reconstruida.astype(np.float32)
+    if is_color:
+        ratio = (work_lum + delta) / (work_lum + 1e-6)
+        reconstruida = np.clip(imagen_rgb * ratio[..., np.newaxis], 0.0, 1.0).astype(np.float32)
+        return reconstruida
+    else:
+        return np.clip(work_lum + delta, 0.0, 1.0).astype(np.float32)
+
 
 
 def apply_hue_vs_sat_curve(img_rgb: np.ndarray, lut_hue_sat: np.ndarray) -> np.ndarray:
