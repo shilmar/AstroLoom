@@ -295,6 +295,26 @@ class MaskCanvas(QWidget):
 
         self.update()
 
+    def update_display_u8(self, display_u8: np.ndarray, before_u8: Optional[np.ndarray] = None) -> None:
+        """
+        Ruta ultrarrápida de pintado en pantalla (Display Transfer / STF) para arrastre continuo a >500 FPS.
+        Actualiza el pixmap base directamente desde un array uint8 contiguo sin conversiones intermedias.
+        """
+        h, w = display_u8.shape[:2]
+        self._cached_display_u8 = np.ascontiguousarray(display_u8, dtype=np.uint8)
+        qimg = QImage(self._cached_display_u8.data, w, h, 3 * w, QImage.Format_RGB888)
+        self.base_pixmap = QPixmap.fromImage(qimg)
+
+        if before_u8 is not None and self.split_view_enabled:
+            b_u8 = np.ascontiguousarray(before_u8, dtype=np.uint8)
+            qimg_b = QImage(b_u8.data, w, h, 3 * w, QImage.Format_RGB888)
+            self.before_pixmap = QPixmap.fromImage(qimg_b)
+
+        if self.show_clipping_shadows or self.show_clipping_highlights:
+            self._update_clipping_overlay()
+
+        self.update()
+
     def _update_clipping_overlay(self) -> None:
         """
         Calcula la máscara de recorte de sombras y luces de forma vectorial acelerada.

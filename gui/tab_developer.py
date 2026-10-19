@@ -113,6 +113,11 @@ from gui.developer.panels.panel_crop import CropToolbar
 from gui.developer.developer_state import DeveloperState
 from gui.developer.pipeline import ResolutionPyramid, apply_developer_pipeline
 from gui.developer.async_worker import AsyncPipelineManager
+from core.display_transfer import (
+    compute_combined_stf_lut,
+    apply_display_lut16_numba,
+    apply_display_lut16_dual_numba
+)
 
 
 class DeveloperTab(QWidget):
@@ -268,6 +273,12 @@ class DeveloperTab(QWidget):
         self._cache_starless_pre_img: Optional[np.ndarray] = None
 
         # Cachés por hitos del pipeline (Milestone Caching)
+        self._cache_ms_linear_key: Optional[tuple] = None
+        self._cache_ms_linear_img: Optional[np.ndarray] = None
+        self._cache_ms_linear_u16: Optional[np.ndarray] = None
+        self._cache_ms_stars_u16: Optional[np.ndarray] = None
+        self._scrub_display_buf: Optional[np.ndarray] = None
+        self._scrub_before_buf: Optional[np.ndarray] = None
         self._cache_ms_stretch_key: Optional[tuple] = None
         self._cache_ms_stretch_img: Optional[np.ndarray] = None
         self._cache_ms_graded_key: Optional[tuple] = None
@@ -3327,7 +3338,12 @@ class DeveloperTab(QWidget):
         self._cache_starless_key = None
         self._cache_starless_linear = None
         self._cache_starless_pre_key = None
-        self._cache_starless_pre_img = None
+        self._cache_ms_linear_key = None
+        self._cache_ms_linear_img = None
+        self._cache_ms_linear_u16 = None
+        self._cache_ms_stars_u16 = None
+        self._scrub_display_buf = None
+        self._scrub_before_buf = None
         self._cache_ms_stretch_key = None
         self._cache_ms_stretch_img = None
         self._cache_ms_graded_key = None
@@ -3743,8 +3759,8 @@ class DeveloperTab(QWidget):
 
         curve_state = tuple((m, tuple(pts)) for m, pts in sorted(self.curve_widget.get_state().items())) if hasattr(self, 'curve_widget') else ()
 
-        # Hito 1: Parámetros Lineales y Estirado (MTF / GHS)
-        key_stretch = (
+        # Hito 0: Parámetros Lineales (Balance de blancos, Saturación, Polución Lumínica, Suelo)
+        key_linear = (
             id(target_img),
             id(precomputed_mask),
             is_full_res,
@@ -3768,6 +3784,11 @@ class DeveloperTab(QWidget):
             round(float(self.gnd_ev_val), 4),
             round(float(self.gnd_shadows_val), 4),
             round(float(self.gnd_bp_val), 4),
+        )
+
+        # Hito 1: Parámetros de Estirado (MTF / GHS)
+        key_stretch = (
+            key_linear,
             getattr(self, "stretch_mode", "mtf"),
             getattr(self, "ghs_color_mode", "luma"),
             round(float(self.spin_ghs_sp.value()), 5) if hasattr(self, 'spin_ghs_sp') else 0.0,
@@ -3818,6 +3839,7 @@ class DeveloperTab(QWidget):
         pre_spatial = self._cache_ms_spatial_img if (is_preview and self._cache_ms_spatial_key == key_spatial) else None
         pre_graded = self._cache_ms_graded_img if (is_preview and self._cache_ms_graded_key == key_graded and pre_spatial is None) else None
         pre_stretched = self._cache_ms_stretch_img if (is_preview and self._cache_ms_stretch_key == key_stretch and pre_spatial is None and pre_graded is None) else None
+        pre_linear = self._cache_ms_linear_img if (is_preview and self._cache_ms_linear_key == key_linear and pre_spatial is None and pre_graded is None and pre_stretched is None) else None
         pre_stars = self._cache_ms_stars_img if (is_preview and self._cache_ms_stretch_key == key_stretch and self._cache_ms_stars_img is not None) else None
 
         # Resolve starless and stars image slices
@@ -3857,7 +3879,7 @@ class DeveloperTab(QWidget):
 
         is_scrubbing = getattr(self, '_is_scrubbing_heavy_slider', False)
 
-        final_img, out_str, out_grd, out_spt, out_stars = apply_developer_pipeline(
+        final_img, out_lin, out_str, out_grd, out_spt, out_stars = apply_developer_pipeline(
             target_img=target_img,
             state=state,
             precomputed_mask=precomputed_mask,
@@ -3870,6 +3892,7 @@ class DeveloperTab(QWidget):
             is_scrubbing=is_scrubbing,
             crop_rect=crop_rect,
             full_shape=full_shape,
+            precomputed_linear_base=pre_linear,
             precomputed_stretched_base=pre_stretched,
             precomputed_graded_base=pre_graded,
             precomputed_spatial_base=pre_spatial,
@@ -3879,6 +3902,12 @@ class DeveloperTab(QWidget):
         )
 
         if is_preview:
+            self._cache_ms_linear_key = key_linear
+            self._cache_ms_linear_img = out_lin
+            if out_lin is not None and not is_zoomed:
+                self._cache_ms_linear_u16 = np.clip(out_lin * 65535.0, 0, 65535).astype(np.uint16)
+            if st_img is not None and not is_zoomed:
+                self._cache_ms_stars_u16 = np.clip(st_img * 65535.0, 0, 65535).astype(np.uint16)
             self._cache_ms_stretch_key = key_stretch
             self._cache_ms_stretch_img = out_str
             self._cache_ms_graded_key = key_graded
@@ -3947,6 +3976,77 @@ class DeveloperTab(QWidget):
             return
         self._is_rendering_preview = True
         try:
+            # === RUTA ULTRARRÁPIDA DE VISUALIZACIÓN POR LUT (Display Transfer / STF >500 FPS) ===
+            # Activada durante el arrastre continuo de deslizadores de estirado/curvas/contraste
+            is_scrubbing = getattr(self, '_is_scrubbing_heavy_slider', False)
+            if (is_scrubbing and 
+                getattr(self, '_cache_ms_linear_u16', None) is not None and 
+                self.view_layer_mode != 2 and
+                not self.is_zoomed_100):
+                
+                curve_rgb = self.curve_widget.get_lut("rgb") if (hasattr(self, 'curve_widget') and not self.curve_widget.is_identity("rgb")) else None
+                contrast_val = (self.contrast_val / 100.0) if hasattr(self, 'contrast_val') else 0.0
+
+                lut = compute_combined_stf_lut(
+                    stretch_mode=getattr(self, "stretch_mode", "mtf"),
+                    bp=float(self.spin_bp.value()) if hasattr(self, 'spin_bp') else 0.0,
+                    mtf=float(self.spin_mtf.value()) if hasattr(self, 'spin_mtf') else 0.1,
+                    ghs_sp=float(self.spin_ghs_sp.value()) if hasattr(self, 'spin_ghs_sp') else 0.02,
+                    ghs_d=float(self.spin_ghs_d.value()) if hasattr(self, 'spin_ghs_d') else 5.0,
+                    ghs_b=float(self.spin_ghs_b.value()) if hasattr(self, 'spin_ghs_b') else 2.0,
+                    ghs_hp=float(self.spin_ghs_hp.value()) if hasattr(self, 'spin_ghs_hp') else 0.0,
+                    ghs_lp=float(self.spin_ghs_lp.value()) if hasattr(self, 'spin_ghs_lp') else 0.0,
+                    ghs_bp=float(self.spin_ghs_bp.value()) if hasattr(self, 'spin_ghs_bp') else 0.0,
+                    curve_lut_rgb=curve_rgb,
+                    contrast=contrast_val
+                )
+
+                src_u16 = self._cache_ms_linear_u16
+                h, w = src_u16.shape[:2]
+                if getattr(self, '_scrub_display_buf', None) is None or self._scrub_display_buf.shape[:2] != (h, w):
+                    self._scrub_display_buf = np.empty((h, w, 3), dtype=np.uint8)
+
+                if (getattr(self, '_cache_ms_stars_u16', None) is not None and 
+                    self.image_stars is not None and 
+                    self.view_layer_mode == 0):
+                    
+                    lut_st = compute_combined_stf_lut(
+                        stretch_mode=getattr(self, "stretch_mode", "mtf"),
+                        bp=0.0,
+                        mtf=float(self.spin_mtf.value()) if hasattr(self, 'spin_mtf') else 0.1,
+                        ghs_sp=getattr(self, 'initial_ghs_sp', 0.02),
+                        ghs_d=getattr(self, 'initial_ghs_d', 5.0)
+                    )
+                    apply_display_lut16_dual_numba(
+                        src_u16,
+                        self._cache_ms_stars_u16,
+                        lut,
+                        lut_st,
+                        float(getattr(self, 'star_intensity', 1.0)),
+                        self._scrub_display_buf
+                    )
+                else:
+                    apply_display_lut16_numba(src_u16, lut, self._scrub_display_buf)
+
+                before_u8 = None
+                if self.canvas.split_view_enabled:
+                    lut_before = compute_combined_stf_lut(
+                        stretch_mode=getattr(self, "initial_stretch_mode", "mtf"),
+                        bp=getattr(self, "initial_bp", 0.0),
+                        mtf=getattr(self, "initial_mtf", 0.1),
+                        ghs_sp=getattr(self, "initial_ghs_sp", 0.02),
+                        ghs_d=getattr(self, "initial_ghs_d", 5.0),
+                        contrast=0.0
+                    )
+                    if getattr(self, '_scrub_before_buf', None) is None or self._scrub_before_buf.shape[:2] != (h, w):
+                        self._scrub_before_buf = np.empty((h, w, 3), dtype=np.uint8)
+                    apply_display_lut16_numba(src_u16, lut_before, self._scrub_before_buf)
+                    before_u8 = self._scrub_before_buf
+
+                self.canvas.update_display_u8(self._scrub_display_buf, before_u8=before_u8)
+                self._update_canvas_info_label()
+                return
+
             base_to_render, active_mask = self._compose_active_base(for_export=False)
             if base_to_render is None:
                 return
