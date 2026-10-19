@@ -125,6 +125,7 @@ class PrecisionSliderRow(QWidget):
         parent: QWidget = None,
         label: Optional[str] = None,
         step: int = 1,
+        action_button: Optional[QWidget] = None,
     ):
         super().__init__(parent)
         if label is not None:
@@ -145,19 +146,29 @@ class PrecisionSliderRow(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 1, 0, 1)
         layout.setSpacing(6)
+        layout.setAlignment(Qt.AlignVCenter)
 
         # 1. Indicador dot + Etiqueta
         self.lbl_dot = QLabel("●")
         self.lbl_dot.setFixedWidth(8)
+        self.lbl_dot.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
         self.lbl_dot.setStyleSheet("color: transparent; font-size: 8px;")
-        layout.addWidget(self.lbl_dot)
+        layout.addWidget(self.lbl_dot, alignment=Qt.AlignVCenter)
 
         self.lbl_title = QLabel(title)
-        self.lbl_title.setFixedWidth(max(40, label_width - 10))
+        self.lbl_title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.lbl_title.setCursor(Qt.PointingHandCursor)
         self.lbl_title.setToolTip(f"Doble clic para restablecer (por defecto: {self._format_value(self.raw_default)})")
         self.lbl_title.mouseDoubleClickEvent = lambda e: self.reset()
-        layout.addWidget(self.lbl_title)
+
+        if action_button is not None:
+            btn_w = action_button.sizeHint().width() if action_button.sizeHint().width() > 0 else 18
+            self.lbl_title.setFixedWidth(max(40, label_width - 10 - btn_w - 4))
+            layout.addWidget(self.lbl_title, alignment=Qt.AlignVCenter)
+            layout.addWidget(action_button, alignment=Qt.AlignVCenter)
+        else:
+            self.lbl_title.setFixedWidth(max(40, label_width - 10))
+            layout.addWidget(self.lbl_title, alignment=Qt.AlignVCenter)
 
         # 2. Slider ultra-fino
         self.slider = QSlider(Qt.Horizontal)
@@ -169,7 +180,7 @@ class PrecisionSliderRow(QWidget):
         self.slider.sliderPressed.connect(self.sliderPressed.emit)
         self.slider.sliderReleased.connect(self.sliderReleased.emit)
         self.slider.mouseDoubleClickEvent = lambda e: self.reset()
-        layout.addWidget(self.slider, stretch=1)
+        layout.addWidget(self.slider, stretch=1, alignment=Qt.AlignVCenter)
 
         # 3. Pastilla de lectura / edición
         self.spin = PrecisionSpinBox(decimals=decimals, force_sign=force_sign)

@@ -796,6 +796,8 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.starless_ond_bg_changed.connect(self._on_mask_widget_sl_ond_bg)
         self.mask_layers_widget.starless_contrast_changed.connect(self._on_mask_widget_sl_contrast)
         self.mask_layers_widget.starless_denoise_changed.connect(self._on_mask_widget_sl_denoise)
+        self.mask_layers_widget.starless_denoise_color_changed.connect(self._on_mask_widget_sl_denoise_color)
+        self.mask_layers_widget.starless_denoise_mask_changed.connect(self._on_mask_widget_sl_denoise_mask)
         self.mask_layers_widget.starless_orton_strength_changed.connect(self._on_mask_widget_sl_orton_strength)
         self.mask_layers_widget.starless_orton_radius_changed.connect(self._on_mask_widget_sl_orton_radius)
         self.mask_layers_widget.starless_orton_threshold_changed.connect(self._on_mask_widget_sl_orton_threshold)
@@ -822,7 +824,9 @@ class DeveloperTab(QWidget):
             self.slider_orton_radius.value(),
             self.slider_orton_threshold.value(),
             self.combo_orton_tint.currentIndex(),
-            self.combo_orton_mode.currentIndex()
+            self.combo_orton_mode.currentIndex(),
+            denoise_color=self.slider_denoise_color.value() if hasattr(self, 'slider_denoise_color') else 50,
+            denoise_mask=self.slider_denoise_mask.value() if hasattr(self, 'slider_denoise_mask') else 50
         )
 
         def _update_masks_badge():
@@ -5339,7 +5343,11 @@ class DeveloperTab(QWidget):
             self.mask_layers_widget.set_starless_tone_values(
                 self.slider_clarity.value(), self.slider_dehaze.value(),
                 self.slider_ond_est.value(), self.slider_ond_bg.value(),
-                self.slider_contrast_starless.value(), val
+                self.slider_contrast_starless.value(), val,
+                self.slider_orton.value(), self.slider_orton_radius.value(), self.slider_orton_threshold.value(),
+                self.combo_orton_tint.currentIndex(), self.combo_orton_mode.currentIndex(),
+                denoise_color=self.slider_denoise_color.value() if hasattr(self, 'slider_denoise_color') else 50,
+                denoise_mask=self.slider_denoise_mask.value() if hasattr(self, 'slider_denoise_mask') else 50
             )
         self.update_stretch_preview()
 
@@ -5347,12 +5355,32 @@ class DeveloperTab(QWidget):
         self.denoise_color_strength = val / 100.0
         if hasattr(self, 'lbl_denoise_color'):
             self.lbl_denoise_color.setText(f"{val}%")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_starless_tone_values(
+                self.slider_clarity.value(), self.slider_dehaze.value(),
+                self.slider_ond_est.value(), self.slider_ond_bg.value(),
+                self.slider_contrast_starless.value(), self.slider_denoise.value(),
+                self.slider_orton.value(), self.slider_orton_radius.value(), self.slider_orton_threshold.value(),
+                self.combo_orton_tint.currentIndex(), self.combo_orton_mode.currentIndex(),
+                denoise_color=val,
+                denoise_mask=self.slider_denoise_mask.value() if hasattr(self, 'slider_denoise_mask') else 50
+            )
         self.update_stretch_preview()
 
     def on_denoise_mask_changed(self, val: int):
         self.denoise_masking = val / 100.0
         if hasattr(self, 'lbl_denoise_mask'):
             self.lbl_denoise_mask.setText(f"{val}%")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_starless_tone_values(
+                self.slider_clarity.value(), self.slider_dehaze.value(),
+                self.slider_ond_est.value(), self.slider_ond_bg.value(),
+                self.slider_contrast_starless.value(), self.slider_denoise.value(),
+                self.slider_orton.value(), self.slider_orton_radius.value(), self.slider_orton_threshold.value(),
+                self.combo_orton_tint.currentIndex(), self.combo_orton_mode.currentIndex(),
+                denoise_color=self.slider_denoise_color.value() if hasattr(self, 'slider_denoise_color') else 50,
+                denoise_mask=val
+            )
         self.update_stretch_preview()
         
     def on_ond_estructura_changed(self, val: int):
@@ -5400,6 +5428,14 @@ class DeveloperTab(QWidget):
     def _on_mask_widget_sl_denoise(self, val: int):
         if self.slider_denoise.value() != val:
             self.slider_denoise.setValue(val)
+
+    def _on_mask_widget_sl_denoise_color(self, val: int):
+        if hasattr(self, 'slider_denoise_color') and self.slider_denoise_color.value() != val:
+            self.slider_denoise_color.setValue(val)
+
+    def _on_mask_widget_sl_denoise_mask(self, val: int):
+        if hasattr(self, 'slider_denoise_mask') and self.slider_denoise_mask.value() != val:
+            self.slider_denoise_mask.setValue(val)
 
     def _on_toggle_orton_expand(self, checked: bool):
         if hasattr(self, 'w_orton_advanced'):
@@ -6677,7 +6713,9 @@ class DeveloperTab(QWidget):
                 self.slider_orton_radius.value() if hasattr(self, 'slider_orton_radius') else 40,
                 self.slider_orton_threshold.value() if hasattr(self, 'slider_orton_threshold') else 5,
                 self.combo_orton_tint.currentIndex() if hasattr(self, 'combo_orton_tint') else 0,
-                self.combo_orton_mode.currentIndex() if hasattr(self, 'combo_orton_mode') else 0
+                self.combo_orton_mode.currentIndex() if hasattr(self, 'combo_orton_mode') else 0,
+                denoise_color=getattr(self.panel_starnet, 'slider_denoise_color', None).value() if hasattr(self.panel_starnet, 'slider_denoise_color') else 50,
+                denoise_mask=getattr(self.panel_starnet, 'slider_denoise_mask', None).value() if hasattr(self.panel_starnet, 'slider_denoise_mask') else 50
             )
 
         if "curves" in state and state["curves"] is not None and hasattr(self, 'curve_widget'):

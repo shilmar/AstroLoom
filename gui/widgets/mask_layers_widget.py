@@ -148,6 +148,8 @@ class MaskLayersWidget(QWidget):
     starless_ond_bg_changed = Signal(int)        # (val 0 a 100)
     starless_contrast_changed = Signal(int)      # (val -100 a 100)
     starless_denoise_changed = Signal(int)       # (val 0 a 100)
+    starless_denoise_color_changed = Signal(int) # (val 0 a 100)
+    starless_denoise_mask_changed = Signal(int)  # (val 0 a 100)
     starless_orton_strength_changed = Signal(int)   # (val 0 a 100)
     starless_orton_radius_changed = Signal(int)     # (val 10 a 150)
     starless_orton_threshold_changed = Signal(int)  # (val 0 a 50)
@@ -880,7 +882,7 @@ class MaskLayersWidget(QWidget):
         lbl_stars_notice.setStyleSheet("color: #80d8ff; font-size: 11px; font-style: italic;")
         stars_spec_layout.addWidget(lbl_stars_notice)
 
-        self.row_stars_special = PrecisionSliderRow("Intensidad Estrellas:", 0, 200, 100, unit="%", label_width=135)
+        self.row_stars_special = PrecisionSliderRow("Intensidad Estrellas:", 0, 200, 100, unit="%", label_width=130)
         self.slider_stars_special = self.row_stars_special.slider
         self.lbl_stars_special = self.row_stars_special.lbl_value
         self.slider_stars_special.valueChanged.connect(self._on_stars_special_changed)
@@ -889,23 +891,35 @@ class MaskLayersWidget(QWidget):
 
         # Filtro Difusor y Realce de Constelaciones (Star Mist)
         self.box_sl_star_diff = QGroupBox("Filtro Difusor y Realce de Constelaciones")
+        self.box_sl_star_diff.setObjectName("sl_star_diff_box")
         self.box_sl_star_diff.setStyleSheet("""
-            QGroupBox {
+            QGroupBox#sl_star_diff_box {
+                font-weight: bold;
                 border: 1px solid #fbc02d;
                 border-radius: 6px;
-                margin-top: 4px;
-                padding-top: 8px;
-                background-color: #221f14;
-                font-weight: bold;
+                margin-top: 14px;
+                padding-top: 14px;
+                background-color: #1e1b12;
+                color: #ffe082;
+            }
+            QGroupBox#sl_star_diff_box::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 10px;
+                padding: 0 6px;
                 color: #fff9c4;
+                font-weight: bold;
+                font-size: 11px;
+                background-color: #16130c;
+                border-radius: 3px;
             }
         """)
         sl_sd_layout = QVBoxLayout(self.box_sl_star_diff)
-        sl_sd_layout.setContentsMargins(6, 4, 6, 6)
+        sl_sd_layout.setContentsMargins(8, 8, 8, 8)
         sl_sd_layout.setSpacing(6)
 
         # Intensidad Difusor
-        self.row_sl_star_diff_strength = PrecisionSliderRow("Intensidad Difusor:", 0, 100, 0, unit="%", label_width=135)
+        self.row_sl_star_diff_strength = PrecisionSliderRow("Intensidad Difusor:", 0, 100, 0, unit="%", label_width=130)
         self.slider_sl_star_diff_strength = self.row_sl_star_diff_strength.slider
         self.lbl_sl_star_diff_strength = self.row_sl_star_diff_strength.lbl_value
         self.slider_sl_star_diff_strength.valueChanged.connect(self._on_sl_star_diff_strength_changed)
@@ -913,7 +927,7 @@ class MaskLayersWidget(QWidget):
         sl_sd_layout.addWidget(self.row_sl_star_diff_strength)
 
         # Radio (Halo)
-        self.row_sl_star_diff_radius = PrecisionSliderRow("Radio (Halo):", 5, 60, 20, unit=" px", label_width=120)
+        self.row_sl_star_diff_radius = PrecisionSliderRow("Radio (Halo):", 5, 60, 20, unit=" px", label_width=130)
         self.slider_sl_star_diff_radius = self.row_sl_star_diff_radius.slider
         self.lbl_sl_star_diff_radius = self.row_sl_star_diff_radius.lbl_value
         self.slider_sl_star_diff_radius.valueChanged.connect(self._on_sl_star_diff_radius_changed)
@@ -921,7 +935,7 @@ class MaskLayersWidget(QWidget):
         sl_sd_layout.addWidget(self.row_sl_star_diff_radius)
 
         # Umbral Magnitud
-        self.row_sl_star_diff_threshold = PrecisionSliderRow("Umbral:", 15, 85, 45, scale=100.0, decimals=2, label_width=120)
+        self.row_sl_star_diff_threshold = PrecisionSliderRow("Umbral:", 15, 85, 45, scale=100.0, decimals=2, label_width=130)
         self.slider_sl_star_diff_threshold = self.row_sl_star_diff_threshold.slider
         self.lbl_sl_star_diff_threshold = self.row_sl_star_diff_threshold.lbl_value
         self.slider_sl_star_diff_threshold.valueChanged.connect(self._on_sl_star_diff_threshold_changed)
@@ -929,7 +943,7 @@ class MaskLayersWidget(QWidget):
         sl_sd_layout.addWidget(self.row_sl_star_diff_threshold)
 
         # Color Espectral
-        self.row_sl_star_diff_color = PrecisionSliderRow("Color Espectral:", 0, 100, 50, unit="%", label_width=120)
+        self.row_sl_star_diff_color = PrecisionSliderRow("Color Espectral:", 0, 100, 50, unit="%", label_width=130)
         self.slider_sl_star_diff_color = self.row_sl_star_diff_color.slider
         self.lbl_sl_star_diff_color = self.row_sl_star_diff_color.lbl_value
         self.slider_sl_star_diff_color.valueChanged.connect(self._on_sl_star_diff_color_changed)
@@ -940,7 +954,7 @@ class MaskLayersWidget(QWidget):
         row_sd_mode = QHBoxLayout()
         row_sd_mode.setContentsMargins(14, 0, 0, 0)
         lbl_sd_mode = QLabel("Fusión:")
-        lbl_sd_mode.setFixedWidth(106)
+        lbl_sd_mode.setFixedWidth(120)
         lbl_sd_mode.setStyleSheet("color: #94a3b8; font-size: 11px;")
         row_sd_mode.addWidget(lbl_sd_mode)
         self.combo_sl_star_diff_mode = QComboBox()
@@ -973,7 +987,7 @@ class MaskLayersWidget(QWidget):
         sl_layout.addWidget(lbl_sl_notice)
 
         # Claridad Fondo
-        self.row_sl_clarity = PrecisionSliderRow("Claridad Fondo:", -200, 200, 0, scale=100.0, decimals=2, force_sign=True, label_width=120)
+        self.row_sl_clarity = PrecisionSliderRow("Claridad Fondo:", -200, 200, 0, scale=100.0, decimals=2, force_sign=True, label_width=130)
         self.slider_sl_clarity = self.row_sl_clarity.slider
         self.lbl_sl_clarity = self.row_sl_clarity.lbl_value
         self.slider_sl_clarity.valueChanged.connect(self._on_sl_clarity_changed)
@@ -981,7 +995,7 @@ class MaskLayersWidget(QWidget):
         sl_layout.addWidget(self.row_sl_clarity)
 
         # Borrar Neblina
-        self.row_sl_dehaze = PrecisionSliderRow("Borrar Neblina:", -200, 200, 0, scale=100.0, decimals=2, force_sign=True, label_width=120)
+        self.row_sl_dehaze = PrecisionSliderRow("Borrar Neblina:", -200, 200, 0, scale=100.0, decimals=2, force_sign=True, label_width=130)
         self.slider_sl_dehaze = self.row_sl_dehaze.slider
         self.lbl_sl_dehaze = self.row_sl_dehaze.lbl_value
         self.slider_sl_dehaze.valueChanged.connect(self._on_sl_dehaze_changed)
@@ -989,7 +1003,7 @@ class MaskLayersWidget(QWidget):
         sl_layout.addWidget(self.row_sl_dehaze)
 
         # Estructura Ondículas
-        self.row_sl_ond_est = PrecisionSliderRow("Estructura:", -100, 100, 0, scale=100.0, decimals=2, force_sign=True, label_width=120)
+        self.row_sl_ond_est = PrecisionSliderRow("Estructura:", -100, 100, 0, scale=100.0, decimals=2, force_sign=True, label_width=130)
         self.slider_sl_ond_est = self.row_sl_ond_est.slider
         self.lbl_sl_ond_est = self.row_sl_ond_est.lbl_value
         self.slider_sl_ond_est.valueChanged.connect(self._on_sl_ond_est_changed)
@@ -997,7 +1011,7 @@ class MaskLayersWidget(QWidget):
         sl_layout.addWidget(self.row_sl_ond_est)
 
         # Atenuar Fondo
-        self.row_sl_ond_bg = PrecisionSliderRow("Atenuar Fondo:", 0, 100, 0, unit="%", label_width=120)
+        self.row_sl_ond_bg = PrecisionSliderRow("Atenuar Fondo:", 0, 100, 0, unit="%", label_width=130)
         self.slider_sl_ond_bg = self.row_sl_ond_bg.slider
         self.lbl_sl_ond_bg = self.row_sl_ond_bg.lbl_value
         self.slider_sl_ond_bg.valueChanged.connect(self._on_sl_ond_bg_changed)
@@ -1005,7 +1019,7 @@ class MaskLayersWidget(QWidget):
         sl_layout.addWidget(self.row_sl_ond_bg)
 
         # Contraste Fondo
-        self.row_sl_contrast = PrecisionSliderRow("Contraste Fondo:", -100, 100, 0, scale=100.0, decimals=2, force_sign=True, label_width=120)
+        self.row_sl_contrast = PrecisionSliderRow("Contraste Fondo:", -100, 100, 0, scale=100.0, decimals=2, force_sign=True, label_width=130)
         self.slider_sl_contrast = self.row_sl_contrast.slider
         self.lbl_sl_contrast = self.row_sl_contrast.lbl_value
         self.slider_sl_contrast.valueChanged.connect(self._on_sl_contrast_changed)
@@ -1013,32 +1027,83 @@ class MaskLayersWidget(QWidget):
         sl_layout.addWidget(self.row_sl_contrast)
 
         # Reducción Ruido
-        self.row_sl_denoise = PrecisionSliderRow("Reducción Ruido:", 0, 100, 0, unit="%", label_width=120)
+        self.btn_sl_denoise_expand = QPushButton()
+        self.btn_sl_denoise_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#ce93d8", size=11))
+        self.btn_sl_denoise_expand.setCheckable(True)
+        self.btn_sl_denoise_expand.setChecked(False)
+        self.btn_sl_denoise_expand.setFixedSize(18, 18)
+        self.btn_sl_denoise_expand.setStyleSheet("""
+            QPushButton { border: none; background: transparent; padding: 0px; border-radius: 3px; }
+            QPushButton:hover { background: #262a3a; }
+            QPushButton:checked { background: #3b284c; }
+        """)
+        self.btn_sl_denoise_expand.setToolTip("Ajustes avanzados: Ruido de Color (Croma) y Máscara Bordes/Sombras")
+
+        self.row_sl_denoise = PrecisionSliderRow(
+            "Reducción Ruido:", 0, 100, 0, unit="%", label_width=130, action_button=self.btn_sl_denoise_expand
+        )
         self.slider_sl_denoise = self.row_sl_denoise.slider
         self.lbl_sl_denoise = self.row_sl_denoise.lbl_value
         self.slider_sl_denoise.valueChanged.connect(self._on_sl_denoise_changed)
         self.slider_sl_denoise.sliderReleased.connect(self.ground_slider_released.emit)
         sl_layout.addWidget(self.row_sl_denoise)
 
+        # Contenedor avanzado de Reducción de Ruido (Color y Máscara)
+        self.w_sl_denoise_advanced = QWidget()
+        self.w_sl_denoise_advanced.setVisible(False)
+        layout_sl_dn_adv = QVBoxLayout(self.w_sl_denoise_advanced)
+        layout_sl_dn_adv.setContentsMargins(8, 6, 8, 6)
+        layout_sl_dn_adv.setSpacing(4)
+        self.w_sl_denoise_advanced.setStyleSheet("background-color: #171420; border-radius: 5px; border: 1px solid #3b284c;")
+
+        self.row_sl_denoise_color = PrecisionSliderRow("Ruido Color (Croma):", 0, 100, 50, unit="%", label_width=130)
+        self.slider_sl_denoise_color = self.row_sl_denoise_color.slider
+        self.lbl_sl_denoise_color = self.row_sl_denoise_color.lbl_value
+        self.slider_sl_denoise_color.valueChanged.connect(self._on_sl_denoise_color_changed)
+        self.slider_sl_denoise_color.sliderReleased.connect(self.ground_slider_released.emit)
+        layout_sl_dn_adv.addWidget(self.row_sl_denoise_color)
+
+        self.row_sl_denoise_mask = PrecisionSliderRow("Máscara Bordes/Sombras:", 0, 100, 50, unit="%", label_width=130)
+        self.slider_sl_denoise_mask = self.row_sl_denoise_mask.slider
+        self.lbl_sl_denoise_mask = self.row_sl_denoise_mask.lbl_value
+        self.slider_sl_denoise_mask.valueChanged.connect(self._on_sl_denoise_mask_changed)
+        self.slider_sl_denoise_mask.sliderReleased.connect(self.ground_slider_released.emit)
+        layout_sl_dn_adv.addWidget(self.row_sl_denoise_mask)
+
+        self.btn_sl_denoise_expand.toggled.connect(self.w_sl_denoise_advanced.setVisible)
+        sl_layout.addWidget(self.w_sl_denoise_advanced)
+
         # Par 4: Efecto Orton Astronómico y Glow de Polvo Galáctico
         self.box_sl_orton = QGroupBox("Efecto Orton y Glow de Polvo Galáctico")
+        self.box_sl_orton.setObjectName("sl_orton_box")
         self.box_sl_orton.setStyleSheet("""
-            QGroupBox {
-                border: 1px solid #7b1fa2;
-                border-radius: 6px;
-                margin-top: 6px;
-                padding-top: 10px;
-                background-color: #1a1625;
+            QGroupBox#sl_orton_box {
                 font-weight: bold;
-                color: #e1bee7;
+                border: 1px solid #8e24aa;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding-top: 14px;
+                background-color: #191424;
+                color: #ce93d8;
+            }
+            QGroupBox#sl_orton_box::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 10px;
+                padding: 0 6px;
+                color: #f3e5f5;
+                font-weight: bold;
+                font-size: 11px;
+                background-color: #130f1b;
+                border-radius: 3px;
             }
         """)
         orton_layout = QVBoxLayout(self.box_sl_orton)
-        orton_layout.setContentsMargins(6, 6, 6, 6)
+        orton_layout.setContentsMargins(8, 8, 8, 8)
         orton_layout.setSpacing(6)
 
         # Fila 1: Deslizador de Intensidad Orton
-        self.row_sl_orton_strength = PrecisionSliderRow("Intensidad Glow:", 0, 100, 0, unit="%", label_width=135)
+        self.row_sl_orton_strength = PrecisionSliderRow("Intensidad Glow:", 0, 100, 0, unit="%", label_width=130)
         self.slider_sl_orton_strength = self.row_sl_orton_strength.slider
         self.lbl_sl_orton_strength = self.row_sl_orton_strength.lbl_value
         self.slider_sl_orton_strength.valueChanged.connect(self._on_sl_orton_strength_changed)
@@ -1046,7 +1111,7 @@ class MaskLayersWidget(QWidget):
         orton_layout.addWidget(self.row_sl_orton_strength)
 
         # Radio (Difusión)
-        self.row_sl_orton_radius = PrecisionSliderRow("Radio Difusión:", 10, 150, 40, unit=" px", label_width=135)
+        self.row_sl_orton_radius = PrecisionSliderRow("Radio Difusión:", 10, 150, 40, unit=" px", label_width=130)
         self.slider_sl_orton_radius = self.row_sl_orton_radius.slider
         self.lbl_sl_orton_radius = self.row_sl_orton_radius.lbl_value
         self.slider_sl_orton_radius.valueChanged.connect(self._on_sl_orton_radius_changed)
@@ -1054,7 +1119,7 @@ class MaskLayersWidget(QWidget):
         orton_layout.addWidget(self.row_sl_orton_radius)
 
         # Umbral Polvo
-        self.row_sl_orton_threshold = PrecisionSliderRow("Umbral Polvo:", 0, 50, 5, scale=100.0, decimals=2, label_width=135)
+        self.row_sl_orton_threshold = PrecisionSliderRow("Umbral Polvo:", 0, 50, 5, scale=100.0, decimals=2, label_width=130)
         self.slider_sl_orton_threshold = self.row_sl_orton_threshold.slider
         self.lbl_sl_orton_threshold = self.row_sl_orton_threshold.lbl_value
         self.slider_sl_orton_threshold.valueChanged.connect(self._on_sl_orton_threshold_changed)
@@ -1144,7 +1209,8 @@ class MaskLayersWidget(QWidget):
             'slider_stars_special', 'slider_sl_star_diff_strength', 'slider_sl_star_diff_radius',
             'slider_sl_star_diff_threshold', 'slider_sl_star_diff_color', 'slider_sl_clarity',
             'slider_sl_dehaze', 'slider_sl_ond_est', 'slider_sl_ond_bg', 'slider_sl_contrast',
-            'slider_sl_denoise', 'slider_sl_orton_strength', 'slider_sl_orton_radius',
+            'slider_sl_denoise', 'slider_sl_denoise_color', 'slider_sl_denoise_mask',
+            'slider_sl_orton_strength', 'slider_sl_orton_radius',
             'slider_sl_orton_threshold'
         ]
         for attr in slider_attrs:
@@ -2565,6 +2631,16 @@ class MaskLayersWidget(QWidget):
         self.lbl_sl_denoise.setText(f"{val}%")
         self.starless_denoise_changed.emit(val)
 
+    def _on_sl_denoise_color_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_denoise_color.setText(f"{val}%")
+        self.starless_denoise_color_changed.emit(val)
+
+    def _on_sl_denoise_mask_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_denoise_mask.setText(f"{val}%")
+        self.starless_denoise_mask_changed.emit(val)
+
     def _on_sl_orton_strength_changed(self, val: int) -> None:
         if self._updating_ui: return
         self.lbl_sl_orton_strength.setText(f"{val}%")
@@ -2593,7 +2669,8 @@ class MaskLayersWidget(QWidget):
     def set_starless_tone_values(
         self, clarity: int, dehaze: int, ond_est: int, ond_bg: int, contrast: int, denoise: int,
         orton_strength: int = 0, orton_radius: int = 40, orton_threshold: int = 5,
-        orton_tint_idx: int = 0, orton_mode_idx: int = 0
+        orton_tint_idx: int = 0, orton_mode_idx: int = 0,
+        denoise_color: int = 50, denoise_mask: int = 50
     ) -> None:
         """Sincroniza los controles especiales de fondo nebular desde tab_developer."""
         self._updating_ui = True
@@ -2615,6 +2692,12 @@ class MaskLayersWidget(QWidget):
         if hasattr(self, 'slider_sl_denoise'):
             self.slider_sl_denoise.setValue(denoise)
             self.lbl_sl_denoise.setText(f"{denoise}%")
+        if hasattr(self, 'slider_sl_denoise_color'):
+            self.slider_sl_denoise_color.setValue(denoise_color)
+            self.lbl_sl_denoise_color.setText(f"{denoise_color}%")
+        if hasattr(self, 'slider_sl_denoise_mask'):
+            self.slider_sl_denoise_mask.setValue(denoise_mask)
+            self.lbl_sl_denoise_mask.setText(f"{denoise_mask}%")
         if hasattr(self, 'slider_sl_orton_strength'):
             self.slider_sl_orton_strength.setValue(orton_strength)
             self.lbl_sl_orton_strength.setText(f"{orton_strength}%")
