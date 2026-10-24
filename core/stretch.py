@@ -626,9 +626,9 @@ def apply_luma_vs_sat_curve(img_rgb: np.ndarray, lut_luma_sat: np.ndarray) -> np
 def auto_stretch_adaptive_starless(
     img_starless: np.ndarray,
     sky_mask: np.ndarray = None,
-    target_bg: float = 0.18,
-    shadow_clip_sigma: float = 3.0,
-    saturation_boost: float = 1.5,
+    target_bg: float = 0.15,
+    shadow_clip_sigma: float = 2.0,
+    saturation_boost: float = 2.5,
     unlinked: bool = True,
     feather_radius: int = 2
 ) -> np.ndarray:
@@ -643,9 +643,9 @@ def auto_stretch_adaptive_starless(
         sky_mask: Array binario o booleano (H, W) que define los píxeles del cielo (>0.5).
                   Los píxeles del terreno se ignoran en el cálculo estadístico para que las
                   sombras del suelo no alteren la mediana ni el contraste de la Vía Láctea.
-        target_bg: Mediana de fondo objetivo (por defecto 0.18).
-        shadow_clip_sigma: Nivel de corte de punto negro en sigmas MAD (por defecto 3.0).
-        saturation_boost: Factor de escala para el canal de saturación HSV (por defecto 1.5).
+        target_bg: Mediana de fondo objetivo (por defecto 0.15).
+        shadow_clip_sigma: Nivel de corte de punto negro en sigmas MAD (por defecto 2.0).
+        saturation_boost: Factor de escala para el canal de saturación HSV (por defecto 2.5).
         unlinked: Canales R, G y B calculados de forma independiente (True por defecto) para
                   neutralizar dominantes de color y resaltar los tonos cálidos del polvo galáctico.
         feather_radius: Radio en píxeles para el difuminado gaussiano de la máscara en la línea de horizonte.

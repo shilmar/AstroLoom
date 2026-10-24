@@ -23,6 +23,7 @@ class StarNetPanel(QWidget):
     run_starnet_requested = Signal()
     jump_to_masks_requested = Signal(str)
     auto_stretch_starless_requested = Signal()
+    run_ai_denoise_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None, resettable_label_factory: Optional[Callable] = None):
         super().__init__(parent)
@@ -251,6 +252,31 @@ class StarNetPanel(QWidget):
         self.lbl_denoise.setStyleSheet("color: #a5d6a7; font-weight: bold;")
         row_dn_lbl.addWidget(self.lbl_denoise)
 
+        self.btn_ai_denoise = QPushButton("✨ IA")
+        self.btn_ai_denoise.setCheckable(True)
+        self.btn_ai_denoise.setChecked(False)
+        self.btn_ai_denoise.setCursor(Qt.PointingHandCursor)
+        self.btn_ai_denoise.setFixedHeight(18)
+        self.btn_ai_denoise.setToolTip("Ejecutar Reducción de Ruido Profunda con IA (NAFNet)")
+        self.btn_ai_denoise.setStyleSheet("""
+            QPushButton {
+                background-color: #2b1f3d;
+                color: #ce93d8;
+                border: 1px solid #7b1fa2;
+                border-radius: 3px;
+                padding: 1px 6px;
+                font-weight: bold;
+                font-size: 10px;
+            }
+            QPushButton:hover {
+                background-color: #3b2854;
+                border-color: #ba68c8;
+                color: #ffffff;
+            }
+        """)
+        self.btn_ai_denoise.clicked.connect(self.run_ai_denoise_requested.emit)
+        row_dn_lbl.addWidget(self.btn_ai_denoise)
+
         self.btn_denoise_expand = QPushButton()
         self.btn_denoise_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#a5d6a7", size=11))
         self.btn_denoise_expand.setCheckable(True)
@@ -375,6 +401,49 @@ class StarNetPanel(QWidget):
         for ctrl in controls:
             if ctrl is not None:
                 ctrl.setEnabled(enabled)
+
+    def set_ai_denoise_active(self, active: bool):
+        """Actualiza el aspecto visual del botón según si hay un buffer IA activo."""
+        if not hasattr(self, 'btn_ai_denoise'):
+            return
+        self.btn_ai_denoise.setChecked(active)
+        if active:
+            self.btn_ai_denoise.setText("✓ IA")
+            self.btn_ai_denoise.setStyleSheet("""
+                QPushButton {
+                    background-color: #1b3a2b;
+                    color: #a5d6a7;
+                    border: 1px solid #2e7d32;
+                    border-radius: 3px;
+                    padding: 1px 6px;
+                    font-weight: bold;
+                    font-size: 10px;
+                }
+                QPushButton:hover {
+                    background-color: #2e593e;
+                    color: #ffffff;
+                }
+            """)
+            self.btn_ai_denoise.setToolTip("Reducción de ruido por IA calculada y activa. Desliza para graduar fuerza.")
+        else:
+            self.btn_ai_denoise.setText("✨ IA")
+            self.btn_ai_denoise.setStyleSheet("""
+                QPushButton {
+                    background-color: #2b1f3d;
+                    color: #ce93d8;
+                    border: 1px solid #7b1fa2;
+                    border-radius: 3px;
+                    padding: 1px 6px;
+                    font-weight: bold;
+                    font-size: 10px;
+                }
+                QPushButton:hover {
+                    background-color: #3b2854;
+                    border-color: #ba68c8;
+                    color: #ffffff;
+                }
+            """)
+            self.btn_ai_denoise.setToolTip("Ejecutar Reducción de Ruido Profunda con IA (NAFNet)")
 
     def get_state(self) -> Dict[str, Any]:
         """Captura el estado de desacoplo de estrellas y fondo cósmico, incluyendo efectos."""

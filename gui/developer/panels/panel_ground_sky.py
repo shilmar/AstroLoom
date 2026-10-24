@@ -24,6 +24,7 @@ class GroundSkyPanel(QWidget):
     ev_changed = Signal(int)
     shadows_changed = Signal(int)
     bp_changed = Signal(int)
+    denoise_changed = Signal(int)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -132,6 +133,13 @@ class GroundSkyPanel(QWidget):
         self.slider_gnd_bp.valueChanged.connect(self.bp_changed.emit)
         hidden_gnd_layout.addWidget(self.slider_gnd_bp)
 
+        self.lbl_gnd_dn = QLabel("0%")
+        self.slider_gnd_dn = QSlider(Qt.Horizontal)
+        self.slider_gnd_dn.setRange(0, 100)
+        self.slider_gnd_dn.setValue(0)
+        self.slider_gnd_dn.valueChanged.connect(self.denoise_changed.emit)
+        hidden_gnd_layout.addWidget(self.slider_gnd_dn)
+
         self.btn_reset_gnd = QPushButton("Restablecer Tono Suelo")
         self.btn_reset_gnd.clicked.connect(self.reset_requested.emit)
         hidden_gnd_layout.addWidget(self.btn_reset_gnd)
@@ -147,6 +155,7 @@ class GroundSkyPanel(QWidget):
             "gnd_ev_val": self.slider_gnd_ev.value(),
             "gnd_sh_val": self.slider_gnd_sh.value(),
             "gnd_bp_val": self.slider_gnd_bp.value(),
+            "gnd_dn_val": self.slider_gnd_dn.value() if hasattr(self, 'slider_gnd_dn') else 0,
         }
 
     def set_state(self, state: Dict[str, Any]) -> None:
@@ -165,12 +174,16 @@ class GroundSkyPanel(QWidget):
                 val = state["gnd_bp_val"]
                 self.slider_gnd_bp.setValue(val)
                 self.lbl_gnd_bp.setText(f"{val / 1000.0:+.3f}")
+            if "gnd_dn_val" in state and hasattr(self, 'slider_gnd_dn'):
+                val = state["gnd_dn_val"]
+                self.slider_gnd_dn.setValue(val)
+                self.lbl_gnd_dn.setText(f"{val}%")
         finally:
             self.block_signals(False)
 
     def block_signals(self, blocked: bool) -> None:
         """Bloquea las señales de los controles tonales de suelo."""
-        for w in (self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp):
+        for w in (self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp, getattr(self, 'slider_gnd_dn', None)):
             if w is not None:
                 w.blockSignals(blocked)
 

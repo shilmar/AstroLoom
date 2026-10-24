@@ -210,6 +210,14 @@ class DeveloperTab(QWidget):
         self.denoise_strength = 0.0  # <-- CORREGIDO: Inicialización obligatoria
         self.denoise_color_strength = 0.50
         self.denoise_masking = 0.50
+        self._cache_starless_ai = None
+        self.starless_ai_denoise_enabled: bool = False
+        self.gnd_denoise_val: float = 0.0
+        self.gnd_ai_denoise_enabled: bool = False
+        self._cache_ground_ai: Optional[np.ndarray] = None
+        self.ai_denoise_worker = None
+        self.ground_ai_denoise_worker = None
+        self.nafnet_download_worker = None
 
         # Parámetros del comparador Antes / Después
         self.initial_bp: float = 0.0
@@ -631,6 +639,7 @@ class DeveloperTab(QWidget):
         self.panel_starnet.run_starnet_requested.connect(self.run_starnet)
         self.panel_starnet.jump_to_masks_requested.connect(lambda: self._jump_to_mask_layers(MASK_TYPE_IMAGE_STARLESS))
         self.panel_starnet.auto_stretch_starless_requested.connect(self.on_auto_stretch_starless_requested)
+        self.panel_starnet.run_ai_denoise_requested.connect(self.on_run_ai_denoise_requested)
         self.combo_layer.currentIndexChanged.connect(self.on_layer_mode_changed)
         self.slider_stars.valueChanged.connect(self.on_stars_slider_changed)
         self.slider_clarity.valueChanged.connect(self.on_clarity_changed)
@@ -766,6 +775,10 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.ground_ev_changed.connect(self._on_mask_widget_gnd_ev)
         self.mask_layers_widget.ground_shadows_changed.connect(self._on_mask_widget_gnd_sh)
         self.mask_layers_widget.ground_bp_changed.connect(self._on_mask_widget_gnd_bp)
+        self.mask_layers_widget.ground_denoise_changed.connect(self.on_gnd_denoise_changed)
+        self.mask_layers_widget.ground_ai_denoise_requested.connect(self.on_run_ground_ai_denoise_requested)
+        if hasattr(self, 'panel_ground_sky') and self.panel_ground_sky is not None:
+            self.panel_ground_sky.denoise_changed.connect(self.on_gnd_denoise_changed)
         self.mask_layers_widget.ground_reset_requested.connect(self.reset_gnd_tone)
         self.mask_layers_widget.ground_slider_released.connect(self._commit_action)
         self.mask_layers_widget.set_ground_tone_values(
@@ -803,6 +816,7 @@ class DeveloperTab(QWidget):
             )
         )
         self.mask_layers_widget.auto_stretch_starless_requested.connect(self.on_auto_stretch_starless_requested)
+        self.mask_layers_widget.starless_ai_denoise_requested.connect(self.on_run_ai_denoise_requested)
 
         self.mask_layers_widget.set_stars_special_values(
             presence=self.slider_stars.value(),
@@ -3378,6 +3392,11 @@ class DeveloperTab(QWidget):
         self._cache_pre_layers_key = None
         self._cache_pre_layers_stretched = None
         self._cache_pre_layers_stars = None
+        self._cached_base_stretched = None
+        self._cached_stars_stretched = None
+        self._cached_sky_mask = None
+        self._cached_rendered_image = None
+        self._last_rendered_preview = None
 
     def _generate_preview_proxy(self):
         self._invalidate_pipeline_caches()
@@ -3450,6 +3469,16 @@ class DeveloperTab(QWidget):
             self.mask_layers_widget.invalidate_layer_thumbnail(None)
 
     def load_image_direct(self, filepath: str, mask: np.ndarray = None):
+        # 1. Cancelar workers previos si seguían ejecutándose
+        if getattr(self, 'ground_ai_denoise_worker', None) and self.ground_ai_denoise_worker.isRunning():
+            self.ground_ai_denoise_worker.cancel()
+        self.ground_ai_denoise_worker = None
+
+        if getattr(self, 'ai_denoise_worker', None) and self.ai_denoise_worker.isRunning():
+            self.ai_denoise_worker.cancel()
+        self.ai_denoise_worker = None
+
+        # 2. Limpieza completa de datos de imagen y cachés de IA previos
         self._invalidate_pipeline_caches()
         self.active_filepath = filepath
         self.current_mask = mask
@@ -3461,7 +3490,31 @@ class DeveloperTab(QWidget):
         self.proxy_stars = None
         self.proxy_mask = None
         self.preview_proxy = None
-        
+        self.draft_proxy = None
+        self.draft_starless = None
+        self.draft_stars = None
+        self.draft_mask = None
+
+        self._cache_ground_ai = None
+        self._cache_starless_ai = None
+        self.gnd_ai_denoise_enabled = False
+        self.starless_ai_denoise_enabled = False
+        self.gnd_denoise_val = 0.0
+
+        self.is_zoomed_100 = False
+        self.zoom_rel_coords = (0.5, 0.5)
+        self._zoom_crop_rect = None
+
+        if hasattr(self, 'canvas') and self.canvas is not None:
+            self.canvas.is_zoomed = False
+            self.canvas.set_external_crop(None, None)
+            self.canvas.reset_crop_rect()
+            if self.canvas.crop_mode:
+                self.canvas.set_crop_mode(False)
+            self.canvas.set_layer_brush_enabled(False)
+            self.canvas.set_active_layer_mask(None)
+            self.canvas.clear_all_masking()
+
         self.reset_all_parameters()
         self._set_starnet_tools_enabled(False)
         self.combo_layer.setEnabled(False)
@@ -3574,6 +3627,7 @@ class DeveloperTab(QWidget):
         cache_key_full = (
             id(starless),
             id(mask_3d),
+            id(getattr(self, '_cache_starless_ai', None)),
             is_full_res,
             is_draft,
             round(float(getattr(self, 'denoise_strength', 0.0)), 4),
@@ -3598,6 +3652,7 @@ class DeveloperTab(QWidget):
         cache_key_pre = (
             id(starless),
             id(mask_3d),
+            id(getattr(self, '_cache_starless_ai', None)),
             is_full_res,
             is_draft,
             round(float(getattr(self, 'denoise_strength', 0.0)), 4),
@@ -3622,20 +3677,30 @@ class DeveloperTab(QWidget):
                 proc_starless = starless.copy()
                 proc_mask_3d = mask_3d
 
-            # 1. Reducción de Ruido Multietapa (Luminancia + Croma + Máscara)
+            # 1. Reducción de Ruido Multietapa (Luminancia + Croma + Máscara o NAFNet IA)
             if self.denoise_strength > 1e-4:
-                dn_color_ratio = getattr(self, 'denoise_color_strength', 0.5) / 0.5
-                dn_color = min(1.0, self.denoise_strength * dn_color_ratio)
-                from core.denoise import apply_astro_denoise
-                denoised = apply_astro_denoise(
-                    proc_starless,
-                    strength=self.denoise_strength,
-                    color_strength=dn_color,
-                    masking=getattr(self, 'denoise_masking', 0.5),
-                    sky_mask=proc_mask_3d[..., 0] if proc_mask_3d is not None else None,
-                    is_draft=is_draft,
-                    is_full_res=(is_full_res and not is_draft)
-                )
+                cached_ai = getattr(self, '_cache_starless_ai', None)
+                use_ai = getattr(self, 'starless_ai_denoise_enabled', False) and (cached_ai is not None)
+                if use_ai:
+                    if cached_ai.shape[:2] != proc_starless.shape[:2]:
+                        ai_aligned = cv2.resize(cached_ai, (proc_starless.shape[1], proc_starless.shape[0]), interpolation=cv2.INTER_AREA)
+                    else:
+                        ai_aligned = cached_ai
+                    k = float(np.clip(self.denoise_strength, 0.0, 1.0))
+                    denoised = cv2.addWeighted(ai_aligned, k, proc_starless, 1.0 - k, 0.0)
+                else:
+                    dn_color_ratio = getattr(self, 'denoise_color_strength', 0.5) / 0.5
+                    dn_color = min(1.0, self.denoise_strength * dn_color_ratio)
+                    from core.denoise import apply_astro_denoise
+                    denoised = apply_astro_denoise(
+                        proc_starless,
+                        strength=self.denoise_strength,
+                        color_strength=dn_color,
+                        masking=getattr(self, 'denoise_masking', 0.5),
+                        sky_mask=proc_mask_3d[..., 0] if proc_mask_3d is not None else None,
+                        is_draft=is_draft,
+                        is_full_res=(is_full_res and not is_draft)
+                    )
                 if proc_mask_3d is not None:
                     proc_starless = (denoised * proc_mask_3d) + (proc_starless * (1.0 - proc_mask_3d))
                 else:
@@ -3820,6 +3885,9 @@ class DeveloperTab(QWidget):
             round(float(self.gnd_ev_val), 4),
             round(float(self.gnd_shadows_val), 4),
             round(float(self.gnd_bp_val), 4),
+            round(float(getattr(self, 'gnd_denoise_val', 0.0)), 4),
+            bool(getattr(self, 'gnd_ai_denoise_enabled', False)),
+            id(getattr(self, '_cache_ground_ai', None)),
             round(float(getattr(self, 'denoise_strength', 0.0)), 4),
             round(float(getattr(self, 'denoise_color_strength', 0.5)), 4),
             round(float(getattr(self, 'denoise_masking', 0.5)), 4),
@@ -3930,9 +3998,11 @@ class DeveloperTab(QWidget):
 
         is_scrubbing = getattr(self, '_is_scrubbing_heavy_slider', False)
 
+        cached_gnd_ai = self._cache_ground_ai if getattr(self, 'gnd_ai_denoise_enabled', False) else None
         final_img, out_lin, out_str, out_grd, out_spt, out_stars = apply_developer_pipeline(
             target_img=target_img,
             state=state,
+            cached_ground_ai=cached_gnd_ai,
             precomputed_mask=precomputed_mask,
             image_stars=st_img,
             image_starless=sl_img,
@@ -4207,6 +4277,11 @@ class DeveloperTab(QWidget):
         self.raw_linear_starless = self.image_starless.copy()
         self.starless_is_stretched = False
         self.image_stars = np.ascontiguousarray(stars_img, dtype=np.float32)
+        self._cache_starless_ai = None
+        if hasattr(self, 'panel_starnet'):
+            self.panel_starnet.set_ai_denoise_active(False)
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_ai_denoise_active(False)
 
         # Integrar capas de imagen (Fondo, Estrellas y opcionalmente Suelo) en el Gestor de Capas
         if hasattr(self, 'mask_layers_widget'):
@@ -4227,6 +4302,323 @@ class DeveloperTab(QWidget):
         self._set_ai_processing_state(False)
         self.log_message(f"[ERROR STARNET] {err_msg}")
         QMessageBox.warning(self, "Error en StarNet++", err_msg)
+
+
+    # =========================================================================
+    # REDUCCIÓN DE RUIDO EN CAPA DE SUELO (CLÁSICO + IA NAFNET)
+    # =========================================================================
+    def on_gnd_denoise_changed(self, val: int):
+        """Actualiza el valor de fuerza de reducción de ruido en suelo."""
+        self.gnd_denoise_val = val / 100.0
+        if hasattr(self, 'panel_ground_sky') and self.panel_ground_sky is not None:
+            if hasattr(self.panel_ground_sky, 'slider_gnd_dn') and self.panel_ground_sky.slider_gnd_dn.value() != val:
+                self.panel_ground_sky.slider_gnd_dn.setValue(val)
+        if hasattr(self, 'mask_layers_widget') and hasattr(self.mask_layers_widget, 'slider_gnd_special_dn'):
+            if self.mask_layers_widget.slider_gnd_special_dn.value() != val:
+                self.mask_layers_widget.slider_gnd_special_dn.setValue(val)
+        self.update_stretch_preview()
+
+    def on_run_ground_ai_denoise_requested(self):
+        """Inicia o conmuta la reducción de ruido por IA (NAFNet) en la capa de Suelo."""
+        if self.image_32bit is None:
+            self.log_message("[IA SUELO] No hay imagen cargada en el revelador.")
+            return
+
+        # Si ya existe buffer en caché, conmutar directamente A/B
+        if self._cache_ground_ai is not None:
+            self.gnd_ai_denoise_enabled = not self.gnd_ai_denoise_enabled
+            if hasattr(self, 'mask_layers_widget'):
+                self.mask_layers_widget.set_ground_ai_denoise_active(self.gnd_ai_denoise_enabled)
+            mode_lbl = "IA (NAFNet)" if self.gnd_ai_denoise_enabled else "Clásico (Bilateral)"
+            self.log_message(f"✓ [DENOISE SUELO] Conmutado a modo: {mode_lbl}.")
+            self._invalidate_pipeline_caches()
+            self._generate_preview_proxy()
+            self.update_stretch_preview()
+            return
+
+        from core.ai_denoise import is_nafnet_available
+        if not is_nafnet_available():
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Modelo de IA NAFNet no encontrado")
+            msg.setText(
+                "El modelo de IA para reducción profunda de ruido (nafnet_denoise.onnx, ~117 MB) "
+                "no se encuentra en la carpeta 'models/'.\n\n"
+                "¿Deseas descargarlo ahora automáticamente desde Hugging Face?"
+            )
+            btn_download = msg.addButton("Descargar IA (~117 MB)", QMessageBox.AcceptRole)
+            btn_cancel = msg.addButton("Cancelar", QMessageBox.RejectRole)
+            msg.setDefaultButton(btn_download)
+            msg.exec()
+
+            if msg.clickedButton() == btn_download:
+                self._start_nafnet_model_download()
+            return
+
+        self._run_ground_nafnet_inference()
+
+    def _get_stretched_base_for_ai(self) -> np.ndarray:
+        """Retorna la imagen base desarrollada/estirada para alimentar NAFNet en rango visible sRGB."""
+        if not getattr(self, 'is_zoomed_100', False):
+            if hasattr(self, '_cache_ms_stretch_img') and self._cache_ms_stretch_img is not None:
+                return self._cache_ms_stretch_img.copy()
+            if hasattr(self, '_cached_base_stretched') and self._cached_base_stretched is not None:
+                return self._cached_base_stretched.copy()
+        from core.stretch import manual_stretch, apply_ghs_stretch
+        st_params = self.panel_stretch.get_state() if hasattr(self, 'panel_stretch') else {}
+        st_mode = st_params.get("stretch_mode", "mtf")
+        src = np.clip(self.image_32bit.copy(), 0.0, 1.0).astype(np.float32)
+        if st_mode == "ghs":
+            return apply_ghs_stretch(
+                src,
+                sp=st_params.get("ghs_sp_val", 0.02),
+                d=st_params.get("ghs_d_val", 5.0),
+                b=st_params.get("ghs_b_val", 2.0),
+                hp=st_params.get("ghs_hp_val", 0.0),
+                lp=st_params.get("ghs_lp_val", 0.0),
+                bp=st_params.get("ghs_bp_val", 0.0),
+                color_mode="rgb"
+            )
+        else:
+            return manual_stretch(
+                src,
+                black_point=st_params.get("bp_val", 0.0),
+                midtone=st_params.get("mtf_val", 0.15)
+            )
+
+    def _run_ground_nafnet_inference(self):
+        """Ejecuta inferencia NAFNet sobre la base terrestre."""
+        if self.image_32bit is None:
+            return
+
+        progress = QProgressDialog("Inicializando NAFNet para Capa de Suelo...", "Cancelar", 0, 100, self)
+        progress.setWindowTitle("Reducción de Ruido IA — Suelo")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.setAutoClose(True)
+
+        from gui.worker import AIDenoiseWorker
+        # Procesar la base estirada en rango visible sRGB para evitar deriva matemática en NAFNet
+        base_src = self._get_stretched_base_for_ai()
+
+        self.ground_ai_denoise_worker = AIDenoiseWorker(
+            base_src,
+            tile_size=512,
+            overlap=64,
+            clean_chroma=True,
+            chroma_strength=0.5,
+            parent=self
+        )
+
+        def on_tile_prog(curr, total):
+            pct = int((curr / total) * 100) if total > 0 else 0
+            progress.setValue(pct)
+            progress.setLabelText(f"Reduciendo ruido en superficie terrestre con NAFNet...\nBloque {curr} de {total} ({pct}%)")
+
+        def on_finished(denoised_rgb):
+            progress.close()
+            self._cache_ground_ai = denoised_rgb
+            self.gnd_ai_denoise_enabled = True
+            self.log_message("✓ [IA SUELO] Reducción de ruido NAFNet en suelo calculada y almacenada en memoria caché.")
+
+            # Activar fuerza recomendada (70%) si estaba en cero
+            if getattr(self, 'gnd_denoise_val', 0.0) <= 1e-4:
+                self.gnd_denoise_val = 0.70
+                if hasattr(self, 'mask_layers_widget') and hasattr(self.mask_layers_widget, 'slider_gnd_special_dn'):
+                    self.mask_layers_widget.slider_gnd_special_dn.setValue(70)
+
+            if hasattr(self, 'mask_layers_widget'):
+                self.mask_layers_widget.set_ground_ai_denoise_active(True)
+
+            self._invalidate_pipeline_caches()
+            self._generate_preview_proxy()
+            self.update_stretch_preview()
+
+        def on_error(err):
+            progress.close()
+            self.log_message(f"[ERROR IA SUELO] {err}")
+            QMessageBox.warning(self, "Error en Inferencia", f"Ocurrió un error en la inferencia NAFNet de suelo:\n{err}")
+
+        def on_cancel():
+            self.ground_ai_denoise_worker.cancel()
+            self.log_message("[IA SUELO] Inferencia cancelada por el usuario.")
+
+        self.ground_ai_denoise_worker.progress_changed.connect(on_tile_prog)
+        self.ground_ai_denoise_worker.finished_success.connect(on_finished)
+        self.ground_ai_denoise_worker.error_occurred.connect(on_error)
+        self.ground_ai_denoise_worker.cancelled.connect(on_cancel)
+        progress.canceled.connect(on_cancel)
+
+        self.ground_ai_denoise_worker.start()
+
+    # =========================================================================
+    # REDUCCIÓN DE RUIDO CON INTELIGENCIA ARTIFICIAL (NAFNET ONNX)
+    # =========================================================================
+    def on_run_ai_denoise_requested(self):
+        """Inicia o conmuta la reducción de ruido neuronal profunda NAFNet sobre la capa Starless."""
+        if self.image_starless is None:
+            self.log_message("[IA DENOISE] No hay capa StarNet generada todavía. Separa las estrellas primero.")
+            QMessageBox.information(
+                self,
+                "Reducción de Ruido con IA",
+                "Primero debes desacoplar las estrellas con StarNet para poder aplicar reducción de ruido profunda al fondo."
+            )
+            return
+
+        # Si ya existe un buffer de IA calculado, conmutar inmediatamente entre modo Clásico e IA
+        if self._cache_starless_ai is not None:
+            self.starless_ai_denoise_enabled = not self.starless_ai_denoise_enabled
+            if hasattr(self, 'panel_starnet'):
+                self.panel_starnet.set_ai_denoise_active(self.starless_ai_denoise_enabled)
+            if hasattr(self, 'mask_layers_widget'):
+                self.mask_layers_widget.set_ai_denoise_active(self.starless_ai_denoise_enabled)
+            mode_lbl = "IA (NAFNet)" if self.starless_ai_denoise_enabled else "Clásico (Bilateral)"
+            self.log_message(f"✓ [DENOISE STARLESS] Conmutado a modo: {mode_lbl}.")
+            self._invalidate_pipeline_caches()
+            self._generate_preview_proxy()
+            self.update_stretch_preview()
+            return
+
+        if not getattr(self, "starless_is_stretched", False):
+            reply = QMessageBox.question(
+                self,
+                "Estirado Recomendado para IA",
+                "La capa de Fondo (Starless) aún se encuentra en modo lineal sin estirar.\n\n"
+                "La red neuronal NAFNet está calibrada para imágenes no lineales (estiradas).\n"
+                "Si se aplica directamente en lineal puede recortar información tenue en sombras profundas.\n\n"
+                "¿Deseas continuar con la inferencia de todos modos?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        from core.ai_denoise import is_nafnet_available
+        if not is_nafnet_available():
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Modelo de IA NAFNet no encontrado")
+            msg.setText(
+                "El modelo de IA para reducción profunda de ruido (nafnet_denoise.onnx, ~117 MB) "
+                "no se encuentra en la carpeta 'models/'.\n\n"
+                "¿Deseas descargarlo ahora automáticamente desde el repositorio seguro de Hugging Face?"
+            )
+            btn_download = msg.addButton("Descargar IA (~117 MB)", QMessageBox.AcceptRole)
+            btn_cancel = msg.addButton("Cancelar", QMessageBox.RejectRole)
+            msg.setDefaultButton(btn_download)
+            msg.exec()
+
+            if msg.clickedButton() == btn_download:
+                self._start_nafnet_model_download()
+            return
+
+        self._run_nafnet_inference()
+
+    def _start_nafnet_model_download(self):
+        """Descarga asistida del modelo ONNX de NAFNet con barra modal de progreso."""
+        progress = QProgressDialog("Conectando con Hugging Face...", "Cancelar", 0, 100, self)
+        progress.setWindowTitle("Descarga de Modelo IA Denoise (NAFNet)")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.setAutoClose(True)
+
+        from core.ai_denoise import download_nafnet_model
+        from gui.worker import ModelDownloadWorker
+        self.nafnet_download_worker = ModelDownloadWorker(download_fn=download_nafnet_model, parent=self)
+
+        def on_prog(pct, d_mb, t_mb):
+            progress.setValue(pct)
+            progress.setLabelText(f"Descargando modelo NAFNet (nafnet_denoise.onnx)...\n{d_mb:.1f} MB de {t_mb:.1f} MB ({pct}%)")
+
+        def on_finished(path):
+            progress.close()
+            self.log_message(f"✓ [IA DENOISE] Modelo NAFNet descargado e instalado en: {os.path.basename(path)}")
+            self._run_nafnet_inference()
+
+        def on_error(err):
+            progress.close()
+            self.log_message(f"[ERROR DESCARGA IA] {err}")
+            QMessageBox.warning(self, "Error en Descarga", f"No se pudo descargar el modelo NAFNet:\n{err}")
+
+        def on_cancel():
+            self.nafnet_download_worker.cancel()
+            self.log_message("[IA DENOISE] Descarga cancelada por el usuario.")
+
+        self.nafnet_download_worker.progress_changed.connect(on_prog)
+        self.nafnet_download_worker.finished_success.connect(on_finished)
+        self.nafnet_download_worker.error_occurred.connect(on_error)
+        self.nafnet_download_worker.cancelled.connect(on_cancel)
+        progress.canceled.connect(on_cancel)
+
+        self.nafnet_download_worker.start()
+
+    def _run_nafnet_inference(self):
+        """Ejecuta el worker de inferencia NAFNet con tiling 512x512 y ponderación Hann 2D."""
+        if self.image_starless is None:
+            return
+
+        progress = QProgressDialog("Inicializando red neuronal NAFNet...", "Cancelar", 0, 100, self)
+        progress.setWindowTitle("Reducción de Ruido IA (NAFNet)")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.setAutoClose(True)
+
+        from gui.worker import AIDenoiseWorker
+        c_strength = float(getattr(self, 'denoise_color_strength', 0.5))
+
+        self.ai_denoise_worker = AIDenoiseWorker(
+            self.image_starless.copy(),
+            tile_size=512,
+            overlap=64,
+            clean_chroma=True,
+            chroma_strength=c_strength,
+            parent=self
+        )
+
+        def on_tile_prog(curr, total):
+            pct = int((curr / total) * 100) if total > 0 else 0
+            progress.setValue(pct)
+            progress.setLabelText(f"Procesando reducción de ruido con NAFNet...\nBloque {curr} de {total} ({pct}%)")
+
+        def on_finished(denoised_rgb):
+            progress.close()
+            self._cache_starless_ai = denoised_rgb
+            self.starless_ai_denoise_enabled = True
+            self.log_message("✓ [IA DENOISE] Reducción de ruido NAFNet completada y almacenada en memoria caché.")
+
+            # Ajustar fuerza sugerida (70%) si el control estaba en cero
+            if hasattr(self, 'slider_denoise') and self.slider_denoise.value() == 0:
+                self.slider_denoise.setValue(70)
+            if hasattr(self, 'mask_layers_widget') and hasattr(self.mask_layers_widget, 'slider_sl_denoise'):
+                if self.mask_layers_widget.slider_sl_denoise.value() == 0:
+                    self.mask_layers_widget.slider_sl_denoise.setValue(70)
+
+            # Notificar al botón para reflejar estado activo
+            if hasattr(self, 'panel_starnet'):
+                self.panel_starnet.set_ai_denoise_active(True)
+            if hasattr(self, 'mask_layers_widget'):
+                self.mask_layers_widget.set_ai_denoise_active(True)
+
+            self._invalidate_pipeline_caches()
+            self._generate_preview_proxy()
+
+        def on_error(err):
+            progress.close()
+            self.log_message(f"[ERROR IA DENOISE] {err}")
+            QMessageBox.warning(self, "Error en Inferencia", f"Ocurrió un error en la inferencia NAFNet:\n{err}")
+
+        def on_cancel():
+            self.ai_denoise_worker.cancel()
+            self.log_message("[IA DENOISE] Inferencia cancelada por el usuario.")
+
+        self.ai_denoise_worker.progress_changed.connect(on_tile_prog)
+        self.ai_denoise_worker.finished_success.connect(on_finished)
+        self.ai_denoise_worker.error_occurred.connect(on_error)
+        self.ai_denoise_worker.cancelled.connect(on_cancel)
+        progress.canceled.connect(on_cancel)
+
+        self.ai_denoise_worker.start()
 
     def on_auto_stretch_starless_requested(self):
         """Ejecuta el estirado no lineal adaptativo sobre la capa starless (Estirado Adaptativo RGB)."""
@@ -4255,9 +4647,9 @@ class DeveloperTab(QWidget):
 
         # Leer parámetros configurados desde el gestor de capas
         params = self.mask_layers_widget.get_autostretch_params() if hasattr(self, 'mask_layers_widget') else {}
-        target_bg = params.get("target_bg", 0.18)
-        shadow_clip_sigma = params.get("shadow_clip_sigma", 3.0)
-        saturation_boost = params.get("saturation_boost", 1.5)
+        target_bg = params.get("target_bg", 0.15)
+        shadow_clip_sigma = params.get("shadow_clip_sigma", 2.0)
+        saturation_boost = params.get("saturation_boost", 2.5)
         unlinked = params.get("unlinked", True)
         feather_radius = params.get("feather_radius", 2)
 
@@ -4278,6 +4670,11 @@ class DeveloperTab(QWidget):
         )
         self.image_starless = stretched_starless
         self.starless_is_stretched = True
+        self._cache_starless_ai = None
+        if hasattr(self, 'panel_starnet'):
+            self.panel_starnet.set_ai_denoise_active(False)
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_ai_denoise_active(False)
 
         self._invalidate_pipeline_caches()
         self._generate_preview_proxy()
@@ -5424,13 +5821,33 @@ class DeveloperTab(QWidget):
                 "denoise_color_val": 50,
                 "denoise_mask_val": 50
             })
+            if hasattr(self.panel_starnet, 'set_ai_denoise_active'):
+                self.panel_starnet.set_ai_denoise_active(False)
             
         if hasattr(self, 'panel_ground_sky') and self.panel_ground_sky is not None:
             self.panel_ground_sky.set_state({
                 "gnd_ev_val": 0,
                 "gnd_sh_val": 0,
-                "gnd_bp_val": 0
+                "gnd_bp_val": 0,
+                "gnd_dn_val": 0
             })
+
+        # Limpiar variables internas de Suelo y StarNet AI
+        self.gnd_ev_val = 0.0
+        self.gnd_shadows_val = 0.0
+        self.gnd_bp_val = 0.0
+        self.gnd_denoise_val = 0.0
+        self.gnd_ai_denoise_enabled = False
+        self._cache_ground_ai = None
+        if getattr(self, 'ground_ai_denoise_worker', None) and self.ground_ai_denoise_worker.isRunning():
+            self.ground_ai_denoise_worker.cancel()
+        self.ground_ai_denoise_worker = None
+
+        self.starless_ai_denoise_enabled = False
+        self._cache_starless_ai = None
+        if getattr(self, 'ai_denoise_worker', None) and self.ai_denoise_worker.isRunning():
+            self.ai_denoise_worker.cancel()
+        self.ai_denoise_worker = None
 
         # 2. Resetear curvas y capas
         if hasattr(self, 'curve_widget') and self.curve_widget is not None:
@@ -5438,12 +5855,29 @@ class DeveloperTab(QWidget):
 
         if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget is not None:
             self.mask_layers_widget.set_state([])
+            if hasattr(self.mask_layers_widget, 'set_ground_ai_denoise_active'):
+                self.mask_layers_widget.set_ground_ai_denoise_active(False)
+            if hasattr(self.mask_layers_widget, 'set_ai_denoise_active'):
+                self.mask_layers_widget.set_ai_denoise_active(False)
+            if hasattr(self.mask_layers_widget, 'set_ground_tone_values'):
+                self.mask_layers_widget.set_ground_tone_values(0, 0, 0, 0)
+            if hasattr(self.mask_layers_widget, 'slider_gnd_special_dn'):
+                self.mask_layers_widget.slider_gnd_special_dn.setValue(0)
+            if hasattr(self.mask_layers_widget, 'slider_sl_denoise'):
+                self.mask_layers_widget.slider_sl_denoise.setValue(0)
 
         # 3. Restablecer zoom e invalidar cachés
         self.is_zoomed_100 = False
         self.zoom_rel_coords = (0.5, 0.5)
+        self._zoom_crop_rect = None
         if hasattr(self, 'canvas') and self.canvas is not None:
             self.canvas.is_zoomed = False
+            self.canvas.set_external_crop(None, None)
+            self.canvas.reset_crop_rect()
+            if self.canvas.crop_mode:
+                self.canvas.set_crop_mode(False)
+            self.canvas.set_layer_brush_enabled(False)
+            self.canvas.set_active_layer_mask(None)
 
         if hasattr(self, 'sec_presets') and self.sec_presets is not None:
             self.sec_presets.set_status_badge("")
@@ -5459,15 +5893,28 @@ class DeveloperTab(QWidget):
 
         self.image_32bit = None
         self.image_starless = None
+        self.raw_linear_starless = None
+        self.starless_is_stretched = False
         self.image_stars = None
 
         self.preview_proxy = None
+        self.draft_proxy = None
         self.proxy_starless = None
+        self.draft_starless = None
         self.proxy_stars = None
+        self.draft_stars = None
         self.proxy_mask = None
+        self.draft_mask = None
 
         self.current_mask = None
         self.active_filepath = None
+        self._cache_ground_ai = None
+        self._cache_starless_ai = None
+        self.gnd_ai_denoise_enabled = False
+        self.starless_ai_denoise_enabled = False
+        self.gnd_denoise_val = 0.0
+        self._zoom_crop_rect = None
+        self.is_zoomed_100 = False
 
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_state([])
@@ -5486,10 +5933,12 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'canvas') and self.canvas is not None:
             self.canvas.set_native_image_size(None)
             self.canvas.reset_crop_rect()
+            self.canvas.set_external_crop(None, None)
             if self.canvas.crop_mode:
                 self.canvas.set_crop_mode(False)
             self.canvas.set_layer_brush_enabled(False)
             self.canvas.set_active_layer_mask(None)
+            self.canvas.clear_image()
             self.canvas.set_refined_mask(None)
             self.canvas.set_mask_visible(False)
             self.canvas.orig_rgb = None

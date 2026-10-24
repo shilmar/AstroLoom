@@ -20,5 +20,5 @@ psutil>=5.9.0
 # Exportación PSD nativo por capas
 pytoshop>=1.2.1
 
-# Inferencia de IA (Detección y segmentación automática de horizonte)
-onnxruntime>=1.16.0
+# Inferencia de IA (Detección de horizonte y Reducción de Ruido NAFNet acelerada por GPU)
+onnxruntime-directml>=1.16.0

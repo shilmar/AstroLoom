@@ -263,8 +263,7 @@ def compute_layer_mask(
     elif layer.mask_type == MASK_TYPE_GROUND:
         if master_sky_mask is not None:
             m_sky = master_sky_mask[..., 0] if master_sky_mask.ndim == 3 else master_sky_mask
-            if m_sky.shape[:2] != (h, w):
-                m_sky = cv2.resize(m_sky, (w, h), interpolation=cv2.INTER_LINEAR)
+            m_sky = _slice_or_resize_mask(m_sky)
             m = np.clip(1.0 - m_sky, 0.0, 1.0)
         else:
             m = np.ones((h, w), dtype=np.float32)
@@ -272,10 +271,7 @@ def compute_layer_mask(
     elif layer.mask_type == MASK_TYPE_SKY:
         if master_sky_mask is not None:
             m_sky = master_sky_mask[..., 0] if master_sky_mask.ndim == 3 else master_sky_mask
-            if m_sky.shape[:2] != (h, w):
-                m = cv2.resize(m_sky, (w, h), interpolation=cv2.INTER_LINEAR)
-            else:
-                m = m_sky.copy()
+            m = _slice_or_resize_mask(m_sky)
         else:
             m = np.ones((h, w), dtype=np.float32)
 
@@ -518,7 +514,23 @@ def compute_effective_layer_mask(
     if master_sky_mask is not None:
         sky_m = master_sky_mask[..., 0] if master_sky_mask.ndim == 3 else master_sky_mask
         if sky_m.shape[:2] != (img_h, img_w):
-            sky_m = cv2.resize(sky_m, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
+            if crop_rect is not None and full_image_shape is not None:
+                x1, y1, x2, y2 = crop_rect
+                h_f, w_f = full_image_shape
+                h_m, w_m = sky_m.shape[:2]
+                sx = w_m / float(w_f)
+                sy = h_m / float(h_f)
+                sx1 = max(0, min(w_m, int(round(x1 * sx))))
+                sy1 = max(0, min(h_m, int(round(y1 * sy))))
+                sx2 = max(0, min(w_m, int(round(x2 * sx))))
+                sy2 = max(0, min(h_m, int(round(y2 * sy))))
+                sky_sub = sky_m[sy1:sy2, sx1:sx2]
+                if sky_sub.shape[:2] != (img_h, img_w):
+                    sky_m = cv2.resize(sky_sub, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
+                else:
+                    sky_m = sky_sub
+            else:
+                sky_m = cv2.resize(sky_m, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
 
     if layer.target_scope == SCOPE_TARGET_GROUND and sky_m is not None:
         return np.clip(m_base * (1.0 - sky_m), 0.0, 1.0).astype(np.float32)
@@ -588,7 +600,23 @@ def apply_all_mask_layers(
     if master_sky_mask is not None:
         sky_m = master_sky_mask[..., 0] if master_sky_mask.ndim == 3 else master_sky_mask
         if sky_m.shape[:2] != (img_h, img_w):
-            sky_m = cv2.resize(sky_m, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
+            if crop_rect is not None and full_image_shape is not None:
+                x1, y1, x2, y2 = crop_rect
+                h_f, w_f = full_image_shape
+                h_m, w_m = sky_m.shape[:2]
+                sx = w_m / float(w_f)
+                sy = h_m / float(h_f)
+                sx1 = max(0, min(w_m, int(round(x1 * sx))))
+                sy1 = max(0, min(h_m, int(round(y1 * sy))))
+                sx2 = max(0, min(w_m, int(round(x2 * sx))))
+                sy2 = max(0, min(h_m, int(round(y2 * sy))))
+                sky_sub = sky_m[sy1:sy2, sx1:sx2]
+                if sky_sub.shape[:2] != (img_h, img_w):
+                    sky_m = cv2.resize(sky_sub, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
+                else:
+                    sky_m = sky_sub
+            else:
+                sky_m = cv2.resize(sky_m, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
         gnd_m = np.clip(1.0 - sky_m, 0.0, 1.0).astype(np.float32)
 
     for layer in eval_layers:

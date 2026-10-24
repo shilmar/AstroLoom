@@ -130,6 +130,8 @@ class MaskLayersWidget(QWidget):
     ground_ev_changed = Signal(int)              # (val) sincronizar slider_gnd_ev (-200 a 300)
     ground_shadows_changed = Signal(int)         # (val) sincronizar slider_gnd_sh (0 a 100)
     ground_bp_changed = Signal(int)              # (val) sincronizar slider_gnd_bp (-50 a 100)
+    ground_denoise_changed = Signal(int)         # (val 0 a 100) sincronizar slider de ruido de suelo
+    ground_ai_denoise_requested = Signal()       # Solicitud de alternar o calcular Denoise IA para Suelo
     ground_reset_requested = Signal()            # reset tono suelo
     ground_slider_released = Signal()            # commit de deshacer tras soltar deslizador de suelo
 
@@ -151,6 +153,7 @@ class MaskLayersWidget(QWidget):
     starless_denoise_changed = Signal(int)       # (val 0 a 100)
     starless_denoise_color_changed = Signal(int) # (val 0 a 100)
     starless_denoise_mask_changed = Signal(int)  # (val 0 a 100)
+    starless_ai_denoise_requested = Signal()
     starless_orton_strength_changed = Signal(int)   # (val 0 a 100)
     starless_orton_radius_changed = Signal(int)     # (val 10 a 150)
     starless_orton_threshold_changed = Signal(int)  # (val 0 a 50)
@@ -866,6 +869,40 @@ class MaskLayersWidget(QWidget):
         self.slider_gnd_special_bp.sliderReleased.connect(self.ground_slider_released.emit)
         gnd_spec_layout.addWidget(self.row_gnd_special_bp)
 
+        # Reducción Ruido Suelo (Clásico + IA NAFNet)
+        self.btn_gnd_ai_denoise = QPushButton("✨ IA")
+        self.btn_gnd_ai_denoise.setCheckable(True)
+        self.btn_gnd_ai_denoise.setChecked(False)
+        self.btn_gnd_ai_denoise.setCursor(Qt.PointingHandCursor)
+        self.btn_gnd_ai_denoise.setFixedHeight(18)
+        self.btn_gnd_ai_denoise.setToolTip("Reducción de Ruido Profunda con IA (NAFNet) para la superficie terrestre")
+        self.btn_gnd_ai_denoise.setStyleSheet("""
+            QPushButton {
+                background-color: #1b3822;
+                color: #a5d6a7;
+                border: 1px solid #43a047;
+                border-radius: 3px;
+                padding: 1px 6px;
+                font-weight: bold;
+                font-size: 10px;
+            }
+            QPushButton:hover {
+                background-color: #254d2f;
+                border-color: #81c784;
+                color: #ffffff;
+            }
+        """)
+        self.btn_gnd_ai_denoise.clicked.connect(self.ground_ai_denoise_requested.emit)
+
+        self.row_gnd_special_dn = PrecisionSliderRow(
+            "Reducción Ruido:", 0, 100, 0, unit="%", label_width=120, action_button=self.btn_gnd_ai_denoise
+        )
+        self.slider_gnd_special_dn = self.row_gnd_special_dn.slider
+        self.lbl_gnd_special_dn = self.row_gnd_special_dn.lbl_value
+        self.slider_gnd_special_dn.valueChanged.connect(self._on_gnd_special_dn_changed)
+        self.slider_gnd_special_dn.sliderReleased.connect(self.ground_slider_released.emit)
+        gnd_spec_layout.addWidget(self.row_gnd_special_dn)
+
         self.btn_reset_gnd_special = QPushButton("Restablecer Tono Suelo")
         self.btn_reset_gnd_special.setIcon(get_icon("rotate_ccw", color="#a5d6a7", size=13))
         self.btn_reset_gnd_special.setCursor(Qt.PointingHandCursor)
@@ -1058,8 +1095,39 @@ class MaskLayersWidget(QWidget):
         """)
         self.btn_sl_denoise_expand.setToolTip("Ajustes avanzados: Ruido de Color (Croma) y Máscara Bordes/Sombras")
 
+        self.btn_sl_ai_denoise = QPushButton("✨ IA")
+        self.btn_sl_ai_denoise.setCheckable(True)
+        self.btn_sl_ai_denoise.setChecked(False)
+        self.btn_sl_ai_denoise.setCursor(Qt.PointingHandCursor)
+        self.btn_sl_ai_denoise.setFixedHeight(18)
+        self.btn_sl_ai_denoise.setToolTip("Ejecutar Reducción de Ruido Profunda con IA (NAFNet)")
+        self.btn_sl_ai_denoise.setStyleSheet("""
+            QPushButton {
+                background-color: #2b1f3d;
+                color: #ce93d8;
+                border: 1px solid #7b1fa2;
+                border-radius: 3px;
+                padding: 1px 6px;
+                font-weight: bold;
+                font-size: 10px;
+            }
+            QPushButton:hover {
+                background-color: #3b2854;
+                border-color: #ba68c8;
+                color: #ffffff;
+            }
+        """)
+        self.btn_sl_ai_denoise.clicked.connect(self.starless_ai_denoise_requested.emit)
+
+        w_sl_dn_btns = QWidget()
+        h_sl_dn_btns = QHBoxLayout(w_sl_dn_btns)
+        h_sl_dn_btns.setContentsMargins(0, 0, 0, 0)
+        h_sl_dn_btns.setSpacing(4)
+        h_sl_dn_btns.addWidget(self.btn_sl_ai_denoise)
+        h_sl_dn_btns.addWidget(self.btn_sl_denoise_expand)
+
         self.row_sl_denoise = PrecisionSliderRow(
-            "Reducción Ruido:", 0, 100, 0, unit="%", label_width=130, action_button=self.btn_sl_denoise_expand
+            "Reducción Ruido:", 0, 100, 0, unit="%", label_width=130, action_button=w_sl_dn_btns
         )
         self.slider_sl_denoise = self.row_sl_denoise.slider
         self.lbl_sl_denoise = self.row_sl_denoise.lbl_value
@@ -1226,13 +1294,13 @@ class MaskLayersWidget(QWidget):
         w_as_layout.setContentsMargins(4, 2, 4, 4)
         w_as_layout.setSpacing(4)
 
-        self.row_sl_as_target_bg = PrecisionSliderRow("Fondo Objetivo:", 10, 30, 18, scale=100.0, decimals=2, unit="%", label_width=130)
+        self.row_sl_as_target_bg = PrecisionSliderRow("Fondo Objetivo:", 10, 30, 15, scale=100.0, decimals=2, unit="%", label_width=130)
         w_as_layout.addWidget(self.row_sl_as_target_bg)
 
-        self.row_sl_as_sigma = PrecisionSliderRow("Corte Sombras:", 15, 50, 30, scale=10.0, decimals=1, unit=" σ", label_width=130)
+        self.row_sl_as_sigma = PrecisionSliderRow("Corte Sombras:", 10, 50, 20, scale=10.0, decimals=1, unit=" σ", label_width=130)
         w_as_layout.addWidget(self.row_sl_as_sigma)
 
-        self.row_sl_as_sat = PrecisionSliderRow("Saturación:", 10, 30, 15, scale=10.0, decimals=1, unit="x", label_width=130)
+        self.row_sl_as_sat = PrecisionSliderRow("Saturación:", 10, 40, 25, scale=10.0, decimals=1, unit="x", label_width=130)
         w_as_layout.addWidget(self.row_sl_as_sat)
 
         self.row_sl_as_feather = PrecisionSliderRow("Suavizado Borde:", 0, 10, 2, unit=" px", label_width=130)
@@ -2623,7 +2691,7 @@ class MaskLayersWidget(QWidget):
         self.lbl_gnd_special_bp.setText(f"{display_val:+.3f}")
         self.ground_bp_changed.emit(val)
 
-    def set_ground_tone_values(self, ev_val: int, sh_val: int, bp_val: int) -> None:
+    def set_ground_tone_values(self, ev_val: int, sh_val: int, bp_val: int, dn_val: int = 0) -> None:
         """Sincroniza los valores de los controles tonales de suelo desde tab_developer."""
         self._updating_ui = True
         if hasattr(self, 'slider_gnd_special_ev'):
@@ -2635,7 +2703,58 @@ class MaskLayersWidget(QWidget):
         if hasattr(self, 'slider_gnd_special_bp'):
             self.slider_gnd_special_bp.setValue(bp_val)
             self.lbl_gnd_special_bp.setText(f"{bp_val / 1000.0:+.3f}")
+        if hasattr(self, 'slider_gnd_special_dn'):
+            self.slider_gnd_special_dn.setValue(dn_val)
+            self.lbl_gnd_special_dn.setText(f"{dn_val}%")
         self._updating_ui = False
+
+    def _on_gnd_special_dn_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_gnd_special_dn.setText(f"{val}%")
+        self.ground_denoise_changed.emit(val)
+
+    def set_ground_ai_denoise_active(self, active: bool):
+        """Actualiza el botón IA de la capa de suelo."""
+        if not hasattr(self, 'btn_gnd_ai_denoise'):
+            return
+        self.btn_gnd_ai_denoise.setChecked(active)
+        if active:
+            self.btn_gnd_ai_denoise.setText("✓ IA")
+            self.btn_gnd_ai_denoise.setStyleSheet("""
+                QPushButton {
+                    background-color: #1b3822;
+                    color: #a5d6a7;
+                    border: 1px solid #43a047;
+                    border-radius: 3px;
+                    padding: 1px 6px;
+                    font-weight: bold;
+                    font-size: 10px;
+                }
+                QPushButton:hover {
+                    background-color: #2e593e;
+                    color: #ffffff;
+                }
+            """)
+            self.btn_gnd_ai_denoise.setToolTip("Modo IA ACTIVO en Suelo. Haz clic para alternar al modo Clásico.")
+        else:
+            self.btn_gnd_ai_denoise.setText("✨ IA")
+            self.btn_gnd_ai_denoise.setStyleSheet("""
+                QPushButton {
+                    background-color: #1b3822;
+                    color: #a5d6a7;
+                    border: 1px solid #43a047;
+                    border-radius: 3px;
+                    padding: 1px 6px;
+                    font-weight: bold;
+                    font-size: 10px;
+                }
+                QPushButton:hover {
+                    background-color: #254d2f;
+                    border-color: #81c784;
+                    color: #ffffff;
+                }
+            """)
+            self.btn_gnd_ai_denoise.setToolTip("Modo Clásico ACTIVO en Suelo. Haz clic para activar o calcular Modo IA (NAFNet).")
 
     # Controles Especiales de Estrellas
     def _on_stars_special_changed(self, val: int) -> None:
@@ -2708,9 +2827,9 @@ class MaskLayersWidget(QWidget):
     def get_autostretch_params(self) -> dict:
         """Retorna los parámetros actuales configurados para el Estirado Adaptativo RGB."""
         return {
-            "target_bg": self.row_sl_as_target_bg.value() / 100.0 if hasattr(self, "row_sl_as_target_bg") else 0.18,
-            "shadow_clip_sigma": self.row_sl_as_sigma.value() / 10.0 if hasattr(self, "row_sl_as_sigma") else 3.0,
-            "saturation_boost": self.row_sl_as_sat.value() / 10.0 if hasattr(self, "row_sl_as_sat") else 1.5,
+            "target_bg": self.row_sl_as_target_bg.value() / 100.0 if hasattr(self, "row_sl_as_target_bg") else 0.15,
+            "shadow_clip_sigma": self.row_sl_as_sigma.value() / 10.0 if hasattr(self, "row_sl_as_sigma") else 2.0,
+            "saturation_boost": self.row_sl_as_sat.value() / 10.0 if hasattr(self, "row_sl_as_sat") else 2.5,
             "feather_radius": self.row_sl_as_feather.value() if hasattr(self, "row_sl_as_feather") else 2,
             "unlinked": self.chk_sl_as_unlinked.isChecked() if hasattr(self, "chk_sl_as_unlinked") else True,
         }
@@ -2753,6 +2872,49 @@ class MaskLayersWidget(QWidget):
         if self._updating_ui: return
         self.lbl_sl_contrast.setText(f"{val / 100.0:+.2f}")
         self.starless_contrast_changed.emit(val)
+
+    def set_ai_denoise_active(self, active: bool):
+        """Actualiza el aspecto visual del botón según si hay un buffer IA activo."""
+        if not hasattr(self, 'btn_sl_ai_denoise'):
+            return
+        self.btn_sl_ai_denoise.setChecked(active)
+        if active:
+            self.btn_sl_ai_denoise.setText("✓ IA")
+            self.btn_sl_ai_denoise.setStyleSheet("""
+                QPushButton {
+                    background-color: #1b3a2b;
+                    color: #a5d6a7;
+                    border: 1px solid #2e7d32;
+                    border-radius: 3px;
+                    padding: 1px 6px;
+                    font-weight: bold;
+                    font-size: 10px;
+                }
+                QPushButton:hover {
+                    background-color: #2e593e;
+                    color: #ffffff;
+                }
+            """)
+            self.btn_sl_ai_denoise.setToolTip("Reducción de ruido por IA calculada y activa. Desliza para graduar fuerza.")
+        else:
+            self.btn_sl_ai_denoise.setText("✨ IA")
+            self.btn_sl_ai_denoise.setStyleSheet("""
+                QPushButton {
+                    background-color: #2b1f3d;
+                    color: #ce93d8;
+                    border: 1px solid #7b1fa2;
+                    border-radius: 3px;
+                    padding: 1px 6px;
+                    font-weight: bold;
+                    font-size: 10px;
+                }
+                QPushButton:hover {
+                    background-color: #3b2854;
+                    border-color: #ba68c8;
+                    color: #ffffff;
+                }
+            """)
+            self.btn_sl_ai_denoise.setToolTip("Ejecutar Reducción de Ruido Profunda con IA (NAFNet)")
 
     def _on_sl_denoise_changed(self, val: int) -> None:
         if self._updating_ui: return

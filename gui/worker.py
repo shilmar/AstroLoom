@@ -13,7 +13,7 @@ import numpy as np
 import tifffile
 import multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Callable
 
 from PySide6.QtCore import QThread, Signal
 
@@ -723,9 +723,10 @@ class ModelDownloadWorker(QThread):
     error_occurred = Signal(str)
     cancelled = Signal()
 
-    def __init__(self, target_path: Optional[str] = None, parent=None):
+    def __init__(self, target_path: Optional[str] = None, download_fn: Optional[Callable] = None, parent=None):
         super().__init__(parent)
         self.target_path = target_path
+        self.download_fn = download_fn
         self._is_cancelled = False
 
     def cancel(self):
@@ -733,14 +734,76 @@ class ModelDownloadWorker(QThread):
 
     def run(self):
         try:
-            from core.ai_horizon import download_ai_model
-            res_path = download_ai_model(
-                target_path=self.target_path,
-                progress_callback=lambda pct, d_mb, t_mb: self.progress_changed.emit(pct, d_mb, t_mb),
+            if self.download_fn is not None:
+                res_path = self.download_fn(
+                    target_path=self.target_path,
+                    progress_callback=lambda pct, d_mb, t_mb: self.progress_changed.emit(pct, d_mb, t_mb),
+                    cancel_check=lambda: self._is_cancelled
+                )
+            else:
+                from core.ai_horizon import download_ai_model
+                res_path = download_ai_model(
+                    target_path=self.target_path,
+                    progress_callback=lambda pct, d_mb, t_mb: self.progress_changed.emit(pct, d_mb, t_mb),
+                    cancel_check=lambda: self._is_cancelled
+                )
+            if not self._is_cancelled:
+                self.finished_success.emit(res_path)
+            else:
+                self.cancelled.emit()
+        except InterruptedError:
+            self.cancelled.emit()
+        except Exception as e:
+            if not self._is_cancelled:
+                self.error_occurred.emit(str(e))
+            else:
+                self.cancelled.emit()
+
+
+class AIDenoiseWorker(QThread):
+    """Hilo secundario para inferencia de reducción de ruido neuronal NAFNet con reporte de progreso."""
+    progress_changed = Signal(int, int)  # (current_tile, total_tiles)
+    finished_success = Signal(object)    # denoised_rgb: np.ndarray float32
+    error_occurred = Signal(str)
+    cancelled = Signal()
+
+    def __init__(
+        self,
+        img_rgb: np.ndarray,
+        model_path: Optional[str] = None,
+        tile_size: int = 512,
+        overlap: int = 64,
+        clean_chroma: bool = True,
+        chroma_strength: float = 0.5,
+        parent=None
+    ):
+        super().__init__(parent)
+        self.img_rgb = img_rgb
+        self.model_path = model_path
+        self.tile_size = tile_size
+        self.overlap = overlap
+        self.clean_chroma = clean_chroma
+        self.chroma_strength = chroma_strength
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
+
+    def run(self):
+        try:
+            from core.ai_denoise import run_nafnet_tiled_inference
+            result = run_nafnet_tiled_inference(
+                self.img_rgb,
+                model_path=self.model_path,
+                tile_size=self.tile_size,
+                overlap=self.overlap,
+                clean_chroma=self.clean_chroma,
+                chroma_strength=self.chroma_strength,
+                progress_callback=lambda curr, total: self.progress_changed.emit(curr, total),
                 cancel_check=lambda: self._is_cancelled
             )
             if not self._is_cancelled:
-                self.finished_success.emit(res_path)
+                self.finished_success.emit(result)
             else:
                 self.cancelled.emit()
         except InterruptedError:

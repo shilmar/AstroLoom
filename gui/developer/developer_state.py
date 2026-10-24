@@ -82,6 +82,7 @@ class DeveloperState:
     gnd_ev_val: int = 0
     gnd_sh_val: int = 0
     gnd_bp_val: int = 0
+    gnd_dn_val: int = 0
 
     # Layer & Canvas view mode
     layer_idx: int = 0

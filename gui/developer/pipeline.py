@@ -146,6 +146,7 @@ def apply_developer_pipeline(
     return_milestones: bool = False,
     return_intermediate: bool = False,
     is_dragging_deconv: bool = False,
+    cached_ground_ai: Optional[np.ndarray] = None,
 ) -> Union[np.ndarray, Tuple[Any, ...]]:
     """Pure Python headless non-destructive photo development pipeline.
 
@@ -155,6 +156,7 @@ def apply_developer_pipeline(
     if target_img is None:
         return None
 
+    is_full_res = not is_preview
     st_stretched = precomputed_stretched_stars
     milestone_linear = precomputed_linear_base
     milestone_stretched = precomputed_stretched_base
@@ -235,7 +237,8 @@ def apply_developer_pipeline(
                 gnd_ev = state.gnd_ev_val / 100.0
                 gnd_shadows = state.gnd_sh_val / 100.0
                 gnd_bp = -(state.gnd_bp_val / 1000.0)
-                has_gnd_tone = abs(gnd_ev) > 1e-4 or gnd_shadows > 1e-4 or abs(gnd_bp) > 1e-4
+                gnd_dn = getattr(state, "gnd_dn_val", 0) / 100.0
+                has_gnd_tone = abs(gnd_ev) > 1e-4 or gnd_shadows > 1e-4 or abs(gnd_bp) > 1e-4 or gnd_dn > 1e-4
                 if has_gnd_tone:
                     gnd_part = img.copy()
                     if abs(gnd_ev) > 1e-4:
@@ -358,6 +361,42 @@ def apply_developer_pipeline(
         contrast_global = state.contrast_val / 100.0
         if abs(contrast_global) > 1e-4:
             stretched = adjust_contrast(stretched, contrast_global, pivot=None, fast_draft=is_scrubbing)
+
+        # 9b. Reducción de Ruido en Suelo (Post-estirado sRGB, Clásico o NAFNet IA)
+        gnd_dn = getattr(state, "gnd_dn_val", 0) / 100.0
+        if gnd_dn > 1e-4 and precomputed_mask is not None:
+            if cached_ground_ai is not None:
+                gnd_ai = cached_ground_ai
+                if gnd_ai.shape[:2] != stretched.shape[:2]:
+                    if crop_rect is not None and full_shape is not None:
+                        x1, y1, x2, y2 = crop_rect
+                        h_f, w_f = full_shape
+                        h_g, w_g = gnd_ai.shape[:2]
+                        sx = w_g / float(w_f)
+                        sy = h_g / float(h_f)
+                        sx1 = max(0, min(w_g, int(round(x1 * sx))))
+                        sy1 = max(0, min(h_g, int(round(y1 * sy))))
+                        sx2 = max(0, min(w_g, int(round(x2 * sx))))
+                        sy2 = max(0, min(h_g, int(round(y2 * sy))))
+                        gnd_sub = gnd_ai[sy1:sy2, sx1:sx2]
+                        if gnd_sub.shape[:2] != stretched.shape[:2]:
+                            gnd_ai = cv2.resize(gnd_sub, (stretched.shape[1], stretched.shape[0]), interpolation=cv2.INTER_LINEAR)
+                        else:
+                            gnd_ai = gnd_sub
+                    else:
+                        gnd_ai = cv2.resize(gnd_ai, (stretched.shape[1], stretched.shape[0]), interpolation=cv2.INTER_AREA)
+                denoised_gnd = cv2.addWeighted(gnd_ai, gnd_dn, stretched, 1.0 - gnd_dn, 0.0)
+            else:
+                from core.denoise import apply_astro_denoise
+                denoised_gnd = apply_astro_denoise(
+                    stretched,
+                    strength=gnd_dn,
+                    color_strength=0.5,
+                    is_draft=is_scrubbing,
+                    is_full_res=is_full_res
+                )
+            stretched = (stretched * precomputed_mask) + (denoised_gnd * (1.0 - precomputed_mask))
+
         milestone_graded = stretched
 
     if precomputed_spatial_base is None:
