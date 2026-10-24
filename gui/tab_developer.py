@@ -2602,6 +2602,22 @@ class DeveloperTab(QWidget):
             img = getattr(self, '_cached_base_stretched', None)
             if img is None:
                 img = getattr(self, '_cached_rendered_image', None)
+            if img is None:
+                b_src = self.preview_proxy if self.preview_proxy is not None else self.image_32bit
+                if b_src is not None:
+                    if stretch_mode == "ghs":
+                        img = apply_ghs_stretch(
+                            b_src,
+                            sp=ghs_sp,
+                            d=ghs_d,
+                            b=ghs_b,
+                            hp=ghs_hp,
+                            lp=ghs_lp,
+                            bp=ghs_bp,
+                            color_mode=ghs_color_mode
+                        )
+                    else:
+                        img = manual_stretch(b_src, black_point=bp_val, midtone=mtf_val)
             if img is not None:
                 img = apply_pre_curve_adjustments(img, layer)
             sky_m = self.proxy_mask if self.proxy_mask is not None else self.current_mask
@@ -2613,6 +2629,25 @@ class DeveloperTab(QWidget):
             img = getattr(self, '_cached_base_stretched', None)
             if img is None:
                 img = getattr(self, '_cached_rendered_image', None)
+            if img is None:
+                sl_src = self.proxy_starless if self.proxy_starless is not None else self.image_starless
+                if sl_src is not None:
+                    if getattr(self, 'starless_is_stretched', False):
+                        img = sl_src.copy()
+                    else:
+                        if stretch_mode == "ghs":
+                            img = apply_ghs_stretch(
+                                sl_src,
+                                sp=ghs_sp,
+                                d=ghs_d,
+                                b=ghs_b,
+                                hp=ghs_hp,
+                                lp=ghs_lp,
+                                bp=0.0,
+                                color_mode="rgb"
+                            )
+                        else:
+                            img = manual_stretch(sl_src, black_point=0.0, midtone=mtf_val)
             if img is not None:
                 img = apply_pre_curve_adjustments(img, layer)
             has_active_ground = False
@@ -4362,7 +4397,10 @@ class DeveloperTab(QWidget):
 
         self._set_starnet_tools_enabled(True)
         self._generate_preview_proxy()
-        self.update_stretch_preview()
+        self.update_stretch_preview(immediate=True)
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
+            self.mask_layers_widget.update_active_layer_histogram()
         self.log_message("[STARNET] Estrellas separadas y purgadas con máscara de cielo. Capas activadas.")
 
         # Desplegar automáticamente la sección de capas para acceso inmediato
@@ -6756,10 +6794,27 @@ class DeveloperTab(QWidget):
         return self._do_save_project(filepath)
 
     def _do_save_project(self, filepath: str) -> bool:
-        """Ejecuta la serialización y compresión del proyecto .devloom."""
+        """Ejecuta la serialización y compresión del proyecto .devloom con barra de progreso."""
+        progress = None
         try:
             self.setCursor(Qt.WaitCursor)
-            self.log_message(f"Guardando proyecto: {os.path.basename(filepath)}...")
+            self.log_message(f"--- Guardando proyecto: {os.path.basename(filepath)} ---")
+
+            progress = QProgressDialog("Iniciando guardado de proyecto...", None, 0, 100, self)
+            progress.setWindowTitle("Guardar Proyecto AstroLoom")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setCancelButton(None)
+            progress.setValue(5)
+            progress.show()
+            QCoreApplication.processEvents()
+
+            def on_progress(pct: int, msg: str):
+                if progress:
+                    progress.setValue(pct)
+                    progress.setLabelText(msg)
+                self.log_message(f"[PROYECTO] {msg}")
+                QCoreApplication.processEvents()
 
             # Recolectar datos
             state_dict = self._capture_state()
@@ -6782,6 +6837,7 @@ class DeveloperTab(QWidget):
                 master_sky_mask=master_mask,
                 source_image_path=self.active_filepath,
                 starnet_data=starnet_data,
+                progress_callback=on_progress,
             )
 
             if ok:
@@ -6798,6 +6854,8 @@ class DeveloperTab(QWidget):
             QMessageBox.critical(self, "Error al guardar", f"Fallo al guardar el proyecto:\n{e}")
             return False
         finally:
+            if progress:
+                progress.close()
             self.unsetCursor()
 
     def open_project_dialog(self):
@@ -6818,19 +6876,39 @@ class DeveloperTab(QWidget):
             self.load_project(filepath)
 
     def load_project(self, filepath: str) -> bool:
-        """Carga una sesión completa de desarrollo desde un archivo .devloom."""
+        """Carga una sesión completa de desarrollo desde un archivo .devloom con barra de progreso."""
         from core.project_io import load_devloom_project, resolve_source_image_path
+        progress = None
         try:
             self.setCursor(Qt.WaitCursor)
-            self.log_message(f"Abriendo proyecto: {os.path.basename(filepath)}...")
+            self.log_message(f"--- Abriendo proyecto: {os.path.basename(filepath)} ---")
 
-            proj_data = load_devloom_project(filepath)
+            progress = QProgressDialog("Abriendo proyecto...", None, 0, 100, self)
+            progress.setWindowTitle("Cargar Proyecto AstroLoom")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setCancelButton(None)
+            progress.setValue(5)
+            progress.show()
+            QCoreApplication.processEvents()
+
+            def on_progress(pct: int, msg: str):
+                if progress:
+                    progress.setValue(pct)
+                    progress.setLabelText(msg)
+                self.log_message(f"[PROYECTO] {msg}")
+                QCoreApplication.processEvents()
+
+            proj_data = load_devloom_project(filepath, progress_callback=on_progress)
             source_info = proj_data.get("source_image", {})
             img_filename = source_info.get("filename") or "desconocida"
 
             # 1. Resolver ruta de la imagen base
+            on_progress(30, f"Localizando imagen base: {img_filename}...")
             resolved_img_path = resolve_source_image_path(source_info, filepath)
             if not resolved_img_path:
+                if progress:
+                    progress.hide()
                 self.unsetCursor()
                 reply = QMessageBox.question(
                     self,
@@ -6860,9 +6938,12 @@ class DeveloperTab(QWidget):
                 else:
                     self.log_message(f"[AVISO] Carga de proyecto cancelada: imagen '{img_filename}' no disponible.")
                     return False
+                if progress:
+                    progress.show()
                 self.setCursor(Qt.WaitCursor)
 
             # 2. Cargar imagen base para inicializar canvas, ICC y proxies
+            on_progress(45, f"Cargando imagen en memoria ({img_filename})...")
             master_mask = proj_data.get("master_sky_mask")
             self.load_image_direct(resolved_img_path, mask=master_mask)
 
@@ -6873,6 +6954,7 @@ class DeveloperTab(QWidget):
             raw_sl_img = starnet_dict.get("raw_linear_starless")
 
             if sl_img is not None and st_img is not None:
+                on_progress(65, "Restaurando capas desacopladas de StarNet...")
                 self.image_starless = np.ascontiguousarray(sl_img, dtype=np.float32)
                 self.image_stars = np.ascontiguousarray(st_img, dtype=np.float32)
                 self.raw_linear_starless = np.ascontiguousarray(raw_sl_img, dtype=np.float32) if raw_sl_img is not None else self.image_starless.copy()
@@ -6884,11 +6966,13 @@ class DeveloperTab(QWidget):
                 self._generate_preview_proxy()
 
             # 4. Restaurar capas de ajuste y máscaras locales
+            on_progress(80, "Restaurando pila de capas y máscaras...")
             raw_layers = proj_data.get("mask_layers", [])
             dev_state = proj_data.get("developer_state", {})
             dev_state["mask_layers"] = raw_layers
 
             # 5. Restaurar estado de controles y paneles
+            on_progress(90, "Restaurando parámetros de revelado y curvas...")
             if dev_state:
                 self._restore_state(dev_state)
 
@@ -6904,9 +6988,13 @@ class DeveloperTab(QWidget):
             self._update_project_ui_status()
 
             # 8. Forzar renderizado y refresco inmediato
+            on_progress(98, "Renderizando vista previa...")
             self._invalidate_pipeline_caches()
             self.update_stretch_preview(immediate=True)
+            if hasattr(self, 'mask_layers_widget'):
+                self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
 
+            on_progress(100, f"Proyecto cargado: {os.path.basename(filepath)}")
             self.log_message(f"✓ Proyecto cargado con éxito: {os.path.basename(filepath)}")
             return True
 
@@ -6915,4 +7003,6 @@ class DeveloperTab(QWidget):
             QMessageBox.critical(self, "Error al cargar proyecto", f"No se pudo cargar el archivo:\n{e}")
             return False
         finally:
+            if progress:
+                progress.close()
             self.unsetCursor()

@@ -1782,6 +1782,10 @@ class MaskLayersWidget(QWidget):
             if raw_img is not None:
                 try:
                     small = cv2.resize(raw_img, (tw, th), interpolation=cv2.INTER_AREA)
+                    # Si es una capa de imagen (que no sean solo estrellas) y sus valores son lineales oscuros, estirar para visibilidad
+                    if layer.mask_type != MASK_TYPE_IMAGE_STARS and small.ndim == 3 and np.percentile(small, 98) < 0.12:
+                        from core.stretch import manual_stretch
+                        small = manual_stretch(small, black_point=0.0, midtone=0.15)
                     u8 = (np.clip(small, 0.0, 1.0) * 255.0).astype(np.uint8)
                     u8_contig = np.ascontiguousarray(u8)
                     qimg = QImage(u8_contig.data, tw, th, tw * 3, QImage.Format_RGB888)

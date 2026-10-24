@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import os
 import zipfile
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
@@ -19,6 +19,7 @@ def save_devloom_project(
     master_sky_mask: Optional[np.ndarray] = None,
     source_image_path: Optional[str] = None,
     starnet_data: Optional[Dict[str, Any]] = None,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> bool:
     """
     Guarda una sesión completa de desarrollo en un contenedor comprimido .devloom.
@@ -29,15 +30,23 @@ def save_devloom_project(
     :param master_sky_mask: Máscara maestra 2D float32 [0.0, 1.0].
     :param source_image_path: Ruta a la imagen base cargada.
     :param starnet_data: Diccionario opcional con 'image_starless', 'image_stars', 'raw_linear_starless'.
+    :param progress_callback: Función callback(porcentaje: int, mensaje: str).
     """
     file_path = os.path.abspath(file_path)
     proj_dir = os.path.dirname(file_path)
     os.makedirs(proj_dir, exist_ok=True)
 
+    def _notify(pct: int, msg: str):
+        if progress_callback:
+            progress_callback(pct, msg)
+
+    _notify(5, "Iniciando contenedor de proyecto...")
+
     with zipfile.ZipFile(file_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         # 1. Guardar máscara maestra si existe (16-bit PNG)
         master_mask_ref = None
         if master_sky_mask is not None and isinstance(master_sky_mask, np.ndarray):
+            _notify(15, "Comprimiendo máscara maestra de horizonte (16-bit)...")
             master_mask_ref = "masks/master_sky.png"
             u16 = np.clip(master_sky_mask * 65535.0, 0, 65535).astype(np.uint16)
             ok, buf = cv2.imencode(".png", u16, [cv2.IMWRITE_PNG_COMPRESSION, 6])
@@ -45,6 +54,7 @@ def save_devloom_project(
                 zf.writestr(master_mask_ref, buf.tobytes())
 
         # 2. Guardar máscaras de capas (16-bit PNG)
+        _notify(25, "Comprimiendo máscaras de capas de ajuste locales...")
         serialized_layers = []
         for idx, layer in enumerate(mask_layers):
             if hasattr(layer, "to_dict"):
@@ -73,8 +83,10 @@ def save_devloom_project(
             sl = starnet_data.get("image_starless")
             st = starnet_data.get("image_stars")
             raw_sl = starnet_data.get("raw_linear_starless")
+
             if sl is not None and isinstance(sl, np.ndarray):
                 has_starnet = True
+                _notify(45, "Comprimiendo capa StarNet Fondo Nebular (16-bit)...")
                 u16_sl = np.clip(sl * 65535.0, 0, 65535).astype(np.uint16)
                 bgr_sl = cv2.cvtColor(u16_sl, cv2.COLOR_RGB2BGR) if u16_sl.ndim == 3 else u16_sl
                 ok, buf = cv2.imencode(".png", bgr_sl, [cv2.IMWRITE_PNG_COMPRESSION, 6])
@@ -83,6 +95,7 @@ def save_devloom_project(
 
             if st is not None and isinstance(st, np.ndarray):
                 has_starnet = True
+                _notify(65, "Comprimiendo capa StarNet Estrellas (16-bit)...")
                 u16_st = np.clip(st * 65535.0, 0, 65535).astype(np.uint16)
                 bgr_st = cv2.cvtColor(u16_st, cv2.COLOR_RGB2BGR) if u16_st.ndim == 3 else u16_st
                 ok, buf = cv2.imencode(".png", bgr_st, [cv2.IMWRITE_PNG_COMPRESSION, 6])
@@ -90,6 +103,7 @@ def save_devloom_project(
                     zf.writestr("starnet/stars.png", buf.tobytes())
 
             if raw_sl is not None and isinstance(raw_sl, np.ndarray):
+                _notify(80, "Comprimiendo capa StarNet Lineal (16-bit)...")
                 u16_rsl = np.clip(raw_sl * 65535.0, 0, 65535).astype(np.uint16)
                 bgr_rsl = cv2.cvtColor(u16_rsl, cv2.COLOR_RGB2BGR) if u16_rsl.ndim == 3 else u16_rsl
                 ok, buf = cv2.imencode(".png", bgr_rsl, [cv2.IMWRITE_PNG_COMPRESSION, 6])
@@ -97,6 +111,7 @@ def save_devloom_project(
                     zf.writestr("starnet/raw_linear_starless.png", buf.tobytes())
 
         # 4. Formatear rutas de imagen base
+        _notify(90, "Escribiendo project.json y metadatos...")
         source_info = {}
         if source_image_path:
             abs_source = os.path.abspath(source_image_path)
@@ -121,11 +136,13 @@ def save_devloom_project(
 
         zf.writestr("project.json", json.dumps(manifest, indent=2, ensure_ascii=False))
 
+    _notify(100, "Proyecto guardado con éxito.")
     return True
 
 
 def load_devloom_project(
     file_path: str,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> Dict[str, Any]:
     """
     Carga y deserializa una sesión de revelado .devloom.
@@ -142,17 +159,25 @@ def load_devloom_project(
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Archivo de proyecto no encontrado: {file_path}")
 
+    def _notify(pct: int, msg: str):
+        if progress_callback:
+            progress_callback(pct, msg)
+
+    _notify(5, "Abriendo archivo .devloom...")
+
     with zipfile.ZipFile(file_path, "r") as zf:
         namelist = set(zf.namelist())
         if "project.json" not in namelist:
             raise ValueError("El archivo no es un contenedor .devloom válido (falta project.json).")
 
+        _notify(15, "Leyendo project.json y parámetros...")
         manifest = json.loads(zf.read("project.json").decode("utf-8"))
 
         # 1. Cargar máscara maestra de cielo si existe
         master_sky = None
         mask_ref = manifest.get("master_sky_mask")
         if mask_ref and mask_ref in namelist:
+            _notify(30, "Decodificando máscara maestra de horizonte (16-bit)...")
             raw_b = zf.read(mask_ref)
             arr = np.frombuffer(raw_b, np.uint8)
             dec = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
@@ -161,6 +186,7 @@ def load_devloom_project(
                 master_sky = dec.astype(np.float32) / div
 
         # 2. Cargar capas de ajuste y máscaras de pincel
+        _notify(45, "Decodificando máscaras de capas locales (16-bit)...")
         layers = manifest.get("mask_layers", [])
         for layer in layers:
             mask_file = layer.get("mask_file")
@@ -180,6 +206,7 @@ def load_devloom_project(
         }
 
         if "starnet/starless.png" in namelist:
+            _notify(60, "Extrayendo capa StarNet Fondo Nebular (16-bit)...")
             raw_b = zf.read("starnet/starless.png")
             arr = np.frombuffer(raw_b, np.uint8)
             dec = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
@@ -190,6 +217,7 @@ def load_devloom_project(
                 starnet_out["image_starless"] = dec.astype(np.float32) / div
 
         if "starnet/stars.png" in namelist:
+            _notify(80, "Extrayendo capa StarNet Estrellas (16-bit)...")
             raw_b = zf.read("starnet/stars.png")
             arr = np.frombuffer(raw_b, np.uint8)
             dec = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
@@ -200,6 +228,7 @@ def load_devloom_project(
                 starnet_out["image_stars"] = dec.astype(np.float32) / div
 
         if "starnet/raw_linear_starless.png" in namelist:
+            _notify(90, "Extrayendo capa StarNet Lineal (16-bit)...")
             raw_b = zf.read("starnet/raw_linear_starless.png")
             arr = np.frombuffer(raw_b, np.uint8)
             dec = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
@@ -209,6 +238,7 @@ def load_devloom_project(
                 div = 65535.0 if dec.dtype == np.uint16 else 255.0
                 starnet_out["raw_linear_starless"] = dec.astype(np.float32) / div
 
+    _notify(100, "Lectura de proyecto finalizada.")
     return {
         "manifest": manifest,
         "source_image": manifest.get("source_image", {}),
