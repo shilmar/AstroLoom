@@ -5,6 +5,33 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-24
+
+### Añadido
+* **Sistema de Proyectos y Sesiones (.devloom) en el Revelador:**
+  - Arquitectura completa en `core/project_io.py` para guardar y restaurar el estado íntegro de trabajo mediante contenedores ZIP comprimidos con extensión `.devloom`.
+  - Serialización estructurada de metadatos, parámetros de revelado (deslizadores, recortado, MTF, GHS, balances), historial de capas y curvas tonales interactivas.
+  - Almacenamiento de máscaras espaciales de ajuste local en formato PNG de 16 bits sin pérdida (`uint16`) para preservar gradientes suaves y prevenir posterización o banding.
+  - Empaquetado de capas desacopladas de StarNet (*Starless* y *Stars-only*) dentro del archivo `.devloom` en formato TIFF de 16 bits comprimido con zlib, permitiendo continuar proyectos con separación estelar sin necesidad de recalcular.
+  - Diálogo de progreso modal interactivo (`QProgressDialog`) con informe pormenorizado paso a paso en el Registro de Actividad para operaciones de guardado y carga.
+  - Detección de cambios no guardados con indicador de asterisco (`*`) en el título de la ventana y confirmación preventiva contra pérdida de trabajo al abrir nuevos proyectos o imágenes.
+  - Asistente de re-vinculación interactiva de imágenes base cuando los archivos originales han cambiado de ruta o nombre, mostrando explícitamente el nombre del fichero a localizar.
+  - Soporte completo para arrastrar y soltar (Drag & Drop) de archivos `.devloom` directamente sobre el lienzo del Revelador.
+* **Reducción de Ruido con IA Ligera (NAFNet / ONNX Runtime):**
+  - Integración de arquitectura de red neuronal convolucional sin activaciones no lineales (*Nonlinear Activation Free Network*) en `core/ai_denoise.py` para inferencia local multihilo de alto rendimiento.
+  - Reducción de ruido avanzada para cielo profundo y terreno nocturno con preservación geométrica de estrellas, detalles de alta frecuencia y micro-contraste.
+
+### Optimizado
+* **Rediseño Ergonómico del Selector de Modo de Eclipse:**
+  - Sustitución de botones conmutadores por un selector integrado de sub-pestañas (`EclipseModeToggle`) en `gui/tab_eclipse.py` con iconografía visual temática diferenciada (Sol dorado para modo solar y Luna cyan para modo lunar).
+* **Reinicio Limpio del Historial Deshacer / Rehacer:**
+  - Al cargar un proyecto `.devloom`, la pila de historial (`UndoStack`) se inicializa limpiamente tomando el estado del proyecto como punto de partida base (`clean`), evitando deshacer hacia estados de sesiones anteriores.
+
+### Corregido
+* **Caché y Previsualización de Miniaturas en Gestor de Capas:**
+  - Corrección del bug donde las miniaturas en tamaño mediano (**M**) de capas generadas por StarNet se mostraban lineales y oscuras debido a un cálculo prematuro previo al estirado de previsualización.
+  - Inclusión de invalidación forzada de caché y estirado dinámico de fallback, garantizando miniaturas fotorrealistas y estiradas idénticamente en tamaños S, M y L.
+
 ## [0.11.0] - 2026-10-24
 
 ### Añadido

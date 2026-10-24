@@ -8,7 +8,7 @@
     "default_kappa": 2.2,
     "storage_strategy": "auto",
     "use_gpu": true,
-    "cpu_workers": 5,
+    "cpu_workers": 8,
     "lp_method": "standard",
     "lp_strength": 0.5,
     "starnet_exe": "",

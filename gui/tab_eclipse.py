@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
     QProgressBar, QMessageBox, QGroupBox, QRadioButton, QSlider,
     QDoubleSpinBox, QSplitter, QTextEdit, QScrollArea, QCheckBox,
-    QSizePolicy, QAbstractItemView, QApplication
+    QSizePolicy, QAbstractItemView, QApplication, QButtonGroup
 )
 from PySide6.QtCore import Qt, Signal, QThread, QPoint, QPointF, QRectF
 from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QImage, QCursor, QFont, QTextCursor, QBrush
@@ -53,70 +53,10 @@ from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
 
 
-class ToggleSwitch(QWidget):
-    """
-    Interruptor deslizante moderno tipo píldora (Pill Toggle Switch).
-    checked = False -> Posición Izquierda (Solar: rosa/magenta)
-    checked = True  -> Posición Derecha (Lunar: cyan/azul)
-    """
-    toggled = Signal(bool)
-
-    def __init__(self, parent=None, checked: bool = False):
-        super().__init__(parent)
-        self._checked = checked
-        self.setFixedSize(52, 26)
-        self.setCursor(Qt.PointingHandCursor)
-
-    def isChecked(self) -> bool:
-        return self._checked
-
-    def setChecked(self, checked: bool):
-        if self._checked != checked:
-            self._checked = checked
-            self.update()
-            self.toggled.emit(self._checked)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.setChecked(not self._checked)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        w = self.width()
-        h = self.height()
-        radius = h / 2.0
-        knob_radius = radius - 3.2
-
-        if not self._checked:
-            # Solar: Rosa/Magenta estilizado como en el diseño de referencia
-            bg_brush = QColor(255, 64, 129, 35)
-            border_pen = QPen(QColor(255, 64, 129, 230), 2.2)
-            knob_brush = QColor(255, 64, 129)
-            knob_x = radius
-        else:
-            # Lunar: Cyan brillante estilizado como en el diseño de referencia
-            bg_brush = QColor(0, 229, 255, 35)
-            border_pen = QPen(QColor(0, 229, 255, 230), 2.2)
-            knob_brush = QColor(0, 229, 255)
-            knob_x = w - radius
-
-        # Track exterior redondeado
-        painter.setPen(border_pen)
-        painter.setBrush(bg_brush)
-        painter.drawRoundedRect(QRectF(1.5, 1.5, w - 3, h - 3), radius, radius)
-
-        # Círculo / Knob interior deslizante
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(knob_brush)
-        painter.drawEllipse(QPointF(knob_x, h / 2.0), knob_radius, knob_radius)
-
-
 class EclipseModeToggle(QWidget):
     """
-    Selector compacto de modalidad Sol/Luna en formato botón boolean (Pill Toggle).
-    Ocupa mínimo espacio vertical (~34px) ahorrando espacio en la interfaz.
+    Selector de modalidad Sol / Luna en formato sub-pestañas integradas.
+    Diseño armónico con las pestañas de navegación principales de AstroLoom.
     """
     mode_changed = Signal(str)  # "solar" o "lunar"
 
@@ -125,41 +65,68 @@ class EclipseModeToggle(QWidget):
         self._is_solar = is_solar
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 4, 10, 4)
-        layout.setSpacing(10)
+        layout.setContentsMargins(0, 2, 0, 4)
+        layout.setSpacing(2)
 
-        self.icon_solar = QLabel()
-        self.icon_solar.setFixedSize(16, 16)
-        self.lbl_solar = QLabel("Eclipse Solar")
-        self.lbl_solar.setCursor(Qt.PointingHandCursor)
-        self.lbl_solar.mousePressEvent = lambda e: self.set_solar(True)
+        self.btn_solar = QPushButton(" Eclipse Solar")
+        self.btn_solar.setCheckable(True)
+        self.btn_solar.setCursor(Qt.PointingHandCursor)
 
-        self.toggle_btn = ToggleSwitch(checked=not is_solar)
-        self.toggle_btn.toggled.connect(self._on_switch_toggled)
+        self.btn_lunar = QPushButton(" Eclipse Lunar")
+        self.btn_lunar.setCheckable(True)
+        self.btn_lunar.setCursor(Qt.PointingHandCursor)
 
-        self.icon_lunar = QLabel()
-        self.icon_lunar.setFixedSize(16, 16)
-        self.lbl_lunar = QLabel("Eclipse Lunar")
-        self.lbl_lunar.setCursor(Qt.PointingHandCursor)
-        self.lbl_lunar.mousePressEvent = lambda e: self.set_solar(False)
-
-        layout.addStretch()
-        layout.addWidget(self.icon_solar)
-        layout.addWidget(self.lbl_solar)
-        layout.addWidget(self.toggle_btn)
-        layout.addWidget(self.icon_lunar)
-        layout.addWidget(self.lbl_lunar)
-        layout.addStretch()
-
-        self.setStyleSheet("""
-            EclipseModeToggle {
-                background-color: #141724;
-                border: 1px solid #232738;
-                border-radius: 6px;
+        tab_style = """
+            QPushButton {
+                font-size: 11px;
+                font-weight: bold;
+                padding: 7px 12px;
+                background-color: #10121a;
+                color: #78909c;
+                border: 1px solid #1e2230;
+                border-bottom: 2px solid transparent;
+                border-top-left-radius: 5px;
+                border-top-right-radius: 5px;
+                border-bottom-left-radius: 0px;
+                border-bottom-right-radius: 0px;
             }
-        """)
+            QPushButton:hover:!checked {
+                background-color: #151822;
+                color: #eceff4;
+            }
+            QPushButton:checked {
+                background-color: #171a26;
+                color: #00e5ff;
+                border-color: #232738;
+                border-bottom: 2px solid #00e5ff;
+            }
+        """
+        self.btn_solar.setStyleSheet(tab_style)
+        self.btn_lunar.setStyleSheet(tab_style)
 
-        self._update_styles()
+        self.group = QButtonGroup(self)
+        self.group.setExclusive(True)
+        self.group.addButton(self.btn_solar)
+        self.group.addButton(self.btn_lunar)
+
+        self.btn_solar.clicked.connect(lambda: self.set_solar(True))
+        self.btn_lunar.clicked.connect(lambda: self.set_solar(False))
+
+        layout.addWidget(self.btn_solar, 1)
+        layout.addWidget(self.btn_lunar, 1)
+
+        self._update_state(is_solar)
+
+    def _update_state(self, solar: bool):
+        self._is_solar = solar
+        if solar:
+            self.btn_solar.setChecked(True)
+            self.btn_solar.setIcon(get_icon("sun", color="#ffd54f"))
+            self.btn_lunar.setIcon(get_icon("moon", color="#64748b"))
+        else:
+            self.btn_lunar.setChecked(True)
+            self.btn_solar.setIcon(get_icon("sun", color="#64748b"))
+            self.btn_lunar.setIcon(get_icon("moon", color="#00e5ff"))
 
     def is_solar(self) -> bool:
         return self._is_solar
@@ -169,29 +136,8 @@ class EclipseModeToggle(QWidget):
 
     def set_solar(self, solar: bool):
         if self._is_solar != solar:
-            self._is_solar = solar
-            self.toggle_btn.setChecked(not solar)
-            self._update_styles()
+            self._update_state(solar)
             self.mode_changed.emit("solar" if solar else "lunar")
-
-    def _on_switch_toggled(self, checked: bool):
-        solar = not checked
-        if self._is_solar != solar:
-            self._is_solar = solar
-            self._update_styles()
-            self.mode_changed.emit("solar" if solar else "lunar")
-
-    def _update_styles(self):
-        if self._is_solar:
-            self.icon_solar.setPixmap(get_svg_pixmap("sun", color="#ff4081", size=15))
-            self.lbl_solar.setStyleSheet("font-weight: bold; font-size: 12px; color: #ff4081;")
-            self.icon_lunar.setPixmap(get_svg_pixmap("moon", color="#64748b", size=15))
-            self.lbl_lunar.setStyleSheet("font-weight: normal; font-size: 12px; color: #78909c;")
-        else:
-            self.icon_solar.setPixmap(get_svg_pixmap("sun", color="#64748b", size=15))
-            self.lbl_solar.setStyleSheet("font-weight: normal; font-size: 12px; color: #78909c;")
-            self.icon_lunar.setPixmap(get_svg_pixmap("moon", color="#00e5ff", size=15))
-            self.lbl_lunar.setStyleSheet("font-weight: bold; font-size: 12px; color: #00e5ff;")
 
 
 

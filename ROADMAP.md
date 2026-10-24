@@ -10,7 +10,7 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 
 | Prioridad | Tarea / Funcionalidad | Módulo | Inspiración | Dificultad (1-10) | Impacto (1-10) | Estado |
 | :---: | :--- | :--- | :--- | :---: | :---: | :---: |
-| **P1** | **Reducción de Ruido con IA Ligera (Astro Denoise Fase 2 - ONNX)** | Revelador | NoiseXTerminator / DeepSNR | 6.5 / 10 | 9.0 / 10 | ⏳ Planificado |
+| **P1** | **Reducción de Ruido con IA Ligera (Astro Denoise Fase 2 - ONNX / NAFNet)** | Revelador | NoiseXTerminator / DeepSNR | 6.5 / 10 | 9.0 / 10 | ✅ Completado (v0.11.1) |
 | **P2** | **Corrección de Distorsión Óptica Periférica de Estrellas** | Apilador | Sequator (*Distort Mode*) | 7.5 / 10 | 8.5 / 10 | 🔍 En estudio |
 | **P3** | **Extracción de Gradientes por Puntos de Muestreo Interactivos** | Revelador | PixInsight (*DBE*) / GraXpert | 5.0 / 10 | 8.0 / 10 | ⏳ Planificado |
 | **P4** | **Procesado y Exportación en Lote (Batch Processing)** | Revelador / General | Lightroom / Adobe Camera Raw | 4.0 / 10 | 7.5 / 10 | ⏳ Pendiente |
@@ -30,6 +30,7 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
   - Control de preservación de micro-contraste y textura de grano fino mediante control deslizante de porcentaje.
 * **Impacto:** **9.0 / 10** *(Calidad de reducción de ruido superior sin pérdida de resolución en estructuras astronómicas).*
 * **Dificultad / Coste:** **6.5 / 10** *(Media-Alta: Integración y empaquetado de pesos ONNX optimizados en ejecución local).*
+* **Estado:** **✅ Completado en v0.11.1.** Implementado mediante la arquitectura convolucional NAFNet (*Nonlinear Activation Free Network*) ejecutada con ONNX Runtime multihilo (`core/ai_denoise.py`), permitiendo filtrar selectivamente el fondo nebular y terreno terrestre con máxima preservación estelar.
 
 #### 🔹 1.2 Extracción de Gradientes de Fondo por Muestreo Interactivo (*Sample-Point Background Neutralization*)
 * **Herramientas de referencia:** PixInsight (*DynamicBackgroundExtraction - DBE*), GraXpert.

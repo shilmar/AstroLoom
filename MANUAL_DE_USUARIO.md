@@ -22,6 +22,7 @@ Este manual ha sido redactado pensando en fotógrafos y aficionados: **sin fórm
    - [Sección 7: Color, Saturación e Intensidad de Nebulosa](#sección-7-color-saturación-e-intensidad-de-nebulosa)
    - [Sección 8: Tono y Exposición del Suelo](#sección-8-tono-y-exposición-del-suelo)
    - [Sección 9: Gestor de Capas, Máscaras IA y Exportación PSD](#sección-9-gestor-de-capas-máscaras-ia-y-exportación-psd)
+   - [Sección 10: Guardado y Gestión de Proyectos (.devloom)](#sección-10-guardado-y-gestión-de-proyectos-devloom)
 5. [Módulo 3 y 4: Eclipses (HDR y Collage)](#5-módulos-3-y-4-eclipses-hdr-y-collage)
 6. [Módulo 5: Trazas de Estrellas (Startrails)](#6-módulo-5-trazas-de-estrellas-startrails)
 7. [Módulo 6: Panorámicas (Mosaicos)](#7-módulo-6-panorámicas-mosaicos)
@@ -209,6 +210,9 @@ Esta sección permite separar la fotografía en dos realidades independientes: e
 * **Reducción de Ruido (Astro Denoise Multietapa):** Limpia el ruido preservando el detalle mediante filtrado bilateral en luminancia y suavizado de crominancia en espacio YCrCb. Mediante el icono de engranaje (⚙️), permite acceder a:
   * **Ruido Color (Croma):** Filtra manchas térmicas y ruido de color del sensor sin lavar los colores estelares ni los filamentos tenues.
   * **Máscara Bordes/Sombras:** Pondera la doble máscara inteligente (luminancia invertida para actuar en fondos oscuros de bajo SNR y gradiente Sobel para blindar estrellas y filamentos de contraste).
+* **Reducción de Ruido por IA (NAFNet / ONNX Runtime):**
+  * Motor neuronal convolucional especializado (*Nonlinear Activation Free Network*) ejecutado localmente sin dependencias en la nube.
+  * Diseñado para suprimir el grano profundo en fondos estelares y paisajes nocturnos de alta sensibilidad ISO, blindando el filo de las estrellas y el micro-contraste estructural de las nebulosas.
 
 #### ✨ Efecto Orton y Glow Específico para Polvo Galáctico
 Crea un halo de luz celestial suave y etéreo alrededor de las partes más luminosas de la galaxia, emulando la técnica analógica inventada por Michael Orton.
@@ -331,7 +335,32 @@ El compositor multicapa de AstroLoom funciona de manera análoga a Adobe Photosh
 
 ---
 
+### Sección 10: Guardado y Gestión de Proyectos (.devloom)
+AstroLoom permite congelar y reanudar todo tu flujo de trabajo en cualquier momento sin perder precisión ni calidad fotométrica.
+
+* **¿Qué es un archivo `.devloom`?**
+  * Es un contenedor comprimido (ZIP estándar) autocontenido que almacena el archivo `project.json` con todos los parámetros de revelado (deslizadores de exposición, contraste, GHS, balances, MTF, curvas tonales splines) y las máscaras espaciales de ajuste local en formato **PNG de 16 bits sin pérdida** (`uint16`).
+* **Empaquetado de Capas StarNet:**
+  * Si desacoplaste las estrellas con StarNet++, AstroLoom guarda dentro del `.devloom` las capas de *Fondo Nebular* y *Estrellas* en formato **TIFF comprimido de 16 bits** (`uint16`). Al reabrir el proyecto, tus capas separadas estarán listas inmediatamente sin necesidad de volver a ejecutar la red neuronal.
+* **Flujo de Trabajo y Atajos:**
+  * **Guardar Proyecto (`Ctrl + S`):** Si el proyecto ya fue guardado previamente, sobrescribe los cambios de forma instantánea. Si es la primera vez, abre el diálogo para elegir ubicación y nombre.
+  * **Guardar Como... (`Ctrl + Shift + S`):** Guarda una copia independiente del proyecto con otro nombre o en otra carpeta.
+  * **Abrir Proyecto (`Ctrl + O`):** Permite seleccionar tanto archivos `.devloom` como imágenes astronómicas individuales (TIFF, FITS, PNG, JPG).
+  * **Arrastrar y Soltar (Drag & Drop):** Puedes soltar cualquier archivo `.devloom` directamente sobre el lienzo del Revelador para cargarlo de inmediato.
+* **Barra de Progreso y Reporte Paso a Paso:**
+  * Las operaciones de guardado y apertura muestran un diálogo de progreso modal interactivo (`QProgressDialog`) y notifican cada etapa en el Registro de Actividad (empaquetado de capas, compresión de máscaras de 16 bits, verificación de integridad).
+* **Protección contra Pérdida de Trabajo:**
+  * Cuando realizas cambios en los controles o capas, el título de la ventana muestra un asterisco (`*`) indicando cambios pendientes. Si intentas abrir otro archivo sin guardar, AstroLoom te preguntará si deseas guardar los cambios antes de continuar.
+* **Asistente de Re-vinculación de Imágenes Base:**
+  * Si la imagen base original fue movida a otra carpeta o disco, AstroLoom detecta la ausencia y te muestra un diálogo con el **nombre exacto del archivo que busca**, permitiéndote localizarlo con un solo clic y continuar trabajando sin inconvenientes.
+* **Historial Limpio:**
+  * Al abrir un proyecto `.devloom`, el historial de Deshacer / Rehacer (`Ctrl+Z` / `Ctrl+Y`) se reinicia tomando el estado del proyecto como punto de partida base, evitando saltar accidentalmente a imágenes de sesiones anteriores.
+
+---
+
 ## 5. Módulos 3 y 4: Eclipses (HDR y Collage)
+
+* **Selector de Modo Solar / Lunar Ergonómico:** En la cabecera del módulo dispones de un selector por sub-pestañas integradas con iconografía visual específica (☀️ **Eclipse Solar** con corona dorada y 🌙 **Eclipse Lunar** con tinte cyan), lo que permite alternar instantáneamente entre los flujos de trabajo de corona solar y fases de sombra umbral.
 
 ### Módulo 3: Eclipses (HDR)
 Durante un eclipse total de sol o de luna, el rango dinámico excede la capacidad de cualquier sensor:
@@ -379,6 +408,9 @@ Permite ensamblar mosaicos gigantes del cielo nocturno (por ejemplo, el arco com
 
 | Atajo | Acción |
 | :--- | :--- |
+| `Ctrl + S` | Guardar proyecto actual del Revelador (`.devloom`). |
+| `Ctrl + Shift + S` | Guardar proyecto como... con nuevo nombre (`.devloom`). |
+| `Ctrl + O` | Abrir proyecto `.devloom` o imagen base en el Revelador. |
 | `Ctrl + Z` | Deshacer el último cambio de parámetros o pincel. |
 | `Ctrl + Y` / `Ctrl + Shift + Z` | Rehacer la acción deshecha. |
 | `J` | Alternar advertencia de recorte (Clipping: sombras azules, luces rojas). |
