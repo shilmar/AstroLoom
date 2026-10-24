@@ -92,8 +92,12 @@ El apilador combina múltiples tomas cortas para emular una única exposición u
   * En modo vídeo, precomputa la cadena de homografías adyacentes en tiempo lineal $O(N)$ con consumo acotado de memoria RAM $O(W)$.
 * **Rechazo de Artefactos (Sigma-Clipping / MAD):**
   * Elimina automáticamente las rayas dejadas por satélites (Starlink), estrellas fugaces y aviones que crucen por el encuadre.
-* **Detección de Horizonte por IA y Anti-Ghosting:**
-  * Pulsa **"Auto-Detectar Suelo (IA 1-Click)"** o dibuja trazos con el pincel. El algoritmo Min-Horizon garantiza que la vegetación y ramas de árboles no generen dobles bordes translúcidos (*ghosting*).
+* **Detección de Horizonte por IA y Creación/Edición de Máscaras:**
+  * **Auto-Detectar Suelo (IA 1-Click):** Segmenta automáticamente cielo y tierra con inferencia neuronal y refinamiento subpíxel por Filtro Guiado, incluyendo recuperación fotométrica adaptativa de ramas finas y follaje a resolución nativa.
+  * **Pintar en Máscara:** Aplica al instante los trazos verde (cielo) o rojo (suelo) directamente sobre la máscara activa con centro sólido y borde suavizado local, ideal para retoques manuales inmediatos sin esperar ningún cálculo.
+  * **Refinar con GrabCut:** Algoritmo de refinado matemático asistido por trazos. Permite aportar trazos de ambos colores o, si ya cuentas con una máscara base (ej. generada por IA), introducir únicamente trazos verdes o rojos para corregir zonas locales concretas.
+  * **Expandir Suelo (+2px) / Contraer (-2px):** Dilatación y contracción morfológica perimétrica en un solo clic para asegurar que ramas finas queden cubiertas o para recortar transiciones no deseadas.
+  * **Fusión Anti-Ghosting Continua (SDF):** Emplea campos de distancia con signo (*Signed Distance Function*) para generar una transición óptica suave de 2.5 px de radio (5 px en total) sin bandas translúcidas difusas. Protege de forma prioritaria las estructuras oscuras del suelo contra el cielo estrellado en movimiento, erradicando ramas fantasma y sangrado estelar en árboles y horizontes complejos.
 * **Botón "Revelar en Editor ➔":** Una vez terminado el apilado estático, transfiere la imagen de 32 bits directamente a la mesa de revelado.
 
 ---
@@ -184,6 +188,17 @@ Esta sección permite separar la fotografía en dos realidades independientes: e
   * Se crean automáticamente dos capas independientes en el Gestor de Capas.
 * **Presencia de Estrellas (%):**
   * Al mover este control al 50-70%, reduces el tamaño y densidad de las estrellas para que el polvo de la Vía Láctea sea el protagonista sin verse tapado por un millón de puntos blancos.
+
+#### 🚀 Estirado Adaptativo RGB (Starless)
+* **Botón "Estirado Adaptativo RGB":** Ubicado directamente bajo la selección de vista del panel StarNet y accesible también desde los controles de la tarjeta de capa *Fondo Nebular (Starless)*.
+* **Propósito:** Aplica un estirado no lineal analítico MTF calibrado específicamente para el fondo galáctico sin estrellas. Aísla de forma matemática el cielo mediante la máscara de horizonte, evitando que las sombras oscuras del terreno o el horizonte alteren la mediana y el rango dinámico de las nebulosas.
+* **Parámetros configurables en la tarjeta de capa:**
+  * **Fondo Objetivo (Target BG):** Nivel de brillo medio asignado al fondo cósmico tras el estirado (por defecto 18%).
+  * **Recorte Sombras (σ):** Nivel de corte de punto negro en unidades de dispersión estadística MAD (por defecto 3.0σ), maximizando el contraste sin empastar estructuras débiles.
+  * **Realce Saturación:** Multiplicador del canal de saturación HSV (por defecto +50% / 1.5x) para exaltar la crominancia del polvo interestelar y nebulosas de emisión.
+  * **Difuminado Horizonte:** Radio gaussiano en píxeles para una transición imperceptible entre el cielo estirado y el suelo base.
+  * **Desvincular Canales (Unlinked):** Calcula de forma independiente las curvas de los canales R, G y B, eliminando dominantes frías o verdes del sensor y destacando la calidez dorada del núcleo galáctico.
+* **Totalmente No Destructivo:** Compatible con `Ctrl+Z` / `Ctrl+Y`, preservando la base lineal intacta en memoria para reajustes ilimitados.
 
 #### Controles de Textura de Polvo Galáctico
 * **Claridad Nebular:** Realza el micro-contraste local en los bordes de los filamentos oscuros de polvo.
@@ -306,9 +321,9 @@ El compositor multicapa de AstroLoom funciona de manera análoga a Adobe Photosh
 * **Herramientas de Pincel:**
   - Pinta manualmente en pantalla para añadir o quitar zonas de ajuste local con control de tamaño y suavizado de borde (*feather*).
 * **Capas Nativas:**
-  - **🌌 Fondo Nebular:** Ajusta selectivamente el polvo de la Vía Láctea.
-  - **⭐ Estrellas:** Ajusta el brillo, nitidez o saturación de las estrellas.
-  - **🏞️ Suelo:** Ajusta el paisaje terrestre.
+  - **🌌 Fondo Nebular:** Ajusta selectivamente el polvo de la Vía Láctea e integra los controles de Estirado Adaptativo RGB, Claridad, Dehaze, Ondículas y Reducción de Ruido multietapa.
+  - **⭐ Estrellas:** Ajusta el brillo, nitidez o saturación de las estrellas y los efectos de difusión estelar.
+  - **🏞️ Suelo:** Ajusta el paisaje terrestre (exposición, balance de blancos, contraste y curvas tonales locales).
 * **Capas de Ajuste Personalizadas:** Crea capas locales para iluminar un árbol, apagar una farola o dar volumen a una nube.
 * **Exportación Profesional:**
   - **TIFF 16-bit:** Para impresión o archivo maestro de máxima calidad.

@@ -15,7 +15,7 @@ from PySide6.QtCore import Qt, Signal, QCoreApplication
 from PySide6.QtGui import QTextCursor, QCursor
 
 from core.project_manager import ProjectManager
-from core.masking import refine_mask_guided
+from core.masking import refine_mask_guided, apply_direct_brush_to_mask
 from core.stacking import load_image_as_float32
 from gui.canvas import MaskCanvas
 from gui.widgets.drop_widgets import DropListWidget
@@ -593,7 +593,7 @@ class StackerTab(QWidget):
         lbl_ag_rad = QLabel("Radio Frontera:")
         lbl_ag_rad.setStyleSheet("font-size: 11px; color: #90a4ae;")
         self.spin_ag_radius = QSpinBox()
-        self.spin_ag_radius.setRange(5, 80)
+        self.spin_ag_radius.setRange(5, 60)
         self.spin_ag_radius.setValue(25)
         self.spin_ag_radius.setSuffix(" px")
         self.spin_ag_radius.setToolTip("Ancho de la banda perimétrica de seguridad alrededor del contorno del suelo")
@@ -744,19 +744,45 @@ class StackerTab(QWidget):
         # Acciones de trazos y refinado manual
         btn_mask_actions = QHBoxLayout()
         btn_mask_actions.setSpacing(6)
-        self.btn_refine = QPushButton("Refinar con Trazos")
+        self.btn_refine = QPushButton("Refinar con GrabCut")
         self.btn_refine.setIcon(get_icon("brush", size=13, color="#b388ff"))
         self.btn_refine.setStyleSheet("font-weight: bold; color: #b388ff; padding: 5px;")
-        self.btn_refine.setToolTip("Refina o ajusta la máscara usando los trazos verde (cielo) y rojo (suelo) dibujados en el visor.")
+        self.btn_refine.setToolTip("Refina la máscara usando GrabCut y los trazos verde (cielo) y rojo (suelo) sobre la foto base.")
         self.btn_refine.clicked.connect(self.refine_mask)
+
+        self.btn_direct_brush = QPushButton("Pintar en Máscara")
+        self.btn_direct_brush.setIcon(get_icon("sparkles", size=13, color="#80d8ff"))
+        self.btn_direct_brush.setStyleSheet("font-weight: bold; color: #80d8ff; padding: 5px;")
+        self.btn_direct_brush.setToolTip("Aplica los trazos dibujados directamente sobre la máscara actual (aditivo/sustractivo) al instante sin esperar.")
+        self.btn_direct_brush.clicked.connect(self.apply_direct_brush)
+
         self.btn_clear_m = QPushButton("Limpiar")
         self.btn_clear_m.setIcon(get_icon("trash", size=13, color="#ff8a80"))
         self.btn_clear_m.setStyleSheet("font-weight: bold; color: #ff8a80; padding: 5px;")
         self.btn_clear_m.setToolTip("Elimina la máscara actual y los trazos de pincel para empezar de cero.")
         self.btn_clear_m.clicked.connect(self.clear_mask)
+
         btn_mask_actions.addWidget(self.btn_refine)
+        btn_mask_actions.addWidget(self.btn_direct_brush)
         btn_mask_actions.addWidget(self.btn_clear_m)
         mask_layout.addLayout(btn_mask_actions)
+
+        # Ajuste fino perimétrico de silueta (Expandir / Contraer)
+        row_expand = QHBoxLayout()
+        row_expand.setSpacing(6)
+        self.btn_expand_gnd = QPushButton("Expandir Suelo (+2px)")
+        self.btn_expand_gnd.setStyleSheet("color: #ffd54f; font-size: 11px; font-weight: bold; padding: 4px 6px;")
+        self.btn_expand_gnd.setToolTip("Dilata la silueta del suelo 2 píxeles hacia el cielo para asegurar que las ramas finas queden cubiertas.")
+        self.btn_expand_gnd.clicked.connect(lambda: self.expand_ground(2))
+
+        self.btn_shrink_gnd = QPushButton("Contraer (-2px)")
+        self.btn_shrink_gnd.setStyleSheet("color: #b0bec5; font-size: 11px; padding: 4px 6px;")
+        self.btn_shrink_gnd.setToolTip("Contrae la silueta del suelo 2 píxeles hacia adentro.")
+        self.btn_shrink_gnd.clicked.connect(lambda: self.expand_ground(-2))
+
+        row_expand.addWidget(self.btn_expand_gnd)
+        row_expand.addWidget(self.btn_shrink_gnd)
+        mask_layout.addLayout(row_expand)
 
         btn_mask_io = QHBoxLayout()
         btn_mask_io.setSpacing(6)
@@ -1263,11 +1289,16 @@ class StackerTab(QWidget):
             return
         
         scribbles = self.canvas.get_scribbles_matrix()
-        if scribbles is None or not (np.any(scribbles == 1) and np.any(scribbles == 2)):
-            QMessageBox.warning(self, "Aviso", "Debes pintar al menos un trazo verde (cielo) y uno rojo (suelo).")
+        has_any_stroke = scribbles is not None and (np.any(scribbles == 1) or np.any(scribbles == 2))
+        if not has_any_stroke:
+            QMessageBox.warning(self, "Aviso", "Pinta primero al menos un trazo en el visor (Verde = Cielo, Rojo = Suelo).")
             return
 
-        self.log_message("[MÁSCARA] Iniciando refinamiento automático...")
+        if self.computed_mask is None and not (np.any(scribbles == 1) and np.any(scribbles == 2)):
+            QMessageBox.warning(self, "Aviso", "Sin máscara previa, debes pintar al menos un trazo verde (cielo) y uno rojo (suelo).")
+            return
+
+        self.log_message("[MÁSCARA] Iniciando refinamiento con GrabCut asistido...")
         self.setCursor(Qt.WaitCursor)
         QCoreApplication.processEvents()
 
@@ -1280,7 +1311,8 @@ class StackerTab(QWidget):
                 self.canvas.orig_rgb, 
                 scribbles,
                 feather_radius=feather,
-                iterations=iters
+                iterations=iters,
+                base_mask=self.computed_mask
             )
             self.canvas.set_refined_mask(self.computed_mask)
             elapsed = time.perf_counter() - t_start
@@ -1290,6 +1322,41 @@ class StackerTab(QWidget):
             QMessageBox.critical(self, "Error", f"Fallo al refinar la máscara:\n{e}")
         finally:
             self.unsetCursor()
+
+    def apply_direct_brush(self):
+        """Aplica los trazos dibujados directamente sobre la máscara actual (aditivo/sustractivo)."""
+        if self.canvas.orig_rgb is None or self.computed_mask is None:
+            QMessageBox.warning(self, "Aviso", "Genera o carga primero una máscara (ej. con IA 1-Click).")
+            return
+        scribbles = self.canvas.get_scribbles_matrix()
+        if scribbles is None or not (np.any(scribbles == 1) or np.any(scribbles == 2)):
+            QMessageBox.warning(self, "Aviso", "Pinta primero trazos en el visor (Verde = Cielo, Rojo = Suelo).")
+            return
+        feather = self.spin_feather.value()
+        self.computed_mask = apply_direct_brush_to_mask(self.computed_mask, scribbles, feather_radius=max(1, feather // 2))
+        self.canvas.set_refined_mask(self.computed_mask)
+        # Limpiar trazos tras aplicar para dejar el visor limpio
+        if hasattr(self.canvas, 'scribble_pixmap') and self.canvas.scribble_pixmap:
+            self.canvas.scribble_pixmap.fill(Qt.transparent)
+            self.canvas.update()
+        self.log_message("✓ Trazos de pincel integrados directamente en la máscara.")
+
+    def expand_ground(self, pixels: int = 2):
+        """Expande o contrae la silueta del suelo para asegurar cobertura en follaje fino."""
+        if self.computed_mask is None:
+            QMessageBox.warning(self, "Aviso", "Genera o carga primero una máscara de horizonte.")
+            return
+        k_size = 2 * abs(pixels) + 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+        if pixels > 0:
+            # Expandir suelo = erosionar cielo (1.0 = cielo, 0.0 = suelo)
+            self.computed_mask = cv2.erode(self.computed_mask, kernel)
+            self.log_message(f"✓ Silueta de suelo expandida +{pixels}px sobre las ramas.")
+        else:
+            # Contraer suelo = dilatar cielo
+            self.computed_mask = cv2.dilate(self.computed_mask, kernel)
+            self.log_message(f"✓ Silueta de suelo contraída {abs(pixels)}px.")
+        self.canvas.set_refined_mask(self.computed_mask)
 
     def clear_mask(self):
         """Elimina todos los trazos y la máscara calculada para empezar de cero."""

@@ -621,3 +621,146 @@ def apply_luma_vs_sat_curve(img_rgb: np.ndarray, lut_luma_sat: np.ndarray) -> np
     hsv[..., 1] = np.clip(hsv[..., 1] * mult, 0.0, 1.0)
 
     return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+
+
+def auto_stretch_adaptive_starless(
+    img_starless: np.ndarray,
+    sky_mask: np.ndarray = None,
+    target_bg: float = 0.18,
+    shadow_clip_sigma: float = 3.0,
+    saturation_boost: float = 1.5,
+    unlinked: bool = True,
+    feather_radius: int = 2
+) -> np.ndarray:
+    """
+    Estirado Adaptativo RGB: algoritmo de estirado no lineal MTF (con recorte estadístico
+    por sigmas y realce de saturación), diseñado específicamente para la capa starless
+    generada por StarNet, utilizando la máscara cielo/suelo para aislar el cálculo
+    estadístico del fondo celeste del terreno.
+
+    Parámetros:
+        img_starless: Array float32 [0.0, 1.0] (RGB o monocromo) de la capa sin estrellas.
+        sky_mask: Array binario o booleano (H, W) que define los píxeles del cielo (>0.5).
+                  Los píxeles del terreno se ignoran en el cálculo estadístico para que las
+                  sombras del suelo no alteren la mediana ni el contraste de la Vía Láctea.
+        target_bg: Mediana de fondo objetivo (por defecto 0.18).
+        shadow_clip_sigma: Nivel de corte de punto negro en sigmas MAD (por defecto 3.0).
+        saturation_boost: Factor de escala para el canal de saturación HSV (por defecto 1.5).
+        unlinked: Canales R, G y B calculados de forma independiente (True por defecto) para
+                  neutralizar dominantes de color y resaltar los tonos cálidos del polvo galáctico.
+        feather_radius: Radio en píxeles para el difuminado gaussiano de la máscara en la línea de horizonte.
+    """
+    if img_starless is None:
+        return None
+
+    img = np.clip(img_starless, 0.0, 1.0).astype(np.float32)
+    h, w = img.shape[:2]
+
+    # 1. Filtrar píxeles mediante sky_mask
+    if sky_mask is not None:
+        mask = sky_mask
+        if mask.ndim == 3:
+            mask = mask[..., 0]
+        if mask.shape[:2] != (h, w):
+            mask = cv2.resize(mask.astype(np.float32), (w, h), interpolation=cv2.INTER_NEAREST)
+        is_sky = mask > 0.5
+        if np.count_nonzero(is_sky) < 100:
+            is_sky = np.ones((h, w), dtype=bool)
+    else:
+        is_sky = np.ones((h, w), dtype=bool)
+
+    is_color = (img.ndim == 3 and img.shape[2] >= 3)
+    channels = [img[..., c] for c in range(3)] if is_color else [img if img.ndim == 2 else img[..., 0]]
+    out_channels = []
+
+    if unlinked or not is_color:
+        for ch in channels:
+            samples = ch[is_sky]
+            # Submuestreo estadístico si supera 500k elementos para mantener cómputo <15ms
+            if samples.size > 500_000:
+                stride = max(1, samples.size // 500_000)
+                sub_samples = samples[::stride]
+            else:
+                sub_samples = samples
+
+            m_c = float(np.median(sub_samples))
+            sigma_c = float(1.4826 * np.median(np.abs(sub_samples - m_c)))
+            if sigma_c < 1e-6:
+                sigma_c = float(np.std(sub_samples))
+            if sigma_c < 1e-6:
+                c0 = 0.0
+            else:
+                c0 = float(np.clip(m_c - shadow_clip_sigma * sigma_c, 0.0, max(0.0, m_c - 1e-4)))
+
+            denom_norm = max(1e-7, 1.0 - c0)
+            x_norm = np.clip((ch - c0) / denom_norm, 0.0, 1.0)
+            delta = float(np.clip((m_c - c0) / denom_norm, 1e-5, 1.0 - 1e-5))
+
+            denom_m = delta * (1.0 - 2.0 * target_bg) + target_bg
+            m = (delta * (1.0 - target_bg)) / denom_m if abs(denom_m) > 1e-7 else 0.5
+            m = float(np.clip(m, 1e-5, 1.0 - 1e-5))
+
+            # Curva analítica MTF(x, m) = ((m - 1.0) * x) / ((2m - 1.0) * x - m)
+            num = (m - 1.0) * x_norm
+            den = (2.0 * m - 1.0) * x_norm - m
+            out_ch = np.where(np.abs(den) > 1e-7, num / den, 0.0)
+            out_channels.append(np.clip(out_ch, 0.0, 1.0))
+    else:
+        # Modo vinculado (Linked): mediana y dispersión conjuntas
+        all_samples = [ch[is_sky] for ch in channels]
+        combined = np.concatenate(all_samples)
+        if combined.size > 500_000:
+            stride = max(1, combined.size // 500_000)
+            sub_samples = combined[::stride]
+        else:
+            sub_samples = combined
+
+        m_c = float(np.median(sub_samples))
+        sigma_c = float(1.4826 * np.median(np.abs(sub_samples - m_c)))
+        if sigma_c < 1e-6:
+            sigma_c = float(np.std(sub_samples))
+        if sigma_c < 1e-6:
+            c0 = 0.0
+        else:
+            c0 = float(np.clip(m_c - shadow_clip_sigma * sigma_c, 0.0, max(0.0, m_c - 1e-4)))
+
+        denom_norm = max(1e-7, 1.0 - c0)
+        delta = float(np.clip((m_c - c0) / denom_norm, 1e-5, 1.0 - 1e-5))
+        denom_m = delta * (1.0 - 2.0 * target_bg) + target_bg
+        m = (delta * (1.0 - target_bg)) / denom_m if abs(denom_m) > 1e-7 else 0.5
+        m = float(np.clip(m, 1e-5, 1.0 - 1e-5))
+
+        for ch in channels:
+            x_norm = np.clip((ch - c0) / denom_norm, 0.0, 1.0)
+            num = (m - 1.0) * x_norm
+            den = (2.0 * m - 1.0) * x_norm - m
+            out_ch = np.where(np.abs(den) > 1e-7, num / den, 0.0)
+            out_channels.append(np.clip(out_ch, 0.0, 1.0))
+
+    if is_color:
+        out = np.dstack(out_channels).astype(np.float32)
+        # Post-procesado de color: Conversión temporal a HSV para multiplicar S por saturation_boost
+        if abs(saturation_boost - 1.0) > 1e-4:
+            hsv = cv2.cvtColor(out, cv2.COLOR_RGB2HSV)
+            hsv[..., 1] = np.clip(hsv[..., 1] * saturation_boost, 0.0, 1.0)
+            out = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+    else:
+        out = out_channels[0].astype(np.float32)
+        if img.ndim == 3:
+            out = out[..., np.newaxis]
+
+    # Preservar el suelo original si se proporcionó sky_mask, con suavizado opcional de transición
+    if sky_mask is not None:
+        mask_f = mask.astype(np.float32)
+        if feather_radius > 0:
+            k = int(feather_radius) * 2 + 1
+            mask_f = cv2.GaussianBlur(mask_f, (k, k), 0)
+        if is_color:
+            mask_f = mask_f[..., np.newaxis]
+        elif img.ndim == 3 and mask_f.ndim == 2:
+            mask_f = mask_f[..., np.newaxis]
+
+        # Mezcla: píxeles de cielo reciben el estirado; píxeles de suelo conservan img_starless original
+        out = out * mask_f + img * (1.0 - mask_f)
+
+    return np.clip(out, 0.0, 1.0).astype(np.float32)

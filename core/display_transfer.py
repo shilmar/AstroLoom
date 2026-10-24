@@ -1,7 +1,7 @@
 # core/display_transfer.py
 """
 core/display_transfer.py - Motor de visualización acelerada por Look-Up Table (LUT) 1D.
-Inspirado en la tecnología Display Transfer Function / Screen Transfer Function (STF) de PixInsight.
+Inspirado en la tecnología Display Transfer Function / Screen Transfer Function (STF).
 Permite arrastre de deslizadores de estirado (MTF / GHS), curvas tonales y contraste a más de 500-1.000 FPS
 mediante indexación paralela en CPU sobre matrices uint16, manteniendo intactos los datos de 32 bits en RAM.
 """

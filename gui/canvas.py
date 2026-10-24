@@ -73,6 +73,8 @@ class MaskCanvas(QWidget):
         self.is_zoomed: bool = False
         self.zoom_center_img: Optional[QPoint] = None
         self.external_zoom_handler: bool = False  # True si el tab gestiona el recorte externo
+        self.external_crop_rect: Optional[Tuple[int, int, int, int]] = None
+        self.external_full_shape: Optional[Tuple[int, int]] = None
 
         # Capa e indicadores de recorte de sombras (negros) y luces (blancos)
         self.show_clipping_shadows: bool = False
@@ -1372,6 +1374,13 @@ class MaskCanvas(QWidget):
         scribbles[(arr[..., 1] > arr[..., 0]) & has_stroke] = 2
         return scribbles
 
+    def set_external_crop(self, crop_rect: Optional[Tuple[int, int, int, int]], full_shape: Optional[Tuple[int, int]]) -> None:
+        """Establece la geometría de recorte externa (Zoom 100%) para sincronizar overlays de máscaras."""
+        self.external_crop_rect = crop_rect
+        self.external_full_shape = full_shape
+        if self.last_mask_array is not None and self.show_mask_overlay:
+            self.set_refined_mask(self.last_mask_array, mode=getattr(self, '_mask_overlay_mode', 'bicolor'))
+
     def set_refined_mask(self, mask_float: Optional[np.ndarray], mode: str = "bicolor") -> None:
         """
         Genera el overlay semitransparente coloreado para la máscara calculada.
@@ -1396,6 +1405,21 @@ class MaskCanvas(QWidget):
         mask_f = np.clip(mask_f, 0.0, 1.0)
 
         h, w = mask_f.shape
+
+        # Si el visor opera en modo Zoom 100% externo, recortar la ventana correspondiente
+        if self.external_crop_rect is not None and self.external_full_shape is not None:
+            x1, y1, x2, y2 = self.external_crop_rect
+            fh, fw = self.external_full_shape
+            if fh > 0 and fw > 0:
+                sx = float(w) / float(fw)
+                sy = float(h) / float(fh)
+                mx1 = max(0, min(w, int(round(x1 * sx))))
+                my1 = max(0, min(h, int(round(y1 * sy))))
+                mx2 = max(0, min(w, int(round(x2 * sx))))
+                my2 = max(0, min(h, int(round(y2 * sy))))
+                if mx2 > mx1 and my2 > my1:
+                    mask_f = mask_f[my1:my2, mx1:mx2]
+                    h, w = mask_f.shape[:2]
 
         # Si hay una imagen base en el canvas, asegurar coincidencia exacta de resolución
         if self.base_pixmap and not self.base_pixmap.isNull():

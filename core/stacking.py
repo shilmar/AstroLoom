@@ -39,36 +39,48 @@ if HAS_NUMBA:
     def _kappa_sigma_kernel_numba(data, kappa):
         """
         Kernel compilado en LLVM para integración Kappa-Sigma con MAD en una sola pasada.
-        Opera en memoria caché L1/L2 con cero asignaciones en el heap de Python.
+        Excluye valores inválidos (< 0.0) de suelo desplazado o bordes geométricos (Sequator freeze ground).
         data: shape (n_frames, total_items)
         """
         n_frames, total_items = data.shape
         out = np.empty(total_items, dtype=np.float32)
 
         for p in prange(total_items):
-            # 1. Copiar valores locales a un buffer de pila
-            v = np.empty(n_frames, dtype=np.float32)
+            cnt_val = 0
             for i in range(n_frames):
-                v[i] = data[i, p]
+                if data[i, p] >= 0.0:
+                    cnt_val += 1
+
+            if cnt_val == 0:
+                out[p] = 0.0
+                continue
+
+            v = np.empty(cnt_val, dtype=np.float32)
+            idx = 0
+            for i in range(n_frames):
+                val = data[i, p]
+                if val >= 0.0:
+                    v[idx] = val
+                    idx += 1
 
             # 2. Mediana local
             _sort_inplace(v)
-            if n_frames % 2 == 1:
-                med = v[n_frames // 2]
+            if cnt_val % 2 == 1:
+                med = v[cnt_val // 2]
             else:
-                med = 0.5 * (v[n_frames // 2 - 1] + v[n_frames // 2])
+                med = 0.5 * (v[cnt_val // 2 - 1] + v[cnt_val // 2])
 
             # 3. Desviaciones absolutas respecto a la mediana
-            d = np.empty(n_frames, dtype=np.float32)
-            for i in range(n_frames):
-                d[i] = abs(data[i, p] - med)
+            d = np.empty(cnt_val, dtype=np.float32)
+            for i in range(cnt_val):
+                d[i] = abs(v[i] - med)
 
             # 4. MAD (Median Absolute Deviation)
             _sort_inplace(d)
-            if n_frames % 2 == 1:
-                mad = d[n_frames // 2]
+            if cnt_val % 2 == 1:
+                mad = d[cnt_val // 2]
             else:
-                mad = 0.5 * (d[n_frames // 2 - 1] + d[n_frames // 2])
+                mad = 0.5 * (d[cnt_val // 2 - 1] + d[cnt_val // 2])
 
             sigma = 1.4826 * mad + 1e-6
             low = med - kappa * sigma
@@ -76,15 +88,15 @@ if HAS_NUMBA:
 
             # 5. Promedio de valores válidos
             s = 0.0
-            cnt = 0
-            for i in range(n_frames):
-                val = data[i, p]
+            used = 0
+            for i in range(cnt_val):
+                val = v[i]
                 if low <= val <= high:
                     s += val
-                    cnt += 1
+                    used += 1
 
-            if cnt > 0:
-                out[p] = s / cnt
+            if used > 0:
+                out[p] = s / used
             else:
                 out[p] = med
 
@@ -92,38 +104,66 @@ if HAS_NUMBA:
 
     @njit(parallel=True, fastmath=True, nogil=True)
     def _percentile_kernel_numba(data, target_p):
-        """Kernel compilado para cálculo exacto de percentil con interpolación lineal."""
+        """Kernel compilado para cálculo exacto de percentil con exclusión de píxeles inválidos (< 0.0)."""
         n_frames, total_items = data.shape
         out = np.empty(total_items, dtype=np.float32)
-        rank = (target_p / 100.0) * (n_frames - 1)
-        i0 = int(rank)
-        i1 = min(i0 + 1, n_frames - 1)
-        frac = float(rank - i0)
 
         for p in prange(total_items):
-            v = np.empty(n_frames, dtype=np.float32)
+            cnt_val = 0
             for i in range(n_frames):
-                v[i] = data[i, p]
+                if data[i, p] >= 0.0:
+                    cnt_val += 1
+
+            if cnt_val == 0:
+                out[p] = 0.0
+                continue
+
+            v = np.empty(cnt_val, dtype=np.float32)
+            idx = 0
+            for i in range(n_frames):
+                val = data[i, p]
+                if val >= 0.0:
+                    v[idx] = val
+                    idx += 1
+
             _sort_inplace(v)
+            rank = (target_p / 100.0) * (cnt_val - 1)
+            i0 = int(rank)
+            i1 = min(i0 + 1, cnt_val - 1)
+            frac = float(rank - i0)
             out[p] = v[i0] + frac * (v[i1] - v[i0])
 
         return out
 
     @njit(parallel=True, fastmath=True, nogil=True)
     def _median_kernel_numba(data):
-        """Kernel compilado para cálculo rápido de mediana en franjas."""
+        """Kernel compilado para cálculo rápido de mediana con exclusión de píxeles inválidos (< 0.0)."""
         n_frames, total_items = data.shape
         out = np.empty(total_items, dtype=np.float32)
 
         for p in prange(total_items):
-            v = np.empty(n_frames, dtype=np.float32)
+            cnt_val = 0
             for i in range(n_frames):
-                v[i] = data[i, p]
+                if data[i, p] >= 0.0:
+                    cnt_val += 1
+
+            if cnt_val == 0:
+                out[p] = 0.0
+                continue
+
+            v = np.empty(cnt_val, dtype=np.float32)
+            idx = 0
+            for i in range(n_frames):
+                val = data[i, p]
+                if val >= 0.0:
+                    v[idx] = val
+                    idx += 1
+
             _sort_inplace(v)
-            if n_frames % 2 == 1:
-                out[p] = v[n_frames // 2]
+            if cnt_val % 2 == 1:
+                out[p] = v[cnt_val // 2]
             else:
-                out[p] = 0.5 * (v[n_frames // 2 - 1] + v[n_frames // 2])
+                out[p] = 0.5 * (v[cnt_val // 2 - 1] + v[cnt_val // 2])
 
         return out
 
@@ -426,28 +466,48 @@ def preprocess_subframe_lp(
         sh, sw = max(16, h // scale), max(16, w // scale)
         small_img = cv2.resize(frame_rgb, (sw, sh), interpolation=cv2.INTER_AREA)
 
+        sm_mask = None
+        if sky_mask is not None:
+            sm_mask = cv2.resize(np.squeeze(sky_mask).astype(np.float32), (sw, sh), interpolation=cv2.INTER_NEAREST)
+
         k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
         bg_low = np.zeros_like(small_img)
         for ch in range(c):
-            opened = cv2.morphologyEx(small_img[..., ch], cv2.MORPH_OPEN, k_open)
+            ch_data = small_img[..., ch].copy()
+            # Si hay suelo, rellenar el suelo con la mediana del cielo para que no arrastre a la baja el fondo del cielo cerca del horizonte
+            if sm_mask is not None and np.any(sm_mask <= 0.5) and np.any(sm_mask > 0.5):
+                sky_val = float(np.median(ch_data[sm_mask > 0.5]))
+                ch_data[sm_mask <= 0.5] = sky_val
+            opened = cv2.morphologyEx(ch_data, cv2.MORPH_OPEN, k_open)
+            del ch_data
             sigma = max(5.0, min(sh, sw) / 10.0)
             bg_low[..., ch] = cv2.GaussianBlur(opened, (0, 0), sigmaX=sigma, sigmaY=sigma)
-        del small_img
+        del small_img, sm_mask
 
         # 2. Pedestal por submuestreo rápido (4.5 MB en lugar de ordenar 280 MB)
         sub_sample = frame_rgb[::8, ::8]
-        pedestal = np.percentile(sub_sample, 5, axis=(0, 1))
+        if sky_mask is not None:
+            sm_sub = (sky_mask[::8, ::8] > 0.5)
+            if np.any(sm_sub):
+                pedestal = np.percentile(sub_sample[sm_sub], 5, axis=0)
+            else:
+                pedestal = np.percentile(sub_sample, 5, axis=(0, 1))
+        else:
+            pedestal = np.percentile(sub_sample, 5, axis=(0, 1))
         del sub_sample
 
-        # 3. Máscara 2D de cielo
-        m2d = None
+        # 3. Máscara de cielo suavizada: el difuminado sólo atenúa en el cielo, NUNCA invade el suelo
+        m2d_smooth = None
         if sky_mask is not None:
             if sky_mask.shape[:2] != (h, w):
-                m2d = cv2.resize(np.squeeze(sky_mask).astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
+                m2d_raw = cv2.resize(np.squeeze(sky_mask).astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
             else:
-                m2d = np.squeeze(sky_mask).astype(np.float32)
+                m2d_raw = np.squeeze(sky_mask).astype(np.float32)
+            blurred = cv2.GaussianBlur(m2d_raw, (31, 31), sigmaX=8.0)
+            m2d_smooth = np.minimum(m2d_raw, blurred)
+            del m2d_raw, blurred
 
-        # 4. Sustracción in-place canal a canal (Máximo 93 MB asignados a la vez)
+        # 4. Sustracción in-place canal a canal
         for ch in range(c):
             bg_ch = cv2.resize(bg_low[..., ch], (w, h), interpolation=cv2.INTER_LINEAR)
             ped_val = float(pedestal[ch])
@@ -456,15 +516,15 @@ def preprocess_subframe_lp(
             delta = (bg_ch - ped_val) * strength
             del bg_ch
 
-            if m2d is not None:
-                delta *= m2d
+            if m2d_smooth is not None:
+                delta *= m2d_smooth
 
             frame_rgb[..., ch] -= delta
             del delta
             np.clip(frame_rgb[..., ch], 0.0, 1.0, out=frame_rgb[..., ch])
 
-        if m2d is not None:
-            del m2d
+        if m2d_smooth is not None:
+            del m2d_smooth
         del bg_low
         return frame_rgb
 
@@ -640,7 +700,7 @@ def align_single_light_task(args: tuple) -> dict:
             master_flat=master_flat, 
             master_bias=master_bias
         )
-        del master_dark, master_flat, master_bias
+        del master_dark, master_flat, master_bias, raw_frame
 
         curr_kp, curr_desc, _ = detect_sky_stars(calibrated_frame, sky_mask=sky_mask)
         if curr_desc is None or len(curr_kp) < 15:
@@ -682,48 +742,56 @@ def align_single_light_task(args: tuple) -> dict:
         num_inliers = int(np.sum(inliers)) if inliers is not None else 0
         del dst_pts, src_pts, inliers
 
-        if sky_mask is not None:
-            sm_3d = sky_mask[..., np.newaxis]
-            sky_median_val = np.median(calibrated_frame[sky_mask > 0.5]) if np.any(sky_mask > 0.5) else 0.05
-            clean_sky_frame = (calibrated_frame * sm_3d) + (sky_median_val * (1.0 - sm_3d))
-        else:
-            clean_sky_frame = calibrated_frame
+        # 1. Preservar toma de suelo estática para trípode fijo 100% limpia de sustracciones
+        if mode == "fixed_tripod":
+            if use_ram_buffer:
+                res["gnd_data"] = calibrated_frame.copy()
+            else:
+                p_gnd = os.path.join(temp_dir, f"gnd_{idx-1:04d}.bin")
+                save_frame_float32(p_gnd, calibrated_frame)
+                res["gnd_data"] = p_gnd
 
-        warped = cv2.warpPerspective(
-            clean_sky_frame, H_matrix, (w, h),
-            flags=cv2.INTER_CUBIC,
-            borderMode=cv2.BORDER_REFLECT
-        )
-        del clean_sky_frame, calibrated_frame
-
-        warped_processed = preprocess_subframe_lp(
-            warped,
+        # 2. Preprocesar contaminación lumínica en el fotograma para el CIELO
+        calibrated_processed = preprocess_subframe_lp(
+            calibrated_frame,
             method=lp_method,
             strength=lp_strength,
             sky_mask=sky_mask,
             ref_stats=ref_stats
         )
-        del warped, sky_mask
+
+        # 3. Warp óptico exacto del frame de cielo procesado
+        warped = cv2.warpPerspective(
+            calibrated_processed, H_matrix, (w, h),
+            flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=-1.0
+        )
+        del calibrated_processed, calibrated_frame
+
+        # 4. Excluir el suelo desplazado para que NUNCA contamine el cielo apilado (método Sequator)
+        if sky_mask is not None:
+            mask_bin = (sky_mask > 0.5).astype(np.uint8)
+            kernel_safe = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            safe_sky = cv2.erode(mask_bin, kernel_safe)
+            warped_mask = cv2.warpPerspective(
+                safe_sky, H_matrix, (w, h),
+                flags=cv2.INTER_NEAREST,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=0
+            )
+            warped[warped_mask == 0] = -1.0
+            del warped_mask, safe_sky, mask_bin
+        del sky_mask
 
         if use_ram_buffer:
-            res["sky_data"] = np.ascontiguousarray(warped_processed, dtype=np.float32)
-            if mode == "fixed_tripod":
-                res["gnd_data"] = np.ascontiguousarray(raw_frame, dtype=np.float32)
-            else:
-                del raw_frame
+            res["sky_data"] = np.ascontiguousarray(warped, dtype=np.float32)
         else:
             p_sky = os.path.join(temp_dir, f"sky_{idx-1:04d}.bin")
-            save_frame_float32(p_sky, warped_processed)
+            save_frame_float32(p_sky, warped)
             res["sky_data"] = p_sky
 
-            if mode == "fixed_tripod":
-                p_gnd = os.path.join(temp_dir, f"gnd_{idx-1:04d}.bin")
-                save_frame_float32(p_gnd, raw_frame)
-                res["gnd_data"] = p_gnd
-
-            del raw_frame
-
-        del warped_processed
+        del warped
 
         res["success"] = True
         res["inliers"] = num_inliers
@@ -772,24 +840,27 @@ def _process_single_chunk_cpu(args):
     else:
         for ch in range(c):
             channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
+            valid_mask = channel_data >= 0.0
+            ch_masked = np.where(valid_mask, channel_data, np.nan)
             
-            med = np.median(channel_data, axis=0)
-            abs_diff = np.abs(channel_data - med)
-            mad = np.median(abs_diff, axis=0)
+            med = np.nanmedian(ch_masked, axis=0)
+            abs_diff = np.abs(ch_masked - med)
+            mad = np.nanmedian(abs_diff, axis=0)
             sigma = 1.4826 * mad + 1e-6
 
             low = med - kappa * sigma
             high = med + kappa * sigma
 
-            valid = (channel_data >= low) & (channel_data <= high)
-            
-            counts = np.sum(valid, axis=0)
-            sums = np.sum(np.where(valid, channel_data, 0.0), axis=0)
-            
+            in_range = valid_mask & (channel_data >= low) & (channel_data <= high)
+            counts = np.sum(in_range, axis=0)
+            sums = np.sum(np.where(in_range, channel_data, 0.0), axis=0)
+
             fallback = counts == 0
             counts[fallback] = 1
             res = sums / counts
-            res[fallback] = med[fallback]
+            
+            med_fallback = np.nan_to_num(med, nan=0.0)
+            res[fallback] = med_fallback[fallback]
 
             chunk_result[:, :, ch] = res.reshape((actual_rows, w))
 
@@ -859,14 +930,14 @@ def compose_sky_ground_with_anti_ghosting(
     tree_sensitivity: float = 0.5
 ) -> np.ndarray:
     """
-    Composición avanzada cielo/suelo con algoritmo Min-Horizon Anti-Ghosting.
-    Erradica ramas fantasma y sangrado estelar en siluetas de vegetación y perfiles complejos.
+    Composición avanzada cielo/suelo con transición óptica y protección de follaje fino.
+    Erradica ramas fantasma manteniendo la silueta del suelo nítida y sin halos oscuros.
     
     :param sky_stacked: Array float32 (H, W, 3) con el cielo integrado y alineado a estrellas.
     :param ground_layer: Array float32 (H, W, 3) con el suelo estático integrado o de referencia.
     :param sky_mask: Array float32 (H, W) donde 1.0 = cielo y 0.0 = suelo.
     :param enable_anti_ghosting: Si es False, aplica fusión por difuminado gausiano convencional.
-    :param boundary_radius: Radio en píxeles de la franja perimétrica de seguridad (ej. 20 a 30 px).
+    :param boundary_radius: Radio en píxeles de la franja de seguridad en el cielo (ej. 10 a 25 px).
     :param tree_sensitivity: Factor de modulación de silueta vegetal [0.1 a 1.0].
     """
     h, w = sky_stacked.shape[:2]
@@ -879,47 +950,38 @@ def compose_sky_ground_with_anti_ghosting(
         mask_3d = smooth_mask[..., np.newaxis]
         return (sky_stacked * mask_3d) + (ground_layer * (1.0 - mask_3d))
 
-    # 1. Banda de frontera mediante dilatación morfológica
-    rad = max(5, int(boundary_radius))
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * rad + 1, 2 * rad + 1))
-    
     bin_mask = (raw_mask > 0.5).astype(np.uint8)
-    sky_dilated = cv2.dilate(bin_mask, kernel)
-    gnd_dilated = cv2.dilate(1 - bin_mask, kernel)
-    boundary_band = ((sky_dilated > 0) & (gnd_dilated > 0)).astype(np.float32)
-
-    # 2. Signed Distance Function (SDF) para transición continua suave de radio R
     dist_to_gnd = cv2.distanceTransform(bin_mask, cv2.DIST_L2, 5)
     dist_to_sky = cv2.distanceTransform(1 - bin_mask, cv2.DIST_L2, 5)
+    sdf = dist_to_gnd - dist_to_sky  # >0 en cielo, <0 en suelo
 
-    # SDF: positivo en cielo, negativo en suelo, 0 en la frontera
-    sdf = dist_to_gnd - dist_to_sky
-    
-    # Transición lineal normalizada en la franja [-rad, +rad]
-    w_linear = np.clip((sdf / (2.0 * rad)) + 0.5, 0.0, 1.0)
-
-    # Suavizado cosenoidal continuo (C1 continuo sin discontinuidades visuales)
+    # 1. Transición óptica natural (radio de 2.5 px, ancho total 5 px sin translúcidos anchos)
+    optical_feather = 2.5
+    w_linear = np.clip((sdf / (2.0 * optical_feather)) + 0.5, 0.0, 1.0)
     w_smooth = 0.5 - 0.5 * np.cos(np.pi * w_linear)
 
-    # 3. Min-Horizon: Proyección de silueta sólida de vegetación
-    lum_sky = cv2.cvtColor(sky_stacked, cv2.COLOR_RGB2GRAY) if sky_stacked.ndim == 3 else sky_stacked
-    lum_gnd = cv2.cvtColor(ground_layer, cv2.COLOR_RGB2GRAY) if ground_layer.ndim == 3 else ground_layer
+    # 2. Protección de follaje fino en la franja de seguridad del cielo
+    rad = max(4, int(boundary_radius))
+    in_safety_band = (sdf > 0) & (sdf <= rad)
 
-    # Ratio de oscuridad de la silueta terrestre respecto al cielo
-    # Si lum_gnd < lum_sky, hay vegetación/roca oscura en la frontera
-    ratio = np.clip(lum_gnd / (lum_sky + 1e-4), 0.0, 1.0)
-    
-    # Exponente modulador según sensibilidad
-    exponent = 1.0 + 2.0 * float(np.clip(tree_sensitivity, 0.1, 1.0))
-    foliage_factor = ratio ** exponent
+    if np.any(in_safety_band) and tree_sensitivity > 0.05:
+        lum_sky = cv2.cvtColor(sky_stacked, cv2.COLOR_RGB2GRAY) if sky_stacked.ndim == 3 else sky_stacked
+        lum_gnd = cv2.cvtColor(ground_layer, cv2.COLOR_RGB2GRAY) if ground_layer.ndim == 3 else ground_layer
 
-    # En la zona de frontera, modular el peso del cielo con el factor de follaje
-    w_effective = np.where(
-        (boundary_band > 0) & (lum_gnd < lum_sky),
-        w_smooth * foliage_factor,
-        w_smooth
-    )
+        sky_ref_val = float(np.median(lum_sky[raw_mask > 0.6])) if np.any(raw_mask > 0.6) else 0.15
+        gnd_ref_val = float(np.median(lum_gnd[raw_mask < 0.4])) if np.any(raw_mask < 0.4) else 0.02
 
-    mask_3d = np.clip(w_effective, 0.0, 1.0)[..., np.newaxis]
+        # Una rama fina en ground_layer es fotométricamente similar al suelo y mucho más oscura que el cielo
+        sens = float(np.clip(tree_sensitivity, 0.1, 1.0))
+        thresh = gnd_ref_val + (sky_ref_val - gnd_ref_val) * (0.20 + 0.30 * sens)
+        dark_branch_mask = in_safety_band & (lum_gnd < thresh) & (lum_gnd < (lum_sky - 0.005))
+
+        if np.any(dark_branch_mask):
+            branch_f32 = dark_branch_mask.astype(np.float32)
+            branch_smooth = cv2.GaussianBlur(branch_f32, (5, 5), sigmaX=1.0)
+            # Imponer prioridad absoluta y opaca a la rama inmóvil del suelo sobre el cielo en movimiento
+            w_smooth = np.minimum(w_smooth, 1.0 - branch_smooth)
+
+    mask_3d = np.clip(w_smooth, 0.0, 1.0)[..., np.newaxis]
     composite = (sky_stacked * mask_3d) + (ground_layer * (1.0 - mask_3d))
     return composite

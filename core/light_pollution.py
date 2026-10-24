@@ -26,7 +26,9 @@ def compute_light_pollution_dome(
     center_y: float = 0.90,
     width: float = 0.60,
     height: float = 0.45,
-    exponent: float = 2.0
+    exponent: float = 2.0,
+    crop_rect: Optional[Tuple[int, int, int, int]] = None,
+    full_shape: Optional[Tuple[int, int]] = None
 ) -> np.ndarray:
     """
     Calcula una máscara 2D normalizada [0.0, 1.0] que representa el perfil espacial de la cúpula de luz.
@@ -38,9 +40,16 @@ def compute_light_pollution_dome(
     - width: Dispersión/radio horizontal (sigma_x) en escala relativa (típicamente 0.10 a 2.00).
     - height: Dispersión/altura vertical hacia el cenit (sigma_y) en escala relativa (0.10 a 1.50).
     - exponent: Forma de la campana (2.0 = Gaussiana clásica, 1.0 = Exponencial puntiaguda, 3.0 = Cúpula aplanada).
+    - crop_rect, full_shape: Geometría para alinear la cúpula global en modo Zoom 100% (x1, y1, x2, y2).
     """
-    y = np.linspace(0.0, 1.0, h, dtype=np.float32)
-    x = np.linspace(0.0, 1.0, w, dtype=np.float32)
+    if crop_rect is not None and full_shape is not None and full_shape[0] > 1 and full_shape[1] > 1:
+        x1, y1, x2, y2 = crop_rect
+        fh, fw = full_shape
+        y = np.linspace(y1 / (fh - 1.0), (y2 - 1.0) / (fh - 1.0), h, dtype=np.float32)
+        x = np.linspace(x1 / (fw - 1.0), (x2 - 1.0) / (fw - 1.0), w, dtype=np.float32)
+    else:
+        y = np.linspace(0.0, 1.0, h, dtype=np.float32)
+        x = np.linspace(0.0, 1.0, w, dtype=np.float32)
     yy, xx = np.meshgrid(y, x, indexing="ij")
 
     dx = (xx - center_x) / max(0.01, width)
@@ -71,7 +80,9 @@ def apply_parametric_light_pollution(
     tint_strength: float = 0.50,
     sky_mask: Optional[np.ndarray] = None,
     mode: str = "attenuate",
-    legacy_1d: bool = False
+    legacy_1d: bool = False,
+    crop_rect: Optional[Tuple[int, int, int, int]] = None,
+    full_shape: Optional[Tuple[int, int]] = None
 ) -> np.ndarray:
     """
     Aplica reducción paramétrica 2D de contaminación lumínica en float32 [0.0, 1.0].
@@ -86,6 +97,7 @@ def apply_parametric_light_pollution(
     - sky_mask: Máscara de cielo en float32 [0.0, 1.0] (1.0 = cielo, 0.0 = suelo).
     - mode: "attenuate" (atenuación proporcional suave) o "subtractive" (sustracción física del resplandor aditivo).
     - legacy_1d: Si es True, ejecuta el algoritmo de rampa vertical 1D clásica (compatibilidad).
+    - crop_rect, full_shape: Parámetros opcionales para preservar la escala espacial global en Zoom 100%.
     """
     if strength <= 1e-4:
         return img_rgb
@@ -94,7 +106,11 @@ def apply_parametric_light_pollution(
 
     # Modo compatible 1D clásico (rampa coseno vertical)
     if legacy_1d:
-        y_coords = np.linspace(0.0, 1.0, h, dtype=np.float32)
+        if crop_rect is not None and full_shape is not None and full_shape[0] > 1:
+            y1, y2 = crop_rect[1], crop_rect[3]
+            y_coords = np.linspace(y1 / (full_shape[0] - 1.0), (y2 - 1.0) / (full_shape[0] - 1.0), h, dtype=np.float32)
+        else:
+            y_coords = np.linspace(0.0, 1.0, h, dtype=np.float32)
         grad_y = np.clip((y_coords - 0.50) / 0.50, 0.0, 1.0)
         curve_1d = 0.5 * (1.0 - np.cos(np.pi * grad_y)) * (strength * 0.70)
         weight_2d = np.tile(curve_1d[:, np.newaxis], (1, w))
@@ -113,7 +129,9 @@ def apply_parametric_light_pollution(
         center_x=center_x,
         center_y=center_y,
         width=width,
-        height=height
+        height=height,
+        crop_rect=crop_rect,
+        full_shape=full_shape
     )
 
     # 2. Modulación con máscara de cielo si está disponible

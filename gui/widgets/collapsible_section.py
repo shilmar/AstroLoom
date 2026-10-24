@@ -27,7 +27,6 @@ SECTION_ICON_KEYWORDS = {
     "calibración": "sparkles",
     "gradiente": "sparkles",
     "gradient": "sparkles",
-    "graxpert": "sparkles",
     "estirado": "chart",
     "stretch": "chart",
     "curva": "curve",

@@ -4,6 +4,7 @@ gui/widgets/mask_layers_widget.py - Panel interactivo de gestión de capas de m�
 Permite crear, ordenar, editar y previsualizar múltiples máscaras (Pincel, Luminancia, Color y Suelo/Cielo),
 con ajustes locales paramétricos independientes y conciencia de capas StarNet.
 """
+import uuid
 from typing import Optional, List, Dict, Any, Callable, Tuple
 import cv2
 import numpy as np
@@ -156,6 +157,7 @@ class MaskLayersWidget(QWidget):
     starless_orton_tint_changed = Signal(str)       # "warm_gold", "neutral", "cool_blue", "halpha"
     starless_orton_mode_changed = Signal(str)       # "soft_light", "screen", "additive"
     starless_reset_requested = Signal()          # restablecer ajustes de fondo
+    auto_stretch_starless_requested = Signal()   # Estirado Adaptativo RGB para capa starless
     interaction_started = Signal()
     interaction_finished = Signal()
 
@@ -345,6 +347,7 @@ class MaskLayersWidget(QWidget):
             }
         """)
         self.list_layers.currentRowChanged.connect(self._on_layer_selection_changed)
+        self.list_layers.itemClicked.connect(lambda item: self._on_layer_selection_changed(self.list_layers.row(item)))
         top_layout.addWidget(self.list_layers, stretch=1)
 
         # 3. Acciones sobre la capa seleccionada (Subir, Bajar, Duplicar, Eliminar)
@@ -885,8 +888,11 @@ class MaskLayersWidget(QWidget):
         self.row_stars_special = PrecisionSliderRow("Intensidad Estrellas:", 0, 200, 100, unit="%", label_width=130)
         self.slider_stars_special = self.row_stars_special.slider
         self.lbl_stars_special = self.row_stars_special.lbl_value
-        self.slider_stars_special.valueChanged.connect(self._on_stars_special_changed)
-        self.slider_stars_special.sliderReleased.connect(self.ground_slider_released.emit)
+        self.row_stars_special.valueChanged.connect(self._on_stars_special_changed)
+        self.row_stars_special.resetRequested.connect(lambda: self._on_stars_special_changed(self.row_stars_special.raw_default))
+        self.row_stars_special.sliderReleased.connect(self.ground_slider_released.emit)
+        self.row_stars_special.sliderReleased.connect(self._on_slider_interaction_ended)
+        self.row_stars_special.sliderPressed.connect(self._on_slider_interaction_started)
         stars_spec_layout.addWidget(self.row_stars_special)
 
         # Filtro Difusor y Realce de Constelaciones (Star Mist)
@@ -922,32 +928,44 @@ class MaskLayersWidget(QWidget):
         self.row_sl_star_diff_strength = PrecisionSliderRow("Intensidad Difusor:", 0, 100, 0, unit="%", label_width=130)
         self.slider_sl_star_diff_strength = self.row_sl_star_diff_strength.slider
         self.lbl_sl_star_diff_strength = self.row_sl_star_diff_strength.lbl_value
-        self.slider_sl_star_diff_strength.valueChanged.connect(self._on_sl_star_diff_strength_changed)
-        self.slider_sl_star_diff_strength.sliderReleased.connect(self.ground_slider_released.emit)
+        self.row_sl_star_diff_strength.valueChanged.connect(self._on_sl_star_diff_strength_changed)
+        self.row_sl_star_diff_strength.resetRequested.connect(lambda: self._on_sl_star_diff_strength_changed(self.row_sl_star_diff_strength.raw_default))
+        self.row_sl_star_diff_strength.sliderReleased.connect(self.ground_slider_released.emit)
+        self.row_sl_star_diff_strength.sliderReleased.connect(self._on_slider_interaction_ended)
+        self.row_sl_star_diff_strength.sliderPressed.connect(self._on_slider_interaction_started)
         sl_sd_layout.addWidget(self.row_sl_star_diff_strength)
 
         # Radio (Halo)
         self.row_sl_star_diff_radius = PrecisionSliderRow("Radio (Halo):", 5, 60, 20, unit=" px", label_width=130)
         self.slider_sl_star_diff_radius = self.row_sl_star_diff_radius.slider
         self.lbl_sl_star_diff_radius = self.row_sl_star_diff_radius.lbl_value
-        self.slider_sl_star_diff_radius.valueChanged.connect(self._on_sl_star_diff_radius_changed)
-        self.slider_sl_star_diff_radius.sliderReleased.connect(self.ground_slider_released.emit)
+        self.row_sl_star_diff_radius.valueChanged.connect(self._on_sl_star_diff_radius_changed)
+        self.row_sl_star_diff_radius.resetRequested.connect(lambda: self._on_sl_star_diff_radius_changed(self.row_sl_star_diff_radius.raw_default))
+        self.row_sl_star_diff_radius.sliderReleased.connect(self.ground_slider_released.emit)
+        self.row_sl_star_diff_radius.sliderReleased.connect(self._on_slider_interaction_ended)
+        self.row_sl_star_diff_radius.sliderPressed.connect(self._on_slider_interaction_started)
         sl_sd_layout.addWidget(self.row_sl_star_diff_radius)
 
         # Umbral Magnitud
         self.row_sl_star_diff_threshold = PrecisionSliderRow("Umbral:", 15, 85, 45, scale=100.0, decimals=2, label_width=130)
         self.slider_sl_star_diff_threshold = self.row_sl_star_diff_threshold.slider
         self.lbl_sl_star_diff_threshold = self.row_sl_star_diff_threshold.lbl_value
-        self.slider_sl_star_diff_threshold.valueChanged.connect(self._on_sl_star_diff_threshold_changed)
-        self.slider_sl_star_diff_threshold.sliderReleased.connect(self.ground_slider_released.emit)
+        self.row_sl_star_diff_threshold.valueChanged.connect(self._on_sl_star_diff_threshold_changed)
+        self.row_sl_star_diff_threshold.resetRequested.connect(lambda: self._on_sl_star_diff_threshold_changed(self.row_sl_star_diff_threshold.raw_default))
+        self.row_sl_star_diff_threshold.sliderReleased.connect(self.ground_slider_released.emit)
+        self.row_sl_star_diff_threshold.sliderReleased.connect(self._on_slider_interaction_ended)
+        self.row_sl_star_diff_threshold.sliderPressed.connect(self._on_slider_interaction_started)
         sl_sd_layout.addWidget(self.row_sl_star_diff_threshold)
 
         # Color Espectral
         self.row_sl_star_diff_color = PrecisionSliderRow("Color Espectral:", 0, 100, 50, unit="%", label_width=130)
         self.slider_sl_star_diff_color = self.row_sl_star_diff_color.slider
         self.lbl_sl_star_diff_color = self.row_sl_star_diff_color.lbl_value
-        self.slider_sl_star_diff_color.valueChanged.connect(self._on_sl_star_diff_color_changed)
-        self.slider_sl_star_diff_color.sliderReleased.connect(self.ground_slider_released.emit)
+        self.row_sl_star_diff_color.valueChanged.connect(self._on_sl_star_diff_color_changed)
+        self.row_sl_star_diff_color.resetRequested.connect(lambda: self._on_sl_star_diff_color_changed(self.row_sl_star_diff_color.raw_default))
+        self.row_sl_star_diff_color.sliderReleased.connect(self.ground_slider_released.emit)
+        self.row_sl_star_diff_color.sliderReleased.connect(self._on_slider_interaction_ended)
+        self.row_sl_star_diff_color.sliderPressed.connect(self._on_slider_interaction_started)
         sl_sd_layout.addWidget(self.row_sl_star_diff_color)
 
         # Modo de Fusión
@@ -971,6 +989,7 @@ class MaskLayersWidget(QWidget):
         self.btn_reset_stars_special.setIcon(get_icon("rotate_ccw", color="#80d8ff", size=13))
         self.btn_reset_stars_special.setCursor(Qt.PointingHandCursor)
         self.btn_reset_stars_special.clicked.connect(self.stars_reset_requested.emit)
+        self.btn_reset_stars_special.clicked.connect(self.ground_slider_released.emit)
         stars_spec_layout.addWidget(self.btn_reset_stars_special)
 
         props_layout.addWidget(self.grp_stars_special)
@@ -1155,6 +1174,81 @@ class MaskLayersWidget(QWidget):
 
         orton_layout.addLayout(row_ort_combos)
         sl_layout.addWidget(self.box_sl_orton)
+
+        # Fila Botón de Acción + Engranaje de opciones avanzadas de Estirado Adaptativo RGB
+        row_as_header = QHBoxLayout()
+        row_as_header.setSpacing(4)
+
+        self.btn_sl_autostretch = QPushButton("Estirado Adaptativo RGB")
+        self.btn_sl_autostretch.setIcon(get_icon("sparkles", color="#ce93d8", size=13))
+        self.btn_sl_autostretch.setCursor(Qt.PointingHandCursor)
+        self.btn_sl_autostretch.setToolTip(
+            "Aplica el algoritmo de estirado no lineal adaptativo MTF sobre la capa sin estrellas,\n"
+            "aislando el cálculo estadístico del fondo celeste respecto al suelo."
+        )
+        self.btn_sl_autostretch.setStyleSheet("""
+            QPushButton {
+                background-color: #2b1f3d;
+                color: #ce93d8;
+                border: 1px solid #7b1fa2;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #3b2854;
+                border-color: #ba68c8;
+                color: #ffffff;
+            }
+        """)
+        self.btn_sl_autostretch.clicked.connect(self.auto_stretch_starless_requested.emit)
+        row_as_header.addWidget(self.btn_sl_autostretch, stretch=1)
+
+        self.btn_sl_autostretch_expand = QPushButton()
+        self.btn_sl_autostretch_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#ce93d8", size=12))
+        self.btn_sl_autostretch_expand.setCheckable(True)
+        self.btn_sl_autostretch_expand.setChecked(False)
+        self.btn_sl_autostretch_expand.setFixedSize(28, 28)
+        self.btn_sl_autostretch_expand.setToolTip("Despliega las opciones avanzadas de estirado: Fondo objetivo, corte sombras, saturación y canales.")
+        self.btn_sl_autostretch_expand.setStyleSheet("""
+            QPushButton { font-size: 11px; padding: 2px; border-radius: 4px; background: #262933; color: #cfd8dc; border: 1px solid #3b4252; }
+            QPushButton:hover { background: #323846; border-color: #7b1fa2; }
+            QPushButton:checked { background: #4a148c; color: #e1bee7; border: 1px solid #ba68c8; }
+        """)
+        row_as_header.addWidget(self.btn_sl_autostretch_expand)
+        sl_layout.addLayout(row_as_header)
+
+        # Panel colapsable de opciones avanzadas de Estirado Adaptativo RGB
+        self.w_sl_autostretch_advanced = QWidget()
+        self.w_sl_autostretch_advanced.setVisible(False)
+        w_as_layout = QVBoxLayout(self.w_sl_autostretch_advanced)
+        w_as_layout.setContentsMargins(4, 2, 4, 4)
+        w_as_layout.setSpacing(4)
+
+        self.row_sl_as_target_bg = PrecisionSliderRow("Fondo Objetivo:", 10, 30, 18, scale=100.0, decimals=2, unit="%", label_width=130)
+        w_as_layout.addWidget(self.row_sl_as_target_bg)
+
+        self.row_sl_as_sigma = PrecisionSliderRow("Corte Sombras:", 15, 50, 30, scale=10.0, decimals=1, unit=" σ", label_width=130)
+        w_as_layout.addWidget(self.row_sl_as_sigma)
+
+        self.row_sl_as_sat = PrecisionSliderRow("Saturación:", 10, 30, 15, scale=10.0, decimals=1, unit="x", label_width=130)
+        w_as_layout.addWidget(self.row_sl_as_sat)
+
+        self.row_sl_as_feather = PrecisionSliderRow("Suavizado Borde:", 0, 10, 2, unit=" px", label_width=130)
+        w_as_layout.addWidget(self.row_sl_as_feather)
+
+        self.chk_sl_as_unlinked = QCheckBox("Canales RGB independientes (neutraliza dominante)")
+        self.chk_sl_as_unlinked.setChecked(True)
+        self.chk_sl_as_unlinked.setToolTip(
+            "Activado: Calcula MTF independiente por canal R, G y B (neutraliza dominantes en nebulosas).\n"
+            "Desactivado: Usa curva conjunta compartida (conserva balance de color y gradientes del horizonte)."
+        )
+        self.chk_sl_as_unlinked.setStyleSheet("color: #ce93d8; font-size: 11px; margin-left: 12px; margin-top: 2px;")
+        w_as_layout.addWidget(self.chk_sl_as_unlinked)
+
+        self.btn_sl_autostretch_expand.toggled.connect(self.w_sl_autostretch_advanced.setVisible)
+        sl_layout.addWidget(self.w_sl_autostretch_advanced)
 
         self.btn_reset_sl_special = QPushButton("Restablecer Ajustes de Fondo")
         self.btn_reset_sl_special.setIcon(get_icon("rotate_ccw", color="#ce93d8", size=13))
@@ -1446,6 +1540,7 @@ class MaskLayersWidget(QWidget):
         if layer and not layer.is_system_layer:
             d = layer.to_dict()
             new_layer = MaskLayer.from_dict(d)
+            new_layer.id = str(uuid.uuid4())[:8]
             if layer.brush_mask is not None:
                 new_layer.brush_mask = layer.brush_mask.copy()
             new_layer.name = f"{layer.name} (Copia)"
@@ -1805,8 +1900,13 @@ class MaskLayersWidget(QWidget):
                 }
             """)
 
-            def make_click_handler(r):
-                return lambda e: self.list_layers.setCurrentRow(r)
+            def make_click_handler(layer_id, r):
+                def _handler(e):
+                    self.list_layers.setCurrentRow(r)
+                    if self._selected_layer_id != layer_id:
+                        self._selected_layer_id = layer_id
+                        self._update_list_and_props_state()
+                return _handler
 
             def make_eye_handler(r):
                 return lambda: self._toggle_layer_enabled_at(r)
@@ -1814,9 +1914,11 @@ class MaskLayersWidget(QWidget):
             def make_thumb_double_click_handler(l):
                 return lambda e: self._on_thumb_double_clicked(l)
 
-            row_widget.mousePressEvent = make_click_handler(i)
-            lbl_title.mousePressEvent = make_click_handler(i)
-            lbl_thumb.mousePressEvent = make_click_handler(i)
+            h = make_click_handler(layer.id, i)
+            row_widget.mousePressEvent = h
+            lbl_title.mousePressEvent = h
+            lbl_thumb.mousePressEvent = h
+            lbl_icon.mousePressEvent = h
             lbl_thumb.mouseDoubleClickEvent = make_thumb_double_click_handler(layer)
             btn_eye.clicked.connect(make_eye_handler(i))
 
@@ -1910,91 +2012,92 @@ class MaskLayersWidget(QWidget):
             return
 
         self._updating_ui = True
+        try:
+            # Fila A
+            self.txt_layer_name.setText(layer.name)
+            self.txt_layer_name.setEnabled(not is_sys)
+            self.chk_layer_enabled.setChecked(layer.enabled)
+            self.chk_layer_invert.setChecked(layer.inverted)
+            self.chk_layer_invert.setEnabled(not is_sys)
 
-        # Fila A
-        self.txt_layer_name.setText(layer.name)
-        self.txt_layer_name.setEnabled(not is_sys)
-        self.chk_layer_enabled.setChecked(layer.enabled)
-        self.chk_layer_invert.setChecked(layer.inverted)
-        self.chk_layer_invert.setEnabled(not is_sys)
+            # Fila C: Opacidad
+            op_pct = int(round(layer.opacity * 100))
+            self.slider_opacity.setValue(op_pct)
+            self.lbl_opacity.setText(f"{op_pct}%")
 
-        # Fila C: Opacidad
-        op_pct = int(round(layer.opacity * 100))
-        self.slider_opacity.setValue(op_pct)
-        self.lbl_opacity.setText(f"{op_pct}%")
+            # Grupo de definición de máscara (Ocultar si es capa de sistema de StarNet)
+            self.grp_mask_def.setVisible(not is_sys)
 
-        # Grupo de definición de máscara (Ocultar si es capa de sistema de StarNet)
-        self.grp_mask_def.setVisible(not is_sys)
-
-        if not is_sys:
-            # Sub-paneles de tipo de máscara
-            self.panel_brush.setVisible(layer.mask_type == MASK_TYPE_BRUSH)
-            self.panel_luma.setVisible(layer.mask_type == MASK_TYPE_LUMA)
-            self.panel_color.setVisible(layer.mask_type == MASK_TYPE_COLOR)
-            self.panel_ground.setVisible(layer.mask_type in (MASK_TYPE_GROUND, MASK_TYPE_SKY))
-        else:
-            self.panel_brush.setVisible(False)
-            self.panel_luma.setVisible(False)
-            self.panel_color.setVisible(False)
-            self.panel_ground.setVisible(False)
-
-        if layer.mask_type == MASK_TYPE_BRUSH:
-            self.slider_b_radius.setValue(layer.brush_radius)
-            self.lbl_b_radius.setText(f"{layer.brush_radius} px")
-            self.slider_b_hardness.setValue(int(round(layer.brush_hardness * 100)))
-            self.lbl_b_hardness.setText(f"{int(round(layer.brush_hardness * 100))}%")
-            self.slider_b_flow.setValue(int(round(layer.brush_flow * 100)))
-            self.lbl_b_flow.setText(f"{int(round(layer.brush_flow * 100))}%")
-            self.btn_b_paint.setChecked(layer.brush_mode == "paint")
-            self.btn_b_erase.setChecked(layer.brush_mode == "erase")
-
-        elif layer.mask_type == MASK_TYPE_LUMA:
-            self.spin_luma_min.setValue(layer.luma_min)
-            self.spin_luma_max.setValue(layer.luma_max)
-            self.spin_luma_feather.setValue(layer.feather)
-
-        elif layer.mask_type == MASK_TYPE_COLOR:
-            hue_int = int(round(layer.color_hue))
-            self.slider_hue.setValue(hue_int)
-            self.lbl_hue_val.setText(f"{hue_int}°")
-            self._update_color_swatch(hue_int)
-            self.spin_color_tol.setValue(int(layer.color_tolerance))
-            self.spin_color_sat.setValue(layer.color_min_sat)
-
-        # Ajustes locales
-        self.slider_adj_ev.setValue(int(round(layer.exposure * 100)))
-        self.lbl_adj_ev.setText(f"{layer.exposure:+.2f} EV")
-
-        self.slider_adj_contrast.setValue(int(round(layer.contrast * 100)))
-        self.lbl_adj_contrast.setText(f"{layer.contrast:+.2f}")
-
-        self.slider_adj_shadows.setValue(int(round(layer.shadows * 100)))
-        self.lbl_adj_shadows.setText(f"{layer.shadows:+.2f}")
-
-        self.slider_adj_highlights.setValue(int(round(layer.highlights * 100)))
-        self.lbl_adj_highlights.setText(f"{layer.highlights:+.2f}")
-
-        sat_pct = int(round(layer.saturation * 100))
-        self.slider_adj_sat.setValue(sat_pct)
-        self.lbl_adj_sat.setText(f"{layer.saturation:.2f}x")
-
-        # Temperatura y Tinte WB (-1.0000 a +1.0000 con 4 decimales)
-        self.spin_adj_temp.setValue(layer.temp)
-        self.slider_adj_temp.setValue(int(round(layer.temp * 10000.0)))
-
-        self.spin_adj_tint.setValue(layer.tint)
-        self.slider_adj_tint.setValue(int(round(layer.tint * 10000.0)))
-
-        # Curva tonal interactiva de capa
-        if hasattr(self, 'layer_curve_widget'):
-            pts = getattr(layer, 'curve_points', None)
-            if pts:
-                self.layer_curve_widget.set_state({"rgb": pts})
+            if not is_sys:
+                # Sub-paneles de tipo de máscara
+                self.panel_brush.setVisible(layer.mask_type == MASK_TYPE_BRUSH)
+                self.panel_luma.setVisible(layer.mask_type == MASK_TYPE_LUMA)
+                self.panel_color.setVisible(layer.mask_type == MASK_TYPE_COLOR)
+                self.panel_ground.setVisible(layer.mask_type in (MASK_TYPE_GROUND, MASK_TYPE_SKY))
             else:
-                self.layer_curve_widget.reset_curve("rgb")
-            self.update_active_layer_histogram()
+                self.panel_brush.setVisible(False)
+                self.panel_luma.setVisible(False)
+                self.panel_color.setVisible(False)
+                self.panel_ground.setVisible(False)
 
-        self._updating_ui = False
+            if layer.mask_type == MASK_TYPE_BRUSH:
+                self.slider_b_radius.setValue(layer.brush_radius)
+                self.lbl_b_radius.setText(f"{layer.brush_radius} px")
+                self.slider_b_hardness.setValue(int(round(layer.brush_hardness * 100)))
+                self.lbl_b_hardness.setText(f"{int(round(layer.brush_hardness * 100))}%")
+                self.slider_b_flow.setValue(int(round(layer.brush_flow * 100)))
+                self.lbl_b_flow.setText(f"{int(round(layer.brush_flow * 100))}%")
+                self.btn_b_paint.setChecked(layer.brush_mode == "paint")
+                self.btn_b_erase.setChecked(layer.brush_mode == "erase")
+
+            elif layer.mask_type == MASK_TYPE_LUMA:
+                self.spin_luma_min.setValue(layer.luma_min)
+                self.spin_luma_max.setValue(layer.luma_max)
+                self.spin_luma_feather.setValue(layer.feather)
+
+            elif layer.mask_type == MASK_TYPE_COLOR:
+                hue_int = int(round(layer.color_hue))
+                self.slider_hue.setValue(hue_int)
+                self.lbl_hue_val.setText(f"{hue_int}°")
+                self._update_color_swatch(hue_int)
+                self.spin_color_tol.setValue(int(layer.color_tolerance))
+                self.spin_color_sat.setValue(layer.color_min_sat)
+
+            # Ajustes locales
+            self.slider_adj_ev.setValue(int(round(layer.exposure * 100)))
+            self.lbl_adj_ev.setText(f"{layer.exposure:+.2f} EV")
+
+            self.slider_adj_contrast.setValue(int(round(layer.contrast * 100)))
+            self.lbl_adj_contrast.setText(f"{layer.contrast:+.2f}")
+
+            self.slider_adj_shadows.setValue(int(round(layer.shadows * 100)))
+            self.lbl_adj_shadows.setText(f"{layer.shadows:+.2f}")
+
+            self.slider_adj_highlights.setValue(int(round(layer.highlights * 100)))
+            self.lbl_adj_highlights.setText(f"{layer.highlights:+.2f}")
+
+            sat_pct = int(round(layer.saturation * 100))
+            self.slider_adj_sat.setValue(sat_pct)
+            self.lbl_adj_sat.setText(f"{layer.saturation:.2f}x")
+
+            # Temperatura y Tinte WB (-1.0000 a +1.0000 con 4 decimales)
+            self.spin_adj_temp.setValue(layer.temp)
+            self.slider_adj_temp.setValue(int(round(layer.temp * 10000.0)))
+
+            self.spin_adj_tint.setValue(layer.tint)
+            self.slider_adj_tint.setValue(int(round(layer.tint * 10000.0)))
+
+            # Curva tonal interactiva de capa
+            if hasattr(self, 'layer_curve_widget'):
+                pts = getattr(layer, 'curve_points', None)
+                if pts:
+                    self.layer_curve_widget.set_state({"rgb": pts})
+                else:
+                    self.layer_curve_widget.reset_curve("rgb")
+                self.update_active_layer_histogram()
+
+        finally:
+            self._updating_ui = False
 
         if not layer.enabled or is_sys:
             self.brush_tool_toggled.emit(False, None)
@@ -2577,28 +2680,53 @@ class MaskLayersWidget(QWidget):
     ) -> None:
         """Sincroniza los controles especiales de estrellas desde tab_developer."""
         self._updating_ui = True
-        if presence is not None and hasattr(self, 'slider_stars_special'):
-            self.slider_stars_special.setValue(presence)
-            self.lbl_stars_special.setText(f"{presence}%")
-        if diff_strength is not None and hasattr(self, 'slider_sl_star_diff_strength'):
-            self.slider_sl_star_diff_strength.setValue(diff_strength)
-            self.lbl_sl_star_diff_strength.setText(f"{diff_strength}%")
-        if diff_radius is not None and hasattr(self, 'slider_sl_star_diff_radius'):
-            self.slider_sl_star_diff_radius.setValue(diff_radius)
-            self.lbl_sl_star_diff_radius.setText(f"{diff_radius} px")
-        if diff_threshold is not None and hasattr(self, 'slider_sl_star_diff_threshold'):
-            self.slider_sl_star_diff_threshold.setValue(diff_threshold)
-            self.lbl_sl_star_diff_threshold.setText(f"{diff_threshold / 100.0:.2f}")
-        if diff_color is not None and hasattr(self, 'slider_sl_star_diff_color'):
-            self.slider_sl_star_diff_color.setValue(diff_color)
-            self.lbl_sl_star_diff_color.setText(f"{diff_color}%")
-        if diff_mode_idx is not None and hasattr(self, 'combo_sl_star_diff_mode'):
-            self.combo_sl_star_diff_mode.setCurrentIndex(diff_mode_idx)
-        self._updating_ui = False
+        try:
+            if presence is not None and hasattr(self, 'row_stars_special'):
+                self.row_stars_special.setValue(presence)
+                self.lbl_stars_special.setText(f"{presence}%")
+            if diff_strength is not None and hasattr(self, 'row_sl_star_diff_strength'):
+                self.row_sl_star_diff_strength.setValue(diff_strength)
+                self.lbl_sl_star_diff_strength.setText(f"{diff_strength}%")
+            if diff_radius is not None and hasattr(self, 'row_sl_star_diff_radius'):
+                self.row_sl_star_diff_radius.setValue(diff_radius)
+                self.lbl_sl_star_diff_radius.setText(f"{diff_radius} px")
+            if diff_threshold is not None and hasattr(self, 'row_sl_star_diff_threshold'):
+                self.row_sl_star_diff_threshold.setValue(diff_threshold)
+                self.lbl_sl_star_diff_threshold.setText(f"{diff_threshold / 100.0:.2f}")
+            if diff_color is not None and hasattr(self, 'row_sl_star_diff_color'):
+                self.row_sl_star_diff_color.setValue(diff_color)
+                self.lbl_sl_star_diff_color.setText(f"{diff_color}%")
+            if diff_mode_idx is not None and hasattr(self, 'combo_sl_star_diff_mode'):
+                self.combo_sl_star_diff_mode.setCurrentIndex(diff_mode_idx)
+        finally:
+            self._updating_ui = False
 
     def set_stars_special_value(self, val: int) -> None:
         """Sincroniza el control especial de intensidad de estrellas desde tab_developer (compatibilidad)."""
         self.set_stars_special_values(presence=val)
+
+    def get_autostretch_params(self) -> dict:
+        """Retorna los parámetros actuales configurados para el Estirado Adaptativo RGB."""
+        return {
+            "target_bg": self.row_sl_as_target_bg.value() / 100.0 if hasattr(self, "row_sl_as_target_bg") else 0.18,
+            "shadow_clip_sigma": self.row_sl_as_sigma.value() / 10.0 if hasattr(self, "row_sl_as_sigma") else 3.0,
+            "saturation_boost": self.row_sl_as_sat.value() / 10.0 if hasattr(self, "row_sl_as_sat") else 1.5,
+            "feather_radius": self.row_sl_as_feather.value() if hasattr(self, "row_sl_as_feather") else 2,
+            "unlinked": self.chk_sl_as_unlinked.isChecked() if hasattr(self, "chk_sl_as_unlinked") else True,
+        }
+
+    def set_autostretch_params(self, params: dict) -> None:
+        """Configura los controles del panel de Estirado Adaptativo RGB."""
+        if "target_bg" in params and hasattr(self, "row_sl_as_target_bg"):
+            self.row_sl_as_target_bg.setValue(int(round(params["target_bg"] * 100)))
+        if "shadow_clip_sigma" in params and hasattr(self, "row_sl_as_sigma"):
+            self.row_sl_as_sigma.setValue(int(round(params["shadow_clip_sigma"] * 10)))
+        if "saturation_boost" in params and hasattr(self, "row_sl_as_sat"):
+            self.row_sl_as_sat.setValue(int(round(params["saturation_boost"] * 10)))
+        if "feather_radius" in params and hasattr(self, "row_sl_as_feather"):
+            self.row_sl_as_feather.setValue(int(params["feather_radius"]))
+        if "unlinked" in params and hasattr(self, "chk_sl_as_unlinked"):
+            self.chk_sl_as_unlinked.setChecked(bool(params["unlinked"]))
 
     # Controles Especiales de Fondo Nebular (Starless)
     def _on_sl_clarity_changed(self, val: int) -> None:

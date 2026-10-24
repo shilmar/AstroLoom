@@ -232,12 +232,46 @@ def detect_sky_mask_ai(
     r_guide = max(5, int(feather_radius * 2))
     refined = fast_guided_filter(gray_guide, mask_coarse, radius=r_guide, eps=1e-3)
 
+    # Recuperación adaptativa de ramas finas en resolución nativa
+    refined = _recover_fine_foliage(refined, gray_guide, max_reach=35)
+
     # Aplicar umbralización suave o binaria adaptativa centrada en threshold
     if threshold != 0.5:
         offset = 0.5 - float(threshold)
         refined = np.clip(refined + offset, 0.0, 1.0)
 
     return refined.astype(np.float32)
+
+
+def _recover_fine_foliage(mask: np.ndarray, gray_guide: np.ndarray, max_reach: int = 35) -> np.ndarray:
+    """
+    Recupera con resolución nativa las ramas finas y follaje exterior que los modelos
+    de red neuronal (downsampleados a 320x320) omiten por falta de resolución espacial.
+    """
+    bin_gnd = (mask < 0.5).astype(np.uint8)
+    if not np.any(bin_gnd):
+        return mask
+
+    # Distancia desde el borde del suelo hacia el cielo
+    dist_to_gnd = cv2.distanceTransform(1 - bin_gnd, cv2.DIST_L2, 5)
+    fringe = (dist_to_gnd > 0) & (dist_to_gnd <= max_reach)
+    if not np.any(fringe):
+        return mask
+
+    # Muestras representativas de cielo y suelo en la zona
+    sky_samples = gray_guide[dist_to_gnd > (max_reach + 10)]
+    sky_val = float(np.median(sky_samples)) if len(sky_samples) > 0 else 0.15
+    gnd_val = float(np.median(gray_guide[bin_gnd > 0])) if np.any(bin_gnd > 0) else 0.02
+
+    # Umbral fotométrico de vegetación: hojas y ramas son oscuras frente al fondo estelar
+    foliage_thresh = gnd_val + (sky_val - gnd_val) * 0.42
+    is_branch = fringe & (gray_guide <= foliage_thresh)
+
+    if np.any(is_branch):
+        branch_feather = cv2.GaussianBlur(is_branch.astype(np.float32), (5, 5), sigmaX=1.0)
+        return np.clip(np.minimum(mask, 1.0 - branch_feather), 0.0, 1.0).astype(np.float32)
+
+    return mask
 
 
 def detect_sky_mask_algorithmic(
@@ -283,6 +317,7 @@ def detect_sky_mask_algorithmic(
     # 3. Refinado con Filtro Guiado
     r_guide = max(5, int(feather_radius * 2))
     refined = fast_guided_filter(gray, coarse_sky, radius=r_guide, eps=1e-3)
+    refined = _recover_fine_foliage(refined, gray, max_reach=35)
     return np.clip(refined, 0.0, 1.0).astype(np.float32)
 
 

@@ -12,7 +12,8 @@ def refine_mask_guided(
     image_rgb: np.ndarray, 
     user_scribbles: np.ndarray,
     feather_radius: int = 7,
-    iterations: int = 3
+    iterations: int = 3,
+    base_mask: Optional[np.ndarray] = None
 ) -> np.ndarray:
     """
     Refina la máscara cielo/suelo preservando ramas finas y siluetas complejas mediante:
@@ -25,14 +26,22 @@ def refine_mask_guided(
         user_scribbles (np.ndarray): Matriz uint8 (0: no marcado, 1: suelo, 2: cielo).
         feather_radius (int): Radio para el desenfoque gaussiano del perímetro (en píxeles).
         iterations (int): Número de iteraciones del algoritmo GrabCut.
+        base_mask (Optional[np.ndarray]): Máscara previa opcional (ej. de IA 1-Click) para inicializar GrabCut.
 
     Retorna:
         np.ndarray: Máscara continua float32 [0.0, 1.0] (1.0 = cielo, 0.0 = suelo).
     """
     h, w = user_scribbles.shape[:2]
     
-    # Si falta trazo de cielo (2) o de suelo (1), retorna cielo completo por defecto
-    if not (np.any(user_scribbles == 1) and np.any(user_scribbles == 2)):
+    has_gnd_scribble = np.any(user_scribbles == 1)
+    has_sky_scribble = np.any(user_scribbles == 2)
+
+    # Si falta trazo y no hay máscara base, retorna cielo completo
+    if not (has_gnd_scribble and has_sky_scribble) and base_mask is None:
+        if has_sky_scribble and not has_gnd_scribble:
+            return np.ones((h, w), dtype=np.float32)
+        elif has_gnd_scribble and not has_sky_scribble:
+            return np.zeros((h, w), dtype=np.float32)
         return np.ones((h, w), dtype=np.float32)
 
     # 1. Luminancia normalizada
@@ -41,9 +50,19 @@ def refine_mask_guided(
     else:
         gray = np.clip(image_rgb, 0.0, 1.0)
 
-    # 2. Análisis fotométrico de las semillas del usuario
-    sky_samples = gray[user_scribbles == 2]
-    gnd_samples = gray[user_scribbles == 1]
+    # 2. Análisis fotométrico de las semillas del usuario y/o máscara base
+    if has_sky_scribble and has_gnd_scribble:
+        sky_samples = gray[user_scribbles == 2]
+        gnd_samples = gray[user_scribbles == 1]
+    elif base_mask is not None:
+        bm = np.clip(base_mask.astype(np.float32), 0.0, 1.0)
+        if bm.shape[:2] != (h, w):
+            bm = cv2.resize(bm, (w, h), interpolation=cv2.INTER_LINEAR)
+        sky_samples = gray[bm > 0.8] if np.any(bm > 0.8) else (gray[user_scribbles == 2] if has_sky_scribble else np.array([0.2]))
+        gnd_samples = gray[bm < 0.2] if np.any(bm < 0.2) else (gray[user_scribbles == 1] if has_gnd_scribble else np.array([0.05]))
+    else:
+        sky_samples = np.array([0.2])
+        gnd_samples = np.array([0.05])
 
     sky_min = float(np.percentile(sky_samples, 5)) if len(sky_samples) > 0 else 0.2
     gnd_max = float(np.percentile(gnd_samples, 95)) if len(gnd_samples) > 0 else 0.1
@@ -52,11 +71,19 @@ def refine_mask_guided(
     split_thresh = (sky_min * 0.4) + (gnd_max * 0.6)
 
     # 3. Inicializar matriz de probabilidades de GrabCut
-    gc_mask = np.full((h, w), cv2.GC_PR_FGD, dtype=np.uint8)
+    if base_mask is not None:
+        bm = np.clip(base_mask.astype(np.float32), 0.0, 1.0)
+        if bm.shape[:2] != (h, w):
+            bm = cv2.resize(bm, (w, h), interpolation=cv2.INTER_LINEAR)
+        gc_mask = np.where(bm > 0.5, cv2.GC_PR_FGD, cv2.GC_PR_BGD).astype(np.uint8)
+    else:
+        gc_mask = np.full((h, w), cv2.GC_PR_FGD, dtype=np.uint8)
 
     # Fijar semillas seguras del usuario
-    gc_mask[user_scribbles == 1] = cv2.GC_BGD  # Suelo seguro
-    gc_mask[user_scribbles == 2] = cv2.GC_FGD  # Cielo seguro
+    if has_gnd_scribble:
+        gc_mask[user_scribbles == 1] = cv2.GC_BGD  # Suelo seguro
+    if has_sky_scribble:
+        gc_mask[user_scribbles == 2] = cv2.GC_FGD  # Cielo seguro
 
     # Clasificar como probable fondo las estructuras oscuras que contrastan con el cielo
     dark_silhouette = (gray <= split_thresh) & (user_scribbles == 0)
@@ -100,10 +127,6 @@ def refine_mask_guided(
     else:
         mask_full = refined_small
 
-    # Forzar que los píxeles más oscuros que el umbral de silueta queden como suelo (ramas finas)
-    tree_branches = (gray <= (split_thresh * 1.15)) & (user_scribbles != 2)
-    mask_full[tree_branches] = 0.0
-
     # 5. Suavizado y refinado guiado de bordes
     k = max(1, feather_radius)
     if k % 2 == 0:
@@ -119,6 +142,49 @@ def refine_mask_guided(
         mask_final = mask_full
 
     return np.clip(mask_final, 0.0, 1.0).astype(np.float32)
+
+
+def apply_direct_brush_to_mask(
+    mask: np.ndarray,
+    user_scribbles: np.ndarray,
+    feather_radius: int = 3
+) -> np.ndarray:
+    """
+    Aplica trazos de pincel directamente sobre una máscara existente (1: suelo, 2: cielo),
+    con centro 100% sólido y borde suavizado local, sin necesidad de ejecutar GrabCut.
+    """
+    h, w = mask.shape[:2]
+    out = mask.copy().astype(np.float32)
+    if user_scribbles.shape[:2] != (h, w):
+        user_scribbles = cv2.resize(user_scribbles, (w, h), interpolation=cv2.INTER_NEAREST)
+
+    # Suelo seguro (1 -> 0.0)
+    if np.any(user_scribbles == 1):
+        brush_gnd = (user_scribbles == 1).astype(np.float32)
+        if feather_radius > 1:
+            k = 2 * feather_radius + 1
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+            dilated = cv2.dilate(brush_gnd, kernel)
+            fringe = cv2.GaussianBlur(dilated, (k, k), feather_radius / 2.0)
+            weight = np.maximum(brush_gnd, fringe)
+        else:
+            weight = brush_gnd
+        out = out * (1.0 - weight)
+
+    # Cielo seguro (2 -> 1.0)
+    if np.any(user_scribbles == 2):
+        brush_sky = (user_scribbles == 2).astype(np.float32)
+        if feather_radius > 1:
+            k = 2 * feather_radius + 1
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+            dilated = cv2.dilate(brush_sky, kernel)
+            fringe = cv2.GaussianBlur(dilated, (k, k), feather_radius / 2.0)
+            weight = np.maximum(brush_sky, fringe)
+        else:
+            weight = brush_sky
+        out = np.clip(out + weight * (1.0 - out), 0.0, 1.0)
+
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
 
 
 def _smoothstep(edge0: float, edge1: float, x: np.ndarray) -> np.ndarray:

@@ -5,6 +5,35 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-24
+
+### Añadido
+* **Estirado Adaptativo RGB para Fondo Nebular (Starless):**
+  - Motor matemático analítico en `core/stretch.py` (`auto_stretch_adaptive_starless`) basado en transformación no lineal MTF con corte estadístico robusto (sigmas MAD) y realce de saturación en HSV.
+  - Aislamiento estricto del cómputo estadístico mediante la máscara de cielo (`sky_mask`): evita que las sombras oscuras del terreno o el horizonte falseen la mediana del fondo celeste o degraden el contraste de la Vía Láctea.
+  - Soporte de canales de color independientes (*unlinked* por defecto) para neutralizar dominantes cromáticas de fondo y realzar las tonalidades cálidas del polvo interestelar.
+  - Botón directo *"Estirado Adaptativo RGB"* en el panel de StarNet (`panel_starnet.py`) y controles deslizantes dedicados (*Fondo Objetivo*, *Recorte Sombras*, *Realce Saturación*, *Difuminado Horizonte* y *Desvincular Canales*) en la tarjeta de capa Starless (`mask_layers_widget.py`).
+  - Integración completa con el historial de Deshacer / Rehacer (`Ctrl+Z` / `Ctrl+Y`) en el Revelador, preservando la copia lineal intacta (`raw_linear_starless`) y reteniendo la capa seleccionada tras el procesado.
+* **Herramientas de Edición Rápida y Silueta en Máscaras del Apilador:**
+  - **Pintar en Máscara:** Nuevo botón y función `apply_direct_brush_to_mask` en `core/masking.py` para aplicar trazos verdes (cielo) o rojos (suelo) directamente con centro sólido y borde suavizado local al instante, sin esperar el cómputo de GrabCut.
+  - **Expandir Suelo (+2px) y Contraer (-2px):** Botones de ajuste morfológico perimétrico en un clic para afinar la cobertura del horizonte sobre ramas finas o vegetación.
+  - **Refinado GrabCut Mono-Trazo sobre Máscara Base:** GrabCut ahora permite ejecutar refinados introduciendo trazos de un solo color (solo cielo o solo suelo) cuando ya existe una máscara base previa calculada (p. ej. por IA en 1 clic).
+
+### Optimizado
+* **Fusión Anti-Ghosting Continua por Signed Distance Function (SDF):**
+  - Reescritura del algoritmo en `core/stacking.py` (`compose_sky_ground_with_anti_ghosting`) sustituyendo la dilatación morfológica discreta por SDF (`dist_to_gnd - dist_to_sky`) con transición óptica suave de 2.5 px de radio (5 px de ancho total), eliminando halos translúcidos difusos.
+  - **Protección Automática de Follaje Fino:** Blindaje fotométrico en la franja de seguridad del horizonte que detecta ramas y estructuras oscuras del suelo y les otorga prioridad absoluta y opaca sobre el cielo en movimiento, erradicando ramas fantasma y sangrado estelar.
+* **Exclusión de Píxeles Inválidos de Suelo en Kernels Numba (Estilo Sequator):**
+  - Adaptación de los kernels LLVM multihilo (`_kappa_sigma_kernel_numba`, `_percentile_kernel_numba`, `_median_kernel_numba`) para omitir dinámicamente valores negativos (`< 0.0`), permitiendo descartar el terreno desplazado durante el apilado del cielo sin sesgos hacia el negro.
+* **Resguardo del Suelo de Referencia Puro:**
+  - En el flujo de apilado dual, el fotograma de suelo de referencia se preserva íntegro antes de cualquier sustracción o procesado de contaminación lumínica del cielo, garantizando el 100% de su rango dinámico y textura.
+* **Recuperación Adaptativa de Ramas Finas en Segmentación IA:**
+  - Incorporación de `_recover_fine_foliage` en `core/ai_horizon.py` a resolución nativa tras el Filtro Guiado, rescatando ramas delgadas que la red U²-Net omitía por el submuestreo inicial a 320×320.
+
+### Corregido
+* **Alineación Espacial y Escala en Zoom 100% (1:1):**
+  - Sincronización de geometría (`crop_rect` y `full_shape`) en el motor 2D de contaminación lumínica (`core/light_pollution.py`) y en el canvas (`gui/canvas.py`), garantizando que la cúpula de luz y los overlays de máscara mantengan su posición y escala global sin distorsión al hacer zoom al 100%.
+
 ## [0.10.1] - 2026-10-19
 
 ### Añadido

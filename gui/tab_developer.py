@@ -124,6 +124,8 @@ class DeveloperTab(QWidget):
         super().__init__(parent)
         self.image_32bit = None       # Imagen nativa base (float32)
         self.image_starless = None    # Capa sin estrellas (float32)
+        self.raw_linear_starless = None # Copia lineal previa al Auto-Stretch
+        self.starless_is_stretched = False # Indicador de estirado no lineal sobre starless
         self.image_stars = None       # Capa de solo estrellas (float32)
 
         # Buffers proxy para previsualización interactiva a 60 fps
@@ -482,7 +484,6 @@ class DeveloperTab(QWidget):
         self.panel_stretch.auto_ghs_requested.connect(self.apply_auto_ghs)
         self.panel_stretch.ghs_pipette_toggled.connect(self._on_toggle_ghs_pipette)
         self.panel_stretch.action_committed.connect(self._commit_action)
-
         left_layout.addWidget(self.panel_stretch)
 
         # --- SECCIÓN 4: Curva Tonal Interactiva (RGB / Saturación) ---
@@ -626,9 +627,10 @@ class DeveloperTab(QWidget):
         self.lbl_star_diff_color = self.panel_effects.lbl_star_diff_color
         self.combo_star_diff_mode = self.panel_effects.combo_star_diff_mode
 
-        # Conectar eventos de StarNet y Efectos
+        # Conectar eventos de StarNet y Efectos delegados al panel
         self.panel_starnet.run_starnet_requested.connect(self.run_starnet)
         self.panel_starnet.jump_to_masks_requested.connect(lambda: self._jump_to_mask_layers(MASK_TYPE_IMAGE_STARLESS))
+        self.panel_starnet.auto_stretch_starless_requested.connect(self.on_auto_stretch_starless_requested)
         self.combo_layer.currentIndexChanged.connect(self.on_layer_mode_changed)
         self.slider_stars.valueChanged.connect(self.on_stars_slider_changed)
         self.slider_clarity.valueChanged.connect(self.on_clarity_changed)
@@ -640,18 +642,8 @@ class DeveloperTab(QWidget):
         self.slider_denoise_color.valueChanged.connect(self.on_denoise_color_changed)
         self.slider_denoise_mask.valueChanged.connect(self.on_denoise_mask_changed)
 
-        self.slider_orton.valueChanged.connect(self.on_orton_strength_changed)
-        self.slider_orton_radius.valueChanged.connect(self.on_orton_radius_changed)
-        self.slider_orton_threshold.valueChanged.connect(self.on_orton_threshold_changed)
-        self.combo_orton_tint.currentIndexChanged.connect(self._on_orton_tint_changed)
-        self.combo_orton_mode.currentIndexChanged.connect(self._on_orton_mode_changed)
-
-        self.slider_star_diff.valueChanged.connect(self.on_star_diff_strength_changed)
-        self.slider_star_diff_radius.valueChanged.connect(self.on_star_diff_radius_changed)
-        self.slider_star_diff_threshold.valueChanged.connect(self.on_star_diff_threshold_changed)
-        self.slider_star_diff_color.valueChanged.connect(self.on_star_diff_color_changed)
-        self.combo_star_diff_mode.currentIndexChanged.connect(self._on_star_diff_mode_changed)
-
+        # Los controles de Orton y Difusión ya se gestionan dentro de panel_effects
+        self.panel_effects.parameter_changed.connect(self._on_effects_parameter_changed)
         self.panel_effects.action_committed.connect(self._commit_action)
 
         left_layout.addWidget(self.panel_starnet)
@@ -803,7 +795,14 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.starless_orton_threshold_changed.connect(self._on_mask_widget_sl_orton_threshold)
         self.mask_layers_widget.starless_orton_tint_changed.connect(self._on_mask_widget_sl_orton_tint)
         self.mask_layers_widget.starless_orton_mode_changed.connect(self._on_mask_widget_sl_orton_mode)
-        self.mask_layers_widget.starless_reset_requested.connect(self.reset_starless_adjustments)
+        self.mask_layers_widget.starless_reset_requested.connect(
+            lambda: (
+                self.panel_effects.reset_orton(),
+                self.panel_effects.reset_star_diff(),
+                self.update_stretch_preview()
+            )
+        )
+        self.mask_layers_widget.auto_stretch_starless_requested.connect(self.on_auto_stretch_starless_requested)
 
         self.mask_layers_widget.set_stars_special_values(
             presence=self.slider_stars.value(),
@@ -1601,6 +1600,8 @@ class DeveloperTab(QWidget):
             "type": "crop",
             "image_32bit": self.image_32bit.copy(),
             "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
+            "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
+            "starless_is_stretched": getattr(self, "starless_is_stretched", False),
             "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
             "current_mask": self.current_mask.copy() if self.current_mask is not None else None,
         }
@@ -1631,6 +1632,8 @@ class DeveloperTab(QWidget):
         self.image_32bit = rotate_and_crop(self.image_32bit)
         if self.image_starless is not None:
             self.image_starless = rotate_and_crop(self.image_starless)
+        if getattr(self, "raw_linear_starless", None) is not None:
+            self.raw_linear_starless = rotate_and_crop(self.raw_linear_starless)
         if self.image_stars is not None:
             self.image_stars = rotate_and_crop(self.image_stars)
         if self.current_mask is not None:
@@ -2475,14 +2478,24 @@ class DeveloperTab(QWidget):
         """
         Retorna la imagen de trabajo y máscara espacial correspondiente a la capa seleccionada
         para renderizar su histograma de fondo en la Curva Tonal de Capa.
-        Aplica los ajustes locales pre-curva de la capa (Exposición, Sombras, Luces, Contraste,
-        Saturación, Balance de Blancos) para reflejar dinámicamente los valores que entran a la curva.
-        Retorna: (imagen_rgb_estirada, mascara_espacial_2d, es_capa_de_estrellas)
         """
         if self.image_32bit is None:
             return None, None, False
 
         m_type = getattr(layer, 'mask_type', '')
+
+        # Obtener valores actuales de estirado desde panel_stretch
+        st_state = self.panel_stretch.get_state() if hasattr(self, 'panel_stretch') and self.panel_stretch is not None else {}
+        stretch_mode = st_state.get("stretch_mode", "mtf")
+        ghs_sp = st_state.get("ghs_sp_val", 0.02)
+        ghs_d = st_state.get("ghs_d_val", 5.0)
+        ghs_b = st_state.get("ghs_b_val", 2.0)
+        ghs_hp = st_state.get("ghs_hp_val", 0.0)
+        ghs_lp = st_state.get("ghs_lp_val", 0.0)
+        ghs_bp = st_state.get("ghs_bp_val", 0.0)
+        ghs_color_mode = st_state.get("ghs_color_mode", "luma")
+        bp_val = st_state.get("bp_val", 0.0)
+        mtf_val = st_state.get("mtf_val", 0.15)
 
         # 1. Capa de Estrellas (StarNet AI)
         if m_type == MASK_TYPE_IMAGE_STARS:
@@ -2490,15 +2503,15 @@ class DeveloperTab(QWidget):
             if img is None:
                 st_src = self.proxy_stars if self.proxy_stars is not None else self.image_stars
                 if st_src is not None:
-                    if getattr(self, "stretch_mode", "mtf") == "ghs":
+                    if stretch_mode == "ghs":
                         img = np.clip(
                             apply_ghs_stretch(
                                 st_src,
-                                sp=self.spin_ghs_sp.value(),
-                                d=self.spin_ghs_d.value(),
-                                b=self.spin_ghs_b.value(),
-                                hp=self.spin_ghs_hp.value(),
-                                lp=self.spin_ghs_lp.value(),
+                                sp=ghs_sp,
+                                d=ghs_d,
+                                b=ghs_b,
+                                hp=ghs_hp,
+                                lp=ghs_lp,
                                 bp=0.0,
                                 color_mode="rgb"
                             ) * self.star_intensity,
@@ -2506,7 +2519,7 @@ class DeveloperTab(QWidget):
                         )
                     else:
                         img = np.clip(
-                            manual_stretch(st_src, black_point=0.0, midtone=self.spin_mtf.value()) * self.star_intensity,
+                            manual_stretch(st_src, black_point=0.0, midtone=mtf_val) * self.star_intensity,
                             0.0, 1.0
                         )
             if img is not None:
@@ -2531,10 +2544,6 @@ class DeveloperTab(QWidget):
                 img = getattr(self, '_cached_rendered_image', None)
             if img is not None:
                 img = apply_pre_curve_adjustments(img, layer)
-            # Si existe una capa de suelo activa que ya procesa el terreno de forma independiente,
-            # aislamos el histograma estrictamente al cielo nocturno usando sky_mask.
-            # Si la capa de suelo está desactivada o no existe, la capa starless actúa como base
-            # global y su histograma abarca el rango tonal completo del lienzo.
             has_active_ground = False
             if hasattr(self, 'mask_layers_widget'):
                 has_active_ground = any(
@@ -2550,26 +2559,26 @@ class DeveloperTab(QWidget):
             if img is None:
                 b_src = self.preview_proxy if self.preview_proxy is not None else self.image_32bit
                 if b_src is not None:
-                    if getattr(self, "stretch_mode", "mtf") == "ghs":
+                    if stretch_mode == "ghs":
                         img = apply_ghs_stretch(
                             b_src,
-                            sp=self.spin_ghs_sp.value(),
-                            d=self.spin_ghs_d.value(),
-                            b=self.spin_ghs_b.value(),
-                            hp=self.spin_ghs_hp.value(),
-                            lp=self.spin_ghs_lp.value(),
-                            bp=self.spin_ghs_bp.value(),
-                            color_mode=getattr(self, "ghs_color_mode", "luma")
+                            sp=ghs_sp,
+                            d=ghs_d,
+                            b=ghs_b,
+                            hp=ghs_hp,
+                            lp=ghs_lp,
+                            bp=ghs_bp,
+                            color_mode=ghs_color_mode
                         )
                     else:
-                        img = manual_stretch(b_src, black_point=self.spin_bp.value(), midtone=self.spin_mtf.value())
+                        img = manual_stretch(b_src, black_point=bp_val, midtone=mtf_val)
             if img is None:
                 img = getattr(self, '_cached_rendered_image', None)
             if img is not None:
                 img = apply_pre_curve_adjustments(img, layer)
             return img, None, False
 
-        # 5. Capas de ajuste local estándar (Pincel, Gradiente, Luminancia, Color, etc.)
+        # 5. Capas de ajuste local estándar
         base_canvas = getattr(self, '_cached_base_stretched', None)
         if base_canvas is None:
             base_canvas = getattr(self, '_last_rendered_preview', None)
@@ -3445,6 +3454,8 @@ class DeveloperTab(QWidget):
         self.active_filepath = filepath
         self.current_mask = mask
         self.image_starless = None
+        self.raw_linear_starless = None
+        self.starless_is_stretched = False
         self.image_stars = None
         self.proxy_starless = None
         self.proxy_stars = None
@@ -3491,8 +3502,8 @@ class DeveloperTab(QWidget):
             self.canvas.set_native_image_size((self.image_32bit.shape[1], self.image_32bit.shape[0]))
             self._generate_preview_proxy()
             self.apply_auto_mtf()
-            self.initial_bp = self.spin_bp.value()
-            self.initial_mtf = self.spin_mtf.value()
+            self.initial_bp = self.panel_stretch.bp_val if hasattr(self, 'panel_stretch') else 0.0
+            self.initial_mtf = self.panel_stretch.mtf_val if hasattr(self, 'panel_stretch') else 0.15
             self.has_custom_snapshot = False
             self.snapshot_before_pixmap = None
             self._generate_before_reference()
@@ -3815,20 +3826,20 @@ class DeveloperTab(QWidget):
         )
 
         # Hito 1: Parámetros de Estirado (MTF / GHS)
+        st = self.panel_stretch.get_state() if hasattr(self, 'panel_stretch') else {}
         key_stretch = (
             key_linear,
-            getattr(self, "stretch_mode", "mtf"),
-            getattr(self, "ghs_color_mode", "luma"),
-            round(float(self.spin_ghs_sp.value()), 5) if hasattr(self, 'spin_ghs_sp') else 0.0,
-            round(float(self.spin_ghs_d.value()), 4) if hasattr(self, 'spin_ghs_d') else 0.0,
-            round(float(self.spin_ghs_b.value()), 4) if hasattr(self, 'spin_ghs_b') else 0.0,
-            round(float(self.spin_ghs_hp.value()), 4) if hasattr(self, 'spin_ghs_hp') else 0.0,
-            round(float(self.spin_ghs_lp.value()), 4) if hasattr(self, 'spin_ghs_lp') else 0.0,
-            round(float(self.spin_ghs_bp.value()), 5) if hasattr(self, 'spin_ghs_bp') else 0.0,
-            round(float(self.spin_bp.value()), 5) if hasattr(self, 'spin_bp') else 0.0,
-            round(float(self.spin_mtf.value()), 5) if hasattr(self, 'spin_mtf') else 0.0,
+            st.get("stretch_mode", "mtf"),
+            st.get("ghs_color_mode", "luma"),
+            round(float(st.get("ghs_sp_val", 0.02)), 5),
+            round(float(st.get("ghs_d_val", 5.0)), 4),
+            round(float(st.get("ghs_b_val", 2.0)), 4),
+            round(float(st.get("ghs_hp_val", 0.0)), 4),
+            round(float(st.get("ghs_lp_val", 0.0)), 4),
+            round(float(st.get("ghs_bp_val", 0.0)), 5),
+            round(float(st.get("bp_val", 0.0)), 5),
+            round(float(st.get("mtf_val", 0.15)), 5),
         )
-
         # Hito 2: Parámetros de Curvas y Contraste
         key_graded = (
             key_stretch,
@@ -3837,7 +3848,7 @@ class DeveloperTab(QWidget):
             round(float(self.contrast_val), 4),
         )
 
-        # Hito 3: Parámetros Espaciales (Deconvolución, Orton, Difusión Estelar)
+        # Hito 3: Parámetros Espaciales (Deconvolución, Orton)
         key_spatial = (
             key_graded,
             getattr(self, "deconv_iterations", 0),
@@ -3856,19 +3867,7 @@ class DeveloperTab(QWidget):
             getattr(self, 'orton_custom_tint', (1.0, 0.85, 0.55)),
             round(float(getattr(self, 'orton_tint_strength', 0.5)), 4),
             getattr(self, 'orton_mode', 'screen'),
-            round(float(self.star_diff_strength), 4),
-            round(float(self.star_diff_radius), 2),
-            round(float(self.star_diff_threshold), 4),
-            round(float(self.star_diff_color_boost), 4),
-            getattr(self, 'star_diff_mode', 'natural'),
         )
-
-        # Determinar hitos en caché reutilizables
-        pre_spatial = self._cache_ms_spatial_img if (is_preview and self._cache_ms_spatial_key == key_spatial) else None
-        pre_graded = self._cache_ms_graded_img if (is_preview and self._cache_ms_graded_key == key_graded and pre_spatial is None) else None
-        pre_stretched = self._cache_ms_stretch_img if (is_preview and self._cache_ms_stretch_key == key_stretch and pre_spatial is None and pre_graded is None) else None
-        pre_linear = self._cache_ms_linear_img if (is_preview and self._cache_ms_linear_key == key_linear and pre_spatial is None and pre_graded is None and pre_stretched is None) else None
-        pre_stars = self._cache_ms_stars_img if (is_preview and self._cache_ms_stretch_key == key_stretch and self._cache_ms_stars_img is not None) else None
 
         # Resolve starless and stars image slices
         if is_zoomed:
@@ -3885,6 +3884,30 @@ class DeveloperTab(QWidget):
             else:
                 st_img = self.proxy_stars if self.proxy_stars is not None else self.image_stars
                 sl_img = self.proxy_starless if self.proxy_starless is not None else self.image_starless
+
+        # Mask layers
+        mask_layers = self.mask_layers_widget.layers if (apply_mask_layers and hasattr(self, 'mask_layers_widget')) else None
+
+        # Hito Estrellas: Estirado y Filtro Difusor de Estrellas
+        key_stars = (
+            id(st_img),
+            key_stretch,
+            round(float(getattr(self, 'star_intensity', 1.0)), 4),
+            round(float(getattr(self, 'star_diff_strength', 0.0)), 4),
+            round(float(getattr(self, 'star_diff_radius', 20.0)), 2),
+            round(float(getattr(self, 'star_diff_threshold', 0.45)), 4),
+            round(float(getattr(self, 'star_diff_color_boost', 0.50)), 4),
+            getattr(self, 'star_diff_mode', 'screen'),
+            id(precomputed_mask),
+            bool(mask_layers and len(mask_layers) > 0),
+        )
+
+        # Determinar hitos en caché reutilizables
+        pre_spatial = self._cache_ms_spatial_img if (is_preview and self._cache_ms_spatial_key == key_spatial) else None
+        pre_graded = self._cache_ms_graded_img if (is_preview and self._cache_ms_graded_key == key_graded and pre_spatial is None) else None
+        pre_stretched = self._cache_ms_stretch_img if (is_preview and self._cache_ms_stretch_key == key_stretch and pre_spatial is None and pre_graded is None) else None
+        pre_linear = self._cache_ms_linear_img if (is_preview and self._cache_ms_linear_key == key_linear and pre_spatial is None and pre_graded is None and pre_stretched is None) else None
+        pre_stars = self._cache_ms_stars_img if (is_preview and getattr(self, '_cache_ms_stars_key', None) == key_stars and self._cache_ms_stars_img is not None) else None
 
         # Build DeveloperState snapshot
         state = DeveloperState.from_dict(self._capture_state())
@@ -3942,9 +3965,10 @@ class DeveloperTab(QWidget):
             self._cache_ms_graded_img = out_grd
             self._cache_ms_spatial_key = key_spatial
             self._cache_ms_spatial_img = out_spt
+            self._cache_ms_stars_key = key_stars
             self._cache_ms_stars_img = out_stars
             if not is_scrubbing:
-                self._cache_pre_layers_key = key_spatial
+                self._cache_pre_layers_key = (key_spatial, key_stars)
                 self._cache_pre_layers_stretched = out_spt
                 self._cache_pre_layers_stars = out_stars
                 self._cached_base_stretched = out_spt
@@ -4031,18 +4055,21 @@ class DeveloperTab(QWidget):
             # Activada estrictamente durante el arrastre continuo de deslizadores de estirado/contraste
             if self._is_lut_preview_applicable():
                 curve_rgb = self.curve_widget.get_lut("rgb") if (hasattr(self, 'curve_widget') and not self.curve_widget.is_identity("rgb")) else None
-                contrast_val = (self.contrast_val / 100.0) if hasattr(self, 'contrast_val') else 0.0
+                
+                # Obtener valores consolidados desde panel_stretch
+                st = self.panel_stretch.get_state() if hasattr(self, 'panel_stretch') else {}
+                contrast_val = float(st.get("contrast_val", 0)) / 100.0
 
                 lut = compute_combined_stf_lut(
-                    stretch_mode=getattr(self, "stretch_mode", "mtf"),
-                    bp=float(self.spin_bp.value()) if hasattr(self, 'spin_bp') else 0.0,
-                    mtf=float(self.spin_mtf.value()) if hasattr(self, 'spin_mtf') else 0.1,
-                    ghs_sp=float(self.spin_ghs_sp.value()) if hasattr(self, 'spin_ghs_sp') else 0.02,
-                    ghs_d=float(self.spin_ghs_d.value()) if hasattr(self, 'spin_ghs_d') else 5.0,
-                    ghs_b=float(self.spin_ghs_b.value()) if hasattr(self, 'spin_ghs_b') else 2.0,
-                    ghs_hp=float(self.spin_ghs_hp.value()) if hasattr(self, 'spin_ghs_hp') else 0.0,
-                    ghs_lp=float(self.spin_ghs_lp.value()) if hasattr(self, 'spin_ghs_lp') else 0.0,
-                    ghs_bp=float(self.spin_ghs_bp.value()) if hasattr(self, 'spin_ghs_bp') else 0.0,
+                    stretch_mode=st.get("stretch_mode", "mtf"),
+                    bp=float(st.get("bp_val", 0.0)),
+                    mtf=float(st.get("mtf_val", 0.15)),
+                    ghs_sp=float(st.get("ghs_sp_val", 0.02)),
+                    ghs_d=float(st.get("ghs_d_val", 5.0)),
+                    ghs_b=float(st.get("ghs_b_val", 2.0)),
+                    ghs_hp=float(st.get("ghs_hp_val", 0.0)),
+                    ghs_lp=float(st.get("ghs_lp_val", 0.0)),
+                    ghs_bp=float(st.get("ghs_bp_val", 0.0)),
                     curve_lut_rgb=curve_rgb,
                     contrast=contrast_val
                 )
@@ -4096,6 +4123,10 @@ class DeveloperTab(QWidget):
 
             if stretched is not None:
                 self._last_rendered_preview = stretched
+                if self.is_zoomed_100 and getattr(self, '_zoom_crop_rect', None) is not None and self.image_32bit is not None:
+                    self.canvas.set_external_crop(self._zoom_crop_rect, self.image_32bit.shape[:2])
+                else:
+                    self.canvas.set_external_crop(None, None)
                 self.canvas.load_image(base_to_render, display_stretched=stretched)
 
                 # Sincronización del comparador Antes / Después en modo Zoom 1:1
@@ -4173,6 +4204,8 @@ class DeveloperTab(QWidget):
             stars_img = stars_img * mask_3d
 
         self.image_starless = np.ascontiguousarray(starless_img, dtype=np.float32)
+        self.raw_linear_starless = self.image_starless.copy()
+        self.starless_is_stretched = False
         self.image_stars = np.ascontiguousarray(stars_img, dtype=np.float32)
 
         # Integrar capas de imagen (Fondo, Estrellas y opcionalmente Suelo) en el Gestor de Capas
@@ -4194,6 +4227,68 @@ class DeveloperTab(QWidget):
         self._set_ai_processing_state(False)
         self.log_message(f"[ERROR STARNET] {err_msg}")
         QMessageBox.warning(self, "Error en StarNet++", err_msg)
+
+    def on_auto_stretch_starless_requested(self):
+        """Ejecuta el estirado no lineal adaptativo sobre la capa starless (Estirado Adaptativo RGB)."""
+        if self.image_starless is None:
+            self.log_message("[AUTO-STRETCH] No hay capa StarNet generada todavía. Separa las estrellas primero.")
+            QMessageBox.information(self, "Estirado Adaptativo Starless", "Primero debes desacoplar las estrellas con StarNet.")
+            return
+
+        # Snapshot de estado previo para Deshacer
+        undo_item = {
+            "type": "starless",
+            "image_starless": self.image_starless.copy(),
+            "starless_is_stretched": getattr(self, "starless_is_stretched", False),
+        }
+        self.undo_stack.append(undo_item)
+        if len(self.undo_stack) > self.MAX_UNDO_STEPS:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+        self._update_undo_redo_buttons()
+
+        # Usar la base lineal virgen para garantizar idempotencia estadística
+        src = getattr(self, "raw_linear_starless", None)
+        if src is None:
+            src = self.image_starless.copy()
+            self.raw_linear_starless = src.copy()
+
+        # Leer parámetros configurados desde el gestor de capas
+        params = self.mask_layers_widget.get_autostretch_params() if hasattr(self, 'mask_layers_widget') else {}
+        target_bg = params.get("target_bg", 0.18)
+        shadow_clip_sigma = params.get("shadow_clip_sigma", 3.0)
+        saturation_boost = params.get("saturation_boost", 1.5)
+        unlinked = params.get("unlinked", True)
+        feather_radius = params.get("feather_radius", 2)
+
+        from core.stretch import auto_stretch_adaptive_starless
+        mode_str = "RGB independiente" if unlinked else "vinculado"
+        self.log_message(
+            f"[AUTO-STRETCH] Calculando estadísticas MTF ({mode_str}, Bg={target_bg*100:.0f}%, {shadow_clip_sigma:.1f}σ) "
+            f"en capa Starless..."
+        )
+        stretched_starless = auto_stretch_adaptive_starless(
+            src,
+            sky_mask=self.current_mask,
+            target_bg=target_bg,
+            shadow_clip_sigma=shadow_clip_sigma,
+            saturation_boost=saturation_boost,
+            unlinked=unlinked,
+            feather_radius=feather_radius
+        )
+        self.image_starless = stretched_starless
+        self.starless_is_stretched = True
+
+        self._invalidate_pipeline_caches()
+        self._generate_preview_proxy()
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
+            self.mask_layers_widget.update_active_layer_histogram()
+        self.update_stretch_preview(immediate=True)
+        self.log_message(
+            f"[AUTO-STRETCH] ✨ Estirado Adaptativo RGB aplicado sobre Starless "
+            f"(Bg={target_bg*100:.0f}%, {shadow_clip_sigma:.1f}σ, sat {saturation_boost:.1f}x, {mode_str})."
+        )
         
     def on_stars_slider_changed(self, val: int):
         """Ajusta la intensidad relativa de la capa de estrellas separada."""
@@ -4204,49 +4299,15 @@ class DeveloperTab(QWidget):
         self.update_stretch_preview()
 
     def _on_mask_widget_stars_intensity(self, val: int):
+        self.star_intensity = val / 100.0
         if hasattr(self, 'slider_stars') and self.slider_stars.value() != val:
+            self.slider_stars.blockSignals(True)
             self.slider_stars.setValue(val)
-
-    def on_star_diff_strength_changed(self, val: int):
-        self.star_diff_strength = val / 100.0
-        self.lbl_star_diff.setText(f"{val}%")
-        if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_stars_special_values(diff_strength=val)
+            self.slider_stars.blockSignals(False)
+        if hasattr(self, 'lbl_stars'):
+            self.lbl_stars.setText(f"{val}%")
         self.update_stretch_preview()
 
-    def on_star_diff_radius_changed(self, val: int):
-        self.star_diff_radius = float(val)
-        self.lbl_star_diff_radius.setText(f"{val} px")
-        if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_stars_special_values(diff_radius=val)
-        self.update_stretch_preview()
-
-    def on_star_diff_threshold_changed(self, val: int):
-        self.star_diff_threshold = val / 100.0
-        self.lbl_star_diff_threshold.setText(f"{val / 100.0:.2f}")
-        if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_stars_special_values(diff_threshold=val)
-        self.update_stretch_preview()
-
-    def on_star_diff_color_changed(self, val: int):
-        self.star_diff_color_boost = val / 100.0
-        self.lbl_star_diff_color.setText(f"{val}%")
-        if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_stars_special_values(diff_color=val)
-        self.update_stretch_preview()
-
-    def _on_star_diff_mode_changed(self, idx: int):
-        modes = ["screen", "soft_light", "additive"]
-        mode_key = modes[idx] if 0 <= idx < len(modes) else "screen"
-        self.star_diff_mode = mode_key
-        if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_stars_special_values(diff_mode_idx=idx)
-        self.update_stretch_preview()
-        self._commit_action()
-
-    def _on_toggle_star_diff_expand(self, checked: bool):
-        if hasattr(self, 'w_star_diff_advanced'):
-            self.w_star_diff_advanced.setVisible(checked)
 
     # =========================================================================
     # GESTIÓN Y EVENTOS DE DECONVOLUCIÓN ÓPTICA REGULARIZADA (RICHARDSON-LUCY)
@@ -4353,52 +4414,6 @@ class DeveloperTab(QWidget):
             self.log_message(f"[ERROR] Error al estimar PSF: {str(e)}")
             self.lbl_psf_status.setText("Error al estimar PSF")
 
-    def on_deconv_iterations_changed(self, val: int):
-        self.deconv_iterations = int(val)
-        txt = f"{val}" if val > 0 else "0 (Off)"
-        self.lbl_deconv_iter.setText(txt)
-        self.update_stretch_preview()
-
-    def on_deconv_fwhm_changed(self, val: int):
-        fwhm = val / 10.0
-        self.deconv_fwhm = float(fwhm)
-        self.lbl_deconv_fwhm.setText(f"{fwhm:.1f} px")
-        self._cached_psf = None
-        self._cached_psf_key = ()
-        if self.deconv_iterations > 0:
-            self.update_stretch_preview()
-
-    def on_deconv_deringing_changed(self, val: int):
-        der = val / 1000.0
-        self.deconv_deringing = float(der)
-        self.lbl_deconv_deringing.setText(f"{der:.3f}")
-        if self.deconv_iterations > 0:
-            self.update_stretch_preview()
-
-    def on_deconv_damping_changed(self, val: int):
-        damp = val / 100.0
-        self.deconv_damping = float(damp)
-        self.lbl_deconv_damping.setText(f"{val}%")
-        if self.deconv_iterations > 0:
-            self.update_stretch_preview()
-
-    def on_deconv_aspect_changed(self, val: int):
-        aspect = val / 100.0
-        self.deconv_aspect_ratio = float(aspect)
-        self.lbl_deconv_aspect.setText(f"{aspect:.2f}x")
-        self._cached_psf = None
-        self._cached_psf_key = ()
-        if self.deconv_iterations > 0:
-            self.update_stretch_preview()
-
-    def on_deconv_angle_changed(self, val: int):
-        angle = float(val)
-        self.deconv_angle_deg = angle
-        self.lbl_deconv_angle.setText(f"{val}°")
-        self._cached_psf = None
-        self._cached_psf_key = ()
-        if self.deconv_iterations > 0:
-            self.update_stretch_preview()
 
     def _on_deconv_parameter_changed(self):
         """Sincroniza el estado del panel modular de Deconvolución con el revelador."""
@@ -4417,117 +4432,67 @@ class DeveloperTab(QWidget):
         if self.deconv_iterations > 0:
             self.update_stretch_preview()
 
-    def _on_deconv_model_changed(self, idx: int):
-        model = self.combo_deconv_model.itemData(idx) or ("moffat" if idx == 0 else "gaussian")
-        self.deconv_model = model
-        self._cached_psf = None
-        self._cached_psf_key = ()
-        if self.deconv_iterations > 0:
-            self.update_stretch_preview()
-        self._commit_action()
-
-    def _on_deconv_scope_changed(self, idx: int):
-        scope = self.combo_deconv_scope.itemData(idx) or "all"
-        self.deconv_scope = scope
-        if self.deconv_iterations > 0:
-            self.update_stretch_preview()
-        self._commit_action()
-
-    def _on_deconv_luma_only_toggled(self, checked: bool):
-        self.deconv_luma_only = bool(checked)
-        if self.deconv_iterations > 0:
-            self.update_stretch_preview()
-        self._commit_action()
-
-    def _on_toggle_deconv_expand(self, checked: bool):
-        if hasattr(self, 'w_deconv_advanced'):
-            self.w_deconv_advanced.setVisible(checked)
-
-    def reset_deconv(self):
-        """Restablece los parámetros de deconvolución a sus valores neutros por defecto."""
-        self.deconv_iterations = 0
-        self.deconv_fwhm = 3.0
-        self.deconv_model = "moffat"
-        self.deconv_beta = 4.5
-        self.deconv_aspect_ratio = 1.0
-        self.deconv_angle_deg = 0.0
-        self.deconv_deringing = 0.008
-        self.deconv_damping = 0.25
-        self.deconv_luma_only = True
-        self.deconv_scope = "all"
-        self._cached_psf = None
-        self._cached_psf_key = ()
-
-        widgets_to_block = [
-            getattr(self, 'slider_deconv_iter', None),
-            getattr(self, 'slider_deconv_fwhm', None),
-            getattr(self, 'slider_deconv_deringing', None),
-            getattr(self, 'slider_deconv_damping', None),
-            getattr(self, 'slider_deconv_aspect', None),
-            getattr(self, 'slider_deconv_angle', None),
-            getattr(self, 'combo_deconv_model', None),
-            getattr(self, 'combo_deconv_scope', None),
-            getattr(self, 'chk_deconv_luma_only', None),
-        ]
-        for w in widgets_to_block:
-            if w is not None:
-                w.blockSignals(True)
-
-        if hasattr(self, 'slider_deconv_iter'):
-            self.slider_deconv_iter.setValue(0)
-            self.lbl_deconv_iter.setText("0 (Off)")
-        if hasattr(self, 'slider_deconv_fwhm'):
-            self.slider_deconv_fwhm.setValue(30)
-            self.lbl_deconv_fwhm.setText("3.0 px")
-        if hasattr(self, 'slider_deconv_deringing'):
-            self.slider_deconv_deringing.setValue(8)
-            self.lbl_deconv_deringing.setText("0.008")
-        if hasattr(self, 'slider_deconv_damping'):
-            self.slider_deconv_damping.setValue(25)
-            self.lbl_deconv_damping.setText("25%")
-        if hasattr(self, 'slider_deconv_aspect'):
-            self.slider_deconv_aspect.setValue(100)
-            self.lbl_deconv_aspect.setText("1.00x")
-        if hasattr(self, 'slider_deconv_angle'):
-            self.slider_deconv_angle.setValue(0)
-            self.lbl_deconv_angle.setText("0°")
-        if hasattr(self, 'combo_deconv_model'):
-            self.combo_deconv_model.setCurrentIndex(0)
-        if hasattr(self, 'combo_deconv_scope'):
-            self.combo_deconv_scope.setCurrentIndex(0)
-        if hasattr(self, 'chk_deconv_luma_only'):
-            self.chk_deconv_luma_only.setChecked(True)
-        if hasattr(self, 'lbl_psf_status'):
-            self.lbl_psf_status.setText("PSF: Moffat 2D (FWHM: 3.0 px | Aspecto: 1.00)")
-
-        for w in widgets_to_block:
-            if w is not None:
-                w.blockSignals(False)
-
-        self.update_stretch_preview()
 
     def _on_mask_widget_stars_diff_strength(self, val: int):
-        if hasattr(self, 'slider_star_diff') and self.slider_star_diff.value() != val:
-            self.slider_star_diff.setValue(val)
+        self.star_diff_strength = val / 100.0
+        if hasattr(self, 'panel_effects') and self.panel_effects is not None:
+            self.panel_effects.star_diff_strength = val / 100.0
+            if hasattr(self, 'slider_star_diff') and self.slider_star_diff.value() != val:
+                self.slider_star_diff.blockSignals(True)
+                self.slider_star_diff.setValue(val)
+                self.slider_star_diff.blockSignals(False)
+        if hasattr(self, 'lbl_star_diff'):
+            self.lbl_star_diff.setText(f"{val}%")
+        self.update_stretch_preview()
 
     def _on_mask_widget_stars_diff_radius(self, val: int):
-        if hasattr(self, 'slider_star_diff_radius') and self.slider_star_diff_radius.value() != val:
-            self.slider_star_diff_radius.setValue(val)
+        self.star_diff_radius = float(val)
+        if hasattr(self, 'panel_effects') and self.panel_effects is not None:
+            self.panel_effects.star_diff_radius = float(val)
+            if hasattr(self, 'slider_star_diff_radius') and self.slider_star_diff_radius.value() != val:
+                self.slider_star_diff_radius.blockSignals(True)
+                self.slider_star_diff_radius.setValue(val)
+                self.slider_star_diff_radius.blockSignals(False)
+        if hasattr(self, 'lbl_star_diff_radius'):
+            self.lbl_star_diff_radius.setText(f"{val} px")
+        self.update_stretch_preview()
 
     def _on_mask_widget_stars_diff_threshold(self, val: int):
-        if hasattr(self, 'slider_star_diff_threshold') and self.slider_star_diff_threshold.value() != val:
-            self.slider_star_diff_threshold.setValue(val)
+        self.star_diff_threshold = val / 100.0
+        if hasattr(self, 'panel_effects') and self.panel_effects is not None:
+            self.panel_effects.star_diff_threshold = val / 100.0
+            if hasattr(self, 'slider_star_diff_threshold') and self.slider_star_diff_threshold.value() != val:
+                self.slider_star_diff_threshold.blockSignals(True)
+                self.slider_star_diff_threshold.setValue(val)
+                self.slider_star_diff_threshold.blockSignals(False)
+        if hasattr(self, 'lbl_star_diff_threshold'):
+            self.lbl_star_diff_threshold.setText(f"{val / 100.0:.2f}")
+        self.update_stretch_preview()
 
     def _on_mask_widget_stars_diff_color(self, val: int):
-        if hasattr(self, 'slider_star_diff_color') and self.slider_star_diff_color.value() != val:
-            self.slider_star_diff_color.setValue(val)
+        self.star_diff_color_boost = val / 100.0
+        if hasattr(self, 'panel_effects') and self.panel_effects is not None:
+            self.panel_effects.star_diff_color_boost = val / 100.0
+            if hasattr(self, 'slider_star_diff_color') and self.slider_star_diff_color.value() != val:
+                self.slider_star_diff_color.blockSignals(True)
+                self.slider_star_diff_color.setValue(val)
+                self.slider_star_diff_color.blockSignals(False)
+        if hasattr(self, 'lbl_star_diff_color'):
+            self.lbl_star_diff_color.setText(f"{val}%")
+        self.update_stretch_preview()
 
     def _on_mask_widget_stars_diff_mode(self, mode_key: str):
+        self.star_diff_mode = mode_key
+        if hasattr(self, 'panel_effects') and self.panel_effects is not None:
+            self.panel_effects.star_diff_mode = mode_key
         if hasattr(self, 'combo_star_diff_mode'):
             modes = ["screen", "soft_light", "additive"]
             idx = modes.index(mode_key) if mode_key in modes else 0
             if self.combo_star_diff_mode.currentIndex() != idx:
+                self.combo_star_diff_mode.blockSignals(True)
                 self.combo_star_diff_mode.setCurrentIndex(idx)
+                self.combo_star_diff_mode.blockSignals(False)
+        self.update_stretch_preview()
 
     def reset_stars_intensity(self):
         widgets = [
@@ -4548,16 +4513,19 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'lbl_stars'):
             self.lbl_stars.setText("100%")
 
-        if hasattr(self, 'slider_star_diff'):
-            self.slider_star_diff.setValue(0)
-        if hasattr(self, 'slider_star_diff_radius'):
-            self.slider_star_diff_radius.setValue(20)
-        if hasattr(self, 'slider_star_diff_threshold'):
-            self.slider_star_diff_threshold.setValue(45)
-        if hasattr(self, 'slider_star_diff_color'):
-            self.slider_star_diff_color.setValue(50)
-        if hasattr(self, 'combo_star_diff_mode'):
-            self.combo_star_diff_mode.setCurrentIndex(0)
+        if hasattr(self, 'panel_effects') and self.panel_effects is not None:
+            self.panel_effects.reset_star_diff()
+        else:
+            if hasattr(self, 'slider_star_diff'):
+                self.slider_star_diff.setValue(0)
+            if hasattr(self, 'slider_star_diff_radius'):
+                self.slider_star_diff_radius.setValue(20)
+            if hasattr(self, 'slider_star_diff_threshold'):
+                self.slider_star_diff_threshold.setValue(45)
+            if hasattr(self, 'slider_star_diff_color'):
+                self.slider_star_diff_color.setValue(50)
+            if hasattr(self, 'combo_star_diff_mode'):
+                self.combo_star_diff_mode.setCurrentIndex(0)
 
         self.star_diff_strength = 0.0
         self.star_diff_radius = 20.0
@@ -4578,6 +4546,11 @@ class DeveloperTab(QWidget):
             if w is not None:
                 w.blockSignals(False)
 
+        # Invalidar caché de estrellas para forzar recálculo
+        self._cache_ms_stars_key = None
+        self._cache_ms_stars_img = None
+        self._cache_pre_layers_key = None
+
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_stars_special_values(
                 presence=100,
@@ -4587,7 +4560,8 @@ class DeveloperTab(QWidget):
                 diff_color=50,
                 diff_mode_idx=0
             )
-        self.update_stretch_preview()
+        self.update_stretch_preview(immediate=True)
+        self._commit_action()
 
     def on_layer_mode_changed(self, idx: int):
         self.view_layer_mode = idx
@@ -4624,93 +4598,6 @@ class DeveloperTab(QWidget):
             self.vibrance_val = self.panel_color_wb.vibrance_val
         self.update_stretch_preview()
 
-    def on_temp_changed(self, val: int):
-        self.temp_val = val / 1000.0
-        if hasattr(self, 'spin_temp'):
-            self.spin_temp.blockSignals(True)
-            self.spin_temp.setValue(self.temp_val)
-            self.spin_temp.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_spin_temp_changed(self, val: float):
-        self.temp_val = float(val)
-        slider_val = int(round(val * 1000.0))
-        if hasattr(self, 'slider_temp'):
-            self.slider_temp.blockSignals(True)
-            self.slider_temp.setValue(slider_val)
-            self.slider_temp.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_tint_changed(self, val: int):
-        self.tint_val = val / 1000.0
-        if hasattr(self, 'spin_tint'):
-            self.spin_tint.blockSignals(True)
-            self.spin_tint.setValue(self.tint_val)
-            self.spin_tint.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_spin_tint_changed(self, val: float):
-        self.tint_val = float(val)
-        slider_val = int(round(val * 1000.0))
-        if hasattr(self, 'slider_tint'):
-            self.slider_tint.blockSignals(True)
-            self.slider_tint.setValue(slider_val)
-            self.slider_tint.blockSignals(False)
-        self.update_stretch_preview()
-
-    def reset_wb(self):
-        self.slider_temp.blockSignals(True)
-        self.slider_tint.blockSignals(True)
-        if hasattr(self, 'spin_temp'):
-            self.spin_temp.blockSignals(True)
-            self.spin_temp.setValue(0.0)
-            self.spin_temp.blockSignals(False)
-        if hasattr(self, 'spin_tint'):
-            self.spin_tint.blockSignals(True)
-            self.spin_tint.setValue(0.0)
-            self.spin_tint.blockSignals(False)
-        self.slider_temp.setValue(0)
-        self.slider_tint.setValue(0)
-        self.temp_val = 0.0
-        self.tint_val = 0.0
-        self.slider_temp.blockSignals(False)
-        self.slider_tint.blockSignals(False)
-        self.update_stretch_preview()
-        self._commit_action()
-
-    def on_sat_sky_changed(self, val: int):
-        self.sat_sky_val = val / 100.0
-        self.lbl_sat_sky.setText(f"{self.sat_sky_val:.2f}x")
-        self.update_stretch_preview()
-
-    def on_sat_gnd_changed(self, val: int):
-        self.sat_gnd_val = val / 100.0
-        self.lbl_sat_gnd.setText(f"{self.sat_gnd_val:.2f}x")
-        self.update_stretch_preview()
-
-    def on_vibrance_changed(self, val: int):
-        self.vibrance_val = val / 100.0
-        self.lbl_vibrance.setText(f"{self.vibrance_val:+.2f}")
-        self.update_stretch_preview()
-
-    def reset_saturation(self):
-        self.slider_sat_sky.blockSignals(True)
-        self.slider_sat_gnd.blockSignals(True)
-        self.slider_vibrance.blockSignals(True)
-        self.slider_sat_sky.setValue(100)
-        self.slider_sat_gnd.setValue(100)
-        self.slider_vibrance.setValue(0)
-        self.sat_sky_val = 1.0
-        self.sat_gnd_val = 1.0
-        self.vibrance_val = 0.0
-        self.lbl_sat_sky.setText("1.00x")
-        self.lbl_sat_gnd.setText("1.00x")
-        self.lbl_vibrance.setText("0.00")
-        self.slider_sat_sky.blockSignals(False)
-        self.slider_sat_gnd.blockSignals(False)
-        self.slider_vibrance.blockSignals(False)
-        self.update_stretch_preview()
-
     def _set_curve_mode(self, mode: str) -> None:
         """Cambia el modo activo de la curva y sincroniza los botones de selección."""
         if hasattr(self, 'curve_widget'):
@@ -4718,39 +4605,6 @@ class DeveloperTab(QWidget):
             self.btn_curve_rgb.setChecked(mode == "rgb")
             self.btn_curve_hue.setChecked(mode == "hue_sat")
             self.btn_curve_luma.setChecked(mode == "luma_sat")
-
-    def on_contrast_changed(self, val: int):
-        self.contrast_val = val / 100.0
-        self.lbl_contrast.setText(f"{self.contrast_val:+.2f}")
-        self.update_stretch_preview()
-
-    def on_slider_bp_changed(self, val: int):
-        bp = (val / 2000.0) * 0.20
-        self.spin_bp.blockSignals(True)
-        self.spin_bp.setValue(bp)
-        self.spin_bp.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_spin_bp_changed(self, val: float):
-        slider_val = int(np.clip((val / 0.20) * 2000.0, 0, 2000))
-        self.slider_bp.blockSignals(True)
-        self.slider_bp.setValue(slider_val)
-        self.slider_bp.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_slider_mtf_changed(self, val: int):
-        m = max(0.0001, (val / 2000.0) * 0.50)
-        self.spin_mtf.blockSignals(True)
-        self.spin_mtf.setValue(m)
-        self.spin_mtf.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_spin_mtf_changed(self, val: float):
-        slider_val = int(np.clip((val / 0.50) * 2000.0, 1, 2000))
-        self.slider_mtf.blockSignals(True)
-        self.slider_mtf.setValue(slider_val)
-        self.slider_mtf.blockSignals(False)
-        self.update_stretch_preview()
 
     def apply_auto_mtf(self):
         target = self.preview_proxy if self.preview_proxy is not None else self.image_32bit
@@ -4762,22 +4616,54 @@ class DeveloperTab(QWidget):
         self.update_stretch_preview(immediate=True)
         self.log_message(f"Auto-MTF aplicado (Punto Negro: {bp_suggested:.5f}, MTF m: {m_suggested:.5f}).")
 
+    def on_slider_mtf_changed(self, val: int):
+        if hasattr(self, 'panel_stretch') and self.panel_stretch is not None:
+            self.panel_stretch._on_slider_mtf_changed(val)
+
     def sync_controls(self, bp: float, m: float):
-        self.spin_bp.blockSignals(True)
-        self.slider_bp.blockSignals(True)
-        self.spin_mtf.blockSignals(True)
-        self.slider_mtf.blockSignals(True)
+        if hasattr(self, 'panel_stretch') and self.panel_stretch is not None:
+            self.panel_stretch.sync_controls(bp, m)
 
-        self.spin_bp.setValue(bp)
-        self.slider_bp.setValue(int(np.clip((bp / 0.20) * 2000.0, 0, 2000)))
+    def _on_effects_parameter_changed(self):
+        """Sincroniza el estado del panel modular de Efectos (Orton y Difusión) con el revelador."""
+        if hasattr(self, 'panel_effects') and self.panel_effects is not None:
+            self.orton_strength = self.panel_effects.orton_strength
+            self.orton_radius = self.panel_effects.orton_radius
+            self.orton_threshold = self.panel_effects.orton_threshold
+            self.orton_tint_type = self.panel_effects.orton_tint_type
+            self.orton_mode = self.panel_effects.orton_mode
+            self.star_diff_strength = self.panel_effects.star_diff_strength
+            self.star_diff_radius = self.panel_effects.star_diff_radius
+            self.star_diff_threshold = self.panel_effects.star_diff_threshold
+            self.star_diff_color_boost = self.panel_effects.star_diff_color_boost
+            self.star_diff_mode = self.panel_effects.star_diff_mode
 
-        self.spin_mtf.setValue(m)
-        self.slider_mtf.setValue(int(np.clip((m / 0.50) * 2000.0, 1, 2000)))
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_starless_tone_values(
+                self.slider_clarity.value(),
+                self.slider_dehaze.value(),
+                self.slider_ond_est.value(),
+                self.slider_ond_bg.value(),
+                self.slider_contrast_starless.value(),
+                self.slider_denoise.value(),
+                self.slider_orton.value(),
+                self.slider_orton_radius.value(),
+                self.slider_orton_threshold.value(),
+                self.combo_orton_tint.currentIndex(),
+                self.combo_orton_mode.currentIndex(),
+                denoise_color=self.slider_denoise_color.value() if hasattr(self, 'slider_denoise_color') else 50,
+                denoise_mask=self.slider_denoise_mask.value() if hasattr(self, 'slider_denoise_mask') else 50
+            )
+            self.mask_layers_widget.set_stars_special_values(
+                presence=self.slider_stars.value(),
+                diff_strength=self.slider_star_diff.value(),
+                diff_radius=self.slider_star_diff_radius.value(),
+                diff_threshold=self.slider_star_diff_threshold.value(),
+                diff_color=self.slider_star_diff_color.value(),
+                diff_mode_idx=self.combo_star_diff_mode.currentIndex()
+            )
 
-        self.spin_bp.blockSignals(False)
-        self.slider_bp.blockSignals(False)
-        self.spin_mtf.blockSignals(False)
-        self.slider_mtf.blockSignals(False)
+        self.update_stretch_preview()
 
     def _on_stretch_parameter_changed(self):
         """Sincroniza el estado del panel modular de Estirado con el revelador."""
@@ -4840,129 +4726,23 @@ class DeveloperTab(QWidget):
         self.update_stretch_preview()
         self._commit_action()
 
-    def on_slider_ghs_sp_changed(self, val: int):
-        sp = val / 10000.0
-        self.spin_ghs_sp.blockSignals(True)
-        self.spin_ghs_sp.setValue(sp)
-        self.spin_ghs_sp.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_spin_ghs_sp_changed(self, val: float):
-        slider_val = int(np.clip(val * 10000.0, 0, 10000))
-        self.slider_ghs_sp.blockSignals(True)
-        self.slider_ghs_sp.setValue(slider_val)
-        self.slider_ghs_sp.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_slider_ghs_d_changed(self, val: int):
-        d = val / 100.0
-        self.spin_ghs_d.blockSignals(True)
-        self.spin_ghs_d.setValue(d)
-        self.spin_ghs_d.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_spin_ghs_d_changed(self, val: float):
-        slider_val = int(np.clip(val * 100.0, 0, 2000))
-        self.slider_ghs_d.blockSignals(True)
-        self.slider_ghs_d.setValue(slider_val)
-        self.slider_ghs_d.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_slider_ghs_b_changed(self, val: int):
-        b = val / 100.0
-        self.spin_ghs_b.blockSignals(True)
-        self.spin_ghs_b.setValue(b)
-        self.spin_ghs_b.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_spin_ghs_b_changed(self, val: float):
-        slider_val = int(np.clip(val * 100.0, 0, 1500))
-        self.slider_ghs_b.blockSignals(True)
-        self.slider_ghs_b.setValue(slider_val)
-        self.slider_ghs_b.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_slider_ghs_hp_changed(self, val: int):
-        hp = val / 1000.0
-        self.spin_ghs_hp.blockSignals(True)
-        self.spin_ghs_hp.setValue(hp)
-        self.spin_ghs_hp.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_spin_ghs_hp_changed(self, val: float):
-        slider_val = int(np.clip(val * 1000.0, 0, 1000))
-        self.slider_ghs_hp.blockSignals(True)
-        self.slider_ghs_hp.setValue(slider_val)
-        self.slider_ghs_hp.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_slider_ghs_lp_changed(self, val: int):
-        lp = val / 1000.0
-        self.spin_ghs_lp.blockSignals(True)
-        self.spin_ghs_lp.setValue(lp)
-        self.spin_ghs_lp.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_spin_ghs_lp_changed(self, val: float):
-        slider_val = int(np.clip(val * 1000.0, 0, 1000))
-        self.slider_ghs_lp.blockSignals(True)
-        self.slider_ghs_lp.setValue(slider_val)
-        self.slider_ghs_lp.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_slider_ghs_bp_changed(self, val: int):
-        bp = (val / 2000.0) * 0.20
-        self.spin_ghs_bp.blockSignals(True)
-        self.spin_ghs_bp.setValue(bp)
-        self.spin_ghs_bp.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_spin_ghs_bp_changed(self, val: float):
-        slider_val = int(np.clip((val / 0.20) * 2000.0, 0, 2000))
-        self.slider_ghs_bp.blockSignals(True)
-        self.slider_ghs_bp.setValue(slider_val)
-        self.slider_ghs_bp.blockSignals(False)
-        self.update_stretch_preview()
-
     def apply_auto_ghs(self):
-        """Calcula y aplica parámetros óptimos de GHS según el histograma de la imagen base."""
+        """Calcula y aplica parámetros óptimos de GHS delegando en el panel de estirado."""
         target = self.preview_proxy if self.preview_proxy is not None else self.image_32bit
         if target is None:
             return
 
         params = estimate_ghs_params(target, target_background=0.18)
 
-        widgets_to_block = [
-            self.spin_ghs_sp, self.slider_ghs_sp,
-            self.spin_ghs_d, self.slider_ghs_d,
-            self.spin_ghs_b, self.slider_ghs_b,
-            self.spin_ghs_hp, self.slider_ghs_hp,
-            self.spin_ghs_lp, self.slider_ghs_lp,
-            self.spin_ghs_bp, self.slider_ghs_bp
-        ]
-        for w in widgets_to_block:
-            w.blockSignals(True)
-
-        self.spin_ghs_sp.setValue(params["sp"])
-        self.slider_ghs_sp.setValue(int(np.clip(params["sp"] * 10000.0, 0, 10000)))
-
-        self.spin_ghs_d.setValue(params["d"])
-        self.slider_ghs_d.setValue(int(np.clip(params["d"] * 100.0, 0, 2000)))
-
-        self.spin_ghs_b.setValue(params["b"])
-        self.slider_ghs_b.setValue(int(np.clip(params["b"] * 100.0, 0, 1500)))
-
-        self.spin_ghs_hp.setValue(params["hp"])
-        self.slider_ghs_hp.setValue(int(np.clip(params["hp"] * 1000.0, 0, 1000)))
-
-        self.spin_ghs_lp.setValue(params["lp"])
-        self.slider_ghs_lp.setValue(int(np.clip(params["lp"] * 1000.0, 0, 1000)))
-
-        self.spin_ghs_bp.setValue(params["bp"])
-        self.slider_ghs_bp.setValue(int(np.clip((params["bp"] / 0.20) * 2000.0, 0, 2000)))
-
-        for w in widgets_to_block:
-            w.blockSignals(False)
+        if hasattr(self, 'panel_stretch') and self.panel_stretch is not None:
+            self.panel_stretch.set_state({
+                "ghs_sp_val": params["sp"],
+                "ghs_d_val": params["d"],
+                "ghs_b_val": params["b"],
+                "ghs_hp_val": params["hp"],
+                "ghs_lp_val": params["lp"],
+                "ghs_bp_val": params["bp"],
+            })
 
         self.log_message(
             f"[GHS] Auto-GHS aplicado: SP={params['sp']:.5f}, D={params['d']:.2f}, b={params['b']:.2f}, "
@@ -4971,54 +4751,16 @@ class DeveloperTab(QWidget):
         self.update_stretch_preview()
         self._commit_action()
 
-    def reset_ghs(self):
-        """Restablece los parámetros de GHS a sus valores predeterminados."""
-        widgets_to_block = [
-            self.spin_ghs_sp, self.slider_ghs_sp,
-            self.spin_ghs_d, self.slider_ghs_d,
-            self.spin_ghs_b, self.slider_ghs_b,
-            self.spin_ghs_hp, self.slider_ghs_hp,
-            self.spin_ghs_lp, self.slider_ghs_lp,
-            self.spin_ghs_bp, self.slider_ghs_bp
-        ]
-        for w in widgets_to_block:
-            w.blockSignals(True)
-
-        self.spin_ghs_sp.setValue(0.02000)
-        self.slider_ghs_sp.setValue(200)
-        self.spin_ghs_d.setValue(5.00)
-        self.slider_ghs_d.setValue(500)
-        self.spin_ghs_b.setValue(2.00)
-        self.slider_ghs_b.setValue(200)
-        self.spin_ghs_hp.setValue(0.00)
-        self.slider_ghs_hp.setValue(0)
-        self.spin_ghs_lp.setValue(0.00)
-        self.slider_ghs_lp.setValue(0)
-        self.spin_ghs_bp.setValue(0.00000)
-        self.slider_ghs_bp.setValue(0)
-
-        for w in widgets_to_block:
-            w.blockSignals(False)
-
-        self.update_stretch_preview()
-        self._commit_action()
-
     def reset_sliders(self):
-        self.slider_contrast.blockSignals(True)
-        self.slider_contrast.setValue(0)
-        self.contrast_val = 0.0
-        self.lbl_contrast.setText("0.00")
-        self.slider_contrast.blockSignals(False)
-
-        if getattr(self, "stretch_mode", "mtf") == "ghs":
-            self.reset_ghs()
+        """Restablece los controles de estirado y contraste delegando en el panel."""
+        if hasattr(self, 'panel_stretch') and self.panel_stretch is not None:
+            self.panel_stretch.reset_sliders()
         else:
-            if self.image_32bit is not None:
-                self.apply_auto_mtf()
-            else:
-                self.sync_controls(0.0, 0.10)
+            self.sync_controls(0.0, 0.10)
             
     def on_canvas_zoom_toggled(self, is_zoomed: bool, rel_x: float, rel_y: float):
+        if not is_zoomed:
+            self.canvas.set_external_crop(None, None)
         self.is_zoomed_100 = is_zoomed
         if is_zoomed:
             self.zoom_rel_coords = (rel_x, rel_y)
@@ -5069,10 +4811,6 @@ class DeveloperTab(QWidget):
         self.log_message(f"[ERROR FONDO] {err_msg}")
         QMessageBox.warning(self, "Error en Extracción de Gradiente", err_msg)
 
-    def on_lp_changed(self, val: int):
-        self.lp_reduction = val / 100.0
-        self.lbl_lp.setText(f"{val}%")
-        self.update_stretch_preview()
 
     def _on_toggle_lp_expand(self, checked: bool):
         if hasattr(self, 'w_lp_params'):
@@ -5121,74 +4859,6 @@ class DeveloperTab(QWidget):
         self.update_stretch_preview()
         self._commit_action()
 
-    def on_spin_lp_cx_changed(self, val: float):
-        self.lp_center_x = float(val)
-        if hasattr(self, 'slider_lp_cx'):
-            self.slider_lp_cx.blockSignals(True)
-            self.slider_lp_cx.setValue(int(round(val * 100.0)))
-            self.slider_lp_cx.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_slider_lp_cx_changed(self, val: int):
-        cx = val / 100.0
-        self.lp_center_x = cx
-        if hasattr(self, 'spin_lp_cx'):
-            self.spin_lp_cx.blockSignals(True)
-            self.spin_lp_cx.setValue(cx)
-            self.spin_lp_cx.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_spin_lp_cy_changed(self, val: float):
-        self.lp_center_y = float(val)
-        if hasattr(self, 'slider_lp_cy'):
-            self.slider_lp_cy.blockSignals(True)
-            self.slider_lp_cy.setValue(int(round(val * 100.0)))
-            self.slider_lp_cy.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_slider_lp_cy_changed(self, val: int):
-        cy = val / 100.0
-        self.lp_center_y = cy
-        if hasattr(self, 'spin_lp_cy'):
-            self.spin_lp_cy.blockSignals(True)
-            self.spin_lp_cy.setValue(cy)
-            self.spin_lp_cy.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_spin_lp_w_changed(self, val: float):
-        self.lp_width = float(val)
-        if hasattr(self, 'slider_lp_w'):
-            self.slider_lp_w.blockSignals(True)
-            self.slider_lp_w.setValue(int(round(val * 100.0)))
-            self.slider_lp_w.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_slider_lp_w_changed(self, val: int):
-        w = val / 100.0
-        self.lp_width = w
-        if hasattr(self, 'spin_lp_w'):
-            self.spin_lp_w.blockSignals(True)
-            self.spin_lp_w.setValue(w)
-            self.spin_lp_w.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_spin_lp_h_changed(self, val: float):
-        self.lp_height = float(val)
-        if hasattr(self, 'slider_lp_h'):
-            self.slider_lp_h.blockSignals(True)
-            self.slider_lp_h.setValue(int(round(val * 100.0)))
-            self.slider_lp_h.blockSignals(False)
-        self.update_stretch_preview()
-
-    def on_slider_lp_h_changed(self, val: int):
-        h = val / 100.0
-        self.lp_height = h
-        if hasattr(self, 'spin_lp_h'):
-            self.spin_lp_h.blockSignals(True)
-            self.spin_lp_h.setValue(h)
-            self.spin_lp_h.blockSignals(False)
-        self.update_stretch_preview()
-
     def _on_lp_parameter_changed(self):
         """Sincroniza el estado del panel modular de Contaminación Lumínica con el revelador."""
         if hasattr(self, 'panel_lp'):
@@ -5204,104 +4874,6 @@ class DeveloperTab(QWidget):
             self.lp_legacy_1d = self.panel_lp.lp_legacy_1d
         self.update_stretch_preview()
 
-    def _on_lp_tint_combo_changed(self, idx: int):
-        tint_type = self.combo_lp_tint.currentData()
-        self.lp_tint_type = tint_type
-        self.update_stretch_preview()
-        self._commit_action()
-
-    def _on_lp_tint_strength_changed(self, val: int):
-        self.lp_tint_strength = val / 100.0
-        if hasattr(self, 'lbl_lp_tint_strength'):
-            self.lbl_lp_tint_strength.setText(f"{val}%")
-        self.update_stretch_preview()
-
-    def _on_lp_mode_combo_changed(self, idx: int):
-        mode = self.combo_lp_mode.currentData()
-        self.lp_mode = mode
-        self.update_stretch_preview()
-        self._commit_action()
-
-    def _on_lp_legacy_1d_toggled(self, checked: bool):
-        self.lp_legacy_1d = checked
-        self.update_stretch_preview()
-        self._commit_action()
-
-    def reset_gradients(self):
-        """Restablece los parámetros de eliminación de gradientes y cúpula de polución 2D."""
-        self.slider_lp.setValue(0)
-        self.lp_reduction = 0.0
-        self.lbl_lp.setText("0%")
-        self.lp_center_x = 0.50
-        self.lp_center_y = 0.90
-        self.lp_width = 0.60
-        self.lp_height = 0.45
-        self.lp_tint_type = "sodium"
-        self.lp_custom_tint = (1.0, 0.68, 0.22)
-        self.lp_tint_strength = 0.50
-        self.lp_mode = "attenuate"
-        self.lp_legacy_1d = False
-
-        if hasattr(self, 'slider_lp_cx'):
-            self.slider_lp_cx.blockSignals(True)
-            self.slider_lp_cx.setValue(50)
-            self.slider_lp_cx.blockSignals(False)
-        if hasattr(self, 'spin_lp_cx'):
-            self.spin_lp_cx.blockSignals(True)
-            self.spin_lp_cx.setValue(0.50)
-            self.spin_lp_cx.blockSignals(False)
-
-        if hasattr(self, 'slider_lp_cy'):
-            self.slider_lp_cy.blockSignals(True)
-            self.slider_lp_cy.setValue(90)
-            self.slider_lp_cy.blockSignals(False)
-        if hasattr(self, 'spin_lp_cy'):
-            self.spin_lp_cy.blockSignals(True)
-            self.spin_lp_cy.setValue(0.90)
-            self.spin_lp_cy.blockSignals(False)
-
-        if hasattr(self, 'slider_lp_w'):
-            self.slider_lp_w.blockSignals(True)
-            self.slider_lp_w.setValue(60)
-            self.slider_lp_w.blockSignals(False)
-        if hasattr(self, 'spin_lp_w'):
-            self.spin_lp_w.blockSignals(True)
-            self.spin_lp_w.setValue(0.60)
-            self.spin_lp_w.blockSignals(False)
-
-        if hasattr(self, 'slider_lp_h'):
-            self.slider_lp_h.blockSignals(True)
-            self.slider_lp_h.setValue(45)
-            self.slider_lp_h.blockSignals(False)
-        if hasattr(self, 'spin_lp_h'):
-            self.spin_lp_h.blockSignals(True)
-            self.spin_lp_h.setValue(0.45)
-            self.spin_lp_h.blockSignals(False)
-
-        if hasattr(self, 'combo_lp_tint'):
-            self.combo_lp_tint.blockSignals(True)
-            self.combo_lp_tint.setCurrentIndex(0)
-            self.combo_lp_tint.blockSignals(False)
-
-        if hasattr(self, 'slider_lp_tint_strength'):
-            self.slider_lp_tint_strength.blockSignals(True)
-            self.slider_lp_tint_strength.setValue(50)
-            self.slider_lp_tint_strength.blockSignals(False)
-        if hasattr(self, 'lbl_lp_tint_strength'):
-            self.lbl_lp_tint_strength.setText("50%")
-
-        if hasattr(self, 'combo_lp_mode'):
-            self.combo_lp_mode.blockSignals(True)
-            self.combo_lp_mode.setCurrentIndex(0)
-            self.combo_lp_mode.blockSignals(False)
-
-        if hasattr(self, 'chk_lp_legacy_1d'):
-            self.chk_lp_legacy_1d.blockSignals(True)
-            self.chk_lp_legacy_1d.setChecked(False)
-            self.chk_lp_legacy_1d.blockSignals(False)
-
-        self.update_stretch_preview()
-        self._commit_action()
 
     def on_contrast_starless_changed(self, val: int):
         self.contrast_starless_val = val / 100.0
@@ -5441,76 +5013,7 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'w_orton_advanced'):
             self.w_orton_advanced.setVisible(checked)
 
-    def on_orton_strength_changed(self, val: int):
-        self.orton_strength = val / 100.0
-        if hasattr(self, 'lbl_orton'):
-            self.lbl_orton.setText(f"{val}%")
-        if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_starless_tone_values(
-                self.slider_clarity.value(), self.slider_dehaze.value(),
-                self.slider_ond_est.value(), self.slider_ond_bg.value(),
-                self.slider_contrast_starless.value(), self.slider_denoise.value(),
-                val, self.slider_orton_radius.value(), self.slider_orton_threshold.value(),
-                self.combo_orton_tint.currentIndex(), self.combo_orton_mode.currentIndex()
-            )
-        self.update_stretch_preview()
-
-    def on_orton_radius_changed(self, val: int):
-        self.orton_radius = float(val)
-        if hasattr(self, 'lbl_orton_radius'):
-            self.lbl_orton_radius.setText(f"{val} px")
-        if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_starless_tone_values(
-                self.slider_clarity.value(), self.slider_dehaze.value(),
-                self.slider_ond_est.value(), self.slider_ond_bg.value(),
-                self.slider_contrast_starless.value(), self.slider_denoise.value(),
-                self.slider_orton.value(), val, self.slider_orton_threshold.value(),
-                self.combo_orton_tint.currentIndex(), self.combo_orton_mode.currentIndex()
-            )
-        self.update_stretch_preview()
-
-    def on_orton_threshold_changed(self, val: int):
-        self.orton_threshold = val / 100.0
-        if hasattr(self, 'lbl_orton_threshold'):
-            self.lbl_orton_threshold.setText(f"{self.orton_threshold:.2f}")
-        if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_starless_tone_values(
-                self.slider_clarity.value(), self.slider_dehaze.value(),
-                self.slider_ond_est.value(), self.slider_ond_bg.value(),
-                self.slider_contrast_starless.value(), self.slider_denoise.value(),
-                self.slider_orton.value(), self.slider_orton_radius.value(), val,
-                self.combo_orton_tint.currentIndex(), self.combo_orton_mode.currentIndex()
-            )
-        self.update_stretch_preview()
-
-    def _on_orton_tint_changed(self, idx: int):
-        tint_key = self.combo_orton_tint.currentData()
-        self.orton_tint_type = tint_key
-        if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_starless_tone_values(
-                self.slider_clarity.value(), self.slider_dehaze.value(),
-                self.slider_ond_est.value(), self.slider_ond_bg.value(),
-                self.slider_contrast_starless.value(), self.slider_denoise.value(),
-                self.slider_orton.value(), self.slider_orton_radius.value(), self.slider_orton_threshold.value(),
-                idx, self.combo_orton_mode.currentIndex()
-            )
-        self.update_stretch_preview()
-        self._commit_action()
-
-    def _on_orton_mode_changed(self, idx: int):
-        mode_key = self.combo_orton_mode.currentData()
-        self.orton_mode = mode_key
-        if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_starless_tone_values(
-                self.slider_clarity.value(), self.slider_dehaze.value(),
-                self.slider_ond_est.value(), self.slider_ond_bg.value(),
-                self.slider_contrast_starless.value(), self.slider_denoise.value(),
-                self.slider_orton.value(), self.slider_orton_radius.value(), self.slider_orton_threshold.value(),
-                self.combo_orton_tint.currentIndex(), idx
-            )
-        self.update_stretch_preview()
-        self._commit_action()
-
+   
     def _on_mask_widget_sl_orton_strength(self, val: int):
         if hasattr(self, 'slider_orton') and self.slider_orton.value() != val:
             self.slider_orton.setValue(val)
@@ -5535,70 +5038,6 @@ class DeveloperTab(QWidget):
             if idx >= 0 and self.combo_orton_mode.currentIndex() != idx:
                 self.combo_orton_mode.setCurrentIndex(idx)
 
-    def reset_starless_adjustments(self):
-        widgets = [
-            self.slider_clarity, self.slider_dehaze, self.slider_ond_est,
-            self.slider_ond_bg, self.slider_contrast_starless, self.slider_denoise,
-            getattr(self, 'slider_denoise_color', None), getattr(self, 'slider_denoise_mask', None),
-            self.slider_orton, self.slider_orton_radius, self.slider_orton_threshold,
-            self.combo_orton_tint, self.combo_orton_mode
-        ]
-        for w in widgets:
-            if w is not None:
-                w.blockSignals(True)
-        self.slider_clarity.setValue(0)
-        self.slider_dehaze.setValue(0)
-        self.slider_ond_est.setValue(0)
-        self.slider_ond_bg.setValue(0)
-        self.slider_contrast_starless.setValue(0)
-        self.slider_denoise.setValue(0)
-        if hasattr(self, 'slider_denoise_color') and self.slider_denoise_color is not None:
-            self.slider_denoise_color.setValue(50)
-        if hasattr(self, 'slider_denoise_mask') and self.slider_denoise_mask is not None:
-            self.slider_denoise_mask.setValue(50)
-        self.slider_orton.setValue(0)
-        self.slider_orton_radius.setValue(40)
-        self.slider_orton_threshold.setValue(5)
-        self.combo_orton_tint.setCurrentIndex(0)
-        self.combo_orton_mode.setCurrentIndex(0)
-        for w in widgets:
-            if w is not None:
-                w.blockSignals(False)
-
-        self.clarity_starless_val = 0.0
-        self.dehaze_starless_val = 0.0
-        self.multiescala_estructura = 0.0
-        self.multiescala_fondo = 0.0
-        self.contrast_starless_val = 0.0
-        self.denoise_strength = 0.0
-        self.denoise_color_strength = 0.50
-        self.denoise_masking = 0.50
-        self.orton_strength = 0.0
-        self.orton_radius = 40.0
-        self.orton_threshold = 0.05
-        self.orton_tint_type = "warm_gold"
-        self.orton_mode = "soft_light"
-
-        self.lbl_clarity.setText("0.00")
-        self.lbl_dehaze.setText("0.00")
-        self.lbl_ond_est.setText("0.00")
-        self.lbl_ond_bg.setText("0%")
-        self.lbl_contrast_starless.setText("0.00")
-        self.lbl_denoise.setText("0%")
-        if hasattr(self, 'lbl_denoise_color') and self.lbl_denoise_color is not None:
-            self.lbl_denoise_color.setText("50%")
-        if hasattr(self, 'lbl_denoise_mask') and self.lbl_denoise_mask is not None:
-            self.lbl_denoise_mask.setText("50%")
-        if hasattr(self, 'lbl_orton'):
-            self.lbl_orton.setText("0%")
-        if hasattr(self, 'lbl_orton_radius'):
-            self.lbl_orton_radius.setText("40 px")
-        if hasattr(self, 'lbl_orton_threshold'):
-            self.lbl_orton_threshold.setText("0.05")
-
-        if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_starless_tone_values(0, 0, 0, 0, 0, 0, 0, 40, 5, 0, 0)
-        self.update_stretch_preview()
     
     def _on_mask_widget_gnd_ev(self, val: int):
         if self.slider_gnd_ev.value() != val:
@@ -5641,30 +5080,23 @@ class DeveloperTab(QWidget):
         self.update_stretch_preview()
 
     def reset_gnd_tone(self):
-        self.slider_gnd_ev.blockSignals(True)
-        self.slider_gnd_sh.blockSignals(True)
-        self.slider_gnd_bp.blockSignals(True)
-
-        self.slider_gnd_ev.setValue(0)
-        self.slider_gnd_sh.setValue(0)
-        self.slider_gnd_bp.setValue(0)
-
+        """Restablece los ajustes tonales del suelo delegando en el panel."""
         self.gnd_ev_val = 0.0
         self.gnd_shadows_val = 0.0
         self.gnd_bp_val = 0.0
 
-        self.lbl_gnd_ev.setText("0.00 EV")
-        self.lbl_gnd_sh.setText("0%")
-        self.lbl_gnd_bp.setText("0.000")
-
-        self.slider_gnd_ev.blockSignals(False)
-        self.slider_gnd_sh.blockSignals(False)
-        self.slider_gnd_bp.blockSignals(False)
+        if hasattr(self, 'panel_ground_sky') and self.panel_ground_sky is not None:
+            self.panel_ground_sky.set_state({
+                "gnd_ev_val": 0,
+                "gnd_sh_val": 0,
+                "gnd_bp_val": 0
+            })
 
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_ground_tone_values(0, 0, 0)
 
         self.update_stretch_preview()
+        self._commit_action()
     
     def _set_ai_processing_state(self, busy: bool):
         """Bloquea o desbloquea controles mientras se ejecutan tareas pesadas de AI."""
@@ -5802,15 +5234,18 @@ class DeveloperTab(QWidget):
 
                     # Estirar la capa de estrellas directamente desde self.image_stars con MTF o GHS
                     st_img = self.image_stars.copy()
-                    if getattr(self, "stretch_mode", "mtf") == "ghs":
+                    st_params = self.panel_stretch.get_state() if hasattr(self, 'panel_stretch') and self.panel_stretch is not None else {}
+                    stretch_mode = st_params.get("stretch_mode", "mtf")
+                    
+                    if stretch_mode == "ghs":
                         st_stretched = np.clip(
                             apply_ghs_stretch(
                                 st_img,
-                                sp=self.spin_ghs_sp.value(),
-                                d=self.spin_ghs_d.value(),
-                                b=self.spin_ghs_b.value(),
-                                hp=self.spin_ghs_hp.value(),
-                                lp=self.spin_ghs_lp.value(),
+                                sp=st_params.get("ghs_sp_val", 0.02),
+                                d=st_params.get("ghs_d_val", 5.0),
+                                b=st_params.get("ghs_b_val", 2.0),
+                                hp=st_params.get("ghs_hp_val", 0.0),
+                                lp=st_params.get("ghs_lp_val", 0.0),
                                 bp=0.0,
                                 color_mode="rgb"
                             ) * self.star_intensity,
@@ -5818,7 +5253,7 @@ class DeveloperTab(QWidget):
                         )
                     else:
                         st_stretched = np.clip(
-                            manual_stretch(st_img, black_point=0.0, midtone=self.spin_mtf.value()) * self.star_intensity,
+                            manual_stretch(st_img, black_point=0.0, midtone=st_params.get("mtf_val", 0.15)) * self.star_intensity,
                             0.0, 1.0
                         )
 
@@ -5919,258 +5354,104 @@ class DeveloperTab(QWidget):
         finally:
             self.unsetCursor()
             
+    def reset_wb(self):
+        """Restablece el balance de blancos delegando en el panel de color."""
+        if hasattr(self, 'panel_color_wb') and self.panel_color_wb is not None:
+            self.panel_color_wb.reset_wb()
+
+    def reset_saturation(self):
+        """Restablece la saturación de cielo y suelo delegando en el panel de color."""
+        if hasattr(self, 'panel_color_wb') and self.panel_color_wb is not None:
+            self.panel_color_wb.reset_saturation()
+
+    def reset_deconv(self):
+        """Restablece los controles de deconvolución delegando en el panel."""
+        if hasattr(self, 'panel_deconv') and self.panel_deconv is not None:
+            self.panel_deconv.reset_deconv()
+
+    def reset_gradients(self):
+        """Restablece los controles de contaminación lumínica delegando en el panel."""
+        if hasattr(self, 'panel_lp') and self.panel_lp is not None:
+            self.panel_lp.reset_gradients()
+
+    def reset_ghs(self):
+        """Restablece los parámetros de estirado hiperbólico GHS delegando en el panel."""
+        if hasattr(self, 'panel_stretch') and self.panel_stretch is not None:
+            self.panel_stretch.reset_ghs()
+
+    def reset_starless_adjustments(self):
+        """Restablece las herramientas de ajuste de fondo starless y efectos."""
+        if hasattr(self, 'panel_starnet') and self.panel_starnet is not None:
+            self.panel_starnet.set_state({
+                "clarity_val": 0, "dehaze_val": 0, "ond_est_val": 0, "ond_bg_val": 0,
+                "contrast_starless_val": 0, "denoise_val": 0, "denoise_color_val": 50, "denoise_mask_val": 50
+            })
+        if hasattr(self, 'panel_effects') and self.panel_effects is not None:
+            self.panel_effects.reset_orton()
+            self.panel_effects.reset_star_diff()
+        self.update_stretch_preview()
+        self._commit_action()
+
     def reset_all_parameters(self):
-        """Devuelve todos los controles y variables del revelador a su estado neutro original."""
-        self.lp_reduction = 0.0
-        self.lp_center_x = 0.50
-        self.lp_center_y = 0.90
-        self.lp_width = 0.60
-        self.lp_height = 0.45
-        self.lp_tint_type = "sodium"
-        self.lp_custom_tint = (1.0, 0.68, 0.22)
-        self.lp_tint_strength = 0.50
-        self.lp_mode = "attenuate"
-        self.lp_legacy_1d = False
-        self.orton_strength = 0.0
-        self.orton_radius = 40.0
-        self.orton_threshold = 0.05
-        self.orton_tint_type = "warm_gold"
-        self.orton_mode = "soft_light"
-        self.star_diff_strength = 0.0
-        self.star_diff_radius = 20.0
-        self.star_diff_threshold = 0.45
-        self.star_diff_color_boost = 0.50
-        self.star_diff_mode = "screen"
-        self.deconv_iterations = 0
-        self.deconv_fwhm = 3.0
-        self.deconv_model = "moffat"
-        self.deconv_beta = 4.5
-        self.deconv_aspect_ratio = 1.0
-        self.deconv_angle_deg = 0.0
-        self.deconv_deringing = 0.008
-        self.deconv_damping = 0.25
-        self.deconv_luma_only = True
-        self.deconv_scope = "all"
-        self._cached_psf = None
-        self._cached_psf_key = ()
-        self.clarity_starless_val = 0.0
-        self.dehaze_starless_val = 0.0
-        self.multiescala_estructura = 0.0
-        self.multiescala_fondo = 0.0
-        self.temp_val = 0.0
-        self.tint_val = 0.0
-        self.sat_sky_val = 1.0
-        self.sat_gnd_val = 1.0
-        self.vibrance_val = 0.0
-        self.contrast_val = 0.0
-        self.contrast_starless_val = 0.0
-        self.star_intensity = 1.0
-        self.view_layer_mode = 0
-        self.denoise_strength = 0.0
-        self.denoise_color_strength = 0.50
-        self.denoise_masking = 0.50
-        self.gnd_ev_val = 0.0
-        self.gnd_shadows_val = 0.0
-        self.gnd_bp_val = 0.0
+        """Devuelve todos los controles y variables del revelador a su estado neutro original delegando en los paneles."""
+        # 1. Delegar reseteo en cada panel modular
+        if hasattr(self, 'panel_stretch') and self.panel_stretch is not None:
+            self.panel_stretch.reset_sliders()
+            
+        if hasattr(self, 'panel_lp') and self.panel_lp is not None:
+            self.panel_lp.reset_gradients()
+            
+        if hasattr(self, 'panel_deconv') and self.panel_deconv is not None:
+            self.panel_deconv.reset_deconv()
+            
+        if hasattr(self, 'panel_color_wb') and self.panel_color_wb is not None:
+            self.panel_color_wb.reset_all()
+            
+        if hasattr(self, 'panel_effects') and self.panel_effects is not None:
+            self.panel_effects.reset_orton()
+            self.panel_effects.reset_star_diff()
 
-        widgets_to_block = [
-            self.slider_lp, self.slider_lp_cx, self.spin_lp_cx,
-            self.slider_lp_cy, self.spin_lp_cy, self.slider_lp_w,
-            self.spin_lp_w, self.slider_lp_h, self.spin_lp_h,
-            self.slider_lp_tint_strength, self.combo_lp_tint,
-            self.combo_lp_mode, self.chk_lp_legacy_1d,
-            self.slider_stars, self.slider_contrast_starless,
-            self.slider_clarity, self.slider_dehaze, self.slider_ond_est,
-            self.slider_ond_bg, self.slider_denoise,
-            getattr(self, 'slider_denoise_color', None),
-            getattr(self, 'slider_denoise_mask', None), 
-            self.slider_orton, self.slider_orton_radius, self.slider_orton_threshold,
-            self.combo_orton_tint, self.combo_orton_mode,
-            getattr(self, 'slider_star_diff', None),
-            getattr(self, 'slider_star_diff_radius', None),
-            getattr(self, 'slider_star_diff_threshold', None),
-            getattr(self, 'slider_star_diff_color', None),
-            getattr(self, 'combo_star_diff_mode', None),
-            getattr(self, 'slider_deconv_iter', None),
-            getattr(self, 'slider_deconv_fwhm', None),
-            getattr(self, 'slider_deconv_deringing', None),
-            getattr(self, 'slider_deconv_damping', None),
-            getattr(self, 'slider_deconv_aspect', None),
-            getattr(self, 'slider_deconv_angle', None),
-            getattr(self, 'combo_deconv_model', None),
-            getattr(self, 'combo_deconv_scope', None),
-            getattr(self, 'chk_deconv_luma_only', None),
-            self.slider_temp, self.slider_tint, self.slider_sat_sky,
-            self.slider_sat_gnd, self.slider_vibrance, self.slider_contrast,
-            self.combo_layer, self.spin_bp, self.slider_bp,
-            self.spin_mtf, self.slider_mtf,
-            self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp,
-        ]
-        for w in widgets_to_block:
-            if w is not None:
-                w.blockSignals(True)
+        if hasattr(self, 'panel_starnet') and self.panel_starnet is not None:
+            self.panel_starnet.set_state({
+                "layer_idx": 0,
+                "stars_val": 100,
+                "contrast_starless_val": 0,
+                "clarity_val": 0,
+                "dehaze_val": 0,
+                "ond_est_val": 0,
+                "ond_bg_val": 0,
+                "denoise_val": 0,
+                "denoise_color_val": 50,
+                "denoise_mask_val": 50
+            })
+            
+        if hasattr(self, 'panel_ground_sky') and self.panel_ground_sky is not None:
+            self.panel_ground_sky.set_state({
+                "gnd_ev_val": 0,
+                "gnd_sh_val": 0,
+                "gnd_bp_val": 0
+            })
 
-        self.slider_lp.setValue(0)
-        self.lbl_lp.setText("0%")
-        if hasattr(self, 'slider_lp_cx'):
-            self.slider_lp_cx.setValue(50)
-            self.spin_lp_cx.setValue(0.50)
-            self.slider_lp_cy.setValue(90)
-            self.spin_lp_cy.setValue(0.90)
-            self.slider_lp_w.setValue(60)
-            self.spin_lp_w.setValue(0.60)
-            self.slider_lp_h.setValue(45)
-            self.spin_lp_h.setValue(0.45)
-            self.combo_lp_tint.setCurrentIndex(0)
-            self.slider_lp_tint_strength.setValue(50)
-            self.lbl_lp_tint_strength.setText("50%")
-            self.combo_lp_mode.setCurrentIndex(0)
-            self.chk_lp_legacy_1d.setChecked(False)
-
-        if hasattr(self, 'slider_orton'):
-            self.slider_orton.setValue(0)
-            self.lbl_orton.setText("0%")
-        if hasattr(self, 'slider_orton_radius'):
-            self.slider_orton_radius.setValue(40)
-            self.lbl_orton_radius.setText("40 px")
-        if hasattr(self, 'slider_orton_threshold'):
-            self.slider_orton_threshold.setValue(5)
-            self.lbl_orton_threshold.setText("0.05")
-        if hasattr(self, 'combo_orton_tint'):
-            self.combo_orton_tint.setCurrentIndex(0)
-        if hasattr(self, 'combo_orton_mode'):
-            self.combo_orton_mode.setCurrentIndex(0)
-
-        if hasattr(self, 'slider_star_diff'):
-            self.slider_star_diff.setValue(0)
-            self.lbl_star_diff.setText("0%")
-        if hasattr(self, 'slider_star_diff_radius'):
-            self.slider_star_diff_radius.setValue(20)
-            self.lbl_star_diff_radius.setText("20 px")
-        if hasattr(self, 'slider_star_diff_threshold'):
-            self.slider_star_diff_threshold.setValue(45)
-            self.lbl_star_diff_threshold.setText("0.45")
-        if hasattr(self, 'slider_star_diff_color'):
-            self.slider_star_diff_color.setValue(50)
-            self.lbl_star_diff_color.setText("50%")
-        if hasattr(self, 'combo_star_diff_mode'):
-            self.combo_star_diff_mode.setCurrentIndex(0)
-
-        if hasattr(self, 'slider_deconv_iter'):
-            self.slider_deconv_iter.setValue(0)
-            self.lbl_deconv_iter.setText("0 (Off)")
-        if hasattr(self, 'slider_deconv_fwhm'):
-            self.slider_deconv_fwhm.setValue(30)
-            self.lbl_deconv_fwhm.setText("3.0 px")
-        if hasattr(self, 'slider_deconv_deringing'):
-            self.slider_deconv_deringing.setValue(8)
-            self.lbl_deconv_deringing.setText("0.008")
-        if hasattr(self, 'slider_deconv_damping'):
-            self.slider_deconv_damping.setValue(25)
-            self.lbl_deconv_damping.setText("25%")
-        if hasattr(self, 'slider_deconv_aspect'):
-            self.slider_deconv_aspect.setValue(100)
-            self.lbl_deconv_aspect.setText("1.00x")
-        if hasattr(self, 'slider_deconv_angle'):
-            self.slider_deconv_angle.setValue(0)
-            self.lbl_deconv_angle.setText("0°")
-        if hasattr(self, 'combo_deconv_model'):
-            self.combo_deconv_model.setCurrentIndex(0)
-        if hasattr(self, 'combo_deconv_scope'):
-            self.combo_deconv_scope.setCurrentIndex(0)
-        if hasattr(self, 'chk_deconv_luma_only'):
-            self.chk_deconv_luma_only.setChecked(True)
-        if hasattr(self, 'lbl_psf_status'):
-            self.lbl_psf_status.setText("PSF: Moffat 2D (FWHM: 3.0 px | Aspecto: 1.00)")
-
-        self.combo_layer.setCurrentIndex(0)
-
-        self.slider_stars.setValue(100)
-        self.lbl_stars.setText("100%")
-
-        self.slider_contrast_starless.setValue(0)
-        self.lbl_contrast_starless.setText("0.00")
-
-        self.slider_clarity.setValue(0)
-        self.lbl_clarity.setText("0.00")
-
-        self.slider_dehaze.setValue(0)
-        self.lbl_dehaze.setText("0.00")
-
-        self.slider_ond_est.setValue(0)
-        self.lbl_ond_est.setText("0.00")
-
-        self.slider_ond_bg.setValue(0)
-        self.lbl_ond_bg.setText("0%")
-
-        self.slider_denoise.setValue(0)
-        self.lbl_denoise.setText("0%")
-        if hasattr(self, 'slider_denoise_color') and self.slider_denoise_color is not None:
-            self.slider_denoise_color.setValue(50)
-            self.lbl_denoise_color.setText("50%")
-        if hasattr(self, 'slider_denoise_mask') and self.slider_denoise_mask is not None:
-            self.slider_denoise_mask.setValue(50)
-            self.lbl_denoise_mask.setText("50%")
-        
-        self._set_starnet_tools_enabled(False)
-        if hasattr(self, 'sec_presets'):
-            self.sec_presets.set_status_badge("")
-
-        if hasattr(self, 'curve_widget'):
+        # 2. Resetear curvas y capas
+        if hasattr(self, 'curve_widget') and self.curve_widget is not None:
             self.curve_widget.reset_all_curves()
 
-        if hasattr(self, 'mask_layers_widget'):
+        if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget is not None:
             self.mask_layers_widget.set_state([])
 
-        self.slider_temp.setValue(0)
-        if hasattr(self, 'spin_temp'):
-            self.spin_temp.setValue(0.0)
-        self.slider_tint.setValue(0)
-        if hasattr(self, 'spin_tint'):
-            self.spin_tint.setValue(0.0)
-
-        self.slider_sat_sky.setValue(100)
-        self.lbl_sat_sky.setText("1.00x")
-        self.slider_sat_gnd.setValue(100)
-        self.lbl_sat_gnd.setText("1.00x")
-
-        self.slider_vibrance.setValue(0)
-        self.lbl_vibrance.setText("0.00")
-
-        self.slider_contrast.setValue(0)
-        self.lbl_contrast.setText("0.00")
-
-        self.slider_gnd_ev.setValue(0)
-        self.lbl_gnd_ev.setText("0.00 EV")
-        self.slider_gnd_sh.setValue(0)
-        self.lbl_gnd_sh.setText("0%")
-        self.slider_gnd_bp.setValue(0)
-        self.lbl_gnd_bp.setText("0.000")
-        if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_ground_tone_values(0, 0, 0)
-            self.mask_layers_widget.set_stars_special_values(100, 0, 20, 45, 50, 0)
-            self.mask_layers_widget.set_starless_tone_values(0, 0, 0, 0, 0, 0, 0, 40, 5, 0, 0)
-
-        self.spin_bp.setValue(0.0)
-        self.slider_bp.setValue(0)
-        self.spin_mtf.setValue(0.10)
-        self.slider_mtf.setValue(400)
-        
+        # 3. Restablecer zoom e invalidar cachés
         self.is_zoomed_100 = False
         self.zoom_rel_coords = (0.5, 0.5)
-        if hasattr(self, 'canvas'):
+        if hasattr(self, 'canvas') and self.canvas is not None:
             self.canvas.is_zoomed = False
 
-        for w in widgets_to_block:
-            w.blockSignals(False)
+        if hasattr(self, 'sec_presets') and self.sec_presets is not None:
+            self.sec_presets.set_status_badge("")
 
         self._invalidate_pipeline_caches()
 
         if hasattr(self, '_update_mask_status_ui'):
             self._update_mask_status_ui()
-
-        if hasattr(self, '_commit_action'):
-            self._commit_action()
             
     def clear_session(self):
         """Descarga por completo la sesión del revelador y fuerza recolección de memoria."""
@@ -6297,111 +5578,30 @@ class DeveloperTab(QWidget):
     # -------------------------------------------------------------
     def _connect_undo_triggers(self):
         """Conecta los eventos de finalización de interacción para registrar acciones en el historial."""
-        heavy_sliders = [
-            getattr(self, 'slider_clarity', None),
-            getattr(self, 'slider_dehaze', None),
-            getattr(self, 'slider_ond_est', None),
-            getattr(self, 'slider_ond_bg', None),
-            getattr(self, 'slider_denoise', None),
-            getattr(self, 'slider_denoise_color', None),
-            getattr(self, 'slider_denoise_mask', None),
-            getattr(self, 'slider_orton', None),
-            getattr(self, 'slider_orton_radius', None),
-            getattr(self, 'slider_orton_threshold', None),
-            getattr(self, 'slider_star_diff', None),
-            getattr(self, 'slider_star_diff_radius', None),
-            getattr(self, 'slider_star_diff_threshold', None),
-            getattr(self, 'slider_star_diff_color', None),
-        ]
-        for s in heavy_sliders:
-            if s is not None:
-                s.sliderPressed.connect(self._on_heavy_slider_pressed)
-                s.sliderReleased.connect(self._on_slider_interaction_finished)
+        
+        # 1. Los paneles modulares ya emiten su propia señal action_committed al soltar sliders o editar spinboxes
+        # Se conectan aquí si no se conectaron en _setup_ui:
+        for panel in (
+            getattr(self, 'panel_stretch', None),
+            getattr(self, 'panel_lp', None),
+            getattr(self, 'panel_deconv', None),
+            getattr(self, 'panel_color_wb', None),
+            getattr(self, 'panel_effects', None),
+        ):
+            if panel is not None and hasattr(panel, 'action_committed'):
+                try:
+                    panel.action_committed.connect(self._commit_action)
+                except Exception:
+                    pass
 
-        # Deslizadores de deconvolución (requieren mantener iteraciones de PSF en su propio arrastre)
-        deconv_sliders = [
-            getattr(self, 'slider_deconv_iter', None),
-            getattr(self, 'slider_deconv_fwhm', None),
-            getattr(self, 'slider_deconv_deringing', None),
-            getattr(self, 'slider_deconv_damping', None),
-            getattr(self, 'slider_deconv_aspect', None),
-            getattr(self, 'slider_deconv_angle', None),
-        ]
-        for s in deconv_sliders:
-            if s is not None:
-                s.sliderPressed.connect(self._on_deconv_slider_pressed)
-                s.sliderReleased.connect(self._on_slider_interaction_finished)
-
-        # Deslizadores de estirado tonal y contraste global acelerados por 1D LUT (>1000 FPS)
-        lut_stretch_sliders = [
-            self.slider_contrast,
-            self.slider_bp, self.slider_mtf,
-            self.slider_ghs_sp, self.slider_ghs_d, self.slider_ghs_b,
-            self.slider_ghs_hp, self.slider_ghs_lp, self.slider_ghs_bp,
-        ]
-        for s in lut_stretch_sliders:
-            if s is not None:
-                s.sliderPressed.connect(self._on_lut_slider_pressed)
-                s.sliderReleased.connect(self._on_slider_interaction_finished)
-
-        # Deslizadores de cálculo ligero y corrección previa lineal (balance, saturación, polución, suelo)
-        # evaluados sobre proxy borrador ultra-fluido (Draft 60 FPS) durante el arrastre
-        light_sliders = [
-            self.slider_contrast_starless,
-            self.slider_stars,
-            self.slider_temp, self.slider_tint, self.slider_sat_sky,
-            self.slider_sat_gnd, self.slider_vibrance,
-            self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp,
-            getattr(self, 'slider_lp', None),
-            getattr(self, 'slider_lp_cx', None),
-            getattr(self, 'slider_lp_cy', None),
-            getattr(self, 'slider_lp_w', None),
-            getattr(self, 'slider_lp_h', None),
-            getattr(self, 'slider_lp_tint_strength', None),
-        ]
-        for s in light_sliders:
-            if s is not None:
-                s.sliderPressed.connect(self._on_heavy_slider_pressed)
-                s.sliderReleased.connect(self._on_slider_interaction_finished)
-
+        # 2. Conectar eventos del Gestor de Capas si existen
         if hasattr(self, 'mask_layers_widget'):
             if hasattr(self.mask_layers_widget, 'interaction_started'):
                 self.mask_layers_widget.interaction_started.connect(self._on_heavy_slider_pressed)
             if hasattr(self.mask_layers_widget, 'interaction_finished'):
                 self.mask_layers_widget.interaction_finished.connect(self._on_slider_interaction_finished)
-            for s in (self.mask_layers_widget.get_all_sliders() if hasattr(self.mask_layers_widget, 'get_all_sliders') else []):
-                s.sliderPressed.connect(self._on_heavy_slider_pressed)
-                s.sliderReleased.connect(self._on_slider_interaction_finished)
 
-        self.spin_bp.editingFinished.connect(self._on_control_committed)
-        self.spin_mtf.editingFinished.connect(self._on_control_committed)
-        self.spin_ghs_sp.editingFinished.connect(self._on_control_committed)
-        self.spin_ghs_d.editingFinished.connect(self._on_control_committed)
-        self.spin_ghs_b.editingFinished.connect(self._on_control_committed)
-        self.spin_ghs_hp.editingFinished.connect(self._on_control_committed)
-        self.spin_ghs_lp.editingFinished.connect(self._on_control_committed)
-        self.spin_ghs_bp.editingFinished.connect(self._on_control_committed)
-        self.spin_lp_cx.editingFinished.connect(self._on_control_committed)
-        self.spin_lp_cy.editingFinished.connect(self._on_control_committed)
-        self.spin_lp_w.editingFinished.connect(self._on_control_committed)
-        self.spin_lp_h.editingFinished.connect(self._on_control_committed)
-        self.combo_lp_tint.activated.connect(lambda _: self._on_control_committed())
-        self.combo_lp_mode.activated.connect(lambda _: self._on_control_committed())
-        self.chk_lp_legacy_1d.toggled.connect(lambda _: self._on_control_committed())
-        self.combo_orton_tint.activated.connect(lambda _: self._on_control_committed())
-        self.combo_orton_mode.activated.connect(lambda _: self._on_control_committed())
-        if hasattr(self, 'combo_star_diff_mode'):
-            self.combo_star_diff_mode.activated.connect(lambda _: self._on_control_committed())
-        if hasattr(self, 'combo_deconv_model'):
-            self.combo_deconv_model.activated.connect(lambda _: self._on_control_committed())
-        if hasattr(self, 'combo_deconv_scope'):
-            self.combo_deconv_scope.activated.connect(lambda _: self._on_control_committed())
-        if hasattr(self, 'chk_deconv_luma_only'):
-            self.chk_deconv_luma_only.toggled.connect(lambda _: self._on_control_committed())
-        self.spin_temp.editingFinished.connect(self._on_control_committed)
-        self.spin_tint.editingFinished.connect(self._on_control_committed)
-        self.combo_layer.activated.connect(lambda _: self._on_control_committed())
-
+        # 3. Conectar la curva tonal
         if hasattr(self, 'curve_widget'):
             self.curve_widget.curveCommitted.connect(self._on_control_committed)
 
@@ -6449,22 +5649,23 @@ class DeveloperTab(QWidget):
         self._commit_action()
 
     def _capture_state(self) -> dict:
-        """Captura una instantánea paramétrica ligera (~1 KB) delegando en los paneles modulares."""
+        """Captura una instantánea paramétrica ligera delegando en los paneles modulares."""
         state = {}
-        if hasattr(self, 'panel_stretch'):
+        if hasattr(self, 'panel_stretch') and self.panel_stretch is not None:
             state.update(self.panel_stretch.get_state())
-        if hasattr(self, 'panel_lp'):
+        if hasattr(self, 'panel_lp') and self.panel_lp is not None:
             state.update(self.panel_lp.get_state())
-        if hasattr(self, 'panel_deconv'):
+        if hasattr(self, 'panel_deconv') and self.panel_deconv is not None:
             state.update(self.panel_deconv.get_state())
-        if hasattr(self, 'panel_color_wb'):
+        if hasattr(self, 'panel_color_wb') and self.panel_color_wb is not None:
             state.update(self.panel_color_wb.get_state())
-        if hasattr(self, 'panel_starnet'):
+        if hasattr(self, 'panel_starnet') and self.panel_starnet is not None:
             state.update(self.panel_starnet.get_state())
-        if hasattr(self, 'panel_ground_sky'):
+        if hasattr(self, 'panel_ground_sky') and self.panel_ground_sky is not None:
             state.update(self.panel_ground_sky.get_state())
         state["curves"] = self.curve_widget.get_state() if hasattr(self, 'curve_widget') else None
         state["mask_layers"] = self.mask_layers_widget.get_state() if hasattr(self, 'mask_layers_widget') else None
+        state["starless_is_stretched"] = getattr(self, "starless_is_stretched", False)
         return state
 
     def _state_different(self, s1: Optional[dict], s2: Optional[dict]) -> bool:
@@ -6508,12 +5709,16 @@ class DeveloperTab(QWidget):
                     "type": "crop",
                     "image_32bit": self.image_32bit.copy(),
                     "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
+                    "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
+                    "starless_is_stretched": getattr(self, "starless_is_stretched", False),
                     "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
                     "current_mask": self.current_mask.copy() if self.current_mask is not None else None,
                 }
                 self.redo_stack.append(redo_item)
                 self.image_32bit = target["image_32bit"]
                 self.image_starless = target["image_starless"]
+                self.raw_linear_starless = target.get("raw_linear_starless")
+                self.starless_is_stretched = target.get("starless_is_stretched", False)
                 self.image_stars = target["image_stars"]
                 self.current_mask = target["current_mask"]
 
@@ -6527,6 +5732,22 @@ class DeveloperTab(QWidget):
                 self._update_canvas_info_label()
                 self._update_mask_status_ui()
                 self.log_message(f"↺ Deshacer recorte: Restaurada imagen original ({w}x{h} px)")
+            elif target.get("type") == "starless":
+                redo_item = {
+                    "type": "starless",
+                    "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
+                    "starless_is_stretched": getattr(self, "starless_is_stretched", False),
+                }
+                self.redo_stack.append(redo_item)
+                self.image_starless = target["image_starless"]
+                self.starless_is_stretched = target.get("starless_is_stretched", False)
+                self._invalidate_pipeline_caches()
+                self._generate_preview_proxy()
+                if hasattr(self, 'mask_layers_widget'):
+                    self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
+                    self.mask_layers_widget.update_active_layer_histogram()
+                self.update_stretch_preview(immediate=True)
+                self.log_message("\u21ba Deshacer: Estirado Adaptativo de Starless revertido")
             elif target.get("type") == "mask":
                 redo_item = {
                     "type": "mask",
@@ -6582,6 +5803,22 @@ class DeveloperTab(QWidget):
                 self._update_canvas_info_label()
                 self._update_mask_status_ui()
                 self.log_message(f"↻ Rehacer recorte: Recorte restaurado ({w}x{h} px)")
+            elif target.get("type") == "starless":
+                undo_item = {
+                    "type": "starless",
+                    "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
+                    "starless_is_stretched": getattr(self, "starless_is_stretched", False),
+                }
+                self.undo_stack.append(undo_item)
+                self.image_starless = target["image_starless"]
+                self.starless_is_stretched = target.get("starless_is_stretched", True)
+                self._invalidate_pipeline_caches()
+                self._generate_preview_proxy()
+                if hasattr(self, 'mask_layers_widget'):
+                    self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
+                    self.mask_layers_widget.update_active_layer_histogram()
+                self.update_stretch_preview(immediate=True)
+                self.log_message("\u21bb Rehacer: Estirado Adaptativo de Starless restaurado")
             elif target.get("type") == "mask":
                 undo_item = {
                     "type": "mask",
@@ -6684,6 +5921,8 @@ class DeveloperTab(QWidget):
 
         if hasattr(self, 'panel_ground_sky'):
             self.panel_ground_sky.set_state(state)
+        if "starless_is_stretched" in state:
+            self.starless_is_stretched = state["starless_is_stretched"]
             self.gnd_ev_val = self.panel_ground_sky.slider_gnd_ev.value() / 100.0
             self.gnd_shadows_val = self.panel_ground_sky.slider_gnd_sh.value() / 100.0
             self.gnd_bp_val = self.panel_ground_sky.slider_gnd_bp.value() / 1000.0
@@ -6724,9 +5963,18 @@ class DeveloperTab(QWidget):
             self.curve_widget.blockSignals(False)
 
         if "mask_layers" in state and hasattr(self, 'mask_layers_widget'):
+            # Guardamos la capa que el usuario tiene seleccionada actualmente
+            current_layer = self.mask_layers_widget.get_selected_layer()
+            current_id = current_layer.id if current_layer else None
+
             self.mask_layers_widget.blockSignals(True)
             self.mask_layers_widget.set_state(state["mask_layers"] or [])
             self.mask_layers_widget.blockSignals(False)
+
+            # Restauramos la selección a la capa donde estaba el usuario, no a estrellas
+            if current_id:
+                self.mask_layers_widget.select_layer_by_id(current_id)
+
             sel_layer = self.mask_layers_widget.get_selected_layer()
             if sel_layer and sel_layer.mask_type == "brush" and sel_layer.enabled:
                 show_overlay = self.mask_layers_widget.btn_preview_mask.isChecked()
@@ -6896,4 +6144,4 @@ class DeveloperTab(QWidget):
         dlg.exec()
         curr_preset = self.combo_presets.currentData(Qt.UserRole)
         curr_id = curr_preset.id if isinstance(curr_preset, DeveloperPreset) else None
-        self._populate_presets_combo(select_preset_id=curr_id)
+        self._populate_presets_combo(select_preset_id=curr_id)

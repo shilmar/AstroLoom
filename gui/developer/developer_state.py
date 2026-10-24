@@ -51,6 +51,7 @@ class DeveloperState:
     denoise_val: int = 0
     denoise_color_val: int = 50
     denoise_mask_val: int = 50
+    starless_is_stretched: bool = False
 
     # Orton Effect
     orton_strength: int = 0

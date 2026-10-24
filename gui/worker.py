@@ -301,10 +301,11 @@ class StackingWorker(QThread):
             ref_gray.tofile(p_ref_gray)
             del ref_gray
 
-            # Si necesitamos suelo (modo dual o solo referencia), preservamos una copia antes del procesado de cielo
+            # Preservar el suelo de referencia limpio ANTES de cualquier sustracción de cielo
+            # para no alterar su rango dinámico, no empastar sombras y retener el 100% de textura
             ref_raw_ground = ref_sky.copy() if (need_stack_ground or ground_mode == "reference") else None
 
-            # Preprocesar fondo in-place sin duplicaciones
+            # Preprocesar fondo in-place sin duplicaciones para la capa de CIELO
             ref_sky_processed = preprocess_subframe_lp(
                 ref_sky,
                 method=lp_method,
@@ -312,6 +313,14 @@ class StackingWorker(QThread):
                 sky_mask=sky_mask,
                 ref_stats=ref_stats
             )
+
+            # Para el apilado de cielo, excluir el suelo de la referencia (-1.0)
+            if sky_mask is not None:
+                mask_bin = (sky_mask > 0.5).astype(np.uint8)
+                kernel_safe = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+                safe_sky = cv2.erode(mask_bin, kernel_safe)
+                ref_sky_processed[safe_sky == 0] = -1.0
+                del mask_bin, safe_sky
 
             if use_ram_buffer:
                 sky_frames_collection.append(ref_sky_processed)
@@ -816,4 +825,4 @@ class SubstackingWorker(QThread):
         if not self._is_cancelled:
             self.frame_rendered.emit(idx, frame_rgb)
 
-
+

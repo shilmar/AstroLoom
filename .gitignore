@@ -45,3 +45,7 @@ models/*.onnx
 
 # Graphify
 graphify-out/
+# Desarrollo interno
+INDEX.md
+docs/
+scripts/

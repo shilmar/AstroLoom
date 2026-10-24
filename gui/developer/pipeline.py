@@ -144,6 +144,7 @@ def apply_developer_pipeline(
     precomputed_graded_base: Optional[np.ndarray] = None,
     precomputed_spatial_base: Optional[np.ndarray] = None,
     return_milestones: bool = False,
+    return_intermediate: bool = False,
     is_dragging_deconv: bool = False,
 ) -> Union[np.ndarray, Tuple[Any, ...]]:
     """Pure Python headless non-destructive photo development pipeline.
@@ -225,6 +226,8 @@ def apply_developer_pipeline(
                     sky_mask=mask_2d,
                     mode=lp_mode,
                     legacy_1d=state.lp_legacy_1d,
+                    crop_rect=crop_rect,
+                    full_shape=full_shape,
                 )
 
             # 5. Ajuste Tonal Diferencial para el Suelo
@@ -268,19 +271,44 @@ def apply_developer_pipeline(
             milestone_linear = img
 
         # 6. Estirado Tonal (MTF o GHS)
-        if state.stretch_mode == "ghs":
-            stretched = apply_ghs_stretch(
-                img,
-                sp=state.ghs_sp_val,
-                d=state.ghs_d_val,
-                b=state.ghs_b_val,
-                hp=state.ghs_hp_val,
-                lp=state.ghs_lp_val,
-                bp=state.ghs_bp_val,
-                color_mode=state.ghs_color_mode,
-            )
+        if getattr(state, "starless_is_stretched", False) and image_starless is not None:
+            # En modo estirado adaptativo, 'img' ya contiene la base lineal con claridad, dehaze y ondículas aplicadas.
+            # No se debe descartar 'img' por 'image_starless' crudo; 'img' es la capa tratada.
+            if precomputed_mask is not None:
+                # Estirar la porción de suelo de forma estándar si hay máscara de cielo
+                if state.stretch_mode == "ghs":
+                    stretched_base = apply_ghs_stretch(
+                        img,
+                        sp=state.ghs_sp_val,
+                        d=state.ghs_d_val,
+                        b=state.ghs_b_val,
+                        hp=state.ghs_hp_val,
+                        lp=state.ghs_lp_val,
+                        bp=state.ghs_bp_val,
+                        color_mode=state.ghs_color_mode,
+                    )
+                else:
+                    stretched_base = manual_stretch(img, black_point=state.bp_val, midtone=state.mtf_val)
+                
+                mask_blend = precomputed_mask if precomputed_mask.ndim == 3 else precomputed_mask[..., np.newaxis]
+                stretched = (img * mask_blend) + (stretched_base * (1.0 - mask_blend))
+            else:
+                stretched = img
         else:
-            stretched = manual_stretch(img, black_point=state.bp_val, midtone=state.mtf_val)
+            if state.stretch_mode == "ghs":
+                stretched = apply_ghs_stretch(
+                    img,
+                    sp=state.ghs_sp_val,
+                    d=state.ghs_d_val,
+                    b=state.ghs_b_val,
+                    hp=state.ghs_hp_val,
+                    lp=state.ghs_lp_val,
+                    bp=state.ghs_bp_val,
+                    color_mode=state.ghs_color_mode,
+                )
+            else:
+                stretched = manual_stretch(img, black_point=state.bp_val, midtone=state.mtf_val)
+
         milestone_stretched = stretched
 
     if precomputed_spatial_base is None and precomputed_graded_base is None:

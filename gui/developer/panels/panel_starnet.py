@@ -22,6 +22,7 @@ class StarNetPanel(QWidget):
     """
     run_starnet_requested = Signal()
     jump_to_masks_requested = Signal(str)
+    auto_stretch_starless_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None, resettable_label_factory: Optional[Callable] = None):
         super().__init__(parent)
@@ -125,6 +126,33 @@ class StarNetPanel(QWidget):
         self.lbl_stars.setStyleSheet("color: #ffd54f; font-weight: bold;")
         row_view.addWidget(self.lbl_stars)
         tools_layout.addLayout(row_view)
+
+        # Botón Estirado Adaptativo RGB para Starless
+        self.btn_auto_stretch_starless = QPushButton("Estirado Adaptativo RGB")
+        self.btn_auto_stretch_starless.setIcon(get_icon("sparkles", color="#ce93d8", size=13))
+        self.btn_auto_stretch_starless.setCursor(Qt.PointingHandCursor)
+        self.btn_auto_stretch_starless.setToolTip(
+            "Aplica el algoritmo de estirado no lineal adaptativo MTF sobre la capa sin estrellas,\n"
+            "aislando el cálculo estadístico del fondo celeste respecto al suelo."
+        )
+        self.btn_auto_stretch_starless.setStyleSheet("""
+            QPushButton {
+                background-color: #2b1f3d;
+                color: #ce93d8;
+                border: 1px solid #7b1fa2;
+                border-radius: 4px;
+                padding: 5px 10px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #3b2854;
+                border-color: #ba68c8;
+                color: #ffffff;
+            }
+        """)
+        self.btn_auto_stretch_starless.clicked.connect(self.auto_stretch_starless_requested.emit)
+        tools_layout.addWidget(self.btn_auto_stretch_starless)
 
         self.slider_stars = QSlider(Qt.Horizontal)
         self.slider_stars.setRange(0, 200)
@@ -333,6 +361,7 @@ class StarNetPanel(QWidget):
 
         controls = [
             self.combo_layer,
+            self.btn_auto_stretch_starless,
             self.slider_stars,
             self.slider_contrast_starless,
             self.slider_clarity,
