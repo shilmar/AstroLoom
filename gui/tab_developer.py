@@ -136,6 +136,8 @@ class DeveloperTab(QWidget):
 
         self.current_mask = None      
         self.active_filepath = None
+        self.current_project_path: Optional[str] = None
+        self._is_dirty: bool = False
         self.current_color_space = "srgb"
         self.gx_worker = None
         self.sn_worker = None
@@ -350,6 +352,48 @@ class DeveloperTab(QWidget):
         left_container_layout.setSpacing(6)
         self.left_container.setMinimumWidth(280)
         self.left_container.setMaximumWidth(1200)
+
+        # 1. Gestión de Proyecto (.devloom) fijada arriba
+        self.proj_container = QWidget()
+        self.proj_container.setStyleSheet("background: #181c28; border: 1px solid #2a3144; border-radius: 4px;")
+        proj_vbox = QVBoxLayout(self.proj_container)
+        proj_vbox.setContentsMargins(6, 6, 6, 6)
+        proj_vbox.setSpacing(5)
+
+        self.lbl_project_title = QLabel("Proyecto: Sin guardar")
+        self.lbl_project_title.setStyleSheet("color: #80cbc4; font-size: 11px; font-weight: bold; border: none; background: transparent;")
+        proj_vbox.addWidget(self.lbl_project_title)
+
+        proj_btn_row = QHBoxLayout()
+        proj_btn_row.setContentsMargins(0, 0, 0, 0)
+        proj_btn_row.setSpacing(4)
+
+        self.btn_open_proj = QPushButton("Abrir")
+        self.btn_open_proj.setIcon(get_icon("folder", size=13, color="#80d8ff"))
+        self.btn_open_proj.setToolTip("Abrir proyecto de revelado .devloom (Atajo: Ctrl+O)")
+        self.btn_open_proj.setCursor(Qt.PointingHandCursor)
+        self.btn_open_proj.setStyleSheet("font-weight: bold; color: #80d8ff; background: #22293d; border: 1px solid #333d59; border-radius: 3px; padding: 4px 6px;")
+        self.btn_open_proj.clicked.connect(self.open_project_dialog)
+        proj_btn_row.addWidget(self.btn_open_proj)
+
+        self.btn_save_proj = QPushButton("Guardar")
+        self.btn_save_proj.setIcon(get_icon("save", size=13, color="#a5d6a7"))
+        self.btn_save_proj.setToolTip("Guardar sesión de revelado actual (Atajo: Ctrl+S)")
+        self.btn_save_proj.setCursor(Qt.PointingHandCursor)
+        self.btn_save_proj.setStyleSheet("font-weight: bold; color: #a5d6a7; background: #22293d; border: 1px solid #333d59; border-radius: 3px; padding: 4px 6px;")
+        self.btn_save_proj.clicked.connect(self.save_project)
+        proj_btn_row.addWidget(self.btn_save_proj)
+
+        self.btn_save_as_proj = QPushButton("Guardar Como...")
+        self.btn_save_as_proj.setIcon(get_icon("copy", size=13, color="#cfd8dc"))
+        self.btn_save_as_proj.setToolTip("Guardar sesión de revelado en un archivo nuevo (Atajo: Ctrl+Shift+S)")
+        self.btn_save_as_proj.setCursor(Qt.PointingHandCursor)
+        self.btn_save_as_proj.setStyleSheet("color: #cfd8dc; background: #22293d; border: 1px solid #333d59; border-radius: 3px; padding: 4px 6px;")
+        self.btn_save_as_proj.clicked.connect(self.save_project_as_dialog)
+        proj_btn_row.addWidget(self.btn_save_as_proj)
+
+        proj_vbox.addLayout(proj_btn_row)
+        left_container_layout.addWidget(self.proj_container, 0)
 
         # Carga externa (Siempre fijada arriba)
         self.btn_open_img = QPushButton("Abrir Imagen (TIFF / FITS / RAW)...")
@@ -1082,6 +1126,19 @@ class DeveloperTab(QWidget):
         self.shortcut_redo2 = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
         self.shortcut_redo2.setContext(Qt.WindowShortcut)
         self.shortcut_redo2.activated.connect(self.redo)
+
+        # Atajos globales de Gestión de Proyecto (.devloom)
+        self.shortcut_save_proj = QShortcut(QKeySequence("Ctrl+S"), self)
+        self.shortcut_save_proj.setContext(Qt.WindowShortcut)
+        self.shortcut_save_proj.activated.connect(self.save_project)
+
+        self.shortcut_save_as_proj = QShortcut(QKeySequence("Ctrl+Shift+S"), self)
+        self.shortcut_save_as_proj.setContext(Qt.WindowShortcut)
+        self.shortcut_save_as_proj.activated.connect(self.save_project_as_dialog)
+
+        self.shortcut_open_proj = QShortcut(QKeySequence("Ctrl+O"), self)
+        self.shortcut_open_proj.setContext(Qt.WindowShortcut)
+        self.shortcut_open_proj.activated.connect(self.open_project_dialog)
 
         layout.addWidget(splitter)
 
@@ -3584,6 +3641,8 @@ class DeveloperTab(QWidget):
             QMessageBox.critical(self, "Error", f"Fallo al abrir archivo:\n{e}")
 
     def open_image_file(self):
+        if not self._check_unsaved_changes():
+            return
         filtros = (
             "Imágenes Astronómicas y RAW (*.tif *.tiff *.fits *.fit *.nef *.cr2 *.cr3 *.arw *.dng);;"
             "Archivos RAW (*.nef *.cr2 *.cr3 *.arw *.dng);;"
@@ -3598,11 +3657,25 @@ class DeveloperTab(QWidget):
         )
         if p:
             self.load_image_direct(p)
+            self.current_project_path = None
+            self._is_dirty = False
+            self._update_project_ui_status()
 
     def _on_canvas_files_dropped(self, paths: list):
         """Carga automáticamente la primera imagen arrastrada sobre el lienzo."""
         if paths:
-            self.load_image_direct(paths[0])
+            first_path = paths[0]
+            if first_path.lower().endswith((".devloom", ".loom")):
+                if not self._check_unsaved_changes():
+                    return
+                self.load_project(first_path)
+            else:
+                if not self._check_unsaved_changes():
+                    return
+                self.load_image_direct(first_path)
+                self.current_project_path = None
+                self._is_dirty = False
+                self._update_project_ui_status()
 
     def _process_starless_base(self, starless: Optional[np.ndarray], mask_3d: Optional[np.ndarray] = None, is_full_res: bool = True) -> Optional[np.ndarray]:
         """Aplica las mejoras lineales a la capa StarNet (Denoise, Claridad, Dehaze, Ondículas)."""
@@ -5908,6 +5981,8 @@ class DeveloperTab(QWidget):
 
         self.current_mask = None
         self.active_filepath = None
+        self.current_project_path: Optional[str] = None
+        self._is_dirty: bool = False
         self._cache_ground_ai = None
         self._cache_starless_ai = None
         self.gnd_ai_denoise_enabled = False
@@ -6144,6 +6219,7 @@ class DeveloperTab(QWidget):
                 self.undo_stack.pop(0)
             self.redo_stack.clear()
             self._last_committed_state = current
+            self._mark_dirty()
             self._update_undo_redo_buttons()
 
     def undo(self):
@@ -6219,6 +6295,7 @@ class DeveloperTab(QWidget):
                 self.log_message(f"↺ Deshacer aplicado ({len(self.undo_stack)} pasos restantes)")
         finally:
             self._is_undoing_or_redoing = False
+            self._mark_dirty()
             self._update_undo_redo_buttons()
 
     def redo(self):
@@ -6290,6 +6367,7 @@ class DeveloperTab(QWidget):
                 self.log_message(f"↻ Rehacer aplicado ({len(self.redo_stack)} pasos por rehacer)")
         finally:
             self._is_undoing_or_redoing = False
+            self._mark_dirty()
             self._update_undo_redo_buttons()
 
     def _restore_state(self, state: dict) -> None:
@@ -6594,3 +6672,247 @@ class DeveloperTab(QWidget):
         curr_preset = self.combo_presets.currentData(Qt.UserRole)
         curr_id = curr_preset.id if isinstance(curr_preset, DeveloperPreset) else None
         self._populate_presets_combo(select_preset_id=curr_id)
+
+    # =========================================================================
+    # GESTIÓN DE PROYECTOS Y SESIONES (.devloom)
+    # =========================================================================
+    def _mark_dirty(self):
+        """Marca el proyecto como modificado con cambios pendientes de guardar."""
+        if not self._is_dirty:
+            self._is_dirty = True
+            self._update_project_ui_status()
+
+    def _update_project_ui_status(self):
+        """Actualiza la etiqueta del proyecto y el indicador de cambios pendientes (*)."""
+        if not hasattr(self, 'lbl_project_title'):
+            return
+        name = os.path.basename(self.current_project_path) if self.current_project_path else "Sin guardar"
+        dirty_star = " *" if self._is_dirty else ""
+        self.lbl_project_title.setText(f"Proyecto: {name}{dirty_star}")
+        if self.current_project_path:
+            self.lbl_project_title.setToolTip(f"{self.current_project_path}{' (cambios no guardados)' if self._is_dirty else ''}")
+        else:
+            self.lbl_project_title.setToolTip("Proyecto no guardado")
+
+    def _check_unsaved_changes(self) -> bool:
+        """
+        Verifica si hay cambios no guardados en el proyecto.
+        Retorna True si es seguro proceder (guardó o descartó), o False si el usuario canceló.
+        """
+        if not self._is_dirty or self.image_32bit is None:
+            return True
+        proj_name = os.path.basename(self.current_project_path) if self.current_project_path else "Sin guardar"
+        reply = QMessageBox.question(
+            self,
+            "Cambios no guardados",
+            f"El proyecto '{proj_name}' tiene cambios sin guardar.\n\n¿Deseas guardarlos antes de continuar?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save
+        )
+        if reply == QMessageBox.Save:
+            return self.save_project()
+        elif reply == QMessageBox.Discard:
+            return True
+        else:
+            return False
+
+    def save_project(self) -> bool:
+        """Guarda el proyecto en el archivo actual (.devloom) o solicita ruta si es nuevo (Ctrl+S)."""
+        if self.image_32bit is None:
+            self.log_message("[AVISO] No hay ninguna imagen cargada para guardar como proyecto.")
+            return False
+
+        if self.current_project_path:
+            return self._do_save_project(self.current_project_path)
+        else:
+            return self.save_project_as_dialog()
+
+    def save_project_as_dialog(self) -> bool:
+        """Abre el diálogo para guardar el proyecto con un nuevo nombre (Ctrl+Shift+S)."""
+        if self.image_32bit is None:
+            self.log_message("[AVISO] No hay ninguna imagen cargada para guardar como proyecto.")
+            return False
+
+        cfg = load_config()
+        default_dir = cfg.get("developer_projects_dir") or cfg.get("stacked_dir", os.getcwd())
+        default_name = "mi_revelado.devloom"
+        if self.active_filepath:
+            base_stem = os.path.splitext(os.path.basename(self.active_filepath))[0]
+            default_name = f"{base_stem}.devloom"
+
+        init_path = os.path.join(default_dir, default_name)
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "Guardar Proyecto de Revelado",
+            init_path,
+            "Proyecto AstroLoom (*.devloom *.loom);;Todos los archivos (*.*)"
+        )
+        if not filepath:
+            return False
+
+        if not filepath.lower().endswith((".devloom", ".loom")):
+            filepath += ".devloom"
+
+        return self._do_save_project(filepath)
+
+    def _do_save_project(self, filepath: str) -> bool:
+        """Ejecuta la serialización y compresión del proyecto .devloom."""
+        try:
+            self.setCursor(Qt.WaitCursor)
+            self.log_message(f"Guardando proyecto: {os.path.basename(filepath)}...")
+
+            # Recolectar datos
+            state_dict = self._capture_state()
+            layers = self.mask_layers_widget.layers if hasattr(self, 'mask_layers_widget') else []
+            master_mask = self.current_mask
+
+            starnet_data = None
+            if getattr(self, 'image_starless', None) is not None or getattr(self, 'image_stars', None) is not None:
+                starnet_data = {
+                    "image_starless": getattr(self, 'image_starless', None),
+                    "image_stars": getattr(self, 'image_stars', None),
+                    "raw_linear_starless": getattr(self, 'raw_linear_starless', None),
+                }
+
+            from core.project_io import save_devloom_project
+            ok = save_devloom_project(
+                file_path=filepath,
+                developer_state=state_dict,
+                mask_layers=layers,
+                master_sky_mask=master_mask,
+                source_image_path=self.active_filepath,
+                starnet_data=starnet_data,
+            )
+
+            if ok:
+                self.current_project_path = os.path.abspath(filepath)
+                self._is_dirty = False
+                self._update_project_ui_status()
+                self.log_message(f"✓ Proyecto guardado correctamente: {os.path.basename(filepath)}")
+                return True
+            else:
+                self.log_message("[ERROR] No se pudo guardar el archivo de proyecto.")
+                return False
+        except Exception as e:
+            self.log_message(f"[ERROR] Excepción al guardar proyecto: {e}")
+            QMessageBox.critical(self, "Error al guardar", f"Fallo al guardar el proyecto:\n{e}")
+            return False
+        finally:
+            self.unsetCursor()
+
+    def open_project_dialog(self):
+        """Abre un diálogo para seleccionar y cargar un proyecto .devloom (Ctrl+O)."""
+        if not self._check_unsaved_changes():
+            return
+
+        cfg = load_config()
+        default_dir = cfg.get("developer_projects_dir") or cfg.get("stacked_dir", os.getcwd())
+
+        filepath, _ = QFileDialog.getOpenFileName(
+            self,
+            "Abrir Proyecto de Revelado",
+            default_dir,
+            "Proyecto AstroLoom (*.devloom *.loom);;Todos los archivos (*.*)"
+        )
+        if filepath:
+            self.load_project(filepath)
+
+    def load_project(self, filepath: str) -> bool:
+        """Carga una sesión completa de desarrollo desde un archivo .devloom."""
+        from core.project_io import load_devloom_project, resolve_source_image_path
+        try:
+            self.setCursor(Qt.WaitCursor)
+            self.log_message(f"Abriendo proyecto: {os.path.basename(filepath)}...")
+
+            proj_data = load_devloom_project(filepath)
+            source_info = proj_data.get("source_image", {})
+            img_filename = source_info.get("filename") or "desconocida"
+
+            # 1. Resolver ruta de la imagen base
+            resolved_img_path = resolve_source_image_path(source_info, filepath)
+            if not resolved_img_path:
+                self.unsetCursor()
+                reply = QMessageBox.question(
+                    self,
+                    "Imagen base no encontrada",
+                    f"No se pudo encontrar la imagen base vinculada al proyecto:\n\n"
+                    f"  ▶ Archivo: \"{img_filename}\"\n\n"
+                    f"¿Deseas buscarla manualmente en tu equipo?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes
+                )
+                if reply == QMessageBox.Yes:
+                    filtros = (
+                        "Imágenes Astronómicas y RAW (*.tif *.tiff *.fits *.fit *.nef *.cr2 *.cr3 *.arw *.dng);;"
+                        "Archivos TIFF (*.tif *.tiff);;Archivos FITS (*.fits *.fit);;Todos los archivos (*.*)"
+                    )
+                    found_path, _ = QFileDialog.getOpenFileName(
+                        self,
+                        f"Localizar imagen base: {img_filename}",
+                        os.path.dirname(filepath),
+                        filtros
+                    )
+                    if found_path:
+                        resolved_img_path = found_path
+                    else:
+                        self.log_message("[AVISO] Carga de proyecto cancelada: no se seleccionó ninguna imagen.")
+                        return False
+                else:
+                    self.log_message(f"[AVISO] Carga de proyecto cancelada: imagen '{img_filename}' no disponible.")
+                    return False
+                self.setCursor(Qt.WaitCursor)
+
+            # 2. Cargar imagen base para inicializar canvas, ICC y proxies
+            master_mask = proj_data.get("master_sky_mask")
+            self.load_image_direct(resolved_img_path, mask=master_mask)
+
+            # 3. Restaurar capas StarNet si estaban empaquetadas
+            starnet_dict = proj_data.get("starnet", {})
+            sl_img = starnet_dict.get("image_starless")
+            st_img = starnet_dict.get("image_stars")
+            raw_sl_img = starnet_dict.get("raw_linear_starless")
+
+            if sl_img is not None and st_img is not None:
+                self.image_starless = np.ascontiguousarray(sl_img, dtype=np.float32)
+                self.image_stars = np.ascontiguousarray(st_img, dtype=np.float32)
+                self.raw_linear_starless = np.ascontiguousarray(raw_sl_img, dtype=np.float32) if raw_sl_img is not None else self.image_starless.copy()
+                self.starless_is_stretched = proj_data.get("starless_is_stretched", False)
+                self._set_starnet_tools_enabled(True)
+                self.combo_layer.setEnabled(True)
+                self.slider_stars.setEnabled(True)
+                self._cache_starless_ai = None
+                self._generate_preview_proxy()
+
+            # 4. Restaurar capas de ajuste y máscaras locales
+            raw_layers = proj_data.get("mask_layers", [])
+            dev_state = proj_data.get("developer_state", {})
+            dev_state["mask_layers"] = raw_layers
+
+            # 5. Restaurar estado de controles y paneles
+            if dev_state:
+                self._restore_state(dev_state)
+
+            # 6. Resetear historial de Deshacer/Rehacer al estado recién cargado
+            self.undo_stack.clear()
+            self.redo_stack.clear()
+            self._last_committed_state = self._capture_state()
+            self._update_undo_redo_buttons()
+
+            # 7. Actualizar estado de proyecto
+            self.current_project_path = os.path.abspath(filepath)
+            self._is_dirty = False
+            self._update_project_ui_status()
+
+            # 8. Forzar renderizado y refresco inmediato
+            self._invalidate_pipeline_caches()
+            self.update_stretch_preview(immediate=True)
+
+            self.log_message(f"✓ Proyecto cargado con éxito: {os.path.basename(filepath)}")
+            return True
+
+        except Exception as e:
+            self.log_message(f"[ERROR] Error al cargar proyecto: {e}")
+            QMessageBox.critical(self, "Error al cargar proyecto", f"No se pudo cargar el archivo:\n{e}")
+            return False
+        finally:
+            self.unsetCursor()
