@@ -645,6 +645,8 @@ def apply_all_mask_layers(
 
         elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
             # Capa ⭐ Estrellas
+            layer.temp = 0.0
+            layer.tint = 0.0
             if stars_image is not None and layer.opacity > 1e-4:
                 st = stars_image.copy()
                 if st.shape[:2] != (img_h, img_w):
@@ -666,11 +668,12 @@ def apply_all_mask_layers(
                     else:
                         st = cv2.resize(st, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
                 
-                # Ajustes cromáticos propios de la capa de estrellas
-                has_adj = (abs(layer.temp) > 1e-4 or abs(layer.tint) > 1e-4 or 
-                           abs(layer.exposure) > 1e-3 or abs(layer.contrast) > 1e-3 or 
+                # Ajustes cromáticos propios de la capa de estrellas (Temp y Tinte ignorados para preservar física espectral B-V)
+                has_adj = (abs(layer.exposure) > 1e-3 or abs(layer.contrast) > 1e-3 or 
                            abs(layer.saturation - 1.0) > 1e-3 or layer.has_curve())
                 if has_adj:
+                    layer.temp = 0.0
+                    layer.tint = 0.0
                     st = apply_local_adjustments_to_image(st, np.ones((img_h, img_w), dtype=np.float32), layer, fast_draft=fast_draft)
 
                 # Mezcla Screen (Trama estilo Photoshop): 1 - (1 - canvas) * (1 - st * opacity)

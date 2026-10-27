@@ -291,6 +291,8 @@ class DeveloperTab(QWidget):
         self._cache_starless_pre_img: Optional[np.ndarray] = None
 
         # Cachés por hitos del pipeline (Milestone Caching)
+        self._cache_ms_pre_lp_key: Optional[tuple] = None
+        self._cache_ms_pre_lp_img: Optional[np.ndarray] = None
         self._cache_ms_linear_key: Optional[tuple] = None
         self._cache_ms_linear_img: Optional[np.ndarray] = None
         self._cache_ms_linear_u16: Optional[np.ndarray] = None
@@ -3467,6 +3469,8 @@ class DeveloperTab(QWidget):
         self._cache_starless_key = None
         self._cache_starless_linear = None
         self._cache_starless_pre_key = None
+        self._cache_ms_pre_lp_key = None
+        self._cache_ms_pre_lp_img = None
         self._cache_ms_linear_key = None
         self._cache_ms_linear_img = None
         self._cache_ms_linear_u16 = None
@@ -3968,8 +3972,8 @@ class DeveloperTab(QWidget):
 
         curve_state = tuple((m, tuple(pts)) for m, pts in sorted(self.curve_widget.get_state().items())) if hasattr(self, 'curve_widget') else ()
 
-        # Hito 0: Parámetros Lineales (Balance de blancos, Saturación, Polución Lumínica, Suelo)
-        key_linear = (
+        # Hito 0a: Parámetros Pre-Polución (Balance de blancos, Saturación, Vibrance)
+        key_pre_lp = (
             id(target_img),
             id(precomputed_mask),
             is_full_res,
@@ -3980,6 +3984,11 @@ class DeveloperTab(QWidget):
             round(float(self.sat_sky_val), 4),
             round(float(self.sat_gnd_val), 4),
             round(float(self.vibrance_val), 4),
+        )
+
+        # Hito 0b: Parámetros Lineales (Polución Lumínica, Suelo, Denoise Lineal)
+        key_linear = (
+            key_pre_lp,
             round(float(self.lp_reduction), 4),
             round(float(self.lp_center_x), 4),
             round(float(self.lp_center_y), 4),
@@ -4083,6 +4092,7 @@ class DeveloperTab(QWidget):
         pre_graded = self._cache_ms_graded_img if (is_preview and self._cache_ms_graded_key == key_graded and pre_spatial is None) else None
         pre_stretched = self._cache_ms_stretch_img if (is_preview and self._cache_ms_stretch_key == key_stretch and pre_spatial is None and pre_graded is None) else None
         pre_linear = self._cache_ms_linear_img if (is_preview and self._cache_ms_linear_key == key_linear and pre_spatial is None and pre_graded is None and pre_stretched is None) else None
+        pre_pre_lp = self._cache_ms_pre_lp_img if (is_preview and self._cache_ms_pre_lp_key == key_pre_lp and pre_spatial is None and pre_graded is None and pre_stretched is None and pre_linear is None) else None
         pre_stars = self._cache_ms_stars_img if (is_preview and getattr(self, '_cache_ms_stars_key', None) == key_stars and self._cache_ms_stars_img is not None) else None
 
         # Build DeveloperState snapshot
@@ -4107,7 +4117,7 @@ class DeveloperTab(QWidget):
         is_scrubbing = getattr(self, '_is_scrubbing_heavy_slider', False)
 
         cached_gnd_ai = self._cache_ground_ai if getattr(self, 'gnd_ai_denoise_enabled', False) else None
-        final_img, out_lin, out_str, out_grd, out_spt, out_stars = apply_developer_pipeline(
+        final_img, out_pre_lp, out_lin, out_str, out_grd, out_spt, out_stars = apply_developer_pipeline(
             target_img=target_img,
             state=state,
             cached_ground_ai=cached_gnd_ai,
@@ -4121,6 +4131,7 @@ class DeveloperTab(QWidget):
             is_scrubbing=is_scrubbing,
             crop_rect=crop_rect,
             full_shape=full_shape,
+            precomputed_pre_lp_base=pre_pre_lp,
             precomputed_linear_base=pre_linear,
             precomputed_stretched_base=pre_stretched,
             precomputed_graded_base=pre_graded,
@@ -4131,6 +4142,8 @@ class DeveloperTab(QWidget):
         )
 
         if is_preview:
+            self._cache_ms_pre_lp_key = key_pre_lp
+            self._cache_ms_pre_lp_img = out_pre_lp
             self._cache_ms_linear_key = key_linear
             self._cache_ms_linear_img = out_lin
             if out_lin is not None and not is_zoomed and not is_scrubbing:
@@ -6232,6 +6245,38 @@ class DeveloperTab(QWidget):
         for ctrl in controls:
             if ctrl is not None:
                 ctrl.setEnabled(enabled)
+
+        # Bloqueo de controles de balance de blancos, saturación y estirado al desacoplar capas
+        if hasattr(self, "panel_color_wb") and self.panel_color_wb is not None:
+            if hasattr(self.panel_color_wb, "sec_wb"):
+                self.panel_color_wb.sec_wb.content_area.setEnabled(not enabled)
+                self.panel_color_wb.sec_wb.btn_reset.setEnabled(not enabled)
+                if enabled:
+                    self.panel_color_wb.sec_wb.set_status_badge("🔒 Integrado", "#90a4ae")
+                else:
+                    self.panel_color_wb.sec_wb.set_status_badge("")
+            if hasattr(self.panel_color_wb, "sec_color"):
+                self.panel_color_wb.sec_color.content_area.setEnabled(not enabled)
+                self.panel_color_wb.sec_color.btn_reset.setEnabled(not enabled)
+                if enabled:
+                    self.panel_color_wb.sec_color.set_status_badge("🔒 En capas", "#90a4ae")
+                else:
+                    self.panel_color_wb.sec_color.set_status_badge("")
+
+        if hasattr(self, "panel_stretch") and self.panel_stretch is not None:
+            if hasattr(self.panel_stretch, "sec_stretch"):
+                self.panel_stretch.sec_stretch.content_area.setEnabled(not enabled)
+                self.panel_stretch.sec_stretch.btn_reset.setEnabled(not enabled)
+                if enabled:
+                    self.panel_stretch.sec_stretch.set_status_badge("🔒 Base fijada", "#90a4ae")
+                else:
+                    self.panel_stretch.sec_stretch.set_status_badge("")
+
+        # Contaminación lumínica: permanece siempre 100% interactiva
+        if hasattr(self, "panel_light_pollution") and self.panel_light_pollution is not None:
+            if hasattr(self.panel_light_pollution, "sec_lp"):
+                self.panel_light_pollution.sec_lp.content_area.setEnabled(True)
+                self.panel_light_pollution.sec_lp.btn_reset.setEnabled(True)
 
     # -------------------------------------------------------------
     # GESTOR DE HISTORIAL DE DESHACER / REHACER (UNDO / REDO)

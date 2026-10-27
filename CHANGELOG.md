@@ -5,6 +5,26 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-10-27
+
+### Optimizado
+* **Arquitectura de Caché Lineal Pre-Polución Lumínica en el Pipeline:**
+  - Desacoplamiento del Balance de Blancos y la Saturación/Vibranza global mediante un búfer de hito lineal intermedio (`precomputed_pre_lp_base` / `_cache_ms_pre_lp_img`).
+  - Al separar con StarNet++, la base previa a la polución queda congelada en memoria: ajustar el deslizador de Contaminación Lumínica omite el 100% de los cálculos de WB y conversiones de espacio de color RGB↔HSV, evaluando la cúpula analítica 2D directamente sobre el recorte 1:1 o vista previa en menos de 20 ms.
+  - Si la polución lumínica no se modifica, la etapa lineal completa cuesta 0 ms mediante punteros en caché (`_cache_ms_linear_img`).
+* **Bloqueo Selectivo y Coherencia de Controles al Desacoplar con StarNet++:**
+  - Al generar las capas independientes (*Fondo Nebular* y *Estrellas*), los paneles globales redundantes de la izquierda se bloquean automáticamente con insignias visuales de estado:
+    - Balance de Blancos -> `🔒 Integrado`
+    - Color y Saturación global -> `🔒 En capas`
+    - Estirado Tonal global (MTF / GHS) -> `🔒 Base fijada`
+  - Previene incoherencias cromáticas (donde el WB global afectaba solo al fondo y desfasaba las estrellas) y elimina recálculos redundantes en cada redibujado de Zoom 1:1.
+  - El panel de **Reducción de Contaminación Lumínica** permanece 100% libre e interactivo para calibrar el velo de fondo sin afectar al tren estelar.
+  - Al reiniciar o limpiar StarNet, todos los paneles se rehabilitan instantáneamente de forma no destructiva.
+* **Preservación de Física Espectral Estelar e Ignorado de Balance de Blancos en Capa de Estrellas:**
+  - Ocultación contextual de los controles de Temperatura y Tinte en el Gestor de Capas cuando la capa activa es *"⭐ Capa de Estrellas"*.
+  - Fijación forzada a neutro (`layer.temp = 0.0`, `layer.tint = 0.0`) que protege el índice de color B-V intrínseco de los astros (estrellas azules calientes, amarillas y enanas rojas) frente a dominantes arbitrarias.
+  - Al estar neutralizados, el motor multicapa evalúa `has_adj = False` y se salta por completo la función `apply_local_adjustments_to_image` sobre la capa de estrellas (omitiendo copias de memoria, conversiones HSV y el bucle JIT de Numba), con una ganancia directa de 20-35 ms por fotograma en Zoom 1:1 y vistas completas.
+
 ## [0.11.1] - 2026-10-24
 
 ### Añadido

@@ -138,6 +138,7 @@ def apply_developer_pipeline(
     is_scrubbing: bool = False,
     crop_rect: Optional[Tuple[int, int, int, int]] = None,
     full_shape: Optional[Tuple[int, int]] = None,
+    precomputed_pre_lp_base: Optional[np.ndarray] = None,
     precomputed_linear_base: Optional[np.ndarray] = None,
     precomputed_stretched_base: Optional[np.ndarray] = None,
     precomputed_stretched_stars: Optional[np.ndarray] = None,
@@ -159,6 +160,7 @@ def apply_developer_pipeline(
 
     is_full_res = not is_preview
     st_stretched = precomputed_stretched_stars
+    milestone_pre_lp = precomputed_pre_lp_base
     milestone_linear = precomputed_linear_base
     milestone_stretched = precomputed_stretched_base
     milestone_graded = precomputed_graded_base
@@ -175,37 +177,43 @@ def apply_developer_pipeline(
             img = precomputed_linear_base
             milestone_linear = precomputed_linear_base
         else:
-            # 1. Balance de blancos
-            temp_val = state.temp_val / 1000.0
-            tint_val = state.tint_val / 1000.0
-            if abs(temp_val) > 1e-5 or abs(tint_val) > 1e-5:
-                img = apply_white_balance(target_img, temp_val, tint_val)
+            if precomputed_pre_lp_base is not None:
+                img = precomputed_pre_lp_base
+                milestone_pre_lp = precomputed_pre_lp_base
             else:
-                img = target_img.copy()
-
-            # 2. Saturación diferencial cielo / suelo
-            sat_sky_val = state.sat_sky_val / 100.0
-            sat_gnd_val = state.sat_gnd_val / 100.0
-            if sat_sky_val != 1.0 or sat_gnd_val != 1.0:
-                hsv = cv2.cvtColor(np.clip(img, 0.0, 1.0), cv2.COLOR_RGB2HSV)
-                if precomputed_mask is None or sat_sky_val == sat_gnd_val:
-                    hsv[..., 1] = np.clip(hsv[..., 1] * sat_sky_val, 0.0, 1.0)
-                    img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+                # 1. Balance de blancos
+                temp_val = state.temp_val / 1000.0
+                tint_val = state.tint_val / 1000.0
+                if abs(temp_val) > 1e-5 or abs(tint_val) > 1e-5:
+                    img = apply_white_balance(target_img, temp_val, tint_val)
                 else:
-                    hsv_sky = hsv.copy()
-                    hsv_sky[..., 1] = np.clip(hsv_sky[..., 1] * sat_sky_val, 0.0, 1.0)
-                    rgb_sky = cv2.cvtColor(hsv_sky, cv2.COLOR_HSV2RGB)
+                    img = target_img.copy()
 
-                    hsv_gnd = hsv.copy()
-                    hsv_gnd[..., 1] = np.clip(hsv_gnd[..., 1] * sat_gnd_val, 0.0, 1.0)
-                    rgb_gnd = cv2.cvtColor(hsv_gnd, cv2.COLOR_HSV2RGB)
+                # 2. Saturación diferencial cielo / suelo
+                sat_sky_val = state.sat_sky_val / 100.0
+                sat_gnd_val = state.sat_gnd_val / 100.0
+                if sat_sky_val != 1.0 or sat_gnd_val != 1.0:
+                    hsv = cv2.cvtColor(np.clip(img, 0.0, 1.0), cv2.COLOR_RGB2HSV)
+                    if precomputed_mask is None or sat_sky_val == sat_gnd_val:
+                        hsv[..., 1] = np.clip(hsv[..., 1] * sat_sky_val, 0.0, 1.0)
+                        img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+                    else:
+                        hsv_sky = hsv.copy()
+                        hsv_sky[..., 1] = np.clip(hsv_sky[..., 1] * sat_sky_val, 0.0, 1.0)
+                        rgb_sky = cv2.cvtColor(hsv_sky, cv2.COLOR_HSV2RGB)
 
-                    img = (rgb_sky * precomputed_mask) + (rgb_gnd * (1.0 - precomputed_mask))
+                        hsv_gnd = hsv.copy()
+                        hsv_gnd[..., 1] = np.clip(hsv_gnd[..., 1] * sat_gnd_val, 0.0, 1.0)
+                        rgb_gnd = cv2.cvtColor(hsv_gnd, cv2.COLOR_HSV2RGB)
 
-            # 3. Intensidad / Vibrance
-            vibrance_val = state.vibrance_val / 100.0
-            if abs(vibrance_val) > 1e-4:
-                img = adjust_vibrance(img, vibrance_val)
+                        img = (rgb_sky * precomputed_mask) + (rgb_gnd * (1.0 - precomputed_mask))
+
+                # 3. Intensidad / Vibrance
+                vibrance_val = state.vibrance_val / 100.0
+                if abs(vibrance_val) > 1e-4:
+                    img = adjust_vibrance(img, vibrance_val)
+
+                milestone_pre_lp = img
 
             # 4. Reducción Paramétrica 2D de Cúpula de Contaminación Lumínica
             lp_strength = state.lp_val / 100.0
@@ -672,7 +680,7 @@ def apply_developer_pipeline(
 
     final_result = np.ascontiguousarray(stretched, dtype=np.float32)
     if return_milestones:
-        return final_result, milestone_linear, milestone_stretched, milestone_graded, milestone_spatial, st_stretched
+        return final_result, milestone_pre_lp, milestone_linear, milestone_stretched, milestone_graded, milestone_spatial, st_stretched
     if return_intermediate:
         return final_result, pre_layers_base, pre_layers_stars
     return final_result

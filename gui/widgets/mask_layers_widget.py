@@ -2152,6 +2152,16 @@ class MaskLayersWidget(QWidget):
             self.slider_adj_sat.setValue(sat_pct)
             self.lbl_adj_sat.setText(f"{layer.saturation:.2f}x")
 
+            # Ocultar Temperatura y Tinte en Capa de Estrellas para preservar color espectral intrínseco
+            if hasattr(self, 'row_adj_temp'):
+                self.row_adj_temp.setVisible(not is_stars)
+            if hasattr(self, 'row_adj_tint'):
+                self.row_adj_tint.setVisible(not is_stars)
+
+            if is_stars and layer:
+                layer.temp = 0.0
+                layer.tint = 0.0
+
             # Temperatura y Tinte WB (-1.0000 a +1.0000 con 4 decimales)
             self.spin_adj_temp.setValue(layer.temp)
             self.slider_adj_temp.setValue(int(round(layer.temp * 10000.0)))

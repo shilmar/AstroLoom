@@ -189,6 +189,11 @@ Esta sección permite separar la fotografía en dos realidades independientes: e
   * Se crean automáticamente dos capas independientes en el Gestor de Capas.
 * **Presencia de Estrellas (%):**
   * Al mover este control al 50-70%, reduces el tamaño y densidad de las estrellas para que el polvo de la Vía Láctea sea el protagonista sin verse tapado por un millón de puntos blancos.
+* **Bloqueo Inteligente de Controles Globales (Coherencia y Rendimiento):**
+  * Una vez separadas las capas, los paneles de la izquierda de **Balance de Blancos**, **Color / Saturación** y **Estirado Tonal (MTF/GHS)** se bloquean automáticamente con insignias (`🔒 Integrado`, `🔒 En capas`, `🔒 Base fijada`). Esto previene desincronizaciones cromáticas entre el cielo y las estrellas y ahorra cálculos redundantes en cada redibujado.
+  * **La Contaminación Lumínica permanece 100% libre:** Puedes seguir ajustando la cúpula de polución del horizonte en cualquier momento; el motor utiliza una caché lineal intermedia para responder en milisegundos sin recalcular el balance de color.
+* **Protección Espectral en la Capa de Estrellas:**
+  * En la *"⭐ Capa de Estrellas"*, los deslizadores de Temperatura y Tinte se ocultan para proteger la física cromática natural de las estrellas (índice B-V). La saturación, intensidad y filtro difusor permanecen totalmente configurables.
 
 #### 🚀 Estirado Adaptativo RGB (Starless)
 * **Botón "Estirado Adaptativo RGB":** Ubicado directamente bajo la selección de vista del panel StarNet y accesible también desde los controles de la tarjeta de capa *Fondo Nebular (Starless)*.
