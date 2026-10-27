@@ -599,6 +599,8 @@ class StackingWorker(QThread):
             self.status_changed.emit(f"¡Apilado completado exitosamente en {int(m)}m {s:.1f}s!")
             self.finished_success.emit(output_path)
 
+        except InterruptedError:
+            self.cancelled.emit()
         except Exception as exc:
             if not self._is_cancelled:
                 import traceback
@@ -645,13 +647,16 @@ class StarNetWorker(QThread):
                 sky_mask=self.sky_mask,
                 stride=self.stride,
                 starnet_exe=self.custom_exe,
-                log_callback=self.status_changed.emit
+                log_callback=self.status_changed.emit,
+                cancel_check=lambda: self._is_cancelled
             )
             if self._is_cancelled:
                 self.cancelled.emit()
                 return
 
             self.finished_success.emit(starless, stars)
+        except InterruptedError:
+            self.cancelled.emit()
         except Exception as exc:
             if not self._is_cancelled:
                 self.error_occurred.emit(str(exc))

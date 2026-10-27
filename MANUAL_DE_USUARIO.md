@@ -186,6 +186,7 @@ Esta sección permite separar la fotografía en dos realidades independientes: e
 
 * **Botón "Desacoplar Estrellas (StarNet++)":**
   * Ejecuta una red neuronal de inteligencia artificial que borra limpiamente todas las estrellas de la imagen dejando únicamente el polvo galáctico, las nebulosas y el cielo.
+  * **Nuevo Motor Nativo ONNX con Aceleración GPU DirectML (v0.11.3):** Ya no necesitas instalar manualmente ni configurar rutas de binarios CLI externos (`starnet2.exe`). AstroLoom ejecuta el modelo `starnet2.onnx` directamente en tu tarjeta gráfica (DirectML) o CPU. Si el archivo de pesos (~131 MB) no está presente, la aplicación ofrece descargarlo e instalarlo de forma automática en un clic con barra de progreso interactiva. Si deseas usar un binario `starnet2.exe` personalizado existente, puedes seguir vinculándolo en la pestaña de Ajustes.
   * Se crean automáticamente dos capas independientes en el Gestor de Capas.
 * **Presencia de Estrellas (%):**
   * Al mover este control al 50-70%, reduces el tamaño y densidad de las estrellas para que el polvo de la Vía Láctea sea el protagonista sin verse tapado por un millón de puntos blancos.

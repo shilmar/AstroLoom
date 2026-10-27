@@ -530,7 +530,7 @@ class SettingsTab(QWidget):
         row_author_title.addWidget(lbl_work_title)
         row_author_title.addStretch()
 
-        self.lbl_engine_badge = QLabel("AstroLoom v0.11.2")
+        self.lbl_engine_badge = QLabel("AstroLoom v0.11.3")
         self.lbl_engine_badge.setStyleSheet("color: #80d8ff; font-size: 11px; font-weight: bold;")
         row_author_title.addWidget(self.lbl_engine_badge)
 
@@ -615,16 +615,21 @@ class SettingsTab(QWidget):
         """)
 
     def _update_starnet_status(self) -> None:
-        """Actualiza el indicador visual de disponibilidad del CLI de StarNet++."""
+        """Actualiza el indicador visual de disponibilidad de StarNet (ONNX nativo o CLI)."""
+        from core.starnet_onnx import is_starnet_onnx_available, get_starnet_model_path
         path = self.txt_starnet.text().strip()
-        if path and os.path.isfile(path):
-            self.lbl_sn_status.setText("● StarNet++ detectado y listo para aceleración por IA")
+        if is_starnet_onnx_available():
+            onnx_path = get_starnet_model_path()
+            self.lbl_sn_status.setText(f"● StarNet v2 ONNX activo con aceleración GPU DirectML ({os.path.basename(onnx_path)})")
+            self.lbl_sn_status.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: 600;")
+        elif path and os.path.isfile(path):
+            self.lbl_sn_status.setText("● StarNet++ CLI detectado y listo")
             self.lbl_sn_status.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: 600;")
         elif path:
-            self.lbl_sn_status.setText("● El archivo especificado no existe o la ruta no es accesible")
+            self.lbl_sn_status.setText("● El archivo CLI especificado no existe o la ruta no es accesible")
             self.lbl_sn_status.setStyleSheet("color: #fbbf24; font-size: 11px; font-weight: 600;")
         else:
-            self.lbl_sn_status.setText("● Sin configurar (opcional para el desacoplo de estrellas en el Revelador)")
+            self.lbl_sn_status.setText("● Modelo no detectado (se descargará automáticamente al usar la herramienta en el Revelador)")
             self.lbl_sn_status.setStyleSheet("color: #94a3b8; font-size: 11px;")
 
     def _browse_directory(self, target_line_edit: QLineEdit, dialog_title: str) -> None:

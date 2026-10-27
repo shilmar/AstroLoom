@@ -45,7 +45,7 @@
   - Redimensionador ergonómico con tirador de arrastre libre (`LayerListResizeHandle`) y cálculo dinámico de altura que muestra todas las capas sin barras de scroll internas ni colapso de espacio.
 - **Curvas Tonales Dedicadas por Capa:** Curva spline interactiva de 32 bits integrada de forma independiente en cada capa (Estrellas, Starless, Suelo, Base), con histograma de fondo armonizado al rango tonal post-estirado y filtrado por máscara espacial.
 - **Deconvolución Óptica Regularizada (Richardson-Lucy):** Modelado analítico de PSF (Moffat 2D y Gaussiano), estimador empírico automático subpíxel desde estrellas no saturadas, deringing perimetral y amortiguación Bayesiana de ruido de fondo.
-- **Separación de Estrellas con StarNet++ y Arquitectura de Capas Desacopladas:** Extracción de capas Starless y Stars-only en espacio lineal. Bloqueo selectivo de controles globales redundantes (Balance de Blancos, Saturación y Estirado) al desacoplar capas para prevenir recálculos y desincronizaciones de color, manteniendo la reducción de contaminación lumínica 100% libre e interactiva con aceleración por caché pre-LP (<20 ms en Zoom 1:1).
+- **Separación de Estrellas con StarNet++ (Motor Nativo ONNX DirectML) y Capas Desacopladas:** Inferencia nativa en GPU mediante DirectML y descarga automática asistida de pesos (`starnet2.onnx`), eliminando la necesidad de binarios CLI externos y archivos temporales en disco. Extracción de capas Starless y Stars-only en espacio lineal con ventana Hann 2D y ciclo MTF por canal. Bloqueo selectivo de controles globales redundantes (Balance de Blancos, Saturación y Estirado) al desacoplar capas para prevenir recálculos y desincronizaciones de color, manteniendo la reducción de contaminación lumínica 100% libre e interactiva con aceleración por caché pre-LP (<20 ms en Zoom 1:1).
 - **Preservación Espectral Estelar (Física B-V):** Protección del color espectral intrínseco de las estrellas mediante bypass de temperatura y tinte en la Capa de Estrellas, omitiendo conversiones de espacio de color y acelerando drásticamente el compositor multicapa.
 - **Filtro Difusor Digital y Realce de Constelaciones (Star Mist Filter):** Resplandor etéreo con recuperación de color espectral de estrellas prominentes y protección de estrellas débiles.
 - **Estirado Hiperbólico Generalizado (GHS):** Control con punto de simetría (SP), factor de estirado (D) y protección de altas luces (HP) para datos lineales.
@@ -349,58 +349,7 @@ python run_app.py
 * Pulsa **💾 Guardar Panorámica (TIFF 16/32-bit)** para archivar, o pulsa **➡️ Enviar Panorámica al Revelador / Editor** para aplicar curvas tonales, reducción de ruido o realce de gas y nebulosas.
 
 ## Hoja de Ruta
-* [x] Apilado diferencial cielo/suelo con alineación estelar por homografía.
-* [x] Rechazo estadístico Kappa-Sigma (MAD) libre de trazas de satélites y aviones.
-* [x] Pipeline completo de calibración con Darks, Flats y Bias.
-* [x] Conservación íntegra de resolución nativa mediante BORDER_REFLECT.
-* [x] Gestión de proyectos y sesiones en disco (.mwstack).
-* [x] Segmentación asistida GrabCut y zoom nativo 1:1.
-* [x] Descomposición y realce multiescala mediante ondículas À Trous.
-* [x] Integración de StarNet++ v2 y extracción analítica de gradientes de fondo.
-* [x] Rutina específica de apilado y alineación para eclipses solares y lunares (Módulo Eclipses con NRGF continuo y detección subpíxel).
-* [x] Módulo dedicado de Trazas de Estrellas (Startrails) con streaming O(1), efecto cometa, suelo limpio y supresión automática de satélites/aviones.
-* [x] Relleno continuo de saltos entre tomas (Gap Filling) en Startrails.
-* [x] Exportación de perfiles de color ICC embebidos en TIFF (sRGB / AdobeRGB / ProPhoto).
-* [x] Generación y exportación de secuencia acumulativa de fotogramas para vídeo Time-Lapse.
-* [x] Soporte universal de Arrastrar y Soltar (Drag & Drop) en listas de archivos y lienzos interactivos.
-* [x] Pipeta de Balance de Blancos (Eyedropper) interactiva con neutralización analítica exacta.
-* [x] Lupa de Inspección Flotante (Floating Magnifier) con zoom dinámico de rueda de ratón.
-* [x] Curvas Selectivas de Color (Hue vs Sat y Luma vs Sat) con espectro arcoíris continuo.
-* [x] Diseñador de secuencia y collage de eclipses con cribado de trepidación, cálculo de % de ocultación y exportación PSD nativo por capas (16-bit).
-* [x] Indicador de progreso y estado visual explícito en la ingesta masiva de archivos ("Cargando ficheros..." -> "Carga finalizada") en el módulo de eclipses y collage.
-* [x] Navegación interactiva con Zoom y Paneo en el visor de previsualización del Diseñador de Collage.
-* [x] Detección y recomendación automática de fenómenos singulares de contacto: Perlas de Baily y Anillo de Diamante (Diamond Ring).
-* [x] Margen y radio de recorte adaptativo / configurable para evitar cortar rayos solares, destellos del anillo de diamante y filamentos de la corona (o máscara de capa editable no destructiva en PSD).
-* [x] Nueva modalidad de maquetación: Cinta Horizontal con escala romboidal/progresiva (`<>`) con el centro prominente y extremos compactos.
-* [x] Indicadores numéricos de valor (etiquetas en tiempo real: px / %) y tooltips explicativos en los controles deslizantes de Espaciado y Escala de Totalidad.
-* [x] Capa dedicada de marcas horarias EXIF y textos en la exportación de archivos PSD de Photoshop.
-* [x] Guardado y recuperación instantánea de sesiones de collage de eclipses (.ecollage) con metadatos de análisis, calidad y selección de fases persistente.
-* [x] Aceleración multiproceso/multihilo en el cribado masivo del collage de eclipses con selector configurable de rendimiento (Velocidad half-size RAW vs Máxima resolución nativa).
-* [x] Aceleración multihilo (ThreadPoolExecutor) en la detección de limbo en lote y precarga HDR en la pestaña de Eclipses (manteniendo resolución nativa 1:1 estricta sin downscaling para máxima precisión subpíxel).
-* [x] Módulo de composición panorámica para mosaicos nocturnos (Nightscape Panorama Stitcher).
-* [x] Deshacer / Rehacer (Undo / Redo) paramétrico de 50 pasos en el Revelador con botones dedicados y atajos de teclado.
-* [x] Conversión cromática matemática exacta (adaptación Bradford D65/D50 y aceleración LUT) en exportación con perfiles ICC (sRGB, Adobe RGB, ProPhoto RGB).
-* [x] Auto-reparación y robustez en arranque ante directorios inexistentes con plantilla base config.default.json.
-* [x] Herramienta interactiva de Recorte (Crop) en el Revelador / Editor con encuadre libre y proporciones fijas (1:1, 16:9, 4:3, etc.), nivelación y guías de composición.
-* [x] Ampliación del rango de ajuste de Balance de Blancos (Temperatura y Tinte a ±1.000) con cajas de entrada numérica directa en el Revelador.
-* [x] Rediseño y Unificación Visual Global (Design System `gui/theme.py`): Paleta oscura unificada (Cosmic Dark Pro), botones y tipografía homogénea, estandarización de controles y barras de herramientas comunes entre todos los módulos.
-* [x] Barra de Estado Interactiva y Monitor de Hardware en Tiempo Real: Indicador permanente del motor y monitor dinámico de memoria RAM del sistema con lectura porcentual y en GB (psutil).
-* [x] Sistema de Preajustes (Presets / Recetas) en el Revelador: Guardado, importación y aplicación en un clic de ajustes de procesado (.astropreset) con protección del estirado nativo.
-* [x] Rediseño del Revelador con Acordeón Plegable Inteligente (9 secciones colapsables e interactivas).
-* [x] Motor de Internacionalización (i18n) Multilingüe en tiempo real con soporte modular de diccionarios (Español / Inglés).
-* [x] Gestor Avanzado de Capas y Máscaras de Ajuste Local estilo Photoshop / Lightroom: Capas especiales (Fondo Base, Fondo Starless, Estrellas, Suelo), orden natural de pila (bottom-up), controles contextuales dinámicos, identidad cromática por capa y carga directa de máscaras en barra horizontal.
-* [x] Realce Espectral de Estrellas y Filtro Difusor Digital (Enhance Star Light / Constellation Glow).
-* [x] Estirado Hiperbólico Generalizado (GHS - Generalized Hyperbolic Stretch) en el Revelador.
-* [x] Tratamiento Anti-Borde en Siluetas Arbóreas Complejas (Tree Boundary Anti-Ghosting / Min-Horizon).
-* [x] Cribado Inteligente Previo de Tomas y Calidad Estelar (Frame Culling: FWHM, excentricidad y SNR).
-* [x] Reducción Paramétrica de Contaminación Lumínica Asimétrica (Light Dome Subtraction).
-* [x] Efecto Orton Astronómico y Glow Específico para Polvo Galáctico en el Revelador.
-* [x] Apilado por Ventana Deslizante (Sub-Stacking) para Vídeo Time-Lapse.
-* [x] Detección Automática de Suelo / Cielo con Red Neuronal Ligera (1-Click Auto Sky/Ground).
 * [ ] Reducción de Distorsión Óptica Periférica de Estrellas en Grandes Angulares (Reduce Star Distortion).
-* [x] Deconvolución Estelar Regularizada (Richardson-Lucy con estimación de PSF).
-* [x] Histograma RGB Interactivo en Vivo en el Revelador con sincronización de curvas y avisos de clipping.
-* [x] Fusión de Kernels Numba JIT en Composición de Capas, Pivote de Mediana Submuestreado y Deslizamiento Ultrarrápido (Fast Draft Scrubbing).
 * [ ] Anti-parpadeo (Deflicker) y morphing temporal entre fotogramas en Startrails / Time-Lapse.
 * [ ] Estimación de tiempo restante (ETA) y progreso fluido en barras de ejecución.
 ---

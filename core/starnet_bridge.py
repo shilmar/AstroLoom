@@ -54,21 +54,38 @@ def run_starnet(
     sky_mask: Optional[np.ndarray] = None,
     stride: int = 256,
     starnet_exe: Optional[str] = None,
-    log_callback: Optional[Callable[[str], None]] = None
+    log_callback: Optional[Callable[[str], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Ejecuta StarNetv2 en modo LINEAL sobre img_rgb (float32 [0.0, 1.0]).
     
-    Protege el suelo neutralizándolo si existe sky_mask.
+    Prioriza inferencia nativa DirectML ONNX (sin binarios ni I/O a disco).
+    Si se especifica un binario CLI personalizado o no está disponible ONNX,
+    utiliza el ejecutable de StarNet.
     Retorna:
         starless_rgb (np.ndarray): Imagen sin estrellas con el suelo intacto.
         stars_rgb (np.ndarray): Capa aislada de estrellas en espacio lineal.
     """
+    from core.starnet_onnx import is_starnet_onnx_available, run_starnet_onnx
+
+    # 1. Prioridad: Inferencia nativa ONNX DirectML
+    if not (starnet_exe and os.path.isfile(starnet_exe)) and is_starnet_onnx_available():
+        return run_starnet_onnx(
+            img_rgb=img_rgb,
+            sky_mask=sky_mask,
+            stride=stride,
+            is_linear=True,
+            progress_callback=log_callback,
+            cancel_check=cancel_check
+        )
+
+    # 2. Fallback: Ejecutable CLI externo
     exe = find_starnet_executable(starnet_exe)
     if not exe or not os.path.isfile(exe):
         raise FileNotFoundError(
-            "No se encontró el ejecutable de StarNet++ ('starnet2.exe' o 'starnet++.exe').\n"
-            "Configura la ruta en la pestaña 'Ajustes'."
+            "No se encontró ni el modelo ONNX de StarNet ('models/starnet2.onnx') "
+            "ni el ejecutable de StarNet++ ('starnet2.exe')."
         )
 
     def log(msg: str):

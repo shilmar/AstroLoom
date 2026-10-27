@@ -5,6 +5,21 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-10-27
+
+### Añadido
+* **Inferencia Nativa de StarNet v2 mediante ONNX Runtime con Aceleración GPU DirectML:**
+  - Implementación del nuevo módulo core/starnet_onnx.py para ejecutar la red neuronal StarNet v2 directamente en GPU con DirectML (y fallback transparente a CPU) sin depender de binarios externos (starnet2.exe), dependencias C++ o I/O en disco.
+  - Tiling de inferencia en baldosas (512x512) con ventana 2D de Hann y solapamiento continuo (stride 256) que elimina discontinuidades en imágenes astronómicas de ultra-alta resolución.
+  - Ciclo MTF simétrico per-canal para inferencia no destructiva sobre datos en espacio lineal con restauración espectral exacta.
+* **Descargador Asistido de Pesos del Modelo (starnet2.onnx):**
+  - Diálogo interactivo en el Revelador que detecta la ausencia del modelo y ofrece la descarga directa y descompresión desatendida del archivo oficial (~131 MB) alojado en models/starnet2.onnx.
+  - Hilo de trabajo en segundo plano (gui/worker.py:ModelDownloadWorker) con diálogo modal de progreso porcentual, megabytes transferidos y soporte de cancelación segura.
+  - Detección automática inteligente de instalaciones locales existentes de StarNet 2 en el sistema para copia instantánea sin consumo de ancho de banda.
+* **Compatibilidad Híbrida y Fallback Transparente:**
+  - core/starnet_bridge.py prioriza el motor nativo ONNX y conmuta transparentemente al ejecutable CLI tradicional si el usuario define una ruta personalizada en la pestaña de Ajustes.
+  - Indicador de estado dinámico en la pestaña de Ajustes (gui/tab_settings.py) que informa de la disponibilidad del modelo ONNX y del proveedor de hardware activo.
+
 ## [0.11.2] - 2026-10-27
 
 ### Optimizado

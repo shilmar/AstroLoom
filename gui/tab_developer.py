@@ -4369,6 +4369,25 @@ class DeveloperTab(QWidget):
             QMessageBox.warning(self, "Aviso", "Carga o apila una imagen primero.")
             return
 
+        from core.starnet_onnx import is_starnet_onnx_available
+        from core.starnet_bridge import find_starnet_executable
+        if not is_starnet_onnx_available() and not find_starnet_executable():
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Modelo de IA StarNet v2 no encontrado")
+            msg.setText(
+                "El modelo de IA para separación de estrellas (starnet2.onnx, ~131 MB) "
+                "no se encuentra instalado en 'models/'.\n\n"
+                "¿Deseas descargarlo ahora automáticamente?"
+            )
+            btn_download = msg.addButton("Descargar IA (~131 MB)", QMessageBox.AcceptRole)
+            btn_cancel = msg.addButton("Cancelar", QMessageBox.RejectRole)
+            msg.setDefaultButton(btn_download)
+            msg.exec()
+
+            if msg.clickedButton() == btn_download:
+                self._start_starnet_model_download()
+            return
+
         self._set_ai_processing_state(True)
         self.log_message("=== INICIANDO SEPARACIÓN STARNET++ AI ===")
         if hasattr(self, 'sec_masks'):
@@ -4436,6 +4455,45 @@ class DeveloperTab(QWidget):
         self._set_ai_processing_state(False)
         self.log_message(f"[ERROR STARNET] {err_msg}")
         QMessageBox.warning(self, "Error en StarNet++", err_msg)
+
+    def _start_starnet_model_download(self):
+        """Descarga asistida del modelo ONNX de StarNet v2 con barra modal de progreso."""
+        progress = QProgressDialog("Conectando con StarNet...", "Cancelar", 0, 100, self)
+        progress.setWindowTitle("Descarga de Modelo IA StarNet v2")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.setAutoClose(True)
+
+        from core.starnet_onnx import download_starnet_model
+        from gui.worker import ModelDownloadWorker
+        self.starnet_download_worker = ModelDownloadWorker(download_fn=download_starnet_model, parent=self)
+
+        def on_prog(pct, d_mb, t_mb):
+            progress.setValue(pct)
+            progress.setLabelText(f"Instalando modelo StarNet v2 (starnet2.onnx)...\n{d_mb:.1f} MB de {t_mb:.1f} MB ({pct}%)")
+
+        def on_finished(path):
+            progress.close()
+            self.log_message(f"✓ [STARNET AI] Modelo StarNet v2 ONNX instalado en: {os.path.basename(path)}")
+            self.run_starnet()
+
+        def on_error(err):
+            progress.close()
+            self.log_message(f"[ERROR DESCARGA STARNET] {err}")
+            QMessageBox.warning(self, "Error en Descarga", f"No se pudo descargar el modelo StarNet v2:\n{err}")
+
+        def on_cancel():
+            self.starnet_download_worker.cancel()
+            self.log_message("[STARNET AI] Descarga cancelada por el usuario.")
+
+        self.starnet_download_worker.progress_changed.connect(on_prog)
+        self.starnet_download_worker.finished_success.connect(on_finished)
+        self.starnet_download_worker.error_occurred.connect(on_error)
+        self.starnet_download_worker.cancelled.connect(on_cancel)
+        progress.canceled.connect(on_cancel)
+
+        self.starnet_download_worker.start()
 
 
     # =========================================================================
