@@ -17,6 +17,8 @@ class EffectsPanel(QWidget):
     # Reactive signals
     parameter_changed = pyqtSignal()
     action_committed = pyqtSignal()
+    interaction_started = pyqtSignal()
+    interaction_finished = pyqtSignal()
     orton_changed = pyqtSignal(int, int, int, str, str)       # strength, radius, threshold, tint_key, mode_key
     star_diff_changed = pyqtSignal(int, int, int, int, str)   # strength, radius, threshold, color, mode_key
 
@@ -83,7 +85,8 @@ class EffectsPanel(QWidget):
         self.slider_orton.setRange(0, 100)
         self.slider_orton.setValue(0)
         self.slider_orton.valueChanged.connect(self._on_orton_strength_changed)
-        self.slider_orton.sliderReleased.connect(self.action_committed.emit)
+        self.slider_orton.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_orton.sliderReleased.connect(self._on_slider_released)
         row_ort_int.addWidget(self.slider_orton, stretch=1)
 
         self.btn_orton_expand = QPushButton("")
@@ -122,7 +125,8 @@ class EffectsPanel(QWidget):
         self.slider_orton_radius.setRange(10, 150)
         self.slider_orton_radius.setValue(40)
         self.slider_orton_radius.valueChanged.connect(self._on_orton_radius_changed)
-        self.slider_orton_radius.sliderReleased.connect(self.action_committed.emit)
+        self.slider_orton_radius.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_orton_radius.sliderReleased.connect(self._on_slider_released)
         col_rad.addWidget(self.slider_orton_radius)
         row_ort_ru.addLayout(col_rad)
 
@@ -138,7 +142,8 @@ class EffectsPanel(QWidget):
         self.slider_orton_threshold.setRange(0, 50)
         self.slider_orton_threshold.setValue(5)
         self.slider_orton_threshold.valueChanged.connect(self._on_orton_threshold_changed)
-        self.slider_orton_threshold.sliderReleased.connect(self.action_committed.emit)
+        self.slider_orton_threshold.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_orton_threshold.sliderReleased.connect(self._on_slider_released)
         col_thr.addWidget(self.slider_orton_threshold)
         row_ort_ru.addLayout(col_thr)
         w_ort_layout.addLayout(row_ort_ru)
@@ -204,7 +209,8 @@ class EffectsPanel(QWidget):
         self.slider_star_diff.setRange(0, 100)
         self.slider_star_diff.setValue(0)
         self.slider_star_diff.valueChanged.connect(self._on_star_diff_strength_changed)
-        self.slider_star_diff.sliderReleased.connect(self.action_committed.emit)
+        self.slider_star_diff.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_star_diff.sliderReleased.connect(self._on_slider_released)
         row_sd_int.addWidget(self.slider_star_diff, stretch=1)
 
         self.btn_star_diff_expand = QPushButton("")
@@ -243,7 +249,8 @@ class EffectsPanel(QWidget):
         self.slider_star_diff_radius.setRange(5, 60)
         self.slider_star_diff_radius.setValue(20)
         self.slider_star_diff_radius.valueChanged.connect(self._on_star_diff_radius_changed)
-        self.slider_star_diff_radius.sliderReleased.connect(self.action_committed.emit)
+        self.slider_star_diff_radius.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_star_diff_radius.sliderReleased.connect(self._on_slider_released)
         col_sd_rad.addWidget(self.slider_star_diff_radius)
         row_sd_ru.addLayout(col_sd_rad)
 
@@ -259,7 +266,8 @@ class EffectsPanel(QWidget):
         self.slider_star_diff_threshold.setRange(15, 85)
         self.slider_star_diff_threshold.setValue(45)
         self.slider_star_diff_threshold.valueChanged.connect(self._on_star_diff_threshold_changed)
-        self.slider_star_diff_threshold.sliderReleased.connect(self.action_committed.emit)
+        self.slider_star_diff_threshold.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_star_diff_threshold.sliderReleased.connect(self._on_slider_released)
         col_sd_thr.addWidget(self.slider_star_diff_threshold)
         row_sd_ru.addLayout(col_sd_thr)
         w_sd_layout.addLayout(row_sd_ru)
@@ -280,7 +288,8 @@ class EffectsPanel(QWidget):
         self.slider_star_diff_color.setRange(0, 100)
         self.slider_star_diff_color.setValue(50)
         self.slider_star_diff_color.valueChanged.connect(self._on_star_diff_color_changed)
-        self.slider_star_diff_color.sliderReleased.connect(self.action_committed.emit)
+        self.slider_star_diff_color.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_star_diff_color.sliderReleased.connect(self._on_slider_released)
         col_sd_col.addWidget(self.slider_star_diff_color)
         row_sd_cm.addLayout(col_sd_col)
 
@@ -417,6 +426,10 @@ class EffectsPanel(QWidget):
         if not self._guard:
             self._emit_orton_changed()
             self.action_committed.emit()
+
+    def _on_slider_released(self) -> None:
+        self.interaction_finished.emit()
+        self.action_committed.emit()
 
     def _emit_orton_changed(self) -> None:
         self.orton_changed.emit(

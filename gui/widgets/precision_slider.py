@@ -20,7 +20,7 @@ class PrecisionSpinBox(QDoubleSpinBox):
     """
     def __init__(self, decimals: int = 0, force_sign: bool = False, parent: QWidget = None):
         super().__init__(parent)
-        self.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        # No usamos NoButtons porque en Qt 6 con QSS colapsa el edit-field a 1px; ocultamos botones por CSS.
         self.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._decimals = decimals
         self._force_sign = force_sign
@@ -29,15 +29,22 @@ class PrecisionSpinBox(QDoubleSpinBox):
         self.setToolTip("Haz clic o doble clic para teclear un valor exacto con el teclado.")
         self._apply_style()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        le = self.lineEdit()
+        if le:
+            le.setGeometry(self.rect().adjusted(2, 1, -2, -1))
+
     def set_modified(self, modified: bool) -> None:
         if self._is_modified != modified:
             self._is_modified = modified
             self._apply_style()
 
     def _apply_style(self) -> None:
+        btn_css = "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 0px; height: 0px; border: none; }"
         if self._is_modified:
-            self.setStyleSheet("""
-                QDoubleSpinBox {
+            self.setStyleSheet(f"""
+                QDoubleSpinBox {{
                     background-color: #121826;
                     border: 1px solid #0288d1;
                     border-radius: 4px;
@@ -45,20 +52,21 @@ class PrecisionSpinBox(QDoubleSpinBox):
                     font-size: 11px;
                     font-weight: 600;
                     padding: 1px 4px;
-                }
-                QDoubleSpinBox:hover {
+                }}
+                QDoubleSpinBox:hover {{
                     border-color: #00e5ff;
                     background-color: #172338;
-                }
-                QDoubleSpinBox:focus {
+                }}
+                QDoubleSpinBox:focus {{
                     border-color: #00e5ff;
                     background-color: #19263e;
                     color: #ffffff;
-                }
+                }}
+                {btn_css}
             """)
         else:
-            self.setStyleSheet("""
-                QDoubleSpinBox {
+            self.setStyleSheet(f"""
+                QDoubleSpinBox {{
                     background-color: #141722;
                     border: 1px solid #232738;
                     border-radius: 4px;
@@ -66,16 +74,17 @@ class PrecisionSpinBox(QDoubleSpinBox):
                     font-size: 11px;
                     font-weight: 500;
                     padding: 1px 4px;
-                }
-                QDoubleSpinBox:hover {
+                }}
+                QDoubleSpinBox:hover {{
                     border-color: #38bdf8;
                     background-color: #181d2c;
-                }
-                QDoubleSpinBox:focus {
+                }}
+                QDoubleSpinBox:focus {{
                     border-color: #00e5ff;
                     background-color: #19263e;
                     color: #ffffff;
-                }
+                }}
+                {btn_css}
             """)
 
     def textFromValue(self, val: float) -> str:

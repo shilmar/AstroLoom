@@ -34,6 +34,9 @@ class MaskCanvas(QWidget):
     layer_brush_stroke_started = Signal()        # Inicio de trazado interactivo
     layer_brush_stroke_finished = Signal(object) # np.ndarray máscara de capa tras pintar
     layer_brush_radius_changed = Signal(int)     # Sincronización de radio con rueda
+    pan_started = Signal()
+    pan_moved = Signal(int, int)                 # (dx, dy) desplazamiento en píxeles
+    pan_finished = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None, enable_masking: bool = True):
         super().__init__(parent)
@@ -72,9 +75,14 @@ class MaskCanvas(QWidget):
         # Parámetros del modo Zoom 1:1
         self.is_zoomed: bool = False
         self.zoom_center_img: Optional[QPoint] = None
+        self.is_panning: bool = False
+        self._pan_start_pos: Optional[QPoint] = None
+        self._pan_visual_offset: QPoint = QPoint(0, 0)
+        self._zoom_background_pixmap: Optional[QPixmap] = None
         self.external_zoom_handler: bool = False  # True si el tab gestiona el recorte externo
         self.external_crop_rect: Optional[Tuple[int, int, int, int]] = None
         self.external_full_shape: Optional[Tuple[int, int]] = None
+        self.external_sensor_center: Optional[Tuple[float, float]] = None
 
         # Capa e indicadores de recorte de sombras (negros) y luces (blancos)
         self.show_clipping_shadows: bool = False
@@ -476,11 +484,27 @@ class MaskCanvas(QWidget):
 
         fit_scale = min(w_w / w_i, h_w / h_i)
 
-        if not self.is_zoomed or self.external_zoom_handler:
+        if not self.is_zoomed:
             tw, th = w_i * fit_scale, h_i * fit_scale
             target_rect = QRectF((w_w - tw) / 2.0, (h_w - th) / 2.0, tw, th)
             source_rect = QRectF(0.0, 0.0, w_i, h_i)
             return target_rect, source_rect, fit_scale
+        elif self.external_zoom_handler:
+            # Modo Zoom 1:1 con recorte extendido a escala 1:1 nativa y desplazamiento visual fluido (60 FPS)
+            vox = float(self._pan_visual_offset.x()) if hasattr(self, '_pan_visual_offset') and self._pan_visual_offset else 0.0
+            voy = float(self._pan_visual_offset.y()) if hasattr(self, '_pan_visual_offset') and self._pan_visual_offset else 0.0
+            
+            if self.external_crop_rect is not None and getattr(self, 'external_sensor_center', None) is not None:
+                x1, y1, x2, y2 = self.external_crop_rect
+                cx, cy = self.external_sensor_center
+                crop_screen_x = (w_w / 2.0) - (cx - x1)
+                crop_screen_y = (h_w / 2.0) - (cy - y1)
+                target_rect = QRectF(crop_screen_x + vox, crop_screen_y + voy, w_i, h_i)
+            else:
+                target_rect = QRectF((w_w - w_i) / 2.0 + vox, (h_w - h_i) / 2.0 + voy, w_i, h_i)
+
+            source_rect = QRectF(0.0, 0.0, w_i, h_i)
+            return target_rect, source_rect, 1.0
         else:
             # Modo zoom 1:1 local centrado
             cx = float(self.zoom_center_img.x()) if self.zoom_center_img else (w_i / 2.0)
@@ -598,6 +622,8 @@ class MaskCanvas(QWidget):
             h_i = float(self.base_pixmap.height())
 
             if not self.is_zoomed:
+                if self.base_pixmap and not self.base_pixmap.isNull():
+                    self._zoom_background_pixmap = self.base_pixmap.copy()
                 self.is_zoomed = True
                 self.zoom_center_img = ipt if ipt else QPoint(int(w_i / 2), int(h_i / 2))
                 rel_x = self.zoom_center_img.x() / max(1.0, w_i)
@@ -606,6 +632,10 @@ class MaskCanvas(QWidget):
             else:
                 self.is_zoomed = False
                 self.zoom_center_img = None
+                self._zoom_background_pixmap = None
+                self._pan_visual_offset = QPoint(0, 0)
+                self.is_panning = False
+                self.setCursor(Qt.ArrowCursor)
                 self.zoom_toggled.emit(False, 0.5, 0.5)
 
             if not self.external_zoom_handler:
@@ -613,27 +643,56 @@ class MaskCanvas(QWidget):
             event.accept()
             return
 
+        # 3. Desplazamiento panorámico (Pan) en Zoom 1:1:
+        # - Botón Izquierdo cuando el pincel NO está activo.
+        # - Botón Central (rueda) o Espacio + Botón Izquierdo en cualquier momento (incluso con pincel activo).
+        is_space_held = getattr(self, '_space_held', False)
+        is_pan_click = (
+            (self.is_zoomed and event.button() == Qt.MiddleButton) or
+            (self.is_zoomed and event.button() == Qt.LeftButton and (is_space_held or not self.layer_brush_active))
+        )
+        if is_pan_click and not self.crop_mode and not self.eyedropper_active:
+            self.is_panning = True
+            self._pan_start_pos = pos
+            self.setCursor(Qt.ClosedHandCursor)
+            self.pan_started.emit()
+            event.accept()
+            return
+
         # Interacción de Pincel de Ajuste Local (Capas)
-        if self.layer_brush_active and event.button() == Qt.LeftButton:
+        if self.layer_brush_active and event.button() == Qt.LeftButton and not is_space_held:
             ipt = self.widget_to_image_coords(event.position().toPoint())
             if ipt and self.base_pixmap and not self.base_pixmap.isNull():
                 self._brush_drawing = True
-                self.last_img_pt = ipt
-                w_b = self.base_pixmap.width()
-                h_b = self.base_pixmap.height()
-                if self.layer_brush_mask is None or self.layer_brush_mask.shape[:2] != (h_b, w_b):
-                    self.layer_brush_mask = np.zeros((h_b, w_b), dtype=np.float32)
 
+                # Inicializar layer_brush_mask únicamente si no existe
+                if self.layer_brush_mask is None:
+                    if self.is_zoomed and self.external_zoom_handler:
+                        if self._zoom_background_pixmap and not self._zoom_background_pixmap.isNull():
+                            w_m = self._zoom_background_pixmap.width()
+                            h_m = self._zoom_background_pixmap.height()
+                        elif self.external_full_shape:
+                            h_m, w_m = self.external_full_shape
+                        else:
+                            w_m = self.base_pixmap.width()
+                            h_m = self.base_pixmap.height()
+                    else:
+                        w_m = self.base_pixmap.width()
+                        h_m = self.base_pixmap.height()
+                    self.layer_brush_mask = np.zeros((h_m, w_m), dtype=np.float32)
+
+                h_m, w_m = self.layer_brush_mask.shape[:2]
                 self._stroke_start_mask = self.layer_brush_mask.copy()
-                self._stroke_buffer = np.zeros((h_b, w_b), dtype=np.float32)
+                self._stroke_buffer = np.zeros((h_m, w_m), dtype=np.float32)
 
-                _, _, scale = self.get_render_geometry()
-                native_r = max(2, int(self.layer_brush_radius / max(1e-4, scale)))
-                self._apply_brush_stamp(ipt, native_r)
-                self.set_refined_mask(self.layer_brush_mask, mode="ruby")
-                self.set_mask_visible(True)
-                self.layer_brush_stroke_started.emit()
-                self.update()
+                mask_pt, mask_r = self._map_point_to_layer_mask(ipt, self.layer_brush_radius)
+                if mask_pt:
+                    self._last_mask_pt = mask_pt
+                    self._apply_brush_stamp(mask_pt, mask_r)
+                    self.set_refined_mask(self.layer_brush_mask, mode="ruby")
+                    self.set_mask_visible(True)
+                    self.layer_brush_stroke_started.emit()
+                    self.update()
                 event.accept()
                 return
 
@@ -683,12 +742,12 @@ class MaskCanvas(QWidget):
 
             if self._brush_drawing and self.layer_brush_mask is not None:
                 ipt = self.widget_to_image_coords(pos)
-                if ipt and self.last_img_pt:
-                    _, _, scale = self.get_render_geometry()
-                    native_r = max(2, int(self.layer_brush_radius / max(1e-4, scale)))
-                    self._apply_brush_line(self.last_img_pt, ipt, native_r)
-                    self.last_img_pt = ipt
-                    self.set_refined_mask(self.layer_brush_mask, mode="ruby")
+                if ipt and getattr(self, '_last_mask_pt', None):
+                    mask_pt, mask_r = self._map_point_to_layer_mask(ipt, self.layer_brush_radius)
+                    if mask_pt:
+                        self._apply_brush_line(self._last_mask_pt, mask_pt, mask_r)
+                        self._last_mask_pt = mask_pt
+                        self.set_refined_mask(self.layer_brush_mask, mode="ruby")
             self.update()
             if self._brush_drawing:
                 event.accept()
@@ -720,6 +779,23 @@ class MaskCanvas(QWidget):
                     return
                 elif not self.enable_masking and not self.layer_brush_active:
                     self.setCursor(Qt.ArrowCursor)
+
+        # Manejo de desplazamiento panorámico (Pan) continuo y cursor en Zoom 1:1
+        if self.is_zoomed and not self.crop_mode:
+            target_rect, _, _ = self.get_render_geometry()
+            if self.is_panning and (event.buttons() & (Qt.LeftButton | Qt.MiddleButton)):
+                dx = pos.x() - self._pan_start_pos.x()
+                dy = pos.y() - self._pan_start_pos.y()
+                if dx != 0 or dy != 0:
+                    self._pan_start_pos = pos
+                    self.pan_moved.emit(dx, dy)
+                    if not self.external_zoom_handler and self.zoom_center_img:
+                        self.zoom_center_img = QPoint(self.zoom_center_img.x() - dx, self.zoom_center_img.y() - dy)
+                        self.update()
+                event.accept()
+                return
+            elif target_rect.contains(pos) and not self.eyedropper_active and not self.split_view_enabled and not self.layer_brush_active:
+                self.setCursor(Qt.OpenHandCursor)
 
         if not self.enable_masking:
             return
@@ -755,6 +831,7 @@ class MaskCanvas(QWidget):
             if self._brush_drawing:
                 self._brush_drawing = False
                 self.last_img_pt = None
+                self._last_mask_pt = None
                 self._stroke_start_mask = None
                 self._stroke_buffer = None
                 if self.layer_brush_mask is not None:
@@ -775,11 +852,21 @@ class MaskCanvas(QWidget):
             self.is_dragging_split = False
             event.accept()
             return
+        if (event.button() in (Qt.LeftButton, Qt.MiddleButton)) and self.is_panning:
+            self.is_panning = False
+            self.setCursor(Qt.OpenHandCursor if (self.is_zoomed and not self.layer_brush_active) else Qt.ArrowCursor)
+            self.pan_finished.emit()
+            event.accept()
+            return
         if event.button() == Qt.LeftButton:
             self.drawing = False
             self.last_img_pt = None
 
     def leaveEvent(self, event) -> None:
+        if self.is_panning:
+            self.is_panning = False
+            self.pan_finished.emit()
+            self.setCursor(Qt.ArrowCursor)
         if self._brush_hover_pos is not None:
             self._brush_hover_pos = None
             self.setCursor(Qt.ArrowCursor)
@@ -844,6 +931,34 @@ class MaskCanvas(QWidget):
             painter.drawLine(p1, p2)
         painter.end()
         self.update()
+
+    def _map_point_to_layer_mask(self, ipt: QPoint, screen_radius: int) -> Tuple[Optional[QPoint], int]:
+        """Transforma coordenadas de lienzo/recorte a coordenadas maestras del array layer_brush_mask."""
+        if not ipt or self.layer_brush_mask is None:
+            return None, screen_radius
+
+        h_m, w_m = self.layer_brush_mask.shape[:2]
+
+        if self.is_zoomed and self.external_zoom_handler and self.external_crop_rect is not None and self.external_full_shape is not None:
+            x1, y1, x2, y2 = self.external_crop_rect
+            h_f, w_f = self.external_full_shape
+            if h_f <= 0 or w_f <= 0:
+                return ipt, screen_radius
+
+            sensor_x = float(x1 + ipt.x())
+            sensor_y = float(y1 + ipt.y())
+
+            sx = float(w_m) / float(w_f)
+            sy = float(h_m) / float(h_f)
+
+            mx = int(round(sensor_x * sx))
+            my = int(round(sensor_y * sy))
+            mask_r = max(1, int(round(float(screen_radius) * sx)))
+            return QPoint(mx, my), mask_r
+        else:
+            _, _, scale = self.get_render_geometry()
+            native_r = max(2, int(screen_radius / max(1e-4, scale)))
+            return ipt, native_r
 
     def _apply_brush_stamp(self, pt: QPoint, native_radius: int) -> None:
         """Aplica una estampación radial con dureza y flujo sobre la máscara de capa activa."""
@@ -910,6 +1025,22 @@ class MaskCanvas(QWidget):
             cy = int(round(p1.y() + dy * t))
             self._apply_brush_stamp(QPoint(cx, cy), native_radius)
 
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Space and not event.isAutoRepeat():
+            self._space_held = True
+            if self.is_zoomed and not self.is_panning:
+                self.setCursor(Qt.OpenHandCursor)
+                self.update()
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:
+        if event.key() == Qt.Key_Space and not event.isAutoRepeat():
+            self._space_held = False
+            if self.is_zoomed and not self.is_panning:
+                self.setCursor(Qt.OpenHandCursor if (self.is_zoomed and not self.layer_brush_active) else Qt.ArrowCursor)
+                self.update()
+        super().keyReleaseEvent(event)
+
     def _draw_layer_brush_cursor(self, painter: QPainter) -> None:
         """Renderiza los anillos interactivos del pincel (radio exterior y núcleo de dureza) centrados en el cursor."""
         pos = self._brush_hover_pos
@@ -955,6 +1086,16 @@ class MaskCanvas(QWidget):
         target_rect, source_rect, _ = self.get_render_geometry()
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
         painter.setRenderHint(QPainter.Antialiasing)
+
+        # Superposición de fondo en Zoom 1:1 con recorte externo (mantiene la visión continua del sensor)
+        if self.is_zoomed and self.external_zoom_handler and getattr(self, '_zoom_background_pixmap', None) and not self._zoom_background_pixmap.isNull():
+            if self.external_crop_rect is not None and self.external_full_shape is not None:
+                h_f, w_f = self.external_full_shape
+                x1, y1, x2, y2 = self.external_crop_rect
+                bg_x = target_rect.x() - x1
+                bg_y = target_rect.y() - y1
+                bg_rect = QRectF(bg_x, bg_y, float(w_f), float(h_f))
+                painter.drawPixmap(bg_rect, self._zoom_background_pixmap, QRectF(self._zoom_background_pixmap.rect()))
 
         # MODO RECORTE CON ROTACIÓN ACTIVA (Nivelación de horizonte)
         if self.crop_mode and abs(self.crop_angle) > 1e-3:
@@ -1374,10 +1515,17 @@ class MaskCanvas(QWidget):
         scribbles[(arr[..., 1] > arr[..., 0]) & has_stroke] = 2
         return scribbles
 
-    def set_external_crop(self, crop_rect: Optional[Tuple[int, int, int, int]], full_shape: Optional[Tuple[int, int]]) -> None:
-        """Establece la geometría de recorte externa (Zoom 100%) para sincronizar overlays de máscaras."""
+    def set_external_crop(
+        self, 
+        crop_rect: Optional[Tuple[int, int, int, int]], 
+        full_shape: Optional[Tuple[int, int]],
+        sensor_center: Optional[Tuple[float, float]] = None
+    ) -> None:
+        """Establece la geometría de recorte externa (Zoom 100%) para sincronizar overlays y centrado exacto."""
         self.external_crop_rect = crop_rect
         self.external_full_shape = full_shape
+        self.external_sensor_center = sensor_center
+        self._pan_visual_offset = QPoint(0, 0)
         if self.last_mask_array is not None and self.show_mask_overlay:
             self.set_refined_mask(self.last_mask_array, mode=getattr(self, '_mask_overlay_mode', 'bicolor'))
 
@@ -1657,6 +1805,33 @@ class MaskCanvas(QWidget):
             new_y = max(0.0, min(1.0 - new_h, cy - new_h / 2.0))
 
         self.crop_rect_norm = QRectF(new_x, new_y, new_w, new_h)
+
+    def restore_base_pixmap(self, pixmap: QPixmap, orig_rgb: Optional[np.ndarray] = None) -> None:
+        """Restaura instantáneamente el QPixmap base previo sin recalcular (coste 0 ms)."""
+        self.base_pixmap = pixmap
+        if orig_rgb is not None:
+            self.orig_rgb = orig_rgb
+        self.is_zoomed = False
+        self.zoom_center_img = None
+        self._zoom_background_pixmap = None
+        self._pan_visual_offset = QPoint(0, 0)
+        self.external_crop_rect = None
+        self.external_sensor_center = None
+        self.is_panning = False
+        self.setCursor(Qt.ArrowCursor)
+        self.update()
+
+    def add_pan_visual_offset(self, dx: int, dy: int) -> None:
+        """Añade desplazamiento visual instantáneo al lienzo durante el arrastre panorámico."""
+        if not hasattr(self, '_pan_visual_offset') or self._pan_visual_offset is None:
+            self._pan_visual_offset = QPoint(0, 0)
+        self._pan_visual_offset += QPoint(dx, dy)
+        self.update()
+
+    def reset_pan_visual_offset(self) -> None:
+        """Restablece el desplazamiento visual tras refinar el recorte a alta resolución."""
+        self._pan_visual_offset = QPoint(0, 0)
+        self.update()
 
     def _emit_crop_size(self) -> None:
         """Emite la señal de cambio de resolución del recorte actual."""

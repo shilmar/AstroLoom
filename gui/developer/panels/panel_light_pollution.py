@@ -19,6 +19,8 @@ class LightPollutionPanel(QWidget):
 
     parameter_changed = pyqtSignal()
     action_committed = pyqtSignal()
+    interaction_started = pyqtSignal()
+    interaction_finished = pyqtSignal()
     extract_bg_requested = pyqtSignal()
     auto_detect_lp_requested = pyqtSignal()
     center_pipette_toggled = pyqtSignal(bool)
@@ -79,7 +81,8 @@ class LightPollutionPanel(QWidget):
         self.slider_lp = self.row_lp.slider
         self.lbl_lp = self.row_lp.lbl_value
         self.slider_lp.valueChanged.connect(self._on_lp_changed)
-        self.slider_lp.sliderReleased.connect(self.action_committed.emit)
+        self.slider_lp.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_lp.sliderReleased.connect(self._on_slider_released)
         layout_bg.addWidget(self.row_lp)
 
         # Botonera de herramientas de Cúpula 2D
@@ -131,7 +134,8 @@ class LightPollutionPanel(QWidget):
         self.lbl_lp_cx = self.row_lp_cx.lbl_value
         self.slider_lp_cx.valueChanged.connect(self._on_slider_lp_cx_changed)
         self.spin_lp_cx.valueChanged.connect(self._on_spin_lp_cx_changed)
-        self.slider_lp_cx.sliderReleased.connect(self.action_committed.emit)
+        self.slider_lp_cx.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_lp_cx.sliderReleased.connect(self._on_slider_released)
         layout_lp_params.addWidget(self.row_lp_cx)
 
         self.row_lp_cy = PrecisionSliderRow("Centro Y:", 0, 100, 90, scale=100.0, decimals=2, label_width=115)
@@ -140,7 +144,8 @@ class LightPollutionPanel(QWidget):
         self.lbl_lp_cy = self.row_lp_cy.lbl_value
         self.slider_lp_cy.valueChanged.connect(self._on_slider_lp_cy_changed)
         self.spin_lp_cy.valueChanged.connect(self._on_spin_lp_cy_changed)
-        self.slider_lp_cy.sliderReleased.connect(self.action_committed.emit)
+        self.slider_lp_cy.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_lp_cy.sliderReleased.connect(self._on_slider_released)
         layout_lp_params.addWidget(self.row_lp_cy)
 
         # Fila 2: Ancho W y Alto H
@@ -150,7 +155,8 @@ class LightPollutionPanel(QWidget):
         self.lbl_lp_w = self.row_lp_w.lbl_value
         self.slider_lp_w.valueChanged.connect(self._on_slider_lp_w_changed)
         self.spin_lp_w.valueChanged.connect(self._on_spin_lp_w_changed)
-        self.slider_lp_w.sliderReleased.connect(self.action_committed.emit)
+        self.slider_lp_w.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_lp_w.sliderReleased.connect(self._on_slider_released)
         layout_lp_params.addWidget(self.row_lp_w)
 
         self.row_lp_h = PrecisionSliderRow("Alto:", 5, 150, 45, scale=100.0, decimals=2, label_width=115)
@@ -159,7 +165,8 @@ class LightPollutionPanel(QWidget):
         self.lbl_lp_h = self.row_lp_h.lbl_value
         self.slider_lp_h.valueChanged.connect(self._on_slider_lp_h_changed)
         self.spin_lp_h.valueChanged.connect(self._on_spin_lp_h_changed)
-        self.slider_lp_h.sliderReleased.connect(self.action_committed.emit)
+        self.slider_lp_h.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_lp_h.sliderReleased.connect(self._on_slider_released)
         layout_lp_params.addWidget(self.row_lp_h)
 
         # Fila 3: Tinte cromático y botón cuentagotas de color
@@ -191,7 +198,8 @@ class LightPollutionPanel(QWidget):
         self.slider_lp_tint_strength = self.row_lp_tint_strength.slider
         self.lbl_lp_tint_strength = self.row_lp_tint_strength.lbl_value
         self.slider_lp_tint_strength.valueChanged.connect(self._on_lp_tint_strength_changed)
-        self.slider_lp_tint_strength.sliderReleased.connect(self.action_committed.emit)
+        self.slider_lp_tint_strength.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_lp_tint_strength.sliderReleased.connect(self._on_slider_released)
         layout_lp_params.addWidget(self.row_lp_tint_strength)
 
         # Fila 5: Modo de reducción y Compatibilidad 1D
@@ -223,6 +231,10 @@ class LightPollutionPanel(QWidget):
     # -------------------------------------------------------------
     # Sliders & Value synchronization
     # -------------------------------------------------------------
+    def _on_slider_released(self) -> None:
+        self.interaction_finished.emit()
+        self.action_committed.emit()
+
     def _on_toggle_lp_expand(self, checked: bool) -> None:
         self.w_lp_params.setVisible(checked)
 

@@ -17,8 +17,8 @@ logger = logging.getLogger("AstroLoom.PipelineWorker")
 
 class PipelineSignals(QObject):
     """Señales emitidas por el worker de procesamiento en segundo plano."""
-    finished = Signal(int, object, object, object)  # (request_id, final_img, base_stretched, stars_stretched)
-    error = Signal(int, str)                         # (request_id, error_msg)
+    finished = Signal(int, object)  # (request_id, result_tuple)
+    error = Signal(int, str)        # (request_id, error_msg)
 
 
 class PipelineWorker(QRunnable):
@@ -42,8 +42,12 @@ class PipelineWorker(QRunnable):
         is_scrubbing: bool = False,
         crop_rect: Optional[tuple] = None,
         full_shape: Optional[tuple] = None,
+        precomputed_linear_base: Optional[np.ndarray] = None,
         precomputed_stretched_base: Optional[np.ndarray] = None,
+        precomputed_graded_base: Optional[np.ndarray] = None,
+        precomputed_spatial_base: Optional[np.ndarray] = None,
         precomputed_stretched_stars: Optional[np.ndarray] = None,
+        cached_ground_ai: Optional[np.ndarray] = None,
     ):
         super().__init__()
         self.setAutoDelete(True)
@@ -60,8 +64,12 @@ class PipelineWorker(QRunnable):
         self.is_scrubbing = is_scrubbing
         self.crop_rect = crop_rect
         self.full_shape = full_shape
+        self.precomputed_linear_base = precomputed_linear_base
         self.precomputed_stretched_base = precomputed_stretched_base
+        self.precomputed_graded_base = precomputed_graded_base
+        self.precomputed_spatial_base = precomputed_spatial_base
         self.precomputed_stretched_stars = precomputed_stretched_stars
+        self.cached_ground_ai = cached_ground_ai
 
         self.signals = PipelineSignals()
         self._is_aborted = False
@@ -75,7 +83,7 @@ class PipelineWorker(QRunnable):
             return
 
         try:
-            final_img, base_stretched, stars_stretched = apply_developer_pipeline(
+            res = apply_developer_pipeline(
                 target_img=self.target_img,
                 state=self.state,
                 precomputed_mask=self.precomputed_mask,
@@ -88,13 +96,18 @@ class PipelineWorker(QRunnable):
                 is_scrubbing=self.is_scrubbing,
                 crop_rect=self.crop_rect,
                 full_shape=self.full_shape,
-                return_intermediate=True,
+                precomputed_linear_base=self.precomputed_linear_base,
                 precomputed_stretched_base=self.precomputed_stretched_base,
+                precomputed_graded_base=self.precomputed_graded_base,
+                precomputed_spatial_base=self.precomputed_spatial_base,
                 precomputed_stretched_stars=self.precomputed_stretched_stars,
+                cached_ground_ai=self.cached_ground_ai,
+                return_milestones=True,
+                abort_flag=lambda: self._is_aborted,
             )
 
-            if not self._is_aborted:
-                self.signals.finished.emit(self.request_id, final_img, base_stretched, stars_stretched)
+            if not self._is_aborted and res is not None:
+                self.signals.finished.emit(self.request_id, res)
         except Exception as e:
             if not self._is_aborted:
                 logger.error(f"Error en PipelineWorker #{self.request_id}: {e}", exc_info=True)
@@ -106,7 +119,7 @@ class AsyncPipelineManager(QObject):
     Coordinador de renderizado asíncrono. Asegura que sólo la solicitud más reciente
     actualice la interfaz gráfica y descarta automáticamente resultados obsoletos.
     """
-    preview_ready = Signal(int, object, object, object)
+    preview_ready = Signal(int, object)
     pipeline_failed = Signal(int, str)
 
     def __init__(self, parent: Optional[QObject] = None, max_threads: int = 2):
@@ -136,8 +149,12 @@ class AsyncPipelineManager(QObject):
         is_scrubbing: bool = False,
         crop_rect: Optional[tuple] = None,
         full_shape: Optional[tuple] = None,
+        precomputed_linear_base: Optional[np.ndarray] = None,
         precomputed_stretched_base: Optional[np.ndarray] = None,
+        precomputed_graded_base: Optional[np.ndarray] = None,
+        precomputed_spatial_base: Optional[np.ndarray] = None,
         precomputed_stretched_stars: Optional[np.ndarray] = None,
+        cached_ground_ai: Optional[np.ndarray] = None,
     ) -> int:
         """Envía una nueva tarea de renderizado descartando las solicitudes anteriores."""
         self._current_request_id += 1
@@ -160,8 +177,12 @@ class AsyncPipelineManager(QObject):
             is_scrubbing=is_scrubbing,
             crop_rect=crop_rect,
             full_shape=full_shape,
+            precomputed_linear_base=precomputed_linear_base,
             precomputed_stretched_base=precomputed_stretched_base,
+            precomputed_graded_base=precomputed_graded_base,
+            precomputed_spatial_base=precomputed_spatial_base,
             precomputed_stretched_stars=precomputed_stretched_stars,
+            cached_ground_ai=cached_ground_ai,
         )
         self._active_worker = worker
 
@@ -171,11 +192,11 @@ class AsyncPipelineManager(QObject):
         self.thread_pool.start(worker)
         return req_id
 
-    def _on_worker_finished(self, req_id: int, final_img: Any, base_stretched: Any, stars_stretched: Any):
+    def _on_worker_finished(self, req_id: int, result: Any):
         # Descartar si una solicitud más nueva ya fue enviada
         if req_id == self._current_request_id:
             self._active_worker = None
-            self.preview_ready.emit(req_id, final_img, base_stretched, stars_stretched)
+            self.preview_ready.emit(req_id, result)
 
     def _on_worker_error(self, req_id: int, error_msg: str):
         if req_id == self._current_request_id:

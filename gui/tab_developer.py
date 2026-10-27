@@ -256,6 +256,11 @@ class DeveloperTab(QWidget):
         self._preview_throttle_timer.setInterval(16)
         self._preview_throttle_timer.timeout.connect(self._do_update_stretch_preview)
 
+        self._pan_refine_timer = QTimer(self)
+        self._pan_refine_timer.setSingleShot(True)
+        self._pan_refine_timer.setInterval(180)
+        self._pan_refine_timer.timeout.connect(self._refine_pan_crop)
+
         self._hist_throttle_timer = QTimer(self)
         self._hist_throttle_timer.setSingleShot(True)
         self._hist_throttle_timer.setInterval(70)
@@ -343,6 +348,9 @@ class DeveloperTab(QWidget):
         self.canvas = MaskCanvas(self, enable_masking=False)
         self.canvas.external_zoom_handler = True
         self.canvas.zoom_toggled.connect(self.on_canvas_zoom_toggled)
+        self.canvas.pan_started.connect(self.on_canvas_pan_started)
+        self.canvas.pan_moved.connect(self.on_canvas_pan_moved)
+        self.canvas.pan_finished.connect(self.on_canvas_pan_finished)
         self.canvas.files_dropped.connect(self._on_canvas_files_dropped)
 
         # 2. Panel interno de controles con Acordeón Plegable Inteligente
@@ -3214,15 +3222,7 @@ class DeveloperTab(QWidget):
     def on_toolbar_zoom_toggled(self, checked: bool) -> None:
         """Manejador al conmutar el botón de zoom en la barra superior."""
         if self.is_zoomed_100 != checked:
-            self.is_zoomed_100 = checked
-            self.canvas.is_zoomed = checked
-            if checked:
-                self.zoom_rel_coords = (0.5, 0.5)
-                self.canvas.zoom_center_img = None
-            else:
-                self._generate_before_reference()
-            self.update_stretch_preview()
-            self._update_canvas_info_label()
+            self.on_canvas_zoom_toggled(checked, 0.5, 0.5)
 
     def _generate_before_reference(self) -> None:
         """Genera el QPixmap base de referencia 'Antes' a partir de la toma cruda original."""
@@ -3880,8 +3880,8 @@ class DeveloperTab(QWidget):
             self._zoom_crop_rect = None
         elif self.is_zoomed_100 and self.image_32bit is not None:
             h_f, w_f = self.image_32bit.shape[:2]
-            cw = min(w_f, max(100, self.canvas.width()))
-            ch = min(h_f, max(100, self.canvas.height()))
+            cw = min(w_f, max(100, self.canvas.width() + 100))
+            ch = min(h_f, max(100, self.canvas.height() + 100))
             
             rx, ry = self.zoom_rel_coords
             cx = int(rx * w_f)
@@ -4157,6 +4157,8 @@ class DeveloperTab(QWidget):
         return final_img
 
     def update_stretch_preview(self, immediate: bool = False):
+        if self.is_zoomed_100 and not immediate:
+            self._slider_changed_during_zoom = True
         if immediate:
             if hasattr(self, '_preview_throttle_timer'):
                 self._preview_throttle_timer.stop()
@@ -4302,7 +4304,15 @@ class DeveloperTab(QWidget):
             if stretched is not None:
                 self._last_rendered_preview = stretched
                 if self.is_zoomed_100 and getattr(self, '_zoom_crop_rect', None) is not None and self.image_32bit is not None:
-                    self.canvas.set_external_crop(self._zoom_crop_rect, self.image_32bit.shape[:2])
+                    h_f, w_f = self.image_32bit.shape[:2]
+                    rx, ry = self.zoom_rel_coords
+                    cx = rx * w_f
+                    cy = ry * h_f
+                    self.canvas.set_external_crop(
+                        self._zoom_crop_rect, 
+                        (h_f, w_f), 
+                        sensor_center=(cx, cy)
+                    )
                 else:
                     self.canvas.set_external_crop(None, None)
                 self.canvas.load_image(base_to_render, display_stretched=stretched)
@@ -5266,19 +5276,107 @@ class DeveloperTab(QWidget):
         else:
             self.sync_controls(0.0, 0.10)
             
+    def on_canvas_pan_started(self):
+        """Inicia el desplazamiento panorámico en Zoom 1:1 deteniendo refinados pendientes."""
+        if not self.is_zoomed_100:
+            return
+        if hasattr(self, '_pan_refine_timer'):
+            self._pan_refine_timer.stop()
+
+    def on_canvas_pan_moved(self, dx: int, dy: int):
+        """Desplaza el lienzo a 60-144 FPS mediante traslación de pixmap pura sin ningún bloqueo de CPU."""
+        if not self.is_zoomed_100 or self.image_32bit is None:
+            return
+        h_f, w_f = self.image_32bit.shape[:2]
+
+        rx, ry = self.zoom_rel_coords
+        cx = rx * w_f
+        cy = ry * h_f
+
+        target_cx = cx - dx
+        target_cy = cy - dy
+
+        # Delimitación estricta a los límites visibles de la toma
+        half_vw = min(w_f / 2.0, self.canvas.width() / 2.0)
+        half_vh = min(h_f / 2.0, self.canvas.height() / 2.0)
+        clamped_cx = max(half_vw, min(w_f - half_vw, target_cx)) if w_f > 2 * half_vw else (w_f / 2.0)
+        clamped_cy = max(half_vh, min(h_f - half_vh, target_cy)) if h_f > 2 * half_vh else (h_f / 2.0)
+
+        # Delta visual real permitido respetando los límites del sensor
+        actual_dx = int(round(cx - clamped_cx))
+        actual_dy = int(round(cy - clamped_cy))
+
+        if actual_dx != 0 or actual_dy != 0:
+            self.canvas.add_pan_visual_offset(actual_dx, actual_dy)
+            self.zoom_rel_coords = (clamped_cx / float(w_f), clamped_cy / float(h_f))
+
+        # Durante el arrastre activo continuo NO se ejecuta ningún temporizador de refinado
+        if hasattr(self, '_pan_refine_timer') and self._pan_refine_timer.isActive():
+            self._pan_refine_timer.stop()
+
+    def on_canvas_pan_finished(self):
+        """Finaliza el arrastre. Si el desplazamiento es amplio (>=120 px), programa refinado diferido (500 ms)."""
+        if hasattr(self, '_pan_refine_timer'):
+            self._pan_refine_timer.stop()
+
+        vox = abs(self.canvas._pan_visual_offset.x()) if hasattr(self.canvas, '_pan_visual_offset') else 0
+        voy = abs(self.canvas._pan_visual_offset.y()) if hasattr(self.canvas, '_pan_visual_offset') else 0
+
+        # Si el desplazamiento es leve (<120 px), no recalcular: la vista es 90% nítida y evitamos congelar la UI
+        if vox >= 120 or voy >= 120:
+            if hasattr(self, '_pan_refine_timer'):
+                self._pan_refine_timer.start(500)
+
+    def _refine_pan_crop(self):
+        """Genera el nuevo búfer extendido 1:1 centrado en la nueva posición y refresca histogramas."""
+        if not self.is_zoomed_100:
+            return
+        if hasattr(self, '_pan_refine_timer'):
+            self._pan_refine_timer.stop()
+        self.update_stretch_preview(immediate=True)
+        self._refresh_histograms_now()
+
     def on_canvas_zoom_toggled(self, is_zoomed: bool, rel_x: float, rel_y: float):
         if not is_zoomed:
+            if hasattr(self, '_pan_refine_timer'):
+                self._pan_refine_timer.stop()
+            self.is_zoomed_100 = False
+            if hasattr(self, 'btn_toggle_zoom'):
+                self.btn_toggle_zoom.blockSignals(True)
+                self.btn_toggle_zoom.setChecked(False)
+                self.btn_toggle_zoom.blockSignals(False)
+
+            # Restauración 100% instantánea (0 ms) del mapa general si no se tocaron sliders durante el zoom
+            if not getattr(self, '_slider_changed_during_zoom', False) and getattr(self, '_fit_view_pixmap', None) is not None:
+                self.canvas.restore_base_pixmap(self._fit_view_pixmap, orig_rgb=getattr(self, '_fit_view_orig_rgb', None))
+                self._fit_view_pixmap = None
+                self._fit_view_orig_rgb = None
+                self._update_canvas_info_label()
+                return
+
             self.canvas.set_external_crop(None, None)
-        self.is_zoomed_100 = is_zoomed
-        if is_zoomed:
-            self.zoom_rel_coords = (rel_x, rel_y)
-        else:
+            self.canvas.setCursor(Qt.ArrowCursor)
+            if hasattr(self.canvas, '_zoom_background_pixmap'):
+                self.canvas._zoom_background_pixmap = None
+            if hasattr(self.canvas, 'reset_pan_visual_offset'):
+                self.canvas.reset_pan_visual_offset()
             self._generate_before_reference()
+            self.update_stretch_preview()
+            self._update_canvas_info_label()
+            return
+
+        # Entrada en Zoom 1:1
+        if self.canvas.base_pixmap and not self.canvas.base_pixmap.isNull():
+            self._fit_view_pixmap = self.canvas.base_pixmap.copy()
+            self._fit_view_orig_rgb = self.canvas.orig_rgb
+        self._slider_changed_during_zoom = False
+        self.is_zoomed_100 = True
+        self.zoom_rel_coords = (rel_x, rel_y)
         if hasattr(self, 'btn_toggle_zoom'):
             self.btn_toggle_zoom.blockSignals(True)
-            self.btn_toggle_zoom.setChecked(is_zoomed)
+            self.btn_toggle_zoom.setChecked(True)
             self.btn_toggle_zoom.blockSignals(False)
-        self.update_stretch_preview()
+        self.update_stretch_preview(immediate=True)
         self._update_canvas_info_label()
 
     def on_extract_background_clicked(self):
@@ -6142,19 +6240,31 @@ class DeveloperTab(QWidget):
         """Conecta los eventos de finalización de interacción para registrar acciones en el historial."""
         
         # 1. Los paneles modulares ya emiten su propia señal action_committed al soltar sliders o editar spinboxes
-        # Se conectan aquí si no se conectaron en _setup_ui:
-        for panel in (
-            getattr(self, 'panel_stretch', None),
-            getattr(self, 'panel_lp', None),
-            getattr(self, 'panel_deconv', None),
-            getattr(self, 'panel_color_wb', None),
-            getattr(self, 'panel_effects', None),
-        ):
-            if panel is not None and hasattr(panel, 'action_committed'):
-                try:
-                    panel.action_committed.connect(self._commit_action)
-                except Exception:
-                    pass
+        # Se conectan aquí junto con interaction_started e interaction_finished para modo borrador 60 FPS:
+        panel_press_handlers = (
+            (getattr(self, 'panel_stretch', None), self._on_lut_slider_pressed),
+            (getattr(self, 'panel_lp', None), self._on_heavy_slider_pressed),
+            (getattr(self, 'panel_deconv', None), self._on_deconv_slider_pressed),
+            (getattr(self, 'panel_color_wb', None), self._on_heavy_slider_pressed),
+            (getattr(self, 'panel_effects', None), self._on_heavy_slider_pressed),
+        )
+        for panel, on_pressed in panel_press_handlers:
+            if panel is not None:
+                if hasattr(panel, 'action_committed'):
+                    try:
+                        panel.action_committed.connect(self._commit_action)
+                    except Exception:
+                        pass
+                if hasattr(panel, 'interaction_started'):
+                    try:
+                        panel.interaction_started.connect(on_pressed)
+                    except Exception:
+                        pass
+                if hasattr(panel, 'interaction_finished'):
+                    try:
+                        panel.interaction_finished.connect(self._on_slider_interaction_finished)
+                    except Exception:
+                        pass
 
         # 2. Conectar eventos del Gestor de Capas si existen
         if hasattr(self, 'mask_layers_widget'):
@@ -6169,6 +6279,8 @@ class DeveloperTab(QWidget):
 
     def _on_lut_slider_pressed(self):
         """Activa el modo de visualización directa por LUT 1D (>1000 FPS) para estirado y contraste."""
+        if hasattr(self, 'async_pipeline'):
+            self.async_pipeline.cancel_pending()
         self._is_slider_pressed = True
         self._is_scrubbing_heavy_slider = True
         self._is_scrubbing_lut_slider = True
@@ -6176,6 +6288,8 @@ class DeveloperTab(QWidget):
 
     def _on_heavy_slider_pressed(self):
         """Activa el modo de proxy borrador ultra-fluido (Draft 60 FPS) durante el arrastre continuo."""
+        if hasattr(self, 'async_pipeline'):
+            self.async_pipeline.cancel_pending()
         self._is_slider_pressed = True
         self._is_scrubbing_heavy_slider = True
         self._is_scrubbing_lut_slider = False
@@ -6183,6 +6297,8 @@ class DeveloperTab(QWidget):
 
     def _on_deconv_slider_pressed(self):
         """Activa el modo de arrastre de deconvolución manteniendo fidelidad del filtro de PSF."""
+        if hasattr(self, 'async_pipeline'):
+            self.async_pipeline.cancel_pending()
         self._is_slider_pressed = True
         self._is_scrubbing_heavy_slider = True
         self._is_scrubbing_lut_slider = False

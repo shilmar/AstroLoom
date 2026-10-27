@@ -19,6 +19,8 @@ class StretchingPanel(QWidget):
 
     parameter_changed = pyqtSignal()
     action_committed = pyqtSignal()
+    interaction_started = pyqtSignal()
+    interaction_finished = pyqtSignal()
     auto_mtf_requested = pyqtSignal()
     auto_ghs_requested = pyqtSignal()
     ghs_pipette_toggled = pyqtSignal(bool)
@@ -116,7 +118,8 @@ class StretchingPanel(QWidget):
         self.spin_bp.setSingleStep(0.00010)
         self.slider_bp.valueChanged.connect(self._on_slider_bp_changed)
         self.spin_bp.valueChanged.connect(self._on_spin_bp_changed)
-        self.slider_bp.sliderReleased.connect(self.action_committed.emit)
+        self.slider_bp.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_bp.sliderReleased.connect(self._on_slider_released)
         mtf_layout.addWidget(self.row_bp)
 
         self.row_mtf = PrecisionSliderRow("Medios (m):", 1, 2000, 400, scale=4000.0, decimals=5, label_width=115)
@@ -126,7 +129,8 @@ class StretchingPanel(QWidget):
         self.spin_mtf.setSingleStep(0.00050)
         self.slider_mtf.valueChanged.connect(self._on_slider_mtf_changed)
         self.spin_mtf.valueChanged.connect(self._on_spin_mtf_changed)
-        self.slider_mtf.sliderReleased.connect(self.action_committed.emit)
+        self.slider_mtf.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_mtf.sliderReleased.connect(self._on_slider_released)
         mtf_layout.addWidget(self.row_mtf)
 
         stretch_layout.addWidget(self.w_mtf_container)
@@ -200,7 +204,8 @@ class StretchingPanel(QWidget):
         self.lbl_ghs_sp = self.row_ghs_sp.lbl_value
         self.slider_ghs_sp.valueChanged.connect(self._on_slider_ghs_sp_changed)
         self.spin_ghs_sp.valueChanged.connect(self._on_spin_ghs_sp_changed)
-        self.slider_ghs_sp.sliderReleased.connect(self.action_committed.emit)
+        self.slider_ghs_sp.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_ghs_sp.sliderReleased.connect(self._on_slider_released)
         ghs_layout.addWidget(self.row_ghs_sp)
 
         # Fila Factor D
@@ -210,7 +215,8 @@ class StretchingPanel(QWidget):
         self.lbl_ghs_d = self.row_ghs_d.lbl_value
         self.slider_ghs_d.valueChanged.connect(self._on_slider_ghs_d_changed)
         self.spin_ghs_d.valueChanged.connect(self._on_spin_ghs_d_changed)
-        self.slider_ghs_d.sliderReleased.connect(self.action_committed.emit)
+        self.slider_ghs_d.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_ghs_d.sliderReleased.connect(self._on_slider_released)
         ghs_layout.addWidget(self.row_ghs_d)
 
         # Fila Forma (b)
@@ -220,7 +226,8 @@ class StretchingPanel(QWidget):
         self.lbl_ghs_b = self.row_ghs_b.lbl_value
         self.slider_ghs_b.valueChanged.connect(self._on_slider_ghs_b_changed)
         self.spin_ghs_b.valueChanged.connect(self._on_spin_ghs_b_changed)
-        self.slider_ghs_b.sliderReleased.connect(self.action_committed.emit)
+        self.slider_ghs_b.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_ghs_b.sliderReleased.connect(self._on_slider_released)
         ghs_layout.addWidget(self.row_ghs_b)
 
         # Fila Prot. Estrellas (HP)
@@ -230,7 +237,8 @@ class StretchingPanel(QWidget):
         self.lbl_ghs_hp = self.row_ghs_hp.lbl_value
         self.slider_ghs_hp.valueChanged.connect(self._on_slider_ghs_hp_changed)
         self.spin_ghs_hp.valueChanged.connect(self._on_spin_ghs_hp_changed)
-        self.slider_ghs_hp.sliderReleased.connect(self.action_committed.emit)
+        self.slider_ghs_hp.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_ghs_hp.sliderReleased.connect(self._on_slider_released)
         ghs_layout.addWidget(self.row_ghs_hp)
 
         # Fila Prot. Sombras (LP)
@@ -240,7 +248,8 @@ class StretchingPanel(QWidget):
         self.lbl_ghs_lp = self.row_ghs_lp.lbl_value
         self.slider_ghs_lp.valueChanged.connect(self._on_slider_ghs_lp_changed)
         self.spin_ghs_lp.valueChanged.connect(self._on_spin_ghs_lp_changed)
-        self.slider_ghs_lp.sliderReleased.connect(self.action_committed.emit)
+        self.slider_ghs_lp.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_ghs_lp.sliderReleased.connect(self._on_slider_released)
         ghs_layout.addWidget(self.row_ghs_lp)
 
         # Fila Punto Negro GHS (BP)
@@ -250,7 +259,8 @@ class StretchingPanel(QWidget):
         self.lbl_ghs_bp = self.row_ghs_bp.lbl_value
         self.slider_ghs_bp.valueChanged.connect(self._on_slider_ghs_bp_changed)
         self.spin_ghs_bp.valueChanged.connect(self._on_spin_ghs_bp_changed)
-        self.slider_ghs_bp.sliderReleased.connect(self.action_committed.emit)
+        self.slider_ghs_bp.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_ghs_bp.sliderReleased.connect(self._on_slider_released)
         ghs_layout.addWidget(self.row_ghs_bp)
 
         stretch_layout.addWidget(self.w_ghs_container)
@@ -260,7 +270,8 @@ class StretchingPanel(QWidget):
         self.slider_contrast = self.row_contrast.slider
         self.lbl_contrast = self.row_contrast.lbl_value
         self.slider_contrast.valueChanged.connect(self._on_contrast_changed)
-        self.slider_contrast.sliderReleased.connect(self.action_committed.emit)
+        self.slider_contrast.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_contrast.sliderReleased.connect(self._on_slider_released)
         stretch_layout.addWidget(self.row_contrast)
 
         self.sec_stretch.set_content_widget(w_stretch)
@@ -269,6 +280,10 @@ class StretchingPanel(QWidget):
     # -------------------------------------------------------------
     # Sliders & Value synchronization
     # -------------------------------------------------------------
+    def _on_slider_released(self) -> None:
+        self.interaction_finished.emit()
+        self.action_committed.emit()
+
     def _on_slider_bp_changed(self, val: int) -> None:
         bp = val / 10000.0
         if abs(self.bp_val - bp) < 1e-6:

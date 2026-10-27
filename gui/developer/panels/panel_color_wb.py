@@ -19,6 +19,8 @@ class ColorWbPanel(QWidget):
     parameter_changed = pyqtSignal()
     pipette_toggled = pyqtSignal(bool)
     action_committed = pyqtSignal()
+    interaction_started = pyqtSignal()
+    interaction_finished = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -55,7 +57,8 @@ class ColorWbPanel(QWidget):
         self.lbl_temp = self.row_temp.lbl_value
         self.slider_temp.valueChanged.connect(self._on_temp_changed)
         self.spin_temp.valueChanged.connect(self._on_spin_temp_changed)
-        self.slider_temp.sliderReleased.connect(self.action_committed.emit)
+        self.slider_temp.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_temp.sliderReleased.connect(self._on_slider_released)
         wb_layout.addWidget(self.row_temp)
 
         self.row_tint = PrecisionSliderRow("Tinte (V/M):", -1000, 1000, 0, scale=1000.0, decimals=3, force_sign=True, label_width=115)
@@ -64,7 +67,8 @@ class ColorWbPanel(QWidget):
         self.lbl_tint = self.row_tint.lbl_value
         self.slider_tint.valueChanged.connect(self._on_tint_changed)
         self.spin_tint.valueChanged.connect(self._on_spin_tint_changed)
-        self.slider_tint.sliderReleased.connect(self.action_committed.emit)
+        self.slider_tint.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_tint.sliderReleased.connect(self._on_slider_released)
         wb_layout.addWidget(self.row_tint)
 
         row_wb_btn = QHBoxLayout()
@@ -103,21 +107,24 @@ class ColorWbPanel(QWidget):
         self.slider_sat_sky = self.row_sat_sky.slider
         self.lbl_sat_sky = self.row_sat_sky.lbl_value
         self.slider_sat_sky.valueChanged.connect(self._on_sat_sky_changed)
-        self.slider_sat_sky.sliderReleased.connect(self.action_committed.emit)
+        self.slider_sat_sky.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_sat_sky.sliderReleased.connect(self._on_slider_released)
         sat_layout.addWidget(self.row_sat_sky)
 
         self.row_sat_gnd = PrecisionSliderRow("Sat. Suelo:", 0, 250, 100, scale=100.0, decimals=2, unit="x", label_width=115)
         self.slider_sat_gnd = self.row_sat_gnd.slider
         self.lbl_sat_gnd = self.row_sat_gnd.lbl_value
         self.slider_sat_gnd.valueChanged.connect(self._on_sat_gnd_changed)
-        self.slider_sat_gnd.sliderReleased.connect(self.action_committed.emit)
+        self.slider_sat_gnd.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_sat_gnd.sliderReleased.connect(self._on_slider_released)
         sat_layout.addWidget(self.row_sat_gnd)
 
         self.row_vibrance = PrecisionSliderRow("Vibranza:", -100, 100, 0, scale=100.0, decimals=2, force_sign=True, label_width=115)
         self.slider_vibrance = self.row_vibrance.slider
         self.lbl_vibrance = self.row_vibrance.lbl_value
         self.slider_vibrance.valueChanged.connect(self._on_vibrance_changed)
-        self.slider_vibrance.sliderReleased.connect(self.action_committed.emit)
+        self.slider_vibrance.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_vibrance.sliderReleased.connect(self._on_slider_released)
 
         btn_reset_sat = QPushButton("Restablecer")
         btn_reset_sat.setToolTip("Restablecer Saturación y Vibranza")
@@ -131,6 +138,10 @@ class ColorWbPanel(QWidget):
     # -------------------------------------------------------------
     # Sliders & Value synchronization
     # -------------------------------------------------------------
+    def _on_slider_released(self) -> None:
+        self.interaction_finished.emit()
+        self.action_committed.emit()
+
     def _on_temp_changed(self, val: int) -> None:
         new_val = val / 1000.0
         if abs(self.temp_val - new_val) < 1e-6:

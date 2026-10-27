@@ -8,12 +8,12 @@
     "default_kappa": 2.2,
     "storage_strategy": "auto",
     "use_gpu": true,
-    "cpu_workers": 8,
+    "cpu_workers": 14,
     "lp_method": "standard",
     "lp_strength": 0.5,
     "starnet_exe": "",
     "icc_profile": "adobe",
-    "preview_max_dim": 1500,
+    "preview_max_dim": 1400,
     "export_format_default": "TIFF 16-bit (*.tif *.tiff)",
     "language": "es"
 }

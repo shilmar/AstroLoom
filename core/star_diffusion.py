@@ -140,8 +140,8 @@ def apply_star_diffusion(
     sigma1 = max(1.0, float(radius * 0.55))
     sigma2 = max(2.5, float(radius * 1.75))
 
-    # Optimización downscale si la imagen es de alta resolución y el radio es grande
-    if min(h, w) > 800 and sigma1 > 15.0:
+    # Optimización downscale si la resolución o el radio justifican aceleración
+    if (min(h, w) > 250 and sigma1 > 3.0):
         scale = 0.5
         small_w = max(64, int(w * scale))
         small_h = max(64, int(h * scale))

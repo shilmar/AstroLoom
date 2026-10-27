@@ -51,3 +51,9 @@ docs/
 scripts/
 .archify/
 
+# Build artifacts
+build/
+dist/
+*.spec
+*-crash-report.xml
+

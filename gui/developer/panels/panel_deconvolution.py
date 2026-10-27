@@ -19,6 +19,8 @@ class DeconvolutionPanel(QWidget):
 
     parameter_changed = pyqtSignal()
     action_committed = pyqtSignal()
+    interaction_started = pyqtSignal()
+    interaction_finished = pyqtSignal()
     auto_psf_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None):
@@ -88,7 +90,8 @@ class DeconvolutionPanel(QWidget):
         self.row_deconv_iter.layout().addWidget(self.btn_deconv_expand)
 
         self.row_deconv_iter.valueChanged.connect(self._on_iterations_changed)
-        self.row_deconv_iter.sliderReleased.connect(self.action_committed.emit)
+        self.row_deconv_iter.sliderPressed.connect(self.interaction_started.emit)
+        self.row_deconv_iter.sliderReleased.connect(self._on_slider_released)
         deconv_layout.addWidget(self.row_deconv_iter)
 
         # 3. Control Principal: FWHM
@@ -96,7 +99,8 @@ class DeconvolutionPanel(QWidget):
         self.slider_deconv_fwhm = self.row_deconv_fwhm.slider
         self.lbl_deconv_fwhm = self.row_deconv_fwhm.lbl_value
         self.row_deconv_fwhm.valueChanged.connect(self._on_fwhm_changed)
-        self.row_deconv_fwhm.sliderReleased.connect(self.action_committed.emit)
+        self.row_deconv_fwhm.sliderPressed.connect(self.interaction_started.emit)
+        self.row_deconv_fwhm.sliderReleased.connect(self._on_slider_released)
         deconv_layout.addWidget(self.row_deconv_fwhm)
 
         # 4. Panel Avanzado Desplegable
@@ -110,28 +114,32 @@ class DeconvolutionPanel(QWidget):
         self.slider_deconv_deringing = self.row_deconv_deringing.slider
         self.lbl_deconv_deringing = self.row_deconv_deringing.lbl_value
         self.row_deconv_deringing.valueChanged.connect(self._on_deringing_changed)
-        self.row_deconv_deringing.sliderReleased.connect(self.action_committed.emit)
+        self.row_deconv_deringing.sliderPressed.connect(self.interaction_started.emit)
+        self.row_deconv_deringing.sliderReleased.connect(self._on_slider_released)
         w_dadv_layout.addWidget(self.row_deconv_deringing)
 
         self.row_deconv_damping = PrecisionSliderRow("Amortiguación:", 0, 100, 25, unit="%", label_width=115)
         self.slider_deconv_damping = self.row_deconv_damping.slider
         self.lbl_deconv_damping = self.row_deconv_damping.lbl_value
         self.row_deconv_damping.valueChanged.connect(self._on_damping_changed)
-        self.row_deconv_damping.sliderReleased.connect(self.action_committed.emit)
+        self.row_deconv_damping.sliderPressed.connect(self.interaction_started.emit)
+        self.row_deconv_damping.sliderReleased.connect(self._on_slider_released)
         w_dadv_layout.addWidget(self.row_deconv_damping)
 
         self.row_deconv_aspect = PrecisionSliderRow("Aspecto PSF:", 100, 250, 100, scale=100.0, decimals=2, unit="x", label_width=115)
         self.slider_deconv_aspect = self.row_deconv_aspect.slider
         self.lbl_deconv_aspect = self.row_deconv_aspect.lbl_value
         self.row_deconv_aspect.valueChanged.connect(self._on_aspect_changed)
-        self.row_deconv_aspect.sliderReleased.connect(self.action_committed.emit)
+        self.row_deconv_aspect.sliderPressed.connect(self.interaction_started.emit)
+        self.row_deconv_aspect.sliderReleased.connect(self._on_slider_released)
         w_dadv_layout.addWidget(self.row_deconv_aspect)
 
         self.row_deconv_angle = PrecisionSliderRow("Ángulo PSF:", -90, 90, 0, unit="°", force_sign=True, label_width=115)
         self.slider_deconv_angle = self.row_deconv_angle.slider
         self.lbl_deconv_angle = self.row_deconv_angle.lbl_value
         self.row_deconv_angle.valueChanged.connect(self._on_angle_changed)
-        self.row_deconv_angle.sliderReleased.connect(self.action_committed.emit)
+        self.row_deconv_angle.sliderPressed.connect(self.interaction_started.emit)
+        self.row_deconv_angle.sliderReleased.connect(self._on_slider_released)
         w_dadv_layout.addWidget(self.row_deconv_angle)
 
         # Fila Modelo PSF y Ámbito de Aplicación
@@ -283,6 +291,10 @@ class DeconvolutionPanel(QWidget):
             self.block_signals(False)
 
         self.parameter_changed.emit()
+        self.action_committed.emit()
+
+    def _on_slider_released(self) -> None:
+        self.interaction_finished.emit()
         self.action_committed.emit()
 
     def update_psf_status(self, text: str) -> None:

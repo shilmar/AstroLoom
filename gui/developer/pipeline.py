@@ -1,7 +1,7 @@
 """Headless rendering pipeline and multi-resolution pyramid engine for AstroLoom Developer."""
 from __future__ import annotations
 
-from typing import Optional, Dict, Tuple, List, Any, Union
+from typing import Optional, Dict, Tuple, List, Any, Union, Callable
 import numpy as np
 import cv2
 
@@ -147,6 +147,7 @@ def apply_developer_pipeline(
     return_intermediate: bool = False,
     is_dragging_deconv: bool = False,
     cached_ground_ai: Optional[np.ndarray] = None,
+    abort_flag: Optional[Callable[[], bool]] = None,
 ) -> Union[np.ndarray, Tuple[Any, ...]]:
     """Pure Python headless non-destructive photo development pipeline.
 
@@ -457,7 +458,8 @@ def apply_developer_pipeline(
                     tophat = cv2.morphologyEx(gray_s, cv2.MORPH_TOPHAT, k_th)
                     star_mask = (tophat > 0.02).astype(np.float32)
 
-            deconvolved = richardson_lucy_deconvolve(
+            try:
+                deconvolved = richardson_lucy_deconvolve(
                 in_deconv,
                 psf_kernel=active_psf,
                 iterations=deconv_iters,
@@ -465,8 +467,12 @@ def apply_developer_pipeline(
                 damping=state.deconv_damping / 100.0,
                 luminance_only=state.deconv_luma_only,
                 star_mask=star_mask,
+                abort_flag=abort_flag,
                 target_scope=deconv_scope,
             )
+            except InterruptedError:
+                return None
+
             if in_mask_dec is not None:
                 res_deconv = (deconvolved * in_mask_dec) + (in_deconv * (1.0 - in_mask_dec))
             else:
@@ -476,6 +482,9 @@ def apply_developer_pipeline(
                 stretched = cv2.resize(res_deconv, (orig_w_dec, orig_h_dec), interpolation=cv2.INTER_LINEAR)
             else:
                 stretched = res_deconv
+
+        if abort_flag and abort_flag():
+            return None
 
         # 11. Efecto Orton y Resplandor de Polvo Galáctico
         has_active_starless = (
@@ -530,6 +539,9 @@ def apply_developer_pipeline(
                 stretched = cv2.resize(res_ort, (orig_w_ort, orig_h_ort), interpolation=cv2.INTER_LINEAR)
             else:
                 stretched = res_ort
+
+        if abort_flag and abort_flag():
+            return None
 
         # 12. Filtro Difusor y Realce de Constelaciones
         star_diff_strength = state.star_diff_strength / 100.0
@@ -641,6 +653,9 @@ def apply_developer_pipeline(
 
     pre_layers_base = stretched
     pre_layers_stars = st_stretched
+
+    if abort_flag and abort_flag():
+        return None
 
     # 14. Aplicación de Capas y Máscaras Locales
     if mask_layers and len(mask_layers) > 0:
