@@ -652,6 +652,44 @@ def register_frame_to_center(
     )
 
 
+def crop_frame_roi(
+    image: np.ndarray,
+    center_x: float,
+    center_y: float,
+    radius: float,
+    crop_size: int = 3000
+) -> Tuple[np.ndarray, Tuple[float, float, float]]:
+    """
+    Recorta un recuadro cuadrado (ROI) centrado en el limbo del eclipse de tamaño crop_size,
+    garantizando dimensiones idénticas en todas las tomas y actualizando el centro local.
+    """
+    h, w = image.shape[:2]
+    c_w = min(int(crop_size), w)
+    c_h = min(int(crop_size), h)
+    half_w = c_w // 2
+    half_h = c_h // 2
+
+    x0 = int(round(center_x - half_w))
+    y0 = int(round(center_y - half_h))
+
+    if x0 < 0:
+        x0 = 0
+    elif x0 + c_w > w:
+        x0 = max(0, w - c_w)
+
+    if y0 < 0:
+        y0 = 0
+    elif y0 + c_h > h:
+        y0 = max(0, h - c_h)
+
+    x1 = x0 + c_w
+    y1 = y0 + c_h
+
+    cropped = image[y0:y1, x0:x1].copy()
+    new_c = (float(center_x - x0), float(center_y - y0), float(radius))
+    return cropped, new_c
+
+
 def align_eclipse_bracketing(
     images: List[np.ndarray],
     centers: List[Tuple[float, float]],
@@ -1020,17 +1058,18 @@ def apply_nrgf(
 
 def apply_mgn(
     image: np.ndarray,
-    sigmas: Tuple[float, ...] = (1.5, 3.0, 6.0, 12.0, 24.0, 48.0),
-    k: float = 0.7,
-    gamma: float = 2.8,
-    blend_ratio: float = 0.50,
+    sigmas: Tuple[float, ...] = (2.5, 5.0, 10.0, 20.0, 40.0),
+    k: float = 0.40,
+    gamma: float = 2.2,
+    blend_ratio: float = 0.25,
+    noise_floor: float = 0.015,
     lunar_mask_params: Optional[Tuple[float, float, float]] = None
 ) -> np.ndarray:
     """
-    Multi-scale Gaussian Normalization (MGN - Morgan & Druckmüller 2014).
+    Multi-scale Gaussian Normalization (MGN - Morgan & Druckmüller 2014) con piso de ruido.
     Normaliza el contraste de la corona solar simultáneamente en múltiples escalas espaciales,
     haciendo visibles filamentos radiales finos, bucles magnéticos cerrados y la corona exterior tenue,
-    sin artefactos de coordenadas polares (gramófono) ni compuertas que cercenen el fondo de cielo.
+    con piso de ruido anti-grano para evitar la amplificación espuria del ruido de lectura en zonas oscuras.
     """
     img = np.clip(np.asarray(image, dtype=np.float32), 0.0, 1.0)
     if img.ndim == 3:
@@ -1063,7 +1102,8 @@ def apply_mgn(
         d = np.where(np.isfinite(mu), lum - mu, 0.0).astype(np.float32)
         num_v = cv2.GaussianBlur(np.where(m_bool, d * d, 0.0).astype(np.float32), (0, 0), s_val)
         var = np.where(m_bool & (den >= 0.15), num_v / np.maximum(den, 1e-12), 0.0)
-        sd = np.sqrt(np.maximum(var, 1e-8))
+        # Piso de ruido: evita que en zonas oscuras/ruidosas (sd < noise_floor) se amplifique el ruido del sensor
+        sd = np.sqrt(np.maximum(var, 0.0) + (float(noise_floor) ** 2))
 
         c = np.where(np.isfinite(mu) & (sd > 1e-5), (lum - mu) / sd, 0.0)
         acc += np.arctan(k * c).astype(np.float32)
@@ -1087,7 +1127,7 @@ def apply_mgn(
     # Recomposición cromática lineal radiométrica (preserva H y S intactos)
     if img.ndim == 3:
         ratio = np.divide(mgn_lum, np.maximum(lum, 1e-4), out=np.zeros_like(lum), where=lum > 1e-6)
-        ratio = np.clip(ratio, 0.0, 5.0)
+        ratio = np.clip(ratio, 0.0, 3.0)
         result = img * ratio[..., None]
         result = np.clip(result, 0.0, 1.0)
         if lunar_mask_params is not None:

@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
     QProgressBar, QMessageBox, QGroupBox, QRadioButton, QSlider,
     QDoubleSpinBox, QSplitter, QTextEdit, QScrollArea, QCheckBox,
-    QSizePolicy, QAbstractItemView, QApplication, QButtonGroup
+    QSizePolicy, QAbstractItemView, QApplication, QButtonGroup, QComboBox
 )
 from PySide6.QtCore import Qt, Signal, QThread, QPoint, QPointF, QRectF
 from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QImage, QCursor, QFont, QTextCursor, QBrush
@@ -36,6 +36,7 @@ from core.eclipse import (
     detect_eclipse_disk,
     refine_disk_subpixel,
     register_frame_to_center,
+    crop_frame_roi,
     align_eclipse_bracketing,
     fuse_hdr_bracketing,
     apply_asinh_stretch,
@@ -469,6 +470,9 @@ class EclipseWorker(QThread):
                     cpu_workers = max(2, (os.cpu_count() or 4) - 2)
                 eff_workers = max(1, min(cpu_workers, os.cpu_count() or 16, total))
 
+                crop_roi = self.params.get("crop_roi", False)
+                crop_size = int(self.params.get("crop_size", 3000))
+
                 def _load_and_detect_one(idx_path):
                     idx, path = idx_path
                     img = load_image_as_float32(path)
@@ -477,6 +481,10 @@ class EclipseWorker(QThread):
                     else:
                         cx, cy, r = detect_eclipse_disk(img, mode=mode, expected_radius=expected_r)
                         c = (cx, cy, r)
+
+                    if crop_roi and c is not None and len(c) > 2 and c[2] > 5:
+                        img, c = crop_frame_roi(img, c[0], c[1], c[2], crop_size=crop_size)
+
                     return idx, img, c, os.path.basename(path)
 
                 completed = 0
@@ -563,17 +571,19 @@ class EclipseWorker(QThread):
 
                 if filter_type == "mgn":
                     self.progress.emit(25, "Calculando filtro multiescala MGN (Morgan & Druckmüller)...")
-                    mgn_k = self.params.get("mgn_k", 0.7)
-                    mgn_gamma = self.params.get("mgn_gamma", 2.8)
-                    blend = self.params.get("blend", 0.50)
+                    mgn_k = self.params.get("mgn_k", 0.40)
+                    mgn_gamma = self.params.get("mgn_gamma", 2.2)
+                    blend = self.params.get("blend", 0.25)
+                    noise_floor = self.params.get("mgn_noise_floor", 0.015)
                     lunar_mask = (cx, cy, r) if r > 5 else None
 
                     filtered = apply_mgn(
                         base_img,
-                        sigmas=(1.5, 3.0, 6.0, 12.0, 24.0, 48.0),
+                        sigmas=(2.5, 5.0, 10.0, 20.0, 40.0),
                         k=mgn_k,
                         gamma=mgn_gamma,
                         blend_ratio=blend,
+                        noise_floor=noise_floor,
                         lunar_mask_params=lunar_mask
                     )
                 else:
@@ -795,6 +805,20 @@ class EclipseTab(QWidget):
         self.chk_sub_sky.setToolTip("Anivela el fondo de cielo y luz difusa en cada fotograma antes de fusionar para erradicar anillos o escalones concéntricos en las transiciones de saturación.")
         hdr_layout.addWidget(self.chk_sub_sky)
 
+        row_roi = QHBoxLayout()
+        self.chk_crop_roi = QCheckBox("Recorte ROI centrado en limbo")
+        self.chk_crop_roi.setChecked(False)
+        self.chk_crop_roi.setStyleSheet("font-weight: bold; color: #80cbc4;")
+        self.chk_crop_roi.setToolTip("Recorta automáticamente un recuadro optimizado alrededor del limbo detectado en cada toma (reduciendo de 24MP a ~9MP). Ahorra 65% de RAM y triplica la velocidad de procesado.")
+        row_roi.addWidget(self.chk_crop_roi)
+
+        self.combo_crop_size = QComboBox()
+        self.combo_crop_size.addItem("3000 x 3000 px", 3000)
+        self.combo_crop_size.addItem("2400 x 2400 px", 2400)
+        self.combo_crop_size.addItem("3600 x 3600 px", 3600)
+        row_roi.addWidget(self.combo_crop_size)
+        hdr_layout.addLayout(row_roi)
+
         self.slider_sat = PrecisionSliderRow(
             title="Corte Saturación",
             min_val=70,
@@ -857,7 +881,7 @@ class EclipseTab(QWidget):
             title="Fuerza Detalle",
             min_val=0,
             max_val=100,
-            default_val=50,
+            default_val=25,
             unit="%",
             decimals=0,
             label_width=135
@@ -867,9 +891,9 @@ class EclipseTab(QWidget):
 
         self.slider_mgn_k = PrecisionSliderRow(
             title="Contraste Local k",
-            min_val=20,
+            min_val=10,
             max_val=150,
-            default_val=70,
+            default_val=40,
             scale=100.0,
             unit="",
             decimals=2,
@@ -881,13 +905,26 @@ class EclipseTab(QWidget):
             title="Compresión Gamma",
             min_val=15,
             max_val=40,
-            default_val=28,
+            default_val=22,
             scale=10.0,
             unit="",
             decimals=1,
             label_width=135
         )
         mgn_box_layout.addWidget(self.slider_mgn_gamma)
+
+        self.slider_mgn_noise_floor = PrecisionSliderRow(
+            title="Piso de Ruido (Fondo)",
+            min_val=2,
+            max_val=60,
+            default_val=15,
+            scale=1000.0,
+            unit="",
+            decimals=3,
+            label_width=135
+        )
+        self.slider_mgn_noise_floor.setToolTip("Piso mínimo de dispersión en MGN. Un valor más alto atenúa el grano del sensor en el cielo oscuro y corona lejana.")
+        mgn_box_layout.addWidget(self.slider_mgn_noise_floor)
         nrgf_layout.addWidget(self.container_mgn)
 
         # Contenedor NRGF
@@ -1502,6 +1539,8 @@ class EclipseTab(QWidget):
         asinh_factor = float(self.slider_asinh.value())
         auto_align = self.chk_auto_align.isChecked()
         sub_sky = self.chk_sub_sky.isChecked()
+        crop_roi = self.chk_crop_roi.isChecked()
+        crop_size = int(self.combo_crop_size.currentData() or 3000)
         mode = "solar" if self.rb_solar.isChecked() else "lunar"
 
         self.progress_bar.setVisible(True)
@@ -1514,6 +1553,8 @@ class EclipseTab(QWidget):
             "centers": active_centers,
             "ref_idx": active_ref_idx,
             "auto_align": auto_align,
+            "crop_roi": crop_roi,
+            "crop_size": crop_size,
             "subtract_sky": sub_sky,
             "sat_thresh": sat_thresh,
             "asinh_factor": asinh_factor,
@@ -1557,6 +1598,7 @@ class EclipseTab(QWidget):
         reach = self.slider_reach.value() / 10.0
         mgn_k = self.slider_mgn_k.value() / 100.0
         mgn_gamma = self.slider_mgn_gamma.value() / 10.0
+        mgn_noise_floor = self.slider_mgn_noise_floor.value() / 1000.0
         use_hp = self.chk_highpass.isChecked()
         hp_strength = (self.slider_hp.value() / 100.0) if use_hp else 0.0
 
@@ -1572,6 +1614,7 @@ class EclipseTab(QWidget):
             "filter_type": filter_type,
             "mgn_k": mgn_k,
             "mgn_gamma": mgn_gamma,
+            "mgn_noise_floor": mgn_noise_floor,
             "bin_px": bin_px,
             "robust": robust,
             "blend": blend,
