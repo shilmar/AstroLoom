@@ -1058,18 +1058,19 @@ def apply_nrgf(
 
 def apply_mgn(
     image: np.ndarray,
-    sigmas: Tuple[float, ...] = (2.5, 5.0, 10.0, 20.0, 40.0),
-    k: float = 0.40,
-    gamma: float = 2.2,
-    blend_ratio: float = 0.25,
-    noise_floor: float = 0.015,
+    sigmas: Tuple[float, ...] = (1.5, 3.0, 6.0, 12.0, 24.0, 48.0),
+    k: float = 0.70,
+    gamma: float = 2.8,
+    blend_ratio: float = 0.50,
+    noise_floor: float = 0.003,
     lunar_mask_params: Optional[Tuple[float, float, float]] = None
 ) -> np.ndarray:
     """
-    Multi-scale Gaussian Normalization (MGN - Morgan & Druckmüller 2014) con piso de ruido.
+    Multi-scale Gaussian Normalization (MGN - Morgan & Druckmüller 2014) con preservación
+    de la corona exterior y protección de protuberancias en el limbo.
     Normaliza el contraste de la corona solar simultáneamente en múltiples escalas espaciales,
     haciendo visibles filamentos radiales finos, bucles magnéticos cerrados y la corona exterior tenue,
-    con piso de ruido anti-grano para evitar la amplificación espuria del ruido de lectura en zonas oscuras.
+    con atenuación adaptativa de ruido cromático en cielo profundo.
     """
     img = np.clip(np.asarray(image, dtype=np.float32), 0.0, 1.0)
     if img.ndim == 3:
@@ -1079,12 +1080,12 @@ def apply_mgn(
 
     h, w = lum.shape[:2]
 
-    # Excluir interior del disco lunar para evitar halos y dispersión espuria
+    # Excluir interior del disco lunar protegiendo el margen cromosférico y protuberancias (mr - 2.5px)
     if lunar_mask_params is not None:
         mcx, mcy, mr = lunar_mask_params
         y_idx, x_idx = np.indices((h, w), dtype=np.float32)
         dist = np.hypot(x_idx - mcx, y_idx - mcy)
-        m_bool = dist >= (mr - 1.0)
+        m_bool = dist >= (mr - 2.5)
     else:
         m_bool = np.ones((h, w), dtype=bool)
 
@@ -1124,10 +1125,12 @@ def apply_mgn(
     if lunar_mask_params is not None:
         mgn_lum = np.where(m_bool, mgn_lum, 0.0)
 
-    # Recomposición cromática lineal radiométrica (preserva H y S intactos)
+    # Recomposición cromática lineal con margen adaptativo (no ahoga la corona tenue en negro)
     if img.ndim == 3:
         ratio = np.divide(mgn_lum, np.maximum(lum, 1e-4), out=np.zeros_like(lum), where=lum > 1e-6)
-        ratio = np.clip(ratio, 0.0, 3.0)
+        snr = np.clip(lum / max(float(noise_floor) * 3.0, 1e-3), 0.0, 1.0)
+        max_ratio = 4.0 + 20.0 * snr
+        ratio = np.minimum(ratio, max_ratio)
         result = img * ratio[..., None]
         result = np.clip(result, 0.0, 1.0)
         if lunar_mask_params is not None:

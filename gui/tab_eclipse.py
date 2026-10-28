@@ -571,15 +571,15 @@ class EclipseWorker(QThread):
 
                 if filter_type == "mgn":
                     self.progress.emit(25, "Calculando filtro multiescala MGN (Morgan & Druckmüller)...")
-                    mgn_k = self.params.get("mgn_k", 0.40)
-                    mgn_gamma = self.params.get("mgn_gamma", 2.2)
-                    blend = self.params.get("blend", 0.25)
-                    noise_floor = self.params.get("mgn_noise_floor", 0.015)
+                    mgn_k = self.params.get("mgn_k", 0.70)
+                    mgn_gamma = self.params.get("mgn_gamma", 2.8)
+                    blend = self.params.get("blend", 0.50)
+                    noise_floor = self.params.get("mgn_noise_floor", 0.003)
                     lunar_mask = (cx, cy, r) if r > 5 else None
 
                     filtered = apply_mgn(
                         base_img,
-                        sigmas=(2.5, 5.0, 10.0, 20.0, 40.0),
+                        sigmas=(1.5, 3.0, 6.0, 12.0, 24.0, 48.0),
                         k=mgn_k,
                         gamma=mgn_gamma,
                         blend_ratio=blend,
@@ -835,7 +835,7 @@ class EclipseTab(QWidget):
             title="Compresión Asinh",
             min_val=0,
             max_val=100,
-            default_val=35,
+            default_val=50,
             unit="x",
             decimals=0,
             label_width=135
@@ -881,7 +881,7 @@ class EclipseTab(QWidget):
             title="Fuerza Detalle",
             min_val=0,
             max_val=100,
-            default_val=25,
+            default_val=50,
             unit="%",
             decimals=0,
             label_width=135
@@ -893,7 +893,7 @@ class EclipseTab(QWidget):
             title="Contraste Local k",
             min_val=10,
             max_val=150,
-            default_val=40,
+            default_val=70,
             scale=100.0,
             unit="",
             decimals=2,
@@ -905,7 +905,7 @@ class EclipseTab(QWidget):
             title="Compresión Gamma",
             min_val=15,
             max_val=40,
-            default_val=22,
+            default_val=28,
             scale=10.0,
             unit="",
             decimals=1,
@@ -915,15 +915,15 @@ class EclipseTab(QWidget):
 
         self.slider_mgn_noise_floor = PrecisionSliderRow(
             title="Piso de Ruido (Fondo)",
-            min_val=2,
+            min_val=1,
             max_val=60,
-            default_val=15,
+            default_val=3,
             scale=1000.0,
             unit="",
             decimals=3,
             label_width=135
         )
-        self.slider_mgn_noise_floor.setToolTip("Piso mínimo de dispersión en MGN. Un valor más alto atenúa el grano del sensor en el cielo oscuro y corona lejana.")
+        self.slider_mgn_noise_floor.setToolTip("Piso mínimo de dispersión en MGN. Un valor bajo preserva filamentos lejanos; un valor alto atenúa el grano del sensor.")
         mgn_box_layout.addWidget(self.slider_mgn_noise_floor)
         nrgf_layout.addWidget(self.container_mgn)
 
@@ -980,7 +980,8 @@ class EclipseTab(QWidget):
         self.rb_filter_mgn.toggled.connect(self._on_filter_algo_changed)
 
         self.chk_highpass = QCheckBox("Realce de hilos finos (filtro bilateral tangencial)")
-        self.chk_highpass.setChecked(True)
+        self.chk_highpass.setChecked(False)
+        self.chk_highpass.setToolTip("Realce tangencial complementario (recomendado principalmente para NRGF; en MGN es opcional ya que MGN extrae filamentos nativamente).")
         nrgf_layout.addWidget(self.chk_highpass)
 
         self.slider_hp = PrecisionSliderRow(
