@@ -766,6 +766,41 @@ def apply_asinh_stretch(
     return np.clip(stretched, 0.0, 1.0).astype(np.float32)
 
 
+def balance_coronal_white_balance(
+    image: np.ndarray,
+    center_x: float,
+    center_y: float,
+    radius: float,
+    ring_range: Tuple[float, float] = (1.2, 1.8)
+) -> Tuple[np.ndarray, Tuple[float, float, float]]:
+    """
+    Neutraliza el balance de blancos de la corona solar estimando la mediana de color
+    en el anillo coronal medio (1.2 - 1.8 R), eliminando dominantes cálidas o del
+    cielo crepuscular según las directrices de AEL (white_balance_on_corona).
+    """
+    img = np.asarray(image, dtype=np.float32)
+    if img.ndim != 3:
+        return img, (1.0, 1.0, 1.0)
+
+    h, w = img.shape[:2]
+    y, x = np.ogrid[:h, :w]
+    dist = np.hypot(x - center_x, y - center_y)
+    r_lo = radius * float(ring_range[0])
+    r_hi = radius * float(ring_range[1])
+    ring = (dist >= r_lo) & (dist <= r_hi)
+
+    if np.sum(ring) < 100:
+        return img, (1.0, 1.0, 1.0)
+
+    med = np.median(img[ring], axis=0)
+    g_val = float(med[1]) if med[1] > 1e-6 else float(np.mean(med))
+    f = g_val / np.maximum(med, 1e-6)
+    f = np.clip(f, 0.4, 2.5)
+
+    balanced = np.clip(img * f[None, None, :], 0.0, 1.0).astype(np.float32)
+    return balanced, (float(f[0]), float(f[1]), float(f[2]))
+
+
 def fuse_hdr_bracketing(
     images: List[np.ndarray],
     exposures_s: List[float],
@@ -774,7 +809,8 @@ def fuse_hdr_bracketing(
     asinh_stretch: float = 0.0,
     mode: str = "solar",
     lunar_mask_params: Optional[Tuple[float, float, float]] = None,
-    subtract_sky: bool = True
+    subtract_sky: bool = True,
+    auto_wb_corona: bool = True
 ) -> np.ndarray:
     """
     Fusión de alto rango dinámico (HDR) para tomas de bracketing de eclipses.
@@ -821,7 +857,7 @@ def fuse_hdr_bracketing(
     weighted_flux = np.zeros(shape, dtype=np.float64)
     sum_weights = np.zeros(shape, dtype=np.float64)
 
-    sat_lo = max(0.5, saturation_threshold - 0.10)
+    sat_lo = max(0.40, saturation_threshold - 0.20)
     sat_hi = saturation_threshold
 
     # Máscara lunar para evitar que flare óptico de tomas largas invada el disco
@@ -909,6 +945,11 @@ def fuse_hdr_bracketing(
 
     denom = max(p_high - p_low, 1e-8)
     hdr_norm = np.clip((merged_flux - p_low) / denom, 0.0, 1.0).astype(np.float32)
+
+    # Balance de blancos coronal automático (anillo 1.2 - 1.8 R) para eliminar dominantes de cielo
+    if auto_wb_corona and lunar_mask_params is not None and hdr_norm.ndim == 3:
+        mcx, mcy, mr = lunar_mask_params
+        hdr_norm, _ = balance_coronal_white_balance(hdr_norm, mcx, mcy, mr, ring_range=(1.2, 1.8))
 
     if asinh_stretch > 1.0:
         hdr_norm = apply_asinh_stretch(hdr_norm, stretch_factor=asinh_stretch)
@@ -1063,14 +1104,15 @@ def apply_mgn(
     gamma: float = 2.8,
     blend_ratio: float = 0.50,
     noise_floor: float = 0.003,
+    chroma_denoise_sigma: float = 16.0,
     lunar_mask_params: Optional[Tuple[float, float, float]] = None
 ) -> np.ndarray:
     """
     Multi-scale Gaussian Normalization (MGN - Morgan & Druckmüller 2014) con preservación
-    de la corona exterior y protección de protuberancias en el limbo.
+    de la corona exterior, denoise cromático local (AEL) y protección de protuberancias en el limbo.
     Normaliza el contraste de la corona solar simultáneamente en múltiples escalas espaciales,
     haciendo visibles filamentos radiales finos, bucles magnéticos cerrados y la corona exterior tenue,
-    con atenuación adaptativa de ruido cromático en cielo profundo.
+    eliminando el grano de ruido coloreado del fondo sin deslavar detalles de emisión H-alfa.
     """
     img = np.clip(np.asarray(image, dtype=np.float32), 0.0, 1.0)
     if img.ndim == 3:
@@ -1125,13 +1167,36 @@ def apply_mgn(
     if lunar_mask_params is not None:
         mgn_lum = np.where(m_bool, mgn_lum, 0.0)
 
-    # Recomposición cromática lineal con margen adaptativo (no ahoga la corona tenue en negro)
+    # Recomposición cromática lineal con margen adaptativo y denoise de croma local (AEL)
     if img.ndim == 3:
         ratio = np.divide(mgn_lum, np.maximum(lum, 1e-4), out=np.zeros_like(lum), where=lum > 1e-6)
         snr = np.clip(lum / max(float(noise_floor) * 3.0, 1e-3), 0.0, 1.0)
         max_ratio = 4.0 + 20.0 * snr
         ratio = np.minimum(ratio, max_ratio)
-        result = img * ratio[..., None]
+        scaled_rgb = np.clip(img * ratio[..., None], 0.0, 1.0)
+
+        if chroma_denoise_sigma > 0.5:
+            # Extracción y filtrado espacial de croma (elimina el grano de color del fondo)
+            chroma = np.divide(
+                scaled_rgb,
+                np.maximum(mgn_lum[..., None], 1e-4),
+                out=np.zeros_like(scaled_rgb),
+                where=mgn_lum[..., None] > 1e-5
+            )
+            chroma_smooth = cv2.GaussianBlur(chroma, (0, 0), float(chroma_denoise_sigma))
+            denoised_rgb = np.clip(chroma_smooth * mgn_lum[..., None], 0.0, 1.0)
+
+            # Protección estricta de protuberancias y limbo interior (H-alfa nativa sin desenfocar)
+            if lunar_mask_params is not None:
+                mcx, mcy, mr = lunar_mask_params
+                prom_mask = (dist < mr * 1.35) & (scaled_rgb[..., 0] / np.maximum(scaled_rgb[..., 1], 1e-4) > 1.15)
+                prom_w = cv2.GaussianBlur(prom_mask.astype(np.float32), (0, 0), 2.0)[..., None]
+                result = prom_w * scaled_rgb + (1.0 - prom_w) * denoised_rgb
+            else:
+                result = denoised_rgb
+        else:
+            result = scaled_rgb
+
         result = np.clip(result, 0.0, 1.0)
         if lunar_mask_params is not None:
             result = np.where(m_bool[..., None], result, 0.0)

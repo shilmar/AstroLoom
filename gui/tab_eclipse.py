@@ -538,6 +538,7 @@ class EclipseWorker(QThread):
 
                 progress_msg = "Calculando ponderaciones y fusionando flujo fotométrico HDR..." if mode == "solar" else "Fusionando tomas con exposición multiescala (Mertens HDR)..."
                 self.progress.emit(75, progress_msg)
+                auto_wb = self.params.get("auto_wb_corona", True)
                 hdr_raw = fuse_hdr_bracketing(
                     aligned_images,
                     exposures,
@@ -545,7 +546,8 @@ class EclipseWorker(QThread):
                     asinh_stretch=0.0,
                     mode=mode,
                     lunar_mask_params=lunar_mask,
-                    subtract_sky=subtract_sky
+                    subtract_sky=subtract_sky,
+                    auto_wb_corona=auto_wb
                 )
 
                 hdr_stretched = apply_asinh_stretch(hdr_raw, stretch_factor=asinh_factor) if asinh_factor > 1.0 else hdr_raw.copy()
@@ -575,6 +577,7 @@ class EclipseWorker(QThread):
                     mgn_gamma = self.params.get("mgn_gamma", 2.8)
                     blend = self.params.get("blend", 0.50)
                     noise_floor = self.params.get("mgn_noise_floor", 0.003)
+                    chroma_denoise = self.params.get("mgn_chroma_denoise", 16.0)
                     lunar_mask = (cx, cy, r) if r > 5 else None
 
                     filtered = apply_mgn(
@@ -584,6 +587,7 @@ class EclipseWorker(QThread):
                         gamma=mgn_gamma,
                         blend_ratio=blend,
                         noise_floor=noise_floor,
+                        chroma_denoise_sigma=chroma_denoise,
                         lunar_mask_params=lunar_mask
                     )
                 else:
@@ -805,6 +809,12 @@ class EclipseTab(QWidget):
         self.chk_sub_sky.setToolTip("Anivela el fondo de cielo y luz difusa en cada fotograma antes de fusionar para erradicar anillos o escalones concéntricos en las transiciones de saturación.")
         hdr_layout.addWidget(self.chk_sub_sky)
 
+        self.chk_auto_wb = QCheckBox("Balance de blancos coronal neutro (anillo medio)")
+        self.chk_auto_wb.setChecked(True)
+        self.chk_auto_wb.setStyleSheet("font-weight: bold; color: #ffcc80;")
+        self.chk_auto_wb.setToolTip("Neutraliza la dominante cálida/crepuscular en el anillo medio de la corona (1.2 - 1.8 R) según AEL, manteniendo intactas las protuberancias H-alfa.")
+        hdr_layout.addWidget(self.chk_auto_wb)
+
         row_roi = QHBoxLayout()
         self.chk_crop_roi = QCheckBox("Recorte ROI centrado en limbo")
         self.chk_crop_roi.setChecked(False)
@@ -925,6 +935,18 @@ class EclipseTab(QWidget):
         )
         self.slider_mgn_noise_floor.setToolTip("Piso mínimo de dispersión en MGN. Un valor bajo preserva filamentos lejanos; un valor alto atenúa el grano del sensor.")
         mgn_box_layout.addWidget(self.slider_mgn_noise_floor)
+
+        self.slider_mgn_chroma_denoise = PrecisionSliderRow(
+            title="Denoise Croma (Color)",
+            min_val=0,
+            max_val=40,
+            default_val=16,
+            unit="px",
+            decimals=0,
+            label_width=135
+        )
+        self.slider_mgn_chroma_denoise.setToolTip("Suavizado espacial de crominancia (AEL local_chromaticity). Elimina el grano de ruido coloreado del fondo sin afectar la nitidez de los filamentos.")
+        mgn_box_layout.addWidget(self.slider_mgn_chroma_denoise)
         nrgf_layout.addWidget(self.container_mgn)
 
         # Contenedor NRGF
@@ -1557,6 +1579,7 @@ class EclipseTab(QWidget):
             "crop_roi": crop_roi,
             "crop_size": crop_size,
             "subtract_sky": sub_sky,
+            "auto_wb_corona": self.chk_auto_wb.isChecked(),
             "sat_thresh": sat_thresh,
             "asinh_factor": asinh_factor,
             "mode": mode
@@ -1616,6 +1639,7 @@ class EclipseTab(QWidget):
             "mgn_k": mgn_k,
             "mgn_gamma": mgn_gamma,
             "mgn_noise_floor": mgn_noise_floor,
+            "mgn_chroma_denoise": float(self.slider_mgn_chroma_denoise.value()),
             "bin_px": bin_px,
             "robust": robust,
             "blend": blend,
