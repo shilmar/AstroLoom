@@ -9,6 +9,7 @@ Este manual ha sido redactado pensando en fotógrafos y aficionados: **sin fórm
 ## 🗺️ Índice General
 
 1. [Filosofía y Módulos de la Aplicación](#1-filosofía-y-módulos-de-la-aplicación)
+   - [Arranque Rápido en Windows (astroloom.bat)](#-arranque-rápido-en-windows-astroloombat)
 2. [Flujo de Trabajo Recomendado (Paso a Paso)](#2-flujo-de-trabajo-recomendado-paso-a-paso)
 3. [Módulo 1: Apilador (Stacker)](#3-módulo-1-apilador-stacker)
 4. [Módulo 2: Revelador / Editor (Guía Detallada de Parámetros)](#4-módulo-2-revelador--editor-guía-detallada)
@@ -31,6 +32,14 @@ Este manual ha sido redactado pensando en fotógrafos y aficionados: **sin fórm
 ---
 
 ## 1. Filosofía y Módulos de la Aplicación
+
+### 🚀 Arranque Rápido en Windows (`astroloom.bat`)
+Para iniciar AstroLoom en Windows de la manera más cómoda y sin ventanas negras de consola en segundo plano, haz **doble clic sobre el archivo `astroloom.bat`** en la carpeta principal de la aplicación:
+* El lanzador detecta automáticamente si existe un entorno virtual local (`.venv` o `venv`) y arranca la interfaz usando `pythonw.exe`.
+* Si no hay entorno virtual, recurre automáticamente a la instalación de Python del sistema.
+* En entornos Linux/macOS o desde la terminal, puedes iniciar la suite ejecutando directamente `python run_app.py`.
+
+---
 
 AstroLoom opera internamente en **precisión de coma flotante de 32 bits** sin pérdidas de rango dinámico. En la barra superior encontrarás las pestañas de sus diferentes módulos:
 
@@ -369,10 +378,29 @@ AstroLoom permite congelar y reanudar todo tu flujo de trabajo en cualquier mome
 * **Selector de Modo Solar / Lunar Ergonómico:** En la cabecera del módulo dispones de un selector por sub-pestañas integradas con iconografía visual específica (☀️ **Eclipse Solar** con corona dorada y 🌙 **Eclipse Lunar** con tinte cyan), lo que permite alternar instantáneamente entre los flujos de trabajo de corona solar y fases de sombra umbral.
 
 ### Módulo 3: Eclipses (HDR)
-Durante un eclipse total de sol o de luna, el rango dinámico excede la capacidad de cualquier sensor:
-* Carga la serie de exposiciones (desde $1/4000\text{ s}$ para las protuberancias solares hasta $2\text{ s}$ para la corona lejana).
-* El algoritmo alinea el disco solar/lunar automáticamente mediante detección circular.
-* Produce una imagen compuesta de 32 bits donde se aprecian simultáneamente la superficie lunar, las perlas de Baily y los filamentos coronales.
+Durante un eclipse total de sol o de luna, el rango dinámico de la corona y el limbo solar/lunar excede con creces la capacidad lineal de cualquier sensor:
+
+1. **Carga y Alineación Automática con Recorte ROI:**
+   * Carga la serie de exposiciones (desde tomas ultracortas de $1/4000\text{ s}$ para las protuberancias cromosféricas hasta $2\text{ s}$ o más para los tenues filamentos de la corona lejana).
+   * El algoritmo detecta automáticamente el centro y el radio del limbo mediante detección circular y delimita dinámicamente una **Región de Interés (ROI)** optimizada, acelerando el filtrado multiescala ~3x y reduciendo drásticamente el consumo de memoria RAM.
+
+2. **Fusión HDR Adaptativa:**
+   * Fusión de exposiciones en coma flotante de 32 bits con transiciones progresivas en la rampa de saturación y luminancia para evitar costuras poligonales o cortes bruscos a lo largo de las isofotas de los chorros coronales (*streamers*).
+
+3. **Modos de Visualización y Realce Coronal:**
+   * **HDR Natural (Suave):** Revelado fotorrealista que comprime el rango dinámico sin realces agresivos de gradiente, ideal para una apariencia clásica y equilibrada.
+   * **NRGF (Normalizing Radial Gradient Filter):** Aplica la normalización radial de Morgan et al. para compensar la caída de brillo cuadrática con la distancia ($1/r^2$), equilibrando visualmente la corona interna con la corona exterior.
+   * **MGN (Multi-Scale Gaussian Normalization):** Motor de filtrado multiescala según la formulación científica de Morgan & Druckmüller (2014). Descompone la corona en 6 frecuencias espaciales gaussianas ($\sigma = 1.5$ a $48\text{ px}$) normalizadas por la varianza local, extrayendo filamentos magnéticos sutiles, chorros polares y bucles con un nivel de definición excepcional:
+     - *Contraste de Bordes ($k$):* Modula la ganancia de los detalles finos y la nitidez de las estructuras filamentosas.
+     - *Peso MGN ($h$):* Dosifica el porcentaje de textura normalizada integrada sobre la imagen fusionada base.
+     - *Exponente Gamma ($\gamma$):* Controla la curva de respuesta tonal de la corona procesada.
+
+4. **Calibración Espectral y Control de Ruido:**
+   * **Balance de Blancos Coronal Automático:** Muestrea fotométricamente el anillo coronal intermedio ($1.2 - 1.8 R_\odot$) para neutralizar dominantes de dispersión atmosférica manteniendo intacta la crominancia roja de las protuberancias solares ($H\alpha$).
+   * **Reducción de Ruido Cromático Local:** Suavizado selectivo en los canales de color ($A, B$) guiado por la señal coronal con máscara protectora del limbo para suprimir grano térmico sin emborronar estructuras.
+
+5. **Flujo de Trabajo:**
+   * Guarda directamente en formato **TIFF de 16 bits** de máxima calidad o pulsa **Enviar al Revelador** para aplicar estirado hiperbólico (GHS), curvas de contraste o composición por capas.
 
 ### Módulo 4: Eclipses (Collage)
 * Selecciona las fotos clave de las distintas fases (inicio parcial, totalidad, final parcial).

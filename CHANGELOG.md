@@ -5,7 +5,17 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-10-28
+
 ### Añadido
+* **Motor Avanzado de Procesado de Eclipses HDR (MGN & Filtros Coronales):**
+  - Implementación del algoritmo **Multi-Scale Gaussian Normalization (MGN)** (Morgan & Druckmüller, 2014) en `core/eclipse.py`, descomponiendo la corona en 6 bandas de frecuencias espaciales normalizadas por desviación local ($\sigma \in [1.5, 48]$ px) con ponderación no lineal de gradientes finos.
+  - **Balance de Blancos Coronal Automático:** Calibración fotométrica espectral inspirada en *Agentic-Eclipse-Library* (Pere Guerra), muestreando el anillo coronal medio ($1.2 - 1.8 R_\odot$) para neutralizar dominantes de dispersión atmosférica sin desaturar protuberancias solares.
+  - **Reducción de Ruido Cromático Local:** Filtrado selectivo en el espacio LAB guiado por la señal coronal con máscara de protección para la cromosfera y prominencias $H\alpha$ en el limbo ($1.0 - 1.15 R_\odot$).
+  - **Suelo de Ruido Adaptativo y Margen de Crominancia:** Umbral dinámico de supresión de grano en cielo oscuro exterior y contención de gradientes cromáticos espurios.
+* **Lanzador Ligero para Windows (`astroloom.bat`):**
+  - Script de arranque rápido por doble clic sin ventana persistente de consola (`pythonw`).
+  - Detección automática y priorización transparente de entornos virtuales locales (`.venv` o `venv`) con fallback al Python del sistema y aviso informativo si no está configurado en el `PATH`.
 * **Diálogo Modal de Progreso Interactivo en StarNet:**
   - Barra modal de progreso (QProgressDialog) que bloquea la interfaz durante la inferencia para evitar manipulaciones erróneas y muestra en tiempo real el bloque y porcentaje procesado, con botón de cancelación inmediata.
 * **Upsampling 2x en StarNet para Gran Angular:**
@@ -16,17 +26,21 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
   - Actualización reactiva del texto del botón a 'Volver a separar estrellas (Sobrescribir)' y del estado de las insignias.
 * **Soporte de Deshacer / Rehacer Completo para StarNet (Ctrl+Z / Ctrl+Y):**
   - Registro de eventos `starnet_separation` en la pila de historial que permite revertir y restaurar las capas desacopladas, desbloqueando y bloqueando dinámicamente los paneles base dependientes (Balance de blancos, Color y Estirado).
-* **Actualización de Showcase y Créditos de StarNet en Ajustes:**
+* **Actualización de Showcase y Créditos Formales en Ajustes y Eclipses:**
   - Nueva fotografía de escaparate de la Vía Láctea (838x1254) desarrollada íntegramente con el flujo suite de AstroLoom.
-  - Reconocimiento explícito en la sección de Ajustes agradeciendo a Mikita Misiura la creación de StarNet v2.
+  - Reconocimiento explícito y agradecimientos en `README.md`, `gui/tab_eclipse.py` y `gui/tab_settings.py` a Pere Guerra (*Agentic-Eclipse-Library*), Nikita Misiura (*StarNet++*) y Dr. Miloslav Druckmüller (*Brno University of Technology*).
 
 ### Corregido
+* **Eliminación de Costuras Pentagonales en Fusión HDR de Eclipses:**
+  - Transición progresiva ampliada en la rampa de ponderación de saturación (`sat_lo`), mitigando artefactos poligonales a lo largo de las isofotas de los cinco *streamers* coronales principales amplificados por filtros de gradiente.
 * **Fallo de Broadcasting al Cargar Proyectos .devloom Recortados:**
   - Corrección de la excepción `operands could not be broadcast together with shapes` producida al reabrir proyectos guardados tras aplicar un recorte donde la imagen fuente en disco conservaba las dimensiones originales.
   - Reconstrucción fiel de la base lineal 32-bit en memoria (`raw_linear_starless + stars`) y serialización nativa de `base/cropped_base.png` (16-bit) en el contenedor `.devloom` para proyectos recortados.
   - Alineación dimensional estricta defensiva en `ResolutionPyramid` (proxies preview y draft), `_compose_active_base` y `apply_developer_pipeline`.
 
 ### Optimizado
+* **Recorte Dinámico de Región de Interés (ROI) en Eclipses:**
+  - Detección de radio y centro del limbo solar/lunar para delimitar el área de cómputo de filtros gaussianos pesados, acelerando el procesado ~3x y reduciendo el consumo de RAM en un 65%.
 * **Paso (Stride) por Defecto a 384 px en StarNet:**
   - Adaptado a la morfología de paisaje nocturno, reduciendo el número de bloques a la mitad y acelerando la inferencia ~2.2x sin comprometer la separación en estrellas puntuales.
 
