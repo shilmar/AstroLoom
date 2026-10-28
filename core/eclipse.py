@@ -2,15 +2,23 @@
 """
 core/eclipse.py - Motor matemático y algoritmos especializados para eclipses solares y lunares.
 
+Agradecimientos y Referencias Científicas:
+- Miloslav Druckmüller (Brno University of Technology): Fundamentos matemáticos pioneros de
+  normalización de gradiente adaptativo y filtrado multiescala MGN (Morgan & Druckmüller 2014).
+- Pere Guerra (PeterWar): Por la librería de código abierto Agentic-Eclipse-Library (AEL),
+  sus investigaciones sobre artefactos de isófotas en fusión HDR, balance coronal neutro,
+  preservación cromática de protuberancias y desacoplo de croma (https://github.com/PeterWar/Agentic-Eclipse-Library).
+
 Incluye:
 1. Extracción de metadatos EXIF (tiempo de exposición, ISO, apertura).
 2. Detección de limbo de alta precisión (Sub-pixel Radial Edge Scanner + Ajuste Algebraico
    con rechazo RANSAC/MAD de protuberancias y perlas de Baily).
 3. Traslación afín subpíxel y registro de series de bracketing por limbo.
 4. Fusión HDR lineal con estirado de rango dinámico (Asinh) para levantar la corona externa.
-5. Filtro NRGF con compuerta radial (Radial Gate) y sustracción de ruido de fondo para
-   eliminar al 100% el grano del sensor en el cielo exterior.
-6. Realce de filamentos finos mediante filtro tangencial / bilateral enmascarado.
+5. Balance de blancos coronal neutro automático en anillo medio.
+6. Filtro MGN multiescala con denoise de croma local y preservación de emisión H-alfa.
+7. Filtro NRGF con compuerta radial (Radial Gate) y sustracción de ruido de fondo.
+8. Realce de filamentos finos mediante filtro tangencial / bilateral enmascarado.
 """
 import os
 import cv2

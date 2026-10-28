@@ -1042,6 +1042,18 @@ class EclipseTab(QWidget):
         self.btn_apply_filters.clicked.connect(self._on_apply_filters_clicked)
         nrgf_layout.addWidget(self.btn_apply_filters)
 
+        lbl_credits = QLabel(
+            "✦ Algoritmos de corona inspirados en las investigaciones de M. Druckmüller y "
+            "la librería Agentic-Eclipse-Library de Pere Guerra (PeterWar)."
+        )
+        lbl_credits.setStyleSheet("color: #80cbc4; font-size: 10px; font-style: italic; padding: 4px 2px;")
+        lbl_credits.setWordWrap(True)
+        lbl_credits.setToolTip(
+            "Multi-scale Gaussian Normalization (MGN), balance de blancos coronal y "
+            "denoise cromático basados en Agentic-Eclipse-Library (https://github.com/PeterWar/Agentic-Eclipse-Library)."
+        )
+        nrgf_layout.addWidget(lbl_credits)
+
         left_layout.addWidget(self.grp_nrgf)
 
         # SECCIÓN 5: Exportación y Acabado

@@ -354,6 +354,16 @@ python run_app.py
 * [ ] Estimación de tiempo restante (ETA) y progreso fluido en barras de ejecución.
 ---
 
+## Agradecimientos y Referencias
+
+AstroLoom integra e implementa algoritmos inspirados en trabajos pioneros y herramientas de código abierto de la comunidad astrofotográfica y científica:
+
+* **[Agentic-Eclipse-Library](https://github.com/PeterWar/Agentic-Eclipse-Library)** por **Pere Guerra (PeterWar)**: Investigaciones y metodologías de procesado de eclipses solares totales, heurísticas de fusión HDR, balance coronal neutro, preservación cromática de protuberancias y diagnóstico de artefactos de isófotas.
+* **[StarNet++](https://www.starnetastro.com/)** por **Nikita Misiura (nekitpass)**: Red neuronal convolucional pionera para el desacoplo y eliminación de estrellas (*star removal*), fundamental en el flujo de revelado y procesado de cielo profundo y astrofotografía de paisaje.
+* **Miloslav Druckmüller** (Brno University of Technology): Fundamentos matemáticos pioneros en la normalización de gradientes adaptativos y filtrado multiescala (MGN) para física solar y análisis coronal.
+
+---
+
 ## Licencia
 
 Este proyecto esta bajo la Licencia MIT.
