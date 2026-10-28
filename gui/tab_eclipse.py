@@ -40,6 +40,7 @@ from core.eclipse import (
     fuse_hdr_bracketing,
     apply_asinh_stretch,
     apply_nrgf,
+    apply_mgn,
     apply_coronal_highpass
 )
 from core.stacking import load_image_as_float32
@@ -523,6 +524,10 @@ class EclipseWorker(QThread):
                     aligned_images = [img for img in loaded_images if img is not None]
                     shifts = [(0.0, 0.0)] * len(aligned_images)
 
+                ref_center_info = final_centers[ref_idx] if (ref_idx < len(final_centers) and final_centers[ref_idx] is not None) else None
+                lunar_mask = (ref_center_info[0], ref_center_info[1], ref_center_info[2]) if (ref_center_info is not None and len(ref_center_info) > 2 and ref_center_info[2] > 5) else None
+                subtract_sky = self.params.get("subtract_sky", True)
+
                 progress_msg = "Calculando ponderaciones y fusionando flujo fotométrico HDR..." if mode == "solar" else "Fusionando tomas con exposición multiescala (Mertens HDR)..."
                 self.progress.emit(75, progress_msg)
                 hdr_raw = fuse_hdr_bracketing(
@@ -530,7 +535,9 @@ class EclipseWorker(QThread):
                     exposures,
                     saturation_threshold=sat_thresh,
                     asinh_stretch=0.0,
-                    mode=mode
+                    mode=mode,
+                    lunar_mask_params=lunar_mask,
+                    subtract_sky=subtract_sky
                 )
 
                 hdr_stretched = apply_asinh_stretch(hdr_raw, stretch_factor=asinh_factor) if asinh_factor > 1.0 else hdr_raw.copy()
@@ -549,24 +556,42 @@ class EclipseWorker(QThread):
                 cx = self.params["cx"]
                 cy = self.params["cy"]
                 r = self.params["radius"]
-                bin_px = self.params.get("bin_px", 2.0)
-                robust = self.params.get("robust", True)
-                blend = self.params.get("blend", 0.55)
-                reach = self.params.get("reach", 2.6)
+                filter_type = self.params.get("filter_type", "mgn")
                 use_highpass = self.params.get("use_highpass", False)
                 hp_strength = self.params.get("hp_strength", 0.5)
+                reach = self.params.get("reach", 3.5)
 
-                self.progress.emit(20, "Calculando filtro NRGF limpio (con compuerta radial anti-ruido)...")
-                filtered = apply_nrgf(
-                    base_img,
-                    center_x=cx,
-                    center_y=cy,
-                    bin_px=bin_px,
-                    robust=robust,
-                    blend_ratio=blend,
-                    radius_min=r,
-                    radius_max_factor=reach
-                )
+                if filter_type == "mgn":
+                    self.progress.emit(25, "Calculando filtro multiescala MGN (Morgan & Druckmüller)...")
+                    mgn_k = self.params.get("mgn_k", 0.7)
+                    mgn_gamma = self.params.get("mgn_gamma", 2.8)
+                    blend = self.params.get("blend", 0.50)
+                    lunar_mask = (cx, cy, r) if r > 5 else None
+
+                    filtered = apply_mgn(
+                        base_img,
+                        sigmas=(1.5, 3.0, 6.0, 12.0, 24.0, 48.0),
+                        k=mgn_k,
+                        gamma=mgn_gamma,
+                        blend_ratio=blend,
+                        lunar_mask_params=lunar_mask
+                    )
+                else:
+                    bin_px = self.params.get("bin_px", 2.0)
+                    robust = self.params.get("robust", True)
+                    blend = self.params.get("blend", 0.55)
+
+                    self.progress.emit(20, "Calculando filtro NRGF (gradiente radial polar)...")
+                    filtered = apply_nrgf(
+                        base_img,
+                        center_x=cx,
+                        center_y=cy,
+                        bin_px=bin_px,
+                        robust=robust,
+                        blend_ratio=blend,
+                        radius_min=r,
+                        radius_max_factor=reach
+                    )
 
                 if use_highpass and hp_strength > 0.01:
                     self.progress.emit(75, "Realzando filamentos finos mediante filtro tangencial...")
@@ -579,7 +604,7 @@ class EclipseWorker(QThread):
                         radius_max_factor=reach
                     )
 
-                self.progress.emit(100, "Filtros de corona aplicados con fondo 100% limpio.")
+                self.progress.emit(100, "Filtros de corona aplicados con éxito.")
                 self.finished.emit(filtered, "apply_filters")
 
         except Exception as e:
@@ -765,6 +790,11 @@ class EclipseTab(QWidget):
         self.chk_auto_align.setStyleSheet("font-weight: bold; color: #b9f6ca;")
         hdr_layout.addWidget(self.chk_auto_align)
 
+        self.chk_sub_sky = QCheckBox("Sustracción de pedestal / cielo por toma")
+        self.chk_sub_sky.setChecked(True)
+        self.chk_sub_sky.setToolTip("Anivela el fondo de cielo y luz difusa en cada fotograma antes de fusionar para erradicar anillos o escalones concéntricos en las transiciones de saturación.")
+        hdr_layout.addWidget(self.chk_sub_sky)
+
         self.slider_sat = PrecisionSliderRow(
             title="Corte Saturación",
             min_val=70,
@@ -799,9 +829,72 @@ class EclipseTab(QWidget):
         hdr_layout.addWidget(self.btn_fuse_hdr)
         left_layout.addWidget(self.grp_hdr)
 
-        # SECCIÓN 4: Filtros de Corona Solar (NRGF Limpio)
-        self.grp_nrgf = CollapsibleSection("4. Filtros de Corona Solar (NRGF)", is_expanded=True, icon_name="sparkles")
+        # SECCIÓN 4: Filtros de Corona Solar (MGN / NRGF)
+        self.grp_nrgf = CollapsibleSection("4. Filtros de Corona Solar (MGN / NRGF)", is_expanded=True, icon_name="sparkles")
         nrgf_layout = self.grp_nrgf.content_layout
+
+        lbl_algo = QLabel("Algoritmo de Detalle Coronal:")
+        lbl_algo.setStyleSheet("font-weight: bold; color: #eceff4; font-size: 11px;")
+        nrgf_layout.addWidget(lbl_algo)
+
+        row_algo = QHBoxLayout()
+        self.rb_filter_mgn = QRadioButton("MGN Multiescala (Druckmüller)")
+        self.rb_filter_mgn.setToolTip("Multi-scale Gaussian Normalization (Morgan & Druckmüller 2014). Normaliza el contraste simultáneamente en múltiples escalas espaciales sin generar anillos concéntricos ni recortar el cielo exterior.")
+        self.rb_filter_mgn.setChecked(True)
+        self.rb_filter_nrgf = QRadioButton("NRGF Clásico")
+        self.rb_filter_nrgf.setToolTip("Normalized Radial Gradient Filter estándar por bines polares radiales con compuerta.")
+        row_algo.addWidget(self.rb_filter_mgn)
+        row_algo.addWidget(self.rb_filter_nrgf)
+        nrgf_layout.addLayout(row_algo)
+
+        # Contenedor MGN
+        self.container_mgn = QWidget()
+        mgn_box_layout = QVBoxLayout(self.container_mgn)
+        mgn_box_layout.setContentsMargins(0, 2, 0, 2)
+        mgn_box_layout.setSpacing(6)
+
+        self.slider_blend = PrecisionSliderRow(
+            title="Fuerza Detalle",
+            min_val=0,
+            max_val=100,
+            default_val=50,
+            unit="%",
+            decimals=0,
+            label_width=135
+        )
+        self.lbl_blend_val = self.slider_blend.spin
+        mgn_box_layout.addWidget(self.slider_blend)
+
+        self.slider_mgn_k = PrecisionSliderRow(
+            title="Contraste Local k",
+            min_val=20,
+            max_val=150,
+            default_val=70,
+            scale=100.0,
+            unit="",
+            decimals=2,
+            label_width=135
+        )
+        mgn_box_layout.addWidget(self.slider_mgn_k)
+
+        self.slider_mgn_gamma = PrecisionSliderRow(
+            title="Compresión Gamma",
+            min_val=15,
+            max_val=40,
+            default_val=28,
+            scale=10.0,
+            unit="",
+            decimals=1,
+            label_width=135
+        )
+        mgn_box_layout.addWidget(self.slider_mgn_gamma)
+        nrgf_layout.addWidget(self.container_mgn)
+
+        # Contenedor NRGF
+        self.container_nrgf = QWidget()
+        nrgf_box_layout = QVBoxLayout(self.container_nrgf)
+        nrgf_box_layout.setContentsMargins(0, 2, 0, 2)
+        nrgf_box_layout.setSpacing(6)
 
         row_bin = QHBoxLayout()
         row_bin.addWidget(QLabel("Ancho anillo radial:"))
@@ -811,13 +904,15 @@ class EclipseTab(QWidget):
         self.spin_bin_px.setSingleStep(0.5)
         self.spin_bin_px.setSuffix(" px")
         row_bin.addWidget(self.spin_bin_px)
-        nrgf_layout.addLayout(row_bin)
+        nrgf_box_layout.addLayout(row_bin)
 
-        self.rb_robust = QRadioButton("Mediana robusta (1.4826·MAD)")
+        row_nrgf_mode = QHBoxLayout()
+        self.rb_robust = QRadioButton("Mediana (MAD)")
         self.rb_robust.setChecked(True)
-        self.rb_mean = QRadioButton("Media estándar (Gauss)")
-        nrgf_layout.addWidget(self.rb_robust)
-        nrgf_layout.addWidget(self.rb_mean)
+        self.rb_mean = QRadioButton("Media Gauss")
+        row_nrgf_mode.addWidget(self.rb_robust)
+        row_nrgf_mode.addWidget(self.rb_mean)
+        nrgf_box_layout.addLayout(row_nrgf_mode)
 
         self.slider_reach = PrecisionSliderRow(
             title="Alcance Corona",
@@ -829,11 +924,11 @@ class EclipseTab(QWidget):
             decimals=1,
             label_width=135
         )
-        self.lbl_reach_val = self.slider_reach.spin  # compatibilidad
-        nrgf_layout.addWidget(self.slider_reach)
+        self.lbl_reach_val = self.slider_reach.spin
+        nrgf_box_layout.addWidget(self.slider_reach)
 
-        self.slider_blend = PrecisionSliderRow(
-            title="Fuerza Filamentos",
+        self.slider_blend_nrgf = PrecisionSliderRow(
+            title="Fuerza NRGF",
             min_val=0,
             max_val=100,
             default_val=50,
@@ -841,8 +936,11 @@ class EclipseTab(QWidget):
             decimals=0,
             label_width=135
         )
-        self.lbl_blend_val = self.slider_blend.spin  # compatibilidad
-        nrgf_layout.addWidget(self.slider_blend)
+        nrgf_box_layout.addWidget(self.slider_blend_nrgf)
+        nrgf_layout.addWidget(self.container_nrgf)
+        self.container_nrgf.setVisible(False)
+
+        self.rb_filter_mgn.toggled.connect(self._on_filter_algo_changed)
 
         self.chk_highpass = QCheckBox("Realce de hilos finos (filtro bilateral tangencial)")
         self.chk_highpass.setChecked(True)
@@ -860,7 +958,7 @@ class EclipseTab(QWidget):
         self.lbl_hp_val = self.slider_hp.spin  # compatibilidad
         nrgf_layout.addWidget(self.slider_hp)
 
-        self.btn_apply_filters = QPushButton("APLICAR FILTROS DE CORONA (NRGF)")
+        self.btn_apply_filters = QPushButton("APLICAR FILTROS DE CORONA")
         self.btn_apply_filters.setIcon(get_icon("sparkles", color="#ffffff"))
         self.btn_apply_filters.setFixedHeight(40)
         self.btn_apply_filters.setCursor(Qt.PointingHandCursor)
@@ -1403,6 +1501,7 @@ class EclipseTab(QWidget):
         sat_thresh = self.slider_sat.value() / 100.0
         asinh_factor = float(self.slider_asinh.value())
         auto_align = self.chk_auto_align.isChecked()
+        sub_sky = self.chk_sub_sky.isChecked()
         mode = "solar" if self.rb_solar.isChecked() else "lunar"
 
         self.progress_bar.setVisible(True)
@@ -1415,6 +1514,7 @@ class EclipseTab(QWidget):
             "centers": active_centers,
             "ref_idx": active_ref_idx,
             "auto_align": auto_align,
+            "subtract_sky": sub_sky,
             "sat_thresh": sat_thresh,
             "asinh_factor": asinh_factor,
             "mode": mode
@@ -1425,6 +1525,11 @@ class EclipseTab(QWidget):
         self.worker.finished.connect(self._on_worker_finished)
         self.worker.error.connect(self._on_worker_error)
         self.worker.start()
+
+    def _on_filter_algo_changed(self):
+        is_mgn = self.rb_filter_mgn.isChecked()
+        self.container_mgn.setVisible(is_mgn)
+        self.container_nrgf.setVisible(not is_mgn)
 
     def _on_apply_filters_clicked(self):
         base_img = self.fused_hdr_img if self.fused_hdr_img is not None else self.current_preview_img
@@ -1441,13 +1546,17 @@ class EclipseTab(QWidget):
             r = self.spin_radius.value()
 
         if r <= 5:
-            QMessageBox.warning(self, "Atención", "Define o auto-detecta el radio del limbo antes de aplicar el NRGF.")
+            QMessageBox.warning(self, "Atención", "Define o auto-detecta el radio del limbo antes de aplicar los filtros.")
             return
 
+        is_mgn = self.rb_filter_mgn.isChecked()
+        filter_type = "mgn" if is_mgn else "nrgf"
         bin_px = self.spin_bin_px.value()
         robust = self.rb_robust.isChecked()
-        blend = self.slider_blend.value() / 100.0
+        blend = (self.slider_blend.value() if is_mgn else self.slider_blend_nrgf.value()) / 100.0
         reach = self.slider_reach.value() / 10.0
+        mgn_k = self.slider_mgn_k.value() / 100.0
+        mgn_gamma = self.slider_mgn_gamma.value() / 10.0
         use_hp = self.chk_highpass.isChecked()
         hp_strength = (self.slider_hp.value() / 100.0) if use_hp else 0.0
 
@@ -1460,6 +1569,9 @@ class EclipseTab(QWidget):
             "cx": cx,
             "cy": cy,
             "radius": r,
+            "filter_type": filter_type,
+            "mgn_k": mgn_k,
+            "mgn_gamma": mgn_gamma,
             "bin_px": bin_px,
             "robust": robust,
             "blend": blend,

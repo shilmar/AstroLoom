@@ -687,22 +687,44 @@ def _smoothstep(x: np.ndarray, edge0: float, edge1: float) -> np.ndarray:
     return t * t * (3.0 - 2.0 * t)
 
 
+def soft_shoulder(peak: np.ndarray, threshold: float = 0.70, ceiling: float = 1.0) -> np.ndarray:
+    """Atenuación suave exponencial en altas luces (evita corte duro o meseta a blanco)."""
+    res = np.copy(peak)
+    mask = peak > threshold
+    p = peak[mask] - threshold
+    span = max(ceiling - threshold, 1e-4)
+    res[mask] = threshold + span * (1.0 - np.exp(-p / span))
+    return res
+
+
 def apply_asinh_stretch(
     image: np.ndarray,
     stretch_factor: float = 30.0,
-    black_point: float = 0.0
+    black_point: float = 0.0,
+    shoulder_threshold: float = 0.70,
+    highlight_ceiling: float = 1.0
 ) -> np.ndarray:
     """
-    Estirado de arco seno hiperbólico (asinh) para comprimir el rango dinámico
-    extremo de la corona solar: levanta la corona externa tenue sin saturar
-    las protuberancias ni el núcleo interno brillante.
+    Estirado de arco seno hiperbólico (asinh) con hombro suave de altas luces (soft highlight shoulder).
+    Preserva los ratios cromáticos exactos R:G:B y comprime el rango dinámico
+    extremo de la corona solar: levanta la corona externa tenue sin empastar
+    ni saturar protuberancias a blanco puro.
     """
     if stretch_factor <= 1.0:
         return np.clip(image - black_point, 0.0, 1.0).astype(np.float32)
 
     img = np.maximum(image - black_point, 0.0).astype(np.float32)
     denom = np.arcsinh(float(stretch_factor))
-    stretched = np.arcsinh(float(stretch_factor) * img) / denom
+    u = np.arcsinh(float(stretch_factor) * img) / denom
+
+    if img.ndim == 3:
+        peak = np.max(u, axis=-1)
+        sh = soft_shoulder(peak, threshold=shoulder_threshold, ceiling=highlight_ceiling)
+        factor = np.divide(sh, peak, out=np.ones_like(peak), where=peak > 1e-6)
+        stretched = u * factor[..., None]
+    else:
+        stretched = soft_shoulder(u, threshold=shoulder_threshold, ceiling=highlight_ceiling)
+
     return np.clip(stretched, 0.0, 1.0).astype(np.float32)
 
 
@@ -712,15 +734,17 @@ def fuse_hdr_bracketing(
     saturation_threshold: float = 0.90,
     noise_floor: float = 0.015,
     asinh_stretch: float = 0.0,
-    mode: str = "solar"
+    mode: str = "solar",
+    lunar_mask_params: Optional[Tuple[float, float, float]] = None,
+    subtract_sky: bool = True
 ) -> np.ndarray:
     """
     Fusión de alto rango dinámico (HDR) para tomas de bracketing de eclipses.
-    - Modo solar: Fusión lineal fotométrica ponderada de flujo (flux = img / t),
-      ideal para la corona continua y filtros NRGF.
+    - Modo solar: Fusión lineal fotométrica con pesos unificados en luminancia (inmune a
+      aberración cromática en saturación), sustracción de pedestal de cielo por fotograma
+      y protección de disco lunar frente a dispersión de tomas largas.
     - Modo lunar: Fusión por exposición multiescala (Mertens-Kautz-Van Reeth),
-      óptima para el contraste extremo entre la zona iluminada y la umbra rojiza,
-      preservando textura de cráteres y color sin quemar ni empastar.
+      óptima para el contraste extremo entre la zona iluminada y la umbra rojiza.
     """
     if not images or len(images) != len(exposures_s):
         raise ValueError("La lista de imágenes y tiempos de exposición debe ser consistente.")
@@ -762,16 +786,51 @@ def fuse_hdr_bracketing(
     sat_lo = max(0.5, saturation_threshold - 0.10)
     sat_hi = saturation_threshold
 
+    # Máscara lunar para evitar que flare óptico de tomas largas invada el disco
+    moon_weight = None
+    if lunar_mask_params is not None:
+        mcx, mcy, mr = lunar_mask_params
+        y_idx, x_idx = np.indices(shape[:2], dtype=np.float32)
+        dist = np.hypot(x_idx - mcx, y_idx - mcy)
+        moon_weight = _smoothstep(dist, mr - 1.5, mr + 1.0)
+
     for img, t in zip(sorted_images, sorted_exp):
         t = max(t, 1e-6)
-        flux = img.astype(np.float64) / t
 
-        w_low = _smoothstep(img, 0.0, noise_floor * 2.0)
-        w_high = 1.0 - _smoothstep(img, sat_lo, sat_hi)
+        # 1. Sustracción de pedestal/fondo por fotograma para anivelar el cielo
+        if subtract_sky:
+            if img.ndim == 3:
+                bg = np.percentile(img, 0.5, axis=(0, 1), keepdims=True)
+            else:
+                bg = np.percentile(img, 0.5)
+            clean_img = np.maximum(img - bg, 0.0)
+        else:
+            clean_img = img
+
+        flux = clean_img.astype(np.float64) / t
+
+        # 2. Pesos unificados sobre luminancia y canal máximo (evita franjas de color)
+        if img.ndim == 3:
+            lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
+            max_c = np.max(img, axis=-1)
+        else:
+            lum = img
+            max_c = img
+
+        w_low = _smoothstep(lum, 0.0, noise_floor * 2.0)
+        w_high = 1.0 - _smoothstep(max_c, sat_lo, sat_hi)
         w = (w_low * w_high).astype(np.float64)
 
-        weighted_flux += flux * w
-        sum_weights += w
+        if moon_weight is not None:
+            w = w * moon_weight
+
+        if img.ndim == 3:
+            w_3d = w[..., None]
+            weighted_flux += flux * w_3d
+            sum_weights += w_3d
+        else:
+            weighted_flux += flux * w
+            sum_weights += w
 
     zero_mask = sum_weights < 1e-6
     if np.any(zero_mask):
@@ -780,8 +839,13 @@ def fuse_hdr_bracketing(
         longest_img = sorted_images[-1]
         longest_t = sorted_exp[-1]
 
+        if sorted_images[0].ndim == 3:
+            shortest_max = np.max(shortest_img, axis=-1, keepdims=True)
+        else:
+            shortest_max = shortest_img
+
         fallback_flux = np.where(
-            shortest_img >= sat_lo,
+            shortest_max >= sat_lo,
             shortest_img.astype(np.float64) / shortest_t,
             longest_img.astype(np.float64) / longest_t
         )
@@ -790,10 +854,22 @@ def fuse_hdr_bracketing(
 
     merged_flux = weighted_flux / sum_weights
 
-    p_high = float(np.percentile(merged_flux, 99.9995))
-    p_low = np.percentile(merged_flux, 0.05)
-    denom = max(p_high - p_low, 1e-8)
+    if moon_weight is not None:
+        if merged_flux.ndim == 3:
+            merged_flux = merged_flux * moon_weight[..., None]
+        else:
+            merged_flux = merged_flux * moon_weight
 
+    # Normalización sobre píxeles válidos fuera del disco lunar
+    if moon_weight is not None:
+        valid_px = moon_weight > 0.5
+        p_high = float(np.percentile(merged_flux[valid_px], 99.999))
+        p_low = float(np.percentile(merged_flux[valid_px], 0.05))
+    else:
+        p_high = float(np.percentile(merged_flux, 99.999))
+        p_low = float(np.percentile(merged_flux, 0.05))
+
+    denom = max(p_high - p_low, 1e-8)
     hdr_norm = np.clip((merged_flux - p_low) / denom, 0.0, 1.0).astype(np.float32)
 
     if asinh_stretch > 1.0:
@@ -931,15 +1007,95 @@ def apply_nrgf(
     new_lum = np.clip(lum + final_mod, 0.0, 1.0)
     new_lum = np.where(disk_mask, new_lum, 0.0).astype(np.float32)
 
-    # 6. Recomposición cromática
+    # 6. Recomposición cromática lineal radiométrica (preserva tonos y sat exactos sin distorsión HSV)
     if img.ndim == 3:
-        hsv = cv2.cvtColor(np.clip(img, 0.0, 1.0), cv2.COLOR_RGB2HSV)
-        hsv[..., 2] = new_lum
-        result = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+        ratio = np.divide(new_lum, np.maximum(lum, 1e-4), out=np.zeros_like(lum), where=lum > 1e-6)
+        ratio = np.clip(ratio, 0.0, 4.0)
+        result = img * ratio[..., None]
     else:
         result = new_lum
 
     return np.clip(result, 0.0, 1.0).astype(np.float32)
+
+
+def apply_mgn(
+    image: np.ndarray,
+    sigmas: Tuple[float, ...] = (1.5, 3.0, 6.0, 12.0, 24.0, 48.0),
+    k: float = 0.7,
+    gamma: float = 2.8,
+    blend_ratio: float = 0.50,
+    lunar_mask_params: Optional[Tuple[float, float, float]] = None
+) -> np.ndarray:
+    """
+    Multi-scale Gaussian Normalization (MGN - Morgan & Druckmüller 2014).
+    Normaliza el contraste de la corona solar simultáneamente en múltiples escalas espaciales,
+    haciendo visibles filamentos radiales finos, bucles magnéticos cerrados y la corona exterior tenue,
+    sin artefactos de coordenadas polares (gramófono) ni compuertas que cercenen el fondo de cielo.
+    """
+    img = np.clip(np.asarray(image, dtype=np.float32), 0.0, 1.0)
+    if img.ndim == 3:
+        lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
+    else:
+        lum = img.copy()
+
+    h, w = lum.shape[:2]
+
+    # Excluir interior del disco lunar para evitar halos y dispersión espuria
+    if lunar_mask_params is not None:
+        mcx, mcy, mr = lunar_mask_params
+        y_idx, x_idx = np.indices((h, w), dtype=np.float32)
+        dist = np.hypot(x_idx - mcx, y_idx - mcy)
+        m_bool = dist >= (mr - 1.0)
+    else:
+        m_bool = np.ones((h, w), dtype=bool)
+
+    m = m_bool.astype(np.float32)
+    acc = np.zeros((h, w), dtype=np.float32)
+    total_w = 0.0
+
+    for s in sigmas:
+        s_val = float(s)
+        # Convolución normalizada: (G * (I * m)) / (G * m)
+        num = cv2.GaussianBlur(np.where(m_bool, lum, 0.0).astype(np.float32), (0, 0), s_val)
+        den = cv2.GaussianBlur(m, (0, 0), s_val)
+        mu = np.where(m_bool & (den >= 0.15), num / np.maximum(den, 1e-12), np.nan)
+
+        d = np.where(np.isfinite(mu), lum - mu, 0.0).astype(np.float32)
+        num_v = cv2.GaussianBlur(np.where(m_bool, d * d, 0.0).astype(np.float32), (0, 0), s_val)
+        var = np.where(m_bool & (den >= 0.15), num_v / np.maximum(den, 1e-12), 0.0)
+        sd = np.sqrt(np.maximum(var, 1e-8))
+
+        c = np.where(np.isfinite(mu) & (sd > 1e-5), (lum - mu) / sd, 0.0)
+        acc += np.arctan(k * c).astype(np.float32)
+        total_w += 1.0
+
+    acc /= max(total_w, 1.0)
+
+    # Escalar arctan[-pi/2, pi/2] a [0, 1]
+    acc_norm = np.clip((acc + (np.pi / 2.0)) / np.pi, 0.0, 1.0)
+
+    # Contexto global por compresión gamma
+    g = np.clip(lum, 0.0, 1.0) ** (1.0 / max(gamma, 0.1))
+
+    # Mezcla armónica entre detalle multiescala normalizado y contexto global
+    h_weight = float(np.clip(1.0 - blend_ratio, 0.0, 1.0))
+    mgn_lum = np.clip(h_weight * g + (1.0 - h_weight) * acc_norm, 0.0, 1.0)
+
+    if lunar_mask_params is not None:
+        mgn_lum = np.where(m_bool, mgn_lum, 0.0)
+
+    # Recomposición cromática lineal radiométrica (preserva H y S intactos)
+    if img.ndim == 3:
+        ratio = np.divide(mgn_lum, np.maximum(lum, 1e-4), out=np.zeros_like(lum), where=lum > 1e-6)
+        ratio = np.clip(ratio, 0.0, 5.0)
+        result = img * ratio[..., None]
+        result = np.clip(result, 0.0, 1.0)
+        if lunar_mask_params is not None:
+            result = np.where(m_bool[..., None], result, 0.0)
+    else:
+        result = mgn_lum
+
+    return result.astype(np.float32)
 
 
 def apply_coronal_highpass(
