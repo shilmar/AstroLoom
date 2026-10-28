@@ -266,6 +266,17 @@ class SettingsTab(QWidget):
         self.lbl_sn_status.setStyleSheet("font-size: 11px; margin-top: 2px;")
         tools_layout.addWidget(self.lbl_sn_status)
 
+        # Nota de atribución y agradecimiento a Mikita Misiura (creador de StarNet)
+        self.lbl_sn_credits = QLabel(
+            "Agradecimiento especial a <b>Mikita Misiura</b> por el desarrollo, diseño y entrenamiento de "
+            "la red neuronal <a href='https://www.starnetastro.com/' style='color: #38bdf8; text-decoration: none;'>StarNet v2</a>, "
+            "herramienta esencial en la astrofotografía moderna."
+        )
+        self.lbl_sn_credits.setOpenExternalLinks(True)
+        self.lbl_sn_credits.setWordWrap(True)
+        self.lbl_sn_credits.setStyleSheet("color: #64748b; font-size: 10.5px; margin-top: 6px; line-height: 1.35;")
+        tools_layout.addWidget(self.lbl_sn_credits)
+
         self.sec_tools.setContentLayout(tools_layout)
         self.grp_paths = self.sec_tools
         left_layout.addWidget(self.sec_tools)
@@ -541,7 +552,7 @@ class SettingsTab(QWidget):
         lbl_cam_icon = QLabel()
         lbl_cam_icon.setPixmap(get_svg_pixmap("camera", color="#94a3b8", size=14))
         row_credits.addWidget(lbl_cam_icon)
-        lbl_credits = QLabel("Fotografía y Procesado: Shilmar")
+        lbl_credits = QLabel("Fotografía, Apilado y Revelado: Shilmar (100% AstroLoom Suite)")
         lbl_credits.setStyleSheet("font-size: 12px; color: #e0e0e0; font-weight: 500;")
         row_credits.addWidget(lbl_credits)
         row_credits.addStretch()
@@ -552,6 +563,7 @@ class SettingsTab(QWidget):
         row_tags.setSpacing(6)
 
         tags = [
+            ("● Flujo 100% AstroLoom", "#4ade80", "#0e2a18", "#1c5a32"),
             ("● 32-bit Float HDR", "#80d8ff", "#0d2b3e", "#1b4d6e"),
             ("● StarNet++ AI", "#ce93d8", "#2c1236", "#59266e"),
             ("● MTF Asinh", "#ffd54f", "#332a0d", "#66541a"),

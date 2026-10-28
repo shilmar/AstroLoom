@@ -19,6 +19,7 @@ def save_devloom_project(
     master_sky_mask: Optional[np.ndarray] = None,
     source_image_path: Optional[str] = None,
     starnet_data: Optional[Dict[str, Any]] = None,
+    cropped_base_image: Optional[np.ndarray] = None,
     progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> bool:
     """
@@ -30,6 +31,7 @@ def save_devloom_project(
     :param master_sky_mask: Máscara maestra 2D float32 [0.0, 1.0].
     :param source_image_path: Ruta a la imagen base cargada.
     :param starnet_data: Diccionario opcional con 'image_starless', 'image_stars', 'raw_linear_starless'.
+    :param cropped_base_image: Imagen base recortada 32-bit si se aplicó crop sin StarNet.
     :param progress_callback: Función callback(porcentaje: int, mensaje: str).
     """
     file_path = os.path.abspath(file_path)
@@ -110,7 +112,18 @@ def save_devloom_project(
                 if ok:
                     zf.writestr("starnet/raw_linear_starless.png", buf.tobytes())
 
-        # 4. Formatear rutas de imagen base
+        # 4. Guardar imagen base recortada si aplica
+        has_cropped_base = False
+        if cropped_base_image is not None and isinstance(cropped_base_image, np.ndarray):
+            _notify(85, "Comprimiendo imagen base recortada (16-bit)...")
+            u16_cb = np.clip(cropped_base_image * 65535.0, 0, 65535).astype(np.uint16)
+            bgr_cb = cv2.cvtColor(u16_cb, cv2.COLOR_RGB2BGR) if u16_cb.ndim == 3 else u16_cb
+            ok, buf = cv2.imencode(".png", bgr_cb, [cv2.IMWRITE_PNG_COMPRESSION, 6])
+            if ok:
+                zf.writestr("base/cropped_base.png", buf.tobytes())
+                has_cropped_base = True
+
+        # 5. Formatear rutas de imagen base
         _notify(90, "Escribiendo project.json y metadatos...")
         source_info = {}
         if source_image_path:
@@ -129,6 +142,7 @@ def save_devloom_project(
             "source_image": source_info,
             "master_sky_mask": master_mask_ref,
             "has_starnet": has_starnet,
+            "has_cropped_base": has_cropped_base,
             "starless_is_stretched": developer_state.get("starless_is_stretched", False) if developer_state else False,
             "developer_state": developer_state,
             "mask_layers": serialized_layers,
@@ -238,6 +252,19 @@ def load_devloom_project(
                 div = 65535.0 if dec.dtype == np.uint16 else 255.0
                 starnet_out["raw_linear_starless"] = dec.astype(np.float32) / div
 
+        # 4. Cargar imagen base recortada si existe
+        cropped_base = None
+        if "base/cropped_base.png" in namelist:
+            _notify(95, "Extrayendo imagen base recortada (16-bit)...")
+            raw_b = zf.read("base/cropped_base.png")
+            arr = np.frombuffer(raw_b, np.uint8)
+            dec = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+            if dec is not None:
+                if dec.ndim == 3:
+                    dec = cv2.cvtColor(dec, cv2.COLOR_BGR2RGB)
+                div = 65535.0 if dec.dtype == np.uint16 else 255.0
+                cropped_base = dec.astype(np.float32) / div
+
     _notify(100, "Lectura de proyecto finalizada.")
     return {
         "manifest": manifest,
@@ -246,6 +273,7 @@ def load_devloom_project(
         "master_sky_mask": master_sky,
         "mask_layers": layers,
         "starnet": starnet_out,
+        "cropped_base_image": cropped_base,
         "has_starnet": manifest.get("has_starnet", False),
         "starless_is_stretched": manifest.get("starless_is_stretched", False),
     }

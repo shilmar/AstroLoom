@@ -5,6 +5,31 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+### Añadido
+* **Diálogo Modal de Progreso Interactivo en StarNet:**
+  - Barra modal de progreso (QProgressDialog) que bloquea la interfaz durante la inferencia para evitar manipulaciones erróneas y muestra en tiempo real el bloque y porcentaje procesado, con botón de cancelación inmediata.
+* **Upsampling 2x en StarNet para Gran Angular:**
+  - Checkbox opcional en el panel de StarNet que interpola al 200% (bicúbica) antes de la inferencia, permitiendo detectar y eliminar limpiamente estrellas diminutas de 1-2 píxeles en focales gran angular (14-35 mm).
+  - Reescalado final suave con INTER_AREA y sustracción directa sobre la base nativa original.
+* **Confirmación Defensiva y Estado Dinámico en StarNet:**
+  - Diálogo modal de advertencia al pulsar el botón de StarNet si ya existen capas separadas en la sesión activa, evitando re-ejecuciones accidentales costosas en GPU/CPU.
+  - Actualización reactiva del texto del botón a 'Volver a separar estrellas (Sobrescribir)' y del estado de las insignias.
+* **Soporte de Deshacer / Rehacer Completo para StarNet (Ctrl+Z / Ctrl+Y):**
+  - Registro de eventos `starnet_separation` en la pila de historial que permite revertir y restaurar las capas desacopladas, desbloqueando y bloqueando dinámicamente los paneles base dependientes (Balance de blancos, Color y Estirado).
+* **Actualización de Showcase y Créditos de StarNet en Ajustes:**
+  - Nueva fotografía de escaparate de la Vía Láctea (838x1254) desarrollada íntegramente con el flujo suite de AstroLoom.
+  - Reconocimiento explícito en la sección de Ajustes agradeciendo a Mikita Misiura la creación de StarNet v2.
+
+### Corregido
+* **Fallo de Broadcasting al Cargar Proyectos .devloom Recortados:**
+  - Corrección de la excepción `operands could not be broadcast together with shapes` producida al reabrir proyectos guardados tras aplicar un recorte donde la imagen fuente en disco conservaba las dimensiones originales.
+  - Reconstrucción fiel de la base lineal 32-bit en memoria (`raw_linear_starless + stars`) y serialización nativa de `base/cropped_base.png` (16-bit) en el contenedor `.devloom` para proyectos recortados.
+  - Alineación dimensional estricta defensiva en `ResolutionPyramid` (proxies preview y draft), `_compose_active_base` y `apply_developer_pipeline`.
+
+### Optimizado
+* **Paso (Stride) por Defecto a 384 px en StarNet:**
+  - Adaptado a la morfología de paisaje nocturno, reduciendo el número de bloques a la mitad y acelerando la inferencia ~2.2x sin comprometer la separación en estrellas puntuales.
+
 ## [0.11.3] - 2026-10-27
 
 ### Añadido

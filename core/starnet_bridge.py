@@ -52,8 +52,9 @@ def find_starnet_executable(custom_path: Optional[str] = None) -> Optional[str]:
 def run_starnet(
     img_rgb: np.ndarray,
     sky_mask: Optional[np.ndarray] = None,
-    stride: int = 256,
+    stride: int = 384,
     starnet_exe: Optional[str] = None,
+    upsample: bool = False,
     log_callback: Optional[Callable[[str], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -75,6 +76,7 @@ def run_starnet(
             img_rgb=img_rgb,
             sky_mask=sky_mask,
             stride=stride,
+            upsample=upsample,
             is_linear=True,
             progress_callback=log_callback,
             cancel_check=cancel_check
@@ -88,9 +90,12 @@ def run_starnet(
             "ni el ejecutable de StarNet++ ('starnet2.exe')."
         )
 
-    def log(msg: str):
+    def log(msg: str, curr: int = 0, total: int = 0):
         if log_callback:
-            log_callback(msg)
+            try:
+                log_callback(msg, curr, total)
+            except TypeError:
+                log_callback(msg)
 
     starnet_dir = os.path.dirname(exe)
     temp_dir = tempfile.mkdtemp(prefix="starnet_run_")
@@ -128,7 +133,9 @@ def run_starnet(
             "-s", str(stride),
             "--linear"
         ]
-        log(f"Ejecutando StarNetv2 con flag --linear (stride={stride})...")
+        if upsample:
+            cmd.append("--upsample")
+        log(f"Ejecutando StarNetv2 CLI (stride={stride}, upsample={upsample})...")
 
         proc = subprocess.Popen(
             cmd,
@@ -143,7 +150,9 @@ def run_starnet(
             for line in proc.stdout:
                 txt = line.strip()
                 if txt:
-                    log(f"[StarNet] {txt}")
+                    m = re.search(r'(\d{1,3})%', txt)
+                    curr_pct = int(m.group(1)) if m else 0
+                    log(f"[StarNet] {txt}", curr_pct, 100)
 
         proc.wait()
         if proc.returncode != 0:

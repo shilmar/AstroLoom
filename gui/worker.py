@@ -621,16 +621,18 @@ class StackingWorker(QThread):
 
 class StarNetWorker(QThread):
     status_changed = Signal(str)
+    progress_changed = Signal(int, int, str)  # (current, total, message)
     finished_success = Signal(object, object)
     error_occurred = Signal(str)
     cancelled = Signal()
 
-    def __init__(self, img_rgb: np.ndarray, sky_mask: np.ndarray = None, stride: int = 256, custom_exe: str = None, parent=None):
+    def __init__(self, img_rgb: np.ndarray, sky_mask: np.ndarray = None, stride: int = 384, custom_exe: str = None, upsample: bool = False, parent=None):
         super().__init__(parent)
         self.img_rgb = img_rgb
         self.sky_mask = sky_mask
         self.stride = stride
         self.custom_exe = custom_exe
+        self.upsample = upsample
         self._is_cancelled = False
 
     def cancel(self):
@@ -642,12 +644,17 @@ class StarNetWorker(QThread):
                 self.cancelled.emit()
                 return
 
+            def on_progress(msg: str, curr: int = 0, total: int = 0):
+                self.status_changed.emit(msg)
+                self.progress_changed.emit(curr, total, msg)
+
             starless, stars = run_starnet(
                 self.img_rgb,
                 sky_mask=self.sky_mask,
                 stride=self.stride,
                 starnet_exe=self.custom_exe,
-                log_callback=self.status_changed.emit,
+                upsample=self.upsample,
+                log_callback=on_progress,
                 cancel_check=lambda: self._is_cancelled
             )
             if self._is_cancelled:

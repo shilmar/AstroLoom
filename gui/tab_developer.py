@@ -636,6 +636,7 @@ class DeveloperTab(QWidget):
         self.panel_starnet = StarNetPanel(self, resettable_label_factory=self._make_resettable_label)
         self.sec_starnet = self.panel_starnet.sec_starnet
         self.spin_stride = self.panel_starnet.spin_stride
+        self.chk_upsample = getattr(self.panel_starnet, 'chk_upsample', None)
         self.btn_starnet = self.panel_starnet.btn_starnet
         self.card_starnet_info = self.panel_starnet.card_starnet_info
         self.lbl_starnet_info = self.panel_starnet.lbl_starnet_info
@@ -3517,18 +3518,35 @@ class DeveloperTab(QWidget):
         self.preview_proxy = self.pyramid_image.preview
         self.draft_proxy = self.pyramid_image.draft
 
+        ph, pw = self.preview_proxy.shape[:2]
+        dh, dw = self.draft_proxy.shape[:2]
+
         if self.image_starless is not None:
             self.pyramid_starless = ResolutionPyramid(self.image_starless, max_preview_dim=1600, max_levels=4)
-            self.proxy_starless = self.pyramid_starless.preview
-            self.draft_starless = self.pyramid_starless.draft
+            p_sl = self.pyramid_starless.preview
+            d_sl = self.pyramid_starless.draft
+            if p_sl.shape[:2] != (ph, pw):
+                p_sl = cv2.resize(p_sl, (pw, ph), interpolation=cv2.INTER_AREA)
+            if d_sl.shape[:2] != (dh, dw):
+                d_sl = cv2.resize(d_sl, (dw, dh), interpolation=cv2.INTER_AREA)
+            self.proxy_starless = np.ascontiguousarray(p_sl, dtype=np.float32)
+            self.draft_starless = np.ascontiguousarray(d_sl, dtype=np.float32)
 
             self.pyramid_stars = ResolutionPyramid(self.image_stars, max_preview_dim=1600, max_levels=4)
-            self.proxy_stars = self.pyramid_stars.preview
-            self.draft_stars = self.pyramid_stars.draft
+            p_st = self.pyramid_stars.preview
+            d_st = self.pyramid_stars.draft
+            if p_st.shape[:2] != (ph, pw):
+                p_st = cv2.resize(p_st, (pw, ph), interpolation=cv2.INTER_AREA)
+            if d_st.shape[:2] != (dh, dw):
+                d_st = cv2.resize(d_st, (dw, dh), interpolation=cv2.INTER_AREA)
+            self.proxy_stars = np.ascontiguousarray(p_st, dtype=np.float32)
+            self.draft_stars = np.ascontiguousarray(d_st, dtype=np.float32)
         else:
             self.pyramid_starless = None
+            self.proxy_starless = None
             self.draft_starless = None
             self.pyramid_stars = None
+            self.proxy_stars = None
             self.draft_stars = None
 
         clean_mask = None
@@ -3658,12 +3676,6 @@ class DeveloperTab(QWidget):
             self._generate_before_reference()
             self._update_canvas_info_label()
 
-            # Inicializar historial de Deshacer / Rehacer limpio para la nueva imagen
-            self.undo_stack.clear()
-            self.redo_stack.clear()
-            self._last_committed_state = self._capture_state()
-            self._update_undo_redo_buttons()
-
             if self.current_mask is not None:
                 self.canvas.set_refined_mask(self.current_mask)
             else:
@@ -3673,6 +3685,14 @@ class DeveloperTab(QWidget):
             # Asegurar que se crea la capa Fondo (Imagen Base) en el Gestor de Capas
             if hasattr(self, 'mask_layers_widget'):
                 self.mask_layers_widget.ensure_base_layer()
+
+            # Inicializar historial de Deshacer / Rehacer limpio para la nueva imagen
+            if hasattr(self, '_undo_debounce_timer'):
+                self._undo_debounce_timer.stop()
+            self.undo_stack.clear()
+            self.redo_stack.clear()
+            self._last_committed_state = self._capture_state()
+            self._update_undo_redo_buttons()
 
             self.log_message(f"Imagen en memoria ({self.image_32bit.shape[1]}x{self.image_32bit.shape[0]} px). Vista acelerada activa.")
         except Exception as e:
@@ -3913,14 +3933,21 @@ class DeveloperTab(QWidget):
             crop_active = True
         else:
             is_scrubbing = getattr(self, '_is_scrubbing_heavy_slider', False)
+            if self.image_starless is not None:
+                if is_scrubbing and getattr(self, 'draft_proxy', None) is not None:
+                    starless = self.draft_starless
+                    stars = self.draft_stars
+                else:
+                    starless = self.proxy_starless
+                    stars = self.proxy_stars
+            else:
+                starless = None
+                stars = None
+
             if is_scrubbing and getattr(self, 'draft_proxy', None) is not None:
-                starless = self.draft_starless
-                stars = self.draft_stars
                 base = self.draft_proxy
                 mask_3d = self.draft_mask
             else:
-                starless = self.proxy_starless
-                stars = self.proxy_stars
                 base = self.preview_proxy
                 mask_3d = self.proxy_mask
             crop_active = False
@@ -3929,7 +3956,17 @@ class DeveloperTab(QWidget):
         if base is None:
             return None, None
 
-        if starless is None or stars is None:
+        bh, bw = base.shape[:2]
+        if starless is not None and starless.shape[:2] != (bh, bw):
+            starless = cv2.resize(starless, (bw, bh), interpolation=cv2.INTER_AREA)
+        if stars is not None and stars.shape[:2] != (bh, bw):
+            stars = cv2.resize(stars, (bw, bh), interpolation=cv2.INTER_AREA)
+        if mask_3d is not None and mask_3d.shape[:2] != (bh, bw):
+            mask_3d = cv2.resize(mask_3d, (bw, bh), interpolation=cv2.INTER_LINEAR)
+            if mask_3d.ndim == 2:
+                mask_3d = np.repeat(mask_3d[..., np.newaxis], 3, axis=2)
+
+        if self.image_starless is None or starless is None or stars is None:
             return base, mask_3d
 
         processed_starless = self._process_starless_base(
@@ -4060,15 +4097,19 @@ class DeveloperTab(QWidget):
             st_img = self.image_stars[y1:y2, x1:x2].copy() if self.image_stars is not None else None
             sl_img = self.image_starless[y1:y2, x1:x2].copy() if self.image_starless is not None else None
         elif is_full_res:
-            st_img = self.image_stars
+            st_img = self.image_stars if self.image_starless is not None else None
             sl_img = self.image_starless
         else:
-            if getattr(self, '_is_scrubbing_heavy_slider', False):
-                st_img = self.draft_stars if self.draft_stars is not None else self.proxy_stars
-                sl_img = self.draft_starless if self.draft_starless is not None else self.proxy_starless
+            if self.image_starless is not None:
+                if getattr(self, '_is_scrubbing_heavy_slider', False):
+                    st_img = self.draft_stars if self.draft_stars is not None else self.proxy_stars
+                    sl_img = self.draft_starless if self.draft_starless is not None else self.proxy_starless
+                else:
+                    st_img = self.proxy_stars if self.proxy_stars is not None else self.image_stars
+                    sl_img = self.proxy_starless if self.proxy_starless is not None else self.image_starless
             else:
-                st_img = self.proxy_stars if self.proxy_stars is not None else self.image_stars
-                sl_img = self.proxy_starless if self.proxy_starless is not None else self.image_starless
+                st_img = None
+                sl_img = None
 
         # Mask layers
         mask_layers = self.mask_layers_widget.layers if (apply_mask_layers and hasattr(self, 'mask_layers_widget')) else None
@@ -4369,6 +4410,19 @@ class DeveloperTab(QWidget):
             QMessageBox.warning(self, "Aviso", "Carga o apila una imagen primero.")
             return
 
+        if self.image_starless is not None:
+            ret = QMessageBox.question(
+                self,
+                "Volver a ejecutar StarNet",
+                "Ya existen capas desacopladas de estrellas en la sesión activa.\n\n"
+                "¿Deseas volver a ejecutar StarNet y sobrescribir las capas actuales con los nuevos parámetros?\n\n"
+                "(Podrás deshacer este cambio en cualquier momento con Ctrl+Z).",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if ret != QMessageBox.Yes:
+                return
+
         from core.starnet_onnx import is_starnet_onnx_available
         from core.starnet_bridge import find_starnet_executable
         if not is_starnet_onnx_available() and not find_starnet_executable():
@@ -4394,19 +4448,70 @@ class DeveloperTab(QWidget):
             self.sec_masks.expand()
 
         stride = self.spin_stride.value()
+        upsample = bool(self.chk_upsample and self.chk_upsample.isChecked())
+
+        progress = QProgressDialog("Inicializando StarNet++ AI...", "Cancelar", 0, 100, self)
+        progress.setWindowTitle("Separación de Estrellas — StarNet++ AI")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.setAutoClose(True)
 
         self.sn_worker = StarNetWorker(
             self.image_32bit, 
             sky_mask=self.current_mask, 
-            stride=stride
+            stride=stride,
+            upsample=upsample
         )
+
+        def on_sn_prog(curr, total, msg):
+            if total > 0:
+                pct = int((curr / total) * 100)
+                progress.setValue(pct)
+            progress.setLabelText(msg)
+
+        def on_finished(starless, stars):
+            progress.close()
+            self.on_starnet_success(starless, stars)
+
+        def on_error(err):
+            progress.close()
+            self.on_starnet_error(err)
+
+        def on_cancel():
+            self.sn_worker.cancel()
+            progress.close()
+            self._set_ai_processing_state(False)
+            self.log_message("[STARNET AI] Separación cancelada por el usuario.")
+
         self.sn_worker.status_changed.connect(self.log_message)
-        self.sn_worker.finished_success.connect(self.on_starnet_success)
-        self.sn_worker.error_occurred.connect(self.on_starnet_error)
+        self.sn_worker.progress_changed.connect(on_sn_prog)
+        self.sn_worker.finished_success.connect(on_finished)
+        self.sn_worker.error_occurred.connect(on_error)
+        self.sn_worker.cancelled.connect(on_cancel)
+        progress.canceled.connect(on_cancel)
+
         self.sn_worker.start()
 
     def on_starnet_success(self, starless_img: np.ndarray, stars_img: np.ndarray):
         self._set_ai_processing_state(False)
+        if hasattr(self, '_undo_debounce_timer'):
+            self._undo_debounce_timer.stop()
+
+        # Snapshot de estado previo para Deshacer (Undo) de la separación StarNet
+        undo_item = {
+            "type": "starnet_separation",
+            "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
+            "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
+            "starless_is_stretched": getattr(self, "starless_is_stretched", False),
+            "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
+            "mask_layers": [l.to_dict() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
+        }
+        self.undo_stack.append(undo_item)
+        if len(self.undo_stack) > self.MAX_UNDO_STEPS:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+        self._update_undo_redo_buttons()
 
         # CORREGIDO: Usar self.current_mask en lugar de un inexistente self.sky_mask
         sky_mask = self.current_mask
@@ -4435,7 +4540,9 @@ class DeveloperTab(QWidget):
 
         # Integrar capas de imagen (Fondo, Estrellas y opcionalmente Suelo) en el Gestor de Capas
         if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.blockSignals(True)
             self.mask_layers_widget.ensure_starnet_layers(has_ground=(self.current_mask is not None))
+            self.mask_layers_widget.blockSignals(False)
 
         self._set_starnet_tools_enabled(True)
         self._generate_preview_proxy()
@@ -4443,6 +4550,12 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
             self.mask_layers_widget.update_active_layer_histogram()
+
+        # Sincronizar el estado consolidado para evitar pasos espurios de debounce
+        if hasattr(self, '_undo_debounce_timer'):
+            self._undo_debounce_timer.stop()
+        self._last_committed_state = self._capture_state()
+
         self.log_message("[STARNET] Estrellas separadas y purgadas con máscara de cielo. Capas activadas.")
 
         # Desplegar automáticamente la sección de capas para acceso inmediato
@@ -6268,6 +6381,15 @@ class DeveloperTab(QWidget):
             else:
                 self.sec_starnet.set_status_badge("")
 
+        from core.i18n import tr
+        if hasattr(self, "btn_starnet") and self.btn_starnet is not None:
+            if enabled:
+                self.btn_starnet.setText(tr("developer.starnet.btn_reseparate", "Volver a separar estrellas (Sobrescribir)"))
+                self.btn_starnet.setToolTip("StarNet ya ha sido ejecutado. Pulsa para volver a desacoplar las estrellas con nuevos parámetros.")
+            else:
+                self.btn_starnet.setText(tr("developer.starnet.btn_separate", "Separar Estrellas con StarNet"))
+                self.btn_starnet.setToolTip("Ejecuta StarNet AI para desacoplar estrellas del fondo cósmico.")
+
         if hasattr(self, "btn_go_to_masks_starnet"):
             self.btn_go_to_masks_starnet.setVisible(enabled)
 
@@ -6530,6 +6652,51 @@ class DeveloperTab(QWidget):
                     self.mask_layers_widget.update_active_layer_histogram()
                 self.update_stretch_preview(immediate=True)
                 self.log_message("\u21ba Deshacer: Estirado Adaptativo de Starless revertido")
+            elif target.get("type") == "starnet_separation":
+                if hasattr(self, '_undo_debounce_timer'):
+                    self._undo_debounce_timer.stop()
+                redo_item = {
+                    "type": "starnet_separation",
+                    "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
+                    "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
+                    "starless_is_stretched": getattr(self, "starless_is_stretched", False),
+                    "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
+                    "mask_layers": [l.to_dict() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
+                }
+                self.redo_stack.append(redo_item)
+                self.image_starless = target["image_starless"]
+                self.raw_linear_starless = target.get("raw_linear_starless")
+                self.starless_is_stretched = target.get("starless_is_stretched", False)
+                self.image_stars = target.get("image_stars")
+                if self.image_starless is None:
+                    self.proxy_starless = None
+                    self.proxy_stars = None
+                    self.draft_starless = None
+                    self.draft_stars = None
+                    self.pyramid_starless = None
+                    self.pyramid_stars = None
+                has_starnet = self.image_starless is not None
+                self._set_starnet_tools_enabled(has_starnet)
+                self.combo_layer.setEnabled(has_starnet)
+                self.slider_stars.setEnabled(has_starnet)
+                if hasattr(self, 'mask_layers_widget'):
+                    self.mask_layers_widget.blockSignals(True)
+                    prev_layers = target.get("mask_layers", [])
+                    if prev_layers:
+                        self.mask_layers_widget.set_state(prev_layers)
+                    else:
+                        self.mask_layers_widget.clear_all_layers()
+                        self.mask_layers_widget.ensure_base_layer()
+                    self.mask_layers_widget.blockSignals(False)
+                    self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
+                    self.mask_layers_widget.update_active_layer_histogram()
+                self._invalidate_pipeline_caches()
+                self._generate_preview_proxy()
+                self.update_stretch_preview(immediate=True)
+                if hasattr(self, '_undo_debounce_timer'):
+                    self._undo_debounce_timer.stop()
+                self._last_committed_state = self._capture_state()
+                self.log_message(f"↺ Deshacer: Separación StarNet revertida ({len(self.undo_stack)} pasos restantes)")
             elif target.get("type") == "mask":
                 redo_item = {
                     "type": "mask",
@@ -6567,12 +6734,16 @@ class DeveloperTab(QWidget):
                     "type": "crop",
                     "image_32bit": self.image_32bit.copy(),
                     "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
+                    "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
+                    "starless_is_stretched": getattr(self, "starless_is_stretched", False),
                     "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
                     "current_mask": self.current_mask.copy() if self.current_mask is not None else None,
                 }
                 self.undo_stack.append(undo_item)
                 self.image_32bit = target["image_32bit"]
                 self.image_starless = target["image_starless"]
+                self.raw_linear_starless = target.get("raw_linear_starless")
+                self.starless_is_stretched = target.get("starless_is_stretched", False)
                 self.image_stars = target["image_stars"]
                 self.current_mask = target["current_mask"]
 
@@ -6602,6 +6773,51 @@ class DeveloperTab(QWidget):
                     self.mask_layers_widget.update_active_layer_histogram()
                 self.update_stretch_preview(immediate=True)
                 self.log_message("\u21bb Rehacer: Estirado Adaptativo de Starless restaurado")
+            elif target.get("type") == "starnet_separation":
+                if hasattr(self, '_undo_debounce_timer'):
+                    self._undo_debounce_timer.stop()
+                undo_item = {
+                    "type": "starnet_separation",
+                    "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
+                    "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
+                    "starless_is_stretched": getattr(self, "starless_is_stretched", False),
+                    "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
+                    "mask_layers": [l.to_dict() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
+                }
+                self.undo_stack.append(undo_item)
+                self.image_starless = target["image_starless"]
+                self.raw_linear_starless = target.get("raw_linear_starless")
+                self.starless_is_stretched = target.get("starless_is_stretched", False)
+                self.image_stars = target.get("image_stars")
+                if self.image_starless is None:
+                    self.proxy_starless = None
+                    self.proxy_stars = None
+                    self.draft_starless = None
+                    self.draft_stars = None
+                    self.pyramid_starless = None
+                    self.pyramid_stars = None
+                has_starnet = self.image_starless is not None
+                self._set_starnet_tools_enabled(has_starnet)
+                self.combo_layer.setEnabled(has_starnet)
+                self.slider_stars.setEnabled(has_starnet)
+                if hasattr(self, 'mask_layers_widget'):
+                    self.mask_layers_widget.blockSignals(True)
+                    next_layers = target.get("mask_layers", [])
+                    if next_layers:
+                        self.mask_layers_widget.set_state(next_layers)
+                    else:
+                        self.mask_layers_widget.clear_all_layers()
+                        self.mask_layers_widget.ensure_base_layer()
+                    self.mask_layers_widget.blockSignals(False)
+                    self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
+                    self.mask_layers_widget.update_active_layer_histogram()
+                self._invalidate_pipeline_caches()
+                self._generate_preview_proxy()
+                self.update_stretch_preview(immediate=True)
+                if hasattr(self, '_undo_debounce_timer'):
+                    self._undo_debounce_timer.stop()
+                self._last_committed_state = self._capture_state()
+                self.log_message(f"↻ Rehacer: Separación StarNet restaurada ({len(self.redo_stack)} pasos por rehacer)")
             elif target.get("type") == "mask":
                 undo_item = {
                     "type": "mask",
@@ -6777,7 +6993,7 @@ class DeveloperTab(QWidget):
             self.btn_undo.setEnabled(has_undo)
             if has_undo:
                 last_type = self.undo_stack[-1].get("type", "param")
-                desc = "recorte" if last_type == "crop" else "ajuste"
+                desc = "recorte" if last_type == "crop" else ("separación StarNet" if last_type == "starnet_separation" else ("máscara" if last_type == "mask" else "ajuste"))
                 self.btn_undo.setToolTip(f"Deshacer último {desc} (Ctrl+Z) — {len(self.undo_stack)} pasos en historial")
             else:
                 self.btn_undo.setToolTip("Deshacer (Ctrl+Z) — Sin acciones para deshacer")
@@ -6786,7 +7002,7 @@ class DeveloperTab(QWidget):
             self.btn_redo.setEnabled(has_redo)
             if has_redo:
                 next_type = self.redo_stack[-1].get("type", "param")
-                desc = "recorte" if next_type == "crop" else "ajuste"
+                desc = "recorte" if next_type == "crop" else ("separación StarNet" if next_type == "starnet_separation" else ("máscara" if next_type == "mask" else "ajuste"))
                 self.btn_redo.setToolTip(f"Rehacer {desc} (Ctrl+Y / Ctrl+Shift+Z) — {len(self.redo_stack)} pasos disponibles")
             else:
                 self.btn_redo.setToolTip("Rehacer (Ctrl+Y) — Sin acciones para rehacer")
@@ -7048,6 +7264,17 @@ class DeveloperTab(QWidget):
                     "raw_linear_starless": getattr(self, 'raw_linear_starless', None),
                 }
 
+            cropped_base = None
+            if self.active_filepath and os.path.exists(self.active_filepath) and self.image_32bit is not None and starnet_data is None:
+                try:
+                    import tifffile
+                    with tifffile.TiffFile(self.active_filepath) as tf:
+                        orig_shape = tf.pages[0].shape[:2]
+                    if self.image_32bit.shape[:2] != orig_shape:
+                        cropped_base = self.image_32bit
+                except Exception:
+                    pass
+
             from core.project_io import save_devloom_project
             ok = save_devloom_project(
                 file_path=filepath,
@@ -7056,6 +7283,7 @@ class DeveloperTab(QWidget):
                 master_sky_mask=master_mask,
                 source_image_path=self.active_filepath,
                 starnet_data=starnet_data,
+                cropped_base_image=cropped_base,
                 progress_callback=on_progress,
             )
 
@@ -7166,6 +7394,12 @@ class DeveloperTab(QWidget):
             master_mask = proj_data.get("master_sky_mask")
             self.load_image_direct(resolved_img_path, mask=master_mask)
 
+            # Restaurar base recortada previa si existía en el contenedor
+            cropped_base = proj_data.get("cropped_base_image")
+            if cropped_base is not None:
+                self.image_32bit = np.ascontiguousarray(cropped_base, dtype=np.float32)
+                self.canvas.set_native_image_size((self.image_32bit.shape[1], self.image_32bit.shape[0]))
+
             # 3. Restaurar capas StarNet si estaban empaquetadas
             starnet_dict = proj_data.get("starnet", {})
             sl_img = starnet_dict.get("image_starless")
@@ -7178,11 +7412,30 @@ class DeveloperTab(QWidget):
                 self.image_stars = np.ascontiguousarray(st_img, dtype=np.float32)
                 self.raw_linear_starless = np.ascontiguousarray(raw_sl_img, dtype=np.float32) if raw_sl_img is not None else self.image_starless.copy()
                 self.starless_is_stretched = proj_data.get("starless_is_stretched", False)
+
+                # Si las capas StarNet difieren dimensionalmente de la imagen base cargada
+                # (por ejemplo, si se recortó la imagen en sesión antes de guardar el proyecto),
+                # reconstruimos la base lineal 32-bit exacta a partir de las capas desacopladas.
+                if self.image_32bit is None or self.image_32bit.shape[:2] != self.image_starless.shape[:2]:
+                    base_reconstructed = self.raw_linear_starless + self.image_stars
+                    self.image_32bit = np.clip(base_reconstructed, 0.0, 1.0).astype(np.float32)
+                    self.canvas.set_native_image_size((self.image_32bit.shape[1], self.image_32bit.shape[0]))
+
                 self._set_starnet_tools_enabled(True)
                 self.combo_layer.setEnabled(True)
                 self.slider_stars.setEnabled(True)
                 self._cache_starless_ai = None
-                self._generate_preview_proxy()
+
+            # Sincronizar máscara maestra a las dimensiones de la imagen base activa
+            if master_mask is not None and self.image_32bit is not None:
+                if master_mask.shape[:2] != self.image_32bit.shape[:2]:
+                    self.current_mask = cv2.resize(master_mask, (self.image_32bit.shape[1], self.image_32bit.shape[0]), interpolation=cv2.INTER_LINEAR)
+                else:
+                    self.current_mask = master_mask.copy()
+                self.canvas.set_refined_mask(self.current_mask)
+                self._update_mask_status_ui()
+
+            self._generate_preview_proxy()
 
             # 4. Restaurar capas de ajuste y máscaras locales
             on_progress(80, "Restaurando pila de capas y máscaras...")

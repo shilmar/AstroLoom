@@ -72,7 +72,10 @@
       "wavelets": "Structure (Wavelets):",
       "fade_bg": "Fade Background:",
       "contrast": "Background Contrast:",
-      "denoise": "Noise Reduction:"
+      "denoise": "Noise Reduction:",
+      "upsample": "2x Upsampling (Wide-angle / pinpoint stars)",
+      "upsample_tooltip": "Interpolates the image to 200% before separation so AI detects 1-2 px pinpoint stars typical of wide-angle lenses (14-35 mm).\n\nWARNING: Multiplies computation time by 4.",
+      "btn_reseparate": "Re-separate Stars (Overwrite)"
     },
     "wb": {
       "temp": "Temp:",

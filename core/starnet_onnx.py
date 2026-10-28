@@ -29,7 +29,7 @@ logger = logging.getLogger("AstroLoom.StarNetONNX")
 DEFAULT_STARNET_URL = "https://download.starnetastro.com/starnet2_win_2.6.2-0242_ORT_x64_cli.zip"
 DEFAULT_STARNET_FILENAME = "starnet2.onnx"
 DEFAULT_TILE_SIZE = 512
-DEFAULT_STRIDE = 256
+DEFAULT_STRIDE = 384
 
 
 def get_starnet_model_path() -> Optional[str]:
@@ -213,6 +213,7 @@ def run_starnet_onnx(
     img_rgb: np.ndarray,
     sky_mask: Optional[np.ndarray] = None,
     stride: int = DEFAULT_STRIDE,
+    upsample: bool = False,
     model_path: Optional[str] = None,
     is_linear: bool = True,
     progress_callback: Optional[Callable[[str], None]] = None,
@@ -224,7 +225,8 @@ def run_starnet_onnx(
     Parámetros:
         img_rgb: Imagen de entrada en float32 [0.0, 1.0] (RGB).
         sky_mask: Máscara opcional (float32 [0.0, 1.0]) donde 1=cielo y 0=suelo.
-        stride: Salto de desplazamiento entre bloques (default 256 px).
+        stride: Salto de desplazamiento entre bloques (default 384 px).
+        upsample: Si es True, interpola a 200% (bicúbico) para detectar estrellas de 1-2 px en gran angular.
         model_path: Ruta opcional a los pesos .onnx.
         is_linear: Si es True, ejecuta el ciclo analítico MTF per-canal oficial de StarNet.
         progress_callback: fn(mensaje) para reportar estado y porcentaje a la UI.
@@ -244,9 +246,12 @@ def run_starnet_onnx(
             "Puedes descargarlo automáticamente desde la interfaz."
         )
 
-    def log(msg: str):
+    def log(msg: str, curr: int = 0, total: int = 0):
         if progress_callback:
-            progress_callback(msg)
+            try:
+                progress_callback(msg, curr, total)
+            except TypeError:
+                progress_callback(msg)
 
     # 1. Asegurar formato de entrada RGB float32 [0.0, 1.0]
     if img_rgb.dtype == np.uint8:
@@ -259,17 +264,31 @@ def run_starnet_onnx(
     if base.ndim == 2:
         base = np.stack([base] * 3, axis=-1)
 
-    h, w = base.shape[:2]
+    orig_h, orig_w = base.shape[:2]
+
+    # Preparar datos con posible Upsampling 2x para estrellas diminutas en gran angular
+    if upsample:
+        log(f"Aplicando Upsampling 2x (bicúbico) para detección de estrellas diminutas ({orig_w}x{orig_h} -> {orig_w*2}x{orig_h*2})...")
+        base_work = cv2.resize(base, (orig_w * 2, orig_h * 2), interpolation=cv2.INTER_CUBIC)
+        if sky_mask is not None:
+            sky_mask_work = cv2.resize(sky_mask, (orig_w * 2, orig_h * 2), interpolation=cv2.INTER_LINEAR)
+        else:
+            sky_mask_work = None
+    else:
+        base_work = base
+        sky_mask_work = sky_mask
+
+    h, w = base_work.shape[:2]
     log(f"Iniciando inferencia nativa StarNet v2 ONNX ({w}x{h} px)...")
 
     # 2. Protección del suelo: neutralizar el paisaje con el fondo del cielo si hay máscara
-    input_data = base.copy()
+    input_data = base_work.copy()
     mask_3d = None
-    if sky_mask is not None:
-        if sky_mask.shape[:2] != (h, w):
-            mask_aligned = cv2.resize(sky_mask, (w, h), interpolation=cv2.INTER_LINEAR)
+    if sky_mask_work is not None:
+        if sky_mask_work.shape[:2] != (h, w):
+            mask_aligned = cv2.resize(sky_mask_work, (w, h), interpolation=cv2.INTER_LINEAR)
         else:
-            mask_aligned = sky_mask
+            mask_aligned = sky_mask_work
 
         sky_pixels = input_data[mask_aligned > 0.5]
         bg_color = np.median(sky_pixels, axis=0) if len(sky_pixels) > 0 else np.array([0.005, 0.005, 0.005], dtype=np.float32)
@@ -335,9 +354,8 @@ def run_starnet_onnx(
             raw_starless[y : y + h_chunk, x : x + w_chunk] = tile_out[border : border + h_chunk, border : border + w_chunk]
 
             tile_idx += 1
-            if tile_idx % 5 == 0 or tile_idx == total_tiles:
-                pct = int((tile_idx / total_tiles) * 100)
-                log(f"Procesando StarNetv2 AI: bloque {tile_idx}/{total_tiles} ({pct}%)...")
+            pct = int((tile_idx / total_tiles) * 100)
+            log(f"Separando estrellas con StarNet v2 AI...\nBloque {tile_idx} de {total_tiles} ({pct}%)", tile_idx, total_tiles)
 
     # 6. Des-estirado analítico MTF inverso para imágenes lineales
     if is_linear:
@@ -358,13 +376,19 @@ def run_starnet_onnx(
 
     # 7. Restaurar suelo real intacto si se suministró sky_mask
     if mask_3d is not None:
-        starless_final = (final_starless * mask_3d) + (base * (1.0 - mask_3d))
+        starless_final = (final_starless * mask_3d) + (base_work * (1.0 - mask_3d))
     else:
         starless_final = final_starless
+
+    # Si se aplicó upsampling 2x, redimensionar starless a la resolución original con INTER_AREA
+    if upsample:
+        log(f"Redimensionando fondo Starless a resolución original ({orig_w}x{orig_h})...")
+        starless_final = cv2.resize(starless_final, (orig_w, orig_h), interpolation=cv2.INTER_AREA)
 
     starless_final = np.clip(starless_final, 0.0, 1.0).astype(np.float32)
 
     # 8. Capa de Estrellas puras = max(0, original - starless)
+    # Calculada sobre base original pura para máxima nitidez estelar
     stars_only = np.clip(base - starless_final, 0.0, 1.0).astype(np.float32)
 
     log("Desacoplo de estrellas completado exitosamente con DirectML.")

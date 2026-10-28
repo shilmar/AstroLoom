@@ -72,7 +72,10 @@
       "wavelets": "Estructura (Ondículas):",
       "fade_bg": "Atenuar Fondo:",
       "contrast": "Contraste Fondo:",
-      "denoise": "Reducción Ruido:"
+      "denoise": "Reducción Ruido:",
+      "upsample": "Upsampling 2x (Gran angular / estrellas minúsculas)",
+      "upsample_tooltip": "Interpola la imagen al 200% antes de la separación para que la IA detecte estrellas diminutas de 1-2 píxeles típicas de grandes angulares (14-35 mm).\n\nADVERTENCIA: Multiplica por 4 el número de bloques y el tiempo de cálculo.",
+      "btn_reseparate": "Volver a separar estrellas (Sobrescribir)"
     },
     "wb": {
       "temp": "Temp:",

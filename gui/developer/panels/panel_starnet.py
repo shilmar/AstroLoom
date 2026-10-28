@@ -7,7 +7,7 @@ y fondo cósmico, e integra el submódulo de efectos visuales (Orton y Star Diff
 from typing import Optional, Callable, Dict, Any
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox,
-    QPushButton, QFrame, QComboBox, QSlider
+    QPushButton, QFrame, QComboBox, QSlider, QCheckBox
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -44,12 +44,16 @@ class StarNetPanel(QWidget):
 
         # 1. Disparador de Ejecución
         row_sn = QHBoxLayout()
-        row_sn.addWidget(QLabel("Paso (Stride):"))
+        lbl_stride = QLabel("Paso (Stride):")
+        lbl_stride.setToolTip("Salto entre bloques (px). 384 es el valor óptimo y rápido para gran angular/paisaje. Usa 256 o 128 si hay estrellas muy brillantes con halos amplios.")
+        row_sn.addWidget(lbl_stride)
+
         self.spin_stride = QSpinBox()
         self.spin_stride.setRange(64, 512)
         self.spin_stride.setSingleStep(64)
-        self.spin_stride.setValue(256)
+        self.spin_stride.setValue(384)
         self.spin_stride.setFixedWidth(65)
+        self.spin_stride.setToolTip("Salto entre bloques (px). 384 es óptimo para paisaje. 256 para halos complejos.")
         row_sn.addWidget(self.spin_stride)
 
         self.btn_starnet = QPushButton("Separar Estrellas con StarNet")
@@ -58,6 +62,18 @@ class StarNetPanel(QWidget):
         self.btn_starnet.clicked.connect(self.run_starnet_requested.emit)
         row_sn.addWidget(self.btn_starnet)
         layout_starnet.addLayout(row_sn)
+
+        # Opciones avanzadas: Upsampling 2x
+        row_opts = QHBoxLayout()
+        self.chk_upsample = QCheckBox("Upsampling 2x (Gran angular / estrellas minúsculas)")
+        self.chk_upsample.setToolTip(
+            "Interpola la imagen al 200% antes de la separación para que la IA detecte estrellas diminutas "
+            "de 1-2 píxeles típicas de grandes angulares (14-35 mm).\n\n"
+            "ADVERTENCIA: Multiplica por 4 el número de bloques y el tiempo de cálculo."
+        )
+        self.chk_upsample.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        row_opts.addWidget(self.chk_upsample)
+        layout_starnet.addLayout(row_opts)
 
         # 2. Tarjeta informativa y acceso directo al Gestor de Capas
         self.card_starnet_info = QFrame()

@@ -158,6 +158,16 @@ def apply_developer_pipeline(
     if target_img is None:
         return None
 
+    th, tw = target_img.shape[:2]
+    if precomputed_mask is not None and precomputed_mask.shape[:2] != (th, tw):
+        precomputed_mask = cv2.resize(precomputed_mask, (tw, th), interpolation=cv2.INTER_LINEAR)
+        if precomputed_mask.ndim == 2 and target_img.ndim == 3:
+            precomputed_mask = np.repeat(precomputed_mask[..., np.newaxis], 3, axis=2)
+    if image_starless is not None and image_starless.shape[:2] != (th, tw):
+        image_starless = cv2.resize(image_starless, (tw, th), interpolation=cv2.INTER_AREA)
+    if image_stars is not None and image_stars.shape[:2] != (th, tw):
+        image_stars = cv2.resize(image_stars, (tw, th), interpolation=cv2.INTER_AREA)
+
     is_full_res = not is_preview
     st_stretched = precomputed_stretched_stars
     milestone_pre_lp = precomputed_pre_lp_base
@@ -303,6 +313,10 @@ def apply_developer_pipeline(
                     stretched_base = manual_stretch(img, black_point=state.bp_val, midtone=state.mtf_val)
                 
                 mask_blend = precomputed_mask if precomputed_mask.ndim == 3 else precomputed_mask[..., np.newaxis]
+                if mask_blend.shape[:2] != img.shape[:2]:
+                    mask_blend = cv2.resize(mask_blend, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
+                    if mask_blend.ndim == 2:
+                        mask_blend = mask_blend[..., np.newaxis]
                 stretched = (img * mask_blend) + (stretched_base * (1.0 - mask_blend))
             else:
                 stretched = img
