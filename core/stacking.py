@@ -880,6 +880,7 @@ def align_single_light_task(args: tuple) -> dict:
 def _process_single_chunk_cpu(args):
     source_arrays, y_start, y_end, w, c, kappa, lp_method, lp_strength = args[:8]
     weights = args[8] if len(args) > 8 else None
+    stack_method = args[9] if len(args) > 9 else "kappa_sigma"
     actual_rows = y_end - y_start
     n_frames = len(source_arrays)
     if weights is None:
@@ -907,7 +908,34 @@ def _process_single_chunk_cpu(args):
         del sub_stack
         return y_start, y_end, chunk_result
 
-    # Rechazo estricto en CPU
+    if stack_method == "median":
+        if HAS_NUMBA:
+            flat_data = sub_stack.reshape(n_frames, -1)
+            chunk_result = _median_kernel_numba(flat_data).reshape((actual_rows, w, c))
+        else:
+            for ch in range(c):
+                channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
+                valid_mask = channel_data >= 0.0
+                ch_masked = np.where(valid_mask, channel_data, np.nan)
+                chunk_result[:, :, ch] = np.nan_to_num(np.nanmedian(ch_masked, axis=0), nan=0.0).reshape((actual_rows, w))
+        del sub_stack
+        return y_start, y_end, chunk_result
+
+    if stack_method in ["min", "min_stack", "anti_traffic"]:
+        target_p = 10.0
+        if HAS_NUMBA:
+            flat_data = sub_stack.reshape(n_frames, -1)
+            chunk_result = _percentile_kernel_numba(flat_data, target_p).reshape((actual_rows, w, c))
+        else:
+            for ch in range(c):
+                channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
+                valid_mask = channel_data >= 0.0
+                ch_masked = np.where(valid_mask, channel_data, np.nan)
+                chunk_result[:, :, ch] = np.nan_to_num(np.nanpercentile(ch_masked, target_p, axis=0), nan=0.0).reshape((actual_rows, w))
+        del sub_stack
+        return y_start, y_end, chunk_result
+
+    # Rechazo estricto en CPU (Kappa-Sigma Ponderado)
     if HAS_NUMBA:
         flat_data = sub_stack.reshape(n_frames, -1)
         chunk_result = _kappa_sigma_kernel_numba(flat_data, kappa, weights).reshape((actual_rows, w, c))
@@ -953,7 +981,8 @@ def stream_stack_auto(
     max_workers: int = None,
     lp_method: str = "standard",
     lp_strength: float = 0.5,
-    weights: np.ndarray = None
+    weights: np.ndarray = None,
+    stack_method: str = "kappa_sigma"
 ) -> np.ndarray:
     """
     Motor canónico de integración matemática mediante franjas (chunks) 
@@ -977,7 +1006,7 @@ def stream_stack_auto(
         tasks = []
         for y in range(0, h, chunk_rows):
             y_end = min(y + chunk_rows, h)
-            tasks.append((source_arrays, y, y_end, w, c, kappa, lp_method, lp_strength, weights_arr))
+            tasks.append((source_arrays, y, y_end, w, c, kappa, lp_method, lp_strength, weights_arr, stack_method))
 
         if max_workers is None:
             max_workers = max(1, min(4, (os.cpu_count() or 4) - 1))

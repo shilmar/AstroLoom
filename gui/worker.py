@@ -548,8 +548,15 @@ class StackingWorker(QThread):
 
                 # MODO 1: Apilar ráfaga de suelo completa (Dual)
                 if ground_mode == "dual" and len(ground_frames_collection) >= 2:
+                    ground_algo = self.config.get("ground_algorithm", "kappa_sigma")
+                    algo_labels = {
+                        "kappa_sigma": f"Kappa-Sigma (k={kappa:.1f})",
+                        "median": "Mediana Estricta (Robusto)",
+                        "min": "Fusión Mínima (Min-Stack Anti-Tráfico)"
+                    }
+                    algo_label = algo_labels.get(ground_algo, ground_algo)
                     self.status_changed.emit(
-                        f"[Fase 3/4] Apilando Suelo ({len(ground_frames_collection)} tomas) con CPU Multi-Core (Kappa={kappa:.1f})..."
+                        f"[Fase 3/4] Apilando Suelo ({len(ground_frames_collection)} tomas) con CPU Multi-Core ({algo_label})..."
                     )
                     self.progress_changed.emit(80)
 
@@ -558,7 +565,8 @@ class StackingWorker(QThread):
                         ground_frames_collection, 
                         (h, w, c), 
                         chunk_rows=200, 
-                        kappa=kappa
+                        kappa=kappa,
+                        stack_method=ground_algo
                     )
                     
                     # Liberación inmediata de la colección de suelo de la memoria RAM / disco

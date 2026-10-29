@@ -503,6 +503,27 @@ class StackerTab(QWidget):
         row_ground.addWidget(self.combo_ground)
         set_layout.addWidget(self.row_ground_widget)
 
+        # Selector de Algoritmo de Suelo (Dual)
+        self.row_ground_algo_widget = QWidget()
+        row_ground_algo = QHBoxLayout(self.row_ground_algo_widget)
+        row_ground_algo.setContentsMargins(0, 0, 0, 0)
+        lbl_ground_algo = QLabel("Algoritmo de Suelo:")
+        lbl_ground_algo.setMinimumWidth(140)
+        self.combo_ground_algo = QComboBox()
+        self.combo_ground_algo.addItem("Promedio Kappa-Sigma (Dual)", "kappa_sigma")
+        self.combo_ground_algo.addItem("Mediana Estricta (Robusto)", "median")
+        self.combo_ground_algo.addItem("Fusión Mínima (Min-Stack / Anti-Tráfico)", "min")
+        self.combo_ground_algo.setToolTip(
+            "Algoritmo de integración para la ráfaga de suelo estático en trípode fijo:\n"
+            "• Kappa-Sigma: Máxima relación señal/ruido para paisajes nocturnos limpios.\n"
+            "• Mediana Estricta: Rechazo robusto de objetos en movimiento o nubes bajas.\n"
+            "• Fusión Mínima (Min-Stack): Elimina automáticamente faros de coches, estelas de tráfico, linternas y luces parásitas."
+        )
+        row_ground_algo.addWidget(lbl_ground_algo)
+        row_ground_algo.addWidget(self.combo_ground_algo)
+        set_layout.addWidget(self.row_ground_algo_widget)
+        self.combo_ground.currentIndexChanged.connect(self._on_ground_treatment_changed)
+
         # Contenedor de Configuración para Vídeo Time-Lapse (Sub-stacking)
         self.box_substack_settings = QWidget()
         sub_layout = QVBoxLayout(self.box_substack_settings)
@@ -886,10 +907,18 @@ class StackerTab(QWidget):
         """Si es star tracker, inhabilita el modo de apilar suelo de ráfaga y anti-ghosting."""
         is_fixed = (idx == 0)
         self.combo_ground.setEnabled(is_fixed)
+        if hasattr(self, 'row_ground_algo_widget'):
+            self.row_ground_algo_widget.setEnabled(is_fixed)
         if hasattr(self, 'box_anti_ghosting'):
             self.box_anti_ghosting.setEnabled(is_fixed)
         if not is_fixed:
             self.log_message("[MODO] Star Tracker activado: apilado restringido al cielo en movimiento.")
+
+    def _on_ground_treatment_changed(self, idx: int):
+        """Muestra el selector de algoritmo de suelo únicamente cuando se apila ráfaga completa (Dual)."""
+        is_dual = (idx == 0) and not self.rb_out_video.isChecked()
+        if hasattr(self, 'row_ground_algo_widget'):
+            self.row_ground_algo_widget.setVisible(is_dual)
 
     def _on_sub_w_slider_changed(self, val: int):
         if val % 2 == 0:
@@ -910,6 +939,8 @@ class StackerTab(QWidget):
             self.chk_weighted_stack.setVisible(not is_video)
         if hasattr(self, 'row_ground_widget'):
             self.row_ground_widget.setVisible(not is_video)
+        if hasattr(self, 'row_ground_algo_widget'):
+            self.row_ground_algo_widget.setVisible(not is_video and self.combo_ground.currentIndex() == 0)
         if hasattr(self, 'row_mode_widget'):
             self.row_mode_widget.setVisible(not is_video)
 
@@ -1546,6 +1577,8 @@ class StackerTab(QWidget):
             mode = data.get("mode", "fixed_tripod")
             self.combo_mode.setCurrentIndex(0 if mode == "fixed_tripod" else 1)
             self.combo_ground.setCurrentIndex(data.get("ground_mode_idx", 0))
+            if hasattr(self, 'combo_ground_algo'):
+                self.combo_ground_algo.setCurrentIndex(data.get("ground_algo_idx", 0))
             
             params = data.get("parameters", {})
             self.spin_kappa.setValue(params.get("kappa", 2.2))
@@ -1592,6 +1625,7 @@ class StackerTab(QWidget):
         self.project_mgr.data["ground_frames"] = self.ground_list
         self.project_mgr.data["mode"] = "fixed_tripod" if self.combo_mode.currentIndex() == 0 else "star_tracker"
         self.project_mgr.data["ground_mode_idx"] = self.combo_ground.currentIndex()
+        self.project_mgr.data["ground_algo_idx"] = self.combo_ground_algo.currentIndex() if hasattr(self, 'combo_ground_algo') else 0
         self.project_mgr.data["parameters"] = {
             "kappa": self.spin_kappa.value(),
             "linear_fit": self.chk_linear_fit.isChecked() if hasattr(self, 'chk_linear_fit') else True,
@@ -1633,6 +1667,8 @@ class StackerTab(QWidget):
 
         self.combo_mode.setCurrentIndex(0)
         self.combo_ground.setCurrentIndex(0)
+        if hasattr(self, 'combo_ground_algo'):
+            self.combo_ground_algo.setCurrentIndex(0)
         self.spin_kappa.setValue(2.2)
         if hasattr(self, 'chk_linear_fit'):
             self.chk_linear_fit.setChecked(True)
@@ -1725,6 +1761,7 @@ class StackerTab(QWidget):
             "bias": self.bias_list,
             "mode": "fixed_tripod" if self.combo_mode.currentIndex() == 0 else "star_tracker",
             "ground_mode": selected_ground_mode,
+            "ground_algorithm": self.combo_ground_algo.currentData() if hasattr(self, 'combo_ground_algo') else "kappa_sigma",
             "external_ground_path": external_path,
             "kappa": self.spin_kappa.value(),
             "linear_fit": self.chk_linear_fit.isChecked() if hasattr(self, 'chk_linear_fit') else True,
