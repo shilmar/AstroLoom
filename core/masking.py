@@ -13,7 +13,8 @@ def refine_mask_guided(
     user_scribbles: np.ndarray,
     feather_radius: int = 7,
     iterations: int = 3,
-    base_mask: Optional[np.ndarray] = None
+    base_mask: Optional[np.ndarray] = None,
+    shift_edge: int = 0
 ) -> np.ndarray:
     """
     Refina la máscara cielo/suelo preservando ramas finas y siluetas complejas mediante:
@@ -127,21 +128,125 @@ def refine_mask_guided(
     else:
         mask_full = refined_small
 
-    # 5. Suavizado y refinado guiado de bordes
+    # 5. Suavizado y refinado guiado de bordes (evita desborde gaussiano ciego)
     k = max(1, feather_radius)
-    if k % 2 == 0:
-        k += 1
-
     if k > 1:
-        feathered = cv2.GaussianBlur(mask_full, (k, k), sigmaX=k / 3.0)
-        # Mantener las semillas manuales del usuario con peso estricto
-        feathered[user_scribbles == 2] = 1.0
-        feathered[user_scribbles == 1] = 0.0
-        mask_final = feathered
+        try:
+            from core.ai_horizon import fast_guided_filter
+            mask_final = fast_guided_filter(gray, mask_full, radius=k, eps=1e-4)
+        except Exception:
+            if k % 2 == 0:
+                k += 1
+            mask_final = cv2.GaussianBlur(mask_full, (k, k), sigmaX=k / 3.0)
     else:
         mask_final = mask_full
 
+    # Desplazamiento opcional de frontera (Shift Edge)
+    if shift_edge != 0:
+        mask_final = shift_mask_edge(mask_final, shift_edge)
+
+    # Mantener las semillas manuales del usuario con peso estricto
+    mask_final[user_scribbles == 2] = 1.0
+    mask_final[user_scribbles == 1] = 0.0
+
     return np.clip(mask_final, 0.0, 1.0).astype(np.float32)
+
+
+def shift_mask_edge(mask: np.ndarray, shift_px: int) -> np.ndarray:
+    """
+    Desplaza la frontera de la máscara hacia el cielo (shift_px > 0) o hacia el suelo (shift_px < 0).
+    Permite contraer la máscara de cielo para ocultar flecos luminosos en siluetas complejas.
+    """
+    if shift_px == 0 or mask is None:
+        return mask
+    is_3d = mask.ndim == 3
+    m_2d = mask[..., 0] if is_3d else mask
+    k_size = 2 * abs(int(shift_px)) + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+    if shift_px > 0:
+        res = cv2.dilate(m_2d, kernel)
+    else:
+        res = cv2.erode(m_2d, kernel)
+    if is_3d:
+        return res[..., np.newaxis]
+    return res
+
+
+def suppress_horizon_halos(
+    image_rgb: np.ndarray,
+    sky_mask: np.ndarray,
+    radius: int = 3,
+    strength: float = 0.8,
+    suppress_dark_halos: bool = False
+) -> np.ndarray:
+    """
+    Detecta la banda de frontera entre cielo y suelo y aplica clamping de luminancia
+    (equivalente al Filtro Mínimo en modo Oscurecer en Photoshop) para eliminar
+    halos y rebordes claros en siluetas terrestres oscuras sin degradar texturas interiores.
+    
+    Optimizado con delimitación de caja (bounding box) para máxima velocidad interactiva.
+    """
+    if strength <= 1e-4 or sky_mask is None or radius < 1:
+        return image_rgb
+
+    h, w = image_rgb.shape[:2]
+    m_2d = sky_mask[..., 0] if sky_mask.ndim == 3 else sky_mask
+    if m_2d.shape[:2] != (h, w):
+        m_2d = cv2.resize(m_2d.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
+
+    m_bin = (m_2d > 0.5).astype(np.uint8)
+    if not np.any(m_bin == 0) or not np.any(m_bin == 1):
+        return image_rgb
+
+    r = max(1, int(radius))
+    k_size = 2 * r + 1
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+    boundary = cv2.morphologyEx(m_bin, cv2.MORPH_GRADIENT, k)
+    pts = cv2.findNonZero(boundary)
+    if pts is None:
+        return image_rgb
+
+    # Recorte a la caja delimitadora de la frontera para acelerar el cálculo >8x
+    bx, by, bw, bh = cv2.boundingRect(pts)
+    pad = r * 3
+    y1 = max(0, by - pad)
+    y2 = min(h, by + bh + pad)
+    x1 = max(0, bx - pad)
+    x2 = min(w, bx + bw + pad)
+
+    sub_img = image_rgb[y1:y2, x1:x2]
+    sub_bin = m_bin[y1:y2, x1:x2]
+    sub_m2d = m_2d[y1:y2, x1:x2]
+    sub_bound = boundary[y1:y2, x1:x2].astype(np.float32)
+
+    # 1. Supresión de halos claros en la silueta terrestre (Mínimo local / Oscurecer)
+    k_inner = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, r), max(3, r)))
+    inner_gnd = cv2.erode(1 - sub_bin, k_inner)
+    sample_gnd = inner_gnd if np.any(inner_gnd > 0) else (1 - sub_bin)
+
+    gnd_deep = np.where(sample_gnd[..., np.newaxis] == 1, sub_img, 1.0)
+    gnd_min = cv2.erode(gnd_deep, k)
+
+    gnd_boundary = sub_bound * (1.0 - sub_m2d)
+    target = np.minimum(sub_img, gnd_min)
+
+    w_blend = (gnd_boundary * float(strength))[..., np.newaxis]
+    res_sub = sub_img * (1.0 - w_blend) + target * w_blend
+
+    # 2. Supresión opcional de flecos oscuros en el cielo (Máximo local / Aclarar)
+    if suppress_dark_halos:
+        inner_sky = cv2.erode(sub_bin, k_inner)
+        sample_sky = inner_sky if np.any(inner_sky > 0) else sub_bin
+        sky_deep = np.where(sample_sky[..., np.newaxis] == 1, sub_img, 0.0)
+        sky_max = cv2.dilate(sky_deep, k)
+        sky_boundary = sub_bound * sub_m2d
+        target_sky = np.maximum(res_sub, sky_max)
+        w_sky = (sky_boundary * float(strength))[..., np.newaxis]
+        res_sub = res_sub * (1.0 - w_sky) + target_sky * w_sky
+
+    out = image_rgb.copy()
+    out[y1:y2, x1:x2] = np.clip(res_sub, 0.0, 1.0).astype(np.float32)
+    return out
 
 
 def apply_direct_brush_to_mask(

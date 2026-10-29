@@ -204,7 +204,11 @@ class DeveloperTab(QWidget):
         # Parámetros de Tono del Suelo 
         self.gnd_ev_val = 0.0        # -2.00 EV a +3.00 EV
         self.gnd_shadows_val = 0.0   # 0.0 a 1.0 (0% a 100%)
-        self.gnd_bp_val = 0.0        # -0.050 a +0.100
+        self.gnd_bp_val = 0.0
+        self.gnd_antihalo_val = 0.0
+        self.gnd_edge_shift_val = 0        # -0.050 a +0.100
+        self.gnd_antihalo_val = 0.0  # 0.0 a 1.0 (0% a 100%)
+        self.gnd_edge_shift_val = 0  # -15 a +15 px
         
         self.star_intensity = 1.0    # 1.0 = 100%, 0.0 = Starless puro
         self.view_layer_mode = 0     # 0: Compuesta, 1: Solo Fondo, 2: Solo Estrellas
@@ -831,9 +835,13 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.ground_shadows_changed.connect(self._on_mask_widget_gnd_sh)
         self.mask_layers_widget.ground_bp_changed.connect(self._on_mask_widget_gnd_bp)
         self.mask_layers_widget.ground_denoise_changed.connect(self.on_gnd_denoise_changed)
+        self.mask_layers_widget.ground_antihalo_changed.connect(self.on_gnd_antihalo_changed)
+        self.mask_layers_widget.ground_edge_shift_changed.connect(self.on_gnd_edge_shift_changed)
         self.mask_layers_widget.ground_ai_denoise_requested.connect(self.on_run_ground_ai_denoise_requested)
         if hasattr(self, 'panel_ground_sky') and self.panel_ground_sky is not None:
             self.panel_ground_sky.denoise_changed.connect(self.on_gnd_denoise_changed)
+            self.panel_ground_sky.antihalo_changed.connect(self.on_gnd_antihalo_changed)
+            self.panel_ground_sky.edge_shift_changed.connect(self.on_gnd_edge_shift_changed)
         self.mask_layers_widget.ground_reset_requested.connect(self.reset_gnd_tone)
         self.mask_layers_widget.ground_slider_released.connect(self._commit_action)
         self.mask_layers_widget.set_ground_tone_values(
@@ -1862,6 +1870,18 @@ class DeveloperTab(QWidget):
         self.spin_mask_iters.setToolTip("Número de iteraciones del algoritmo de segmentación GrabCut")
         tb_layout.addWidget(self.spin_mask_iters)
 
+        lbl_sh = QLabel("Desplazar:")
+        lbl_sh.setStyleSheet("color: #c0caf5; font-size: 11px;")
+        tb_layout.addWidget(lbl_sh)
+
+        self.spin_mask_shift = QSpinBox()
+        self.spin_mask_shift.setRange(-20, 20)
+        self.spin_mask_shift.setValue(0)
+        self.spin_mask_shift.setSuffix(" px")
+        self.spin_mask_shift.setFixedWidth(66)
+        self.spin_mask_shift.setToolTip("Desplaza la frontera de la máscara: negativo contrae el cielo hacia el suelo para tapar halos; positivo lo expande")
+        tb_layout.addWidget(self.spin_mask_shift)
+
         # Separador vertical
         sep3 = QFrame()
         sep3.setFrameShape(QFrame.VLine)
@@ -2125,12 +2145,14 @@ class DeveloperTab(QWidget):
 
             feather = self.spin_mask_feather.value()
             iters = self.spin_mask_iters.value()
+            shift_edge = self.spin_mask_shift.value() if hasattr(self, 'spin_mask_shift') else 0
 
             new_mask = refine_mask_guided(
                 self.image_32bit,
                 scribbles_full,
                 feather_radius=feather,
-                iterations=iters
+                iterations=iters,
+                shift_edge=shift_edge
             )
 
             self.current_mask = new_mask
@@ -4042,6 +4064,8 @@ class DeveloperTab(QWidget):
             round(float(getattr(self, 'gnd_denoise_val', 0.0)), 4),
             bool(getattr(self, 'gnd_ai_denoise_enabled', False)),
             id(getattr(self, '_cache_ground_ai', None)),
+            int(getattr(self, 'gnd_edge_shift_val', 0)),
+            round(float(getattr(self, 'gnd_antihalo_val', 0.0)), 4),
             round(float(getattr(self, 'denoise_strength', 0.0)), 4),
             round(float(getattr(self, 'denoise_color_strength', 0.5)), 4),
             round(float(getattr(self, 'denoise_masking', 0.5)), 4),
@@ -5869,11 +5893,35 @@ class DeveloperTab(QWidget):
             )
         self.update_stretch_preview()
 
+    def on_gnd_antihalo_changed(self, val: int):
+        self.gnd_antihalo_val = val / 100.0
+        if hasattr(self, 'panel_ground_sky') and self.panel_ground_sky is not None:
+            if hasattr(self.panel_ground_sky, 'slider_gnd_antihalo') and self.panel_ground_sky.slider_gnd_antihalo.value() != val:
+                self.panel_ground_sky.slider_gnd_antihalo.setValue(val)
+        if hasattr(self, 'mask_layers_widget'):
+            if hasattr(self.mask_layers_widget, 'slider_gnd_special_antihalo') and self.mask_layers_widget.slider_gnd_special_antihalo.value() != val:
+                self.mask_layers_widget.slider_gnd_special_antihalo.setValue(val)
+        self.update_stretch_preview()
+
+    def on_gnd_edge_shift_changed(self, val: int):
+        self.gnd_edge_shift_val = val
+        if hasattr(self, 'panel_ground_sky') and self.panel_ground_sky is not None:
+            if hasattr(self.panel_ground_sky, 'slider_gnd_edge_shift') and self.panel_ground_sky.slider_gnd_edge_shift.value() != val:
+                self.panel_ground_sky.slider_gnd_edge_shift.setValue(val)
+        if hasattr(self, 'mask_layers_widget'):
+            if hasattr(self.mask_layers_widget, 'slider_gnd_special_edge_shift') and self.mask_layers_widget.slider_gnd_special_edge_shift.value() != val:
+                self.mask_layers_widget.slider_gnd_special_edge_shift.setValue(val)
+        if hasattr(self, 'spin_mask_shift') and self.spin_mask_shift.value() != val:
+            self.spin_mask_shift.setValue(val)
+        self.update_stretch_preview()
+
     def reset_gnd_tone(self):
         """Restablece los ajustes tonales del suelo delegando en el panel."""
         self.gnd_ev_val = 0.0
         self.gnd_shadows_val = 0.0
         self.gnd_bp_val = 0.0
+        self.gnd_antihalo_val = 0.0
+        self.gnd_edge_shift_val = 0
 
         if hasattr(self, 'panel_ground_sky') and self.panel_ground_sky is not None:
             self.panel_ground_sky.set_state({
@@ -5883,7 +5931,9 @@ class DeveloperTab(QWidget):
             })
 
         if hasattr(self, 'mask_layers_widget'):
-            self.mask_layers_widget.set_ground_tone_values(0, 0, 0)
+            self.mask_layers_widget.set_ground_tone_values(0, 0, 0, 0, 0, 0)
+        if hasattr(self, 'spin_mask_shift'):
+            self.spin_mask_shift.setValue(0)
 
         self.update_stretch_preview()
         self._commit_action()
@@ -6229,6 +6279,8 @@ class DeveloperTab(QWidget):
         self.gnd_ev_val = 0.0
         self.gnd_shadows_val = 0.0
         self.gnd_bp_val = 0.0
+        self.gnd_antihalo_val = 0.0
+        self.gnd_edge_shift_val = 0
         self.gnd_denoise_val = 0.0
         self.gnd_ai_denoise_enabled = False
         self._cache_ground_ai = None

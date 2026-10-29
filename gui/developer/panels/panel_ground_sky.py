@@ -25,6 +25,8 @@ class GroundSkyPanel(QWidget):
     shadows_changed = Signal(int)
     bp_changed = Signal(int)
     denoise_changed = Signal(int)
+    antihalo_changed = Signal(int)
+    edge_shift_changed = Signal(int)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -140,6 +142,18 @@ class GroundSkyPanel(QWidget):
         self.slider_gnd_dn.valueChanged.connect(self.denoise_changed.emit)
         hidden_gnd_layout.addWidget(self.slider_gnd_dn)
 
+        self.slider_gnd_antihalo = QSlider(Qt.Horizontal)
+        self.slider_gnd_antihalo.setRange(0, 100)
+        self.slider_gnd_antihalo.setValue(0)
+        self.slider_gnd_antihalo.valueChanged.connect(self.antihalo_changed.emit)
+        hidden_gnd_layout.addWidget(self.slider_gnd_antihalo)
+
+        self.slider_gnd_edge_shift = QSlider(Qt.Horizontal)
+        self.slider_gnd_edge_shift.setRange(-15, 15)
+        self.slider_gnd_edge_shift.setValue(0)
+        self.slider_gnd_edge_shift.valueChanged.connect(self.edge_shift_changed.emit)
+        hidden_gnd_layout.addWidget(self.slider_gnd_edge_shift)
+
         self.btn_reset_gnd = QPushButton("Restablecer Tono Suelo")
         self.btn_reset_gnd.clicked.connect(self.reset_requested.emit)
         hidden_gnd_layout.addWidget(self.btn_reset_gnd)
@@ -156,6 +170,8 @@ class GroundSkyPanel(QWidget):
             "gnd_sh_val": self.slider_gnd_sh.value(),
             "gnd_bp_val": self.slider_gnd_bp.value(),
             "gnd_dn_val": self.slider_gnd_dn.value() if hasattr(self, 'slider_gnd_dn') else 0,
+            "gnd_antihalo_val": self.slider_gnd_antihalo.value() if hasattr(self, 'slider_gnd_antihalo') else 0,
+            "gnd_edge_shift_val": self.slider_gnd_edge_shift.value() if hasattr(self, 'slider_gnd_edge_shift') else 0,
         }
 
     def set_state(self, state: Dict[str, Any]) -> None:
@@ -178,12 +194,16 @@ class GroundSkyPanel(QWidget):
                 val = state["gnd_dn_val"]
                 self.slider_gnd_dn.setValue(val)
                 self.lbl_gnd_dn.setText(f"{val}%")
+            if "gnd_antihalo_val" in state and hasattr(self, 'slider_gnd_antihalo'):
+                self.slider_gnd_antihalo.setValue(state["gnd_antihalo_val"])
+            if "gnd_edge_shift_val" in state and hasattr(self, 'slider_gnd_edge_shift'):
+                self.slider_gnd_edge_shift.setValue(state["gnd_edge_shift_val"])
         finally:
             self.block_signals(False)
 
     def block_signals(self, blocked: bool) -> None:
         """Bloquea las señales de los controles tonales de suelo."""
-        for w in (self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp, getattr(self, 'slider_gnd_dn', None)):
+        for w in (self.slider_gnd_ev, self.slider_gnd_sh, self.slider_gnd_bp, getattr(self, 'slider_gnd_dn', None), getattr(self, 'slider_gnd_antihalo', None), getattr(self, 'slider_gnd_edge_shift', None)):
             if w is not None:
                 w.blockSignals(blocked)
 

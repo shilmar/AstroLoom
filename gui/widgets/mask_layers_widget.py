@@ -131,6 +131,8 @@ class MaskLayersWidget(QWidget):
     ground_shadows_changed = Signal(int)         # (val) sincronizar slider_gnd_sh (0 a 100)
     ground_bp_changed = Signal(int)              # (val) sincronizar slider_gnd_bp (-50 a 100)
     ground_denoise_changed = Signal(int)         # (val 0 a 100) sincronizar slider de ruido de suelo
+    ground_antihalo_changed = Signal(int)        # (val 0 a 100) fuerza anti-halo en la frontera
+    ground_edge_shift_changed = Signal(int)      # (val -15 a 15) desplazamiento de borde en px
     ground_ai_denoise_requested = Signal()       # Solicitud de alternar o calcular Denoise IA para Suelo
     ground_reset_requested = Signal()            # reset tono suelo
     ground_slider_released = Signal()            # commit de deshacer tras soltar deslizador de suelo
@@ -902,6 +904,25 @@ class MaskLayersWidget(QWidget):
         self.slider_gnd_special_dn.valueChanged.connect(self._on_gnd_special_dn_changed)
         self.slider_gnd_special_dn.sliderReleased.connect(self.ground_slider_released.emit)
         gnd_spec_layout.addWidget(self.row_gnd_special_dn)
+
+        # Anti-Halo y Desplazamiento de Borde en Frontera
+        self.row_gnd_special_antihalo = PrecisionSliderRow(
+            "Anti-Halo Frontera:", 0, 100, 0, scale=1.0, decimals=0, unit="%", label_width=120
+        )
+        self.slider_gnd_special_antihalo = self.row_gnd_special_antihalo.slider
+        self.lbl_gnd_special_antihalo = self.row_gnd_special_antihalo.lbl_value
+        self.slider_gnd_special_antihalo.valueChanged.connect(self._on_gnd_special_antihalo_changed)
+        self.slider_gnd_special_antihalo.sliderReleased.connect(self.ground_slider_released.emit)
+        gnd_spec_layout.addWidget(self.row_gnd_special_antihalo)
+
+        self.row_gnd_special_edge_shift = PrecisionSliderRow(
+            "Desplazar Borde:", -15, 15, 0, scale=1.0, decimals=0, unit=" px", force_sign=True, label_width=120
+        )
+        self.slider_gnd_special_edge_shift = self.row_gnd_special_edge_shift.slider
+        self.lbl_gnd_special_edge_shift = self.row_gnd_special_edge_shift.lbl_value
+        self.slider_gnd_special_edge_shift.valueChanged.connect(self._on_gnd_special_edge_shift_changed)
+        self.slider_gnd_special_edge_shift.sliderReleased.connect(self.ground_slider_released.emit)
+        gnd_spec_layout.addWidget(self.row_gnd_special_edge_shift)
 
         self.btn_reset_gnd_special = QPushButton("Restablecer Tono Suelo")
         self.btn_reset_gnd_special.setIcon(get_icon("rotate_ccw", color="#a5d6a7", size=13))
@@ -2705,7 +2726,7 @@ class MaskLayersWidget(QWidget):
         self.lbl_gnd_special_bp.setText(f"{display_val:+.3f}")
         self.ground_bp_changed.emit(val)
 
-    def set_ground_tone_values(self, ev_val: int, sh_val: int, bp_val: int, dn_val: int = 0) -> None:
+    def set_ground_tone_values(self, ev_val: int, sh_val: int, bp_val: int, dn_val: int = 0, antihalo_val: int = 0, edge_shift_val: int = 0) -> None:
         """Sincroniza los valores de los controles tonales de suelo desde tab_developer."""
         self._updating_ui = True
         if hasattr(self, 'slider_gnd_special_ev'):
@@ -2720,12 +2741,28 @@ class MaskLayersWidget(QWidget):
         if hasattr(self, 'slider_gnd_special_dn'):
             self.slider_gnd_special_dn.setValue(dn_val)
             self.lbl_gnd_special_dn.setText(f"{dn_val}%")
+        if hasattr(self, 'slider_gnd_special_antihalo'):
+            self.slider_gnd_special_antihalo.setValue(antihalo_val)
+            self.lbl_gnd_special_antihalo.setText(f"{antihalo_val}%")
+        if hasattr(self, 'slider_gnd_special_edge_shift'):
+            self.slider_gnd_special_edge_shift.setValue(edge_shift_val)
+            self.lbl_gnd_special_edge_shift.setText(f"{edge_shift_val:+d} px" if edge_shift_val != 0 else "0 px")
         self._updating_ui = False
 
     def _on_gnd_special_dn_changed(self, val: int) -> None:
         if self._updating_ui: return
         self.lbl_gnd_special_dn.setText(f"{val}%")
         self.ground_denoise_changed.emit(val)
+
+    def _on_gnd_special_antihalo_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_gnd_special_antihalo.setText(f"{val}%")
+        self.ground_antihalo_changed.emit(val)
+
+    def _on_gnd_special_edge_shift_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_gnd_special_edge_shift.setText(f"{val:+d} px" if val != 0 else "0 px")
+        self.ground_edge_shift_changed.emit(val)
 
     def set_ground_ai_denoise_active(self, active: bool):
         """Actualiza el botón IA de la capa de suelo."""

@@ -163,6 +163,10 @@ def apply_developer_pipeline(
         precomputed_mask = cv2.resize(precomputed_mask, (tw, th), interpolation=cv2.INTER_LINEAR)
         if precomputed_mask.ndim == 2 and target_img.ndim == 3:
             precomputed_mask = np.repeat(precomputed_mask[..., np.newaxis], 3, axis=2)
+    edge_shift = getattr(state, "gnd_edge_shift_val", 0)
+    if edge_shift != 0 and precomputed_mask is not None:
+        from core.masking import shift_mask_edge
+        precomputed_mask = shift_mask_edge(precomputed_mask, edge_shift)
     if image_starless is not None and image_starless.shape[:2] != (th, tw):
         image_starless = cv2.resize(image_starless, (tw, th), interpolation=cv2.INTER_AREA)
     if image_stars is not None and image_stars.shape[:2] != (th, tw):
@@ -690,6 +694,17 @@ def apply_developer_pipeline(
             crop_rect=crop_rect,
             full_image_shape=full_shape,
             fast_draft=is_scrubbing,
+        )
+
+    # 15. Supresión de Halos en Frontera de Horizonte (Anti-Halo Clamping)
+    antihalo_strength = getattr(state, "gnd_antihalo_val", 0) / 100.0
+    if antihalo_strength > 1e-4 and precomputed_mask is not None:
+        from core.masking import suppress_horizon_halos
+        stretched = suppress_horizon_halos(
+            stretched,
+            precomputed_mask,
+            radius=3,
+            strength=antihalo_strength
         )
 
     final_result = np.ascontiguousarray(stretched, dtype=np.float32)

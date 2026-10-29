@@ -29,7 +29,7 @@ SCOPE_DETAILS = "details"
 KEYS_EXCLUDED_FROM_PRESETS = {"bp_val", "mtf_val"}
 
 PARAM_KEYS_TONE = {
-    "contrast_val", "gnd_ev_val", "gnd_sh_val", "gnd_bp_val", "curves"
+    "contrast_val", "gnd_ev_val", "gnd_sh_val", "gnd_bp_val", "gnd_antihalo_val", "gnd_edge_shift_val", "curves"
 }
 
 PARAM_KEYS_COLOR = {
