@@ -36,7 +36,7 @@ if HAS_NUMBA:
             arr[j + 1] = key
 
     @njit(parallel=True, fastmath=True, nogil=True)
-    def _kappa_sigma_kernel_numba(data, kappa):
+    def _kappa_sigma_kernel_numba(data, kappa, weights):
         """
         Kernel compilado en LLVM para integración Kappa-Sigma con MAD en una sola pasada.
         Excluye valores inválidos (< 0.0) de suelo desplazado o bordes geométricos (Sequator freeze ground).
@@ -86,17 +86,18 @@ if HAS_NUMBA:
             low = med - kappa * sigma
             high = med + kappa * sigma
 
-            # 5. Promedio de valores válidos
+            # 5. Promedio ponderado de valores válidos
             s = 0.0
-            used = 0
-            for i in range(cnt_val):
-                val = v[i]
-                if low <= val <= high:
-                    s += val
-                    used += 1
+            w_sum = 0.0
+            for i in range(n_frames):
+                val = data[i, p]
+                if val >= 0.0 and low <= val <= high:
+                    w = weights[i]
+                    s += val * w
+                    w_sum += w
 
-            if used > 0:
-                out[p] = s / used
+            if w_sum > 0.0:
+                out[p] = s / w_sum
             else:
                 out[p] = med
 
@@ -170,7 +171,7 @@ if HAS_NUMBA:
     # Calentamiento JIT anticipado con arrays mínimos de prueba
     try:
         _dummy = np.zeros((2, 2), dtype=np.float32)
-        _kappa_sigma_kernel_numba(_dummy, 2.2)
+        _kappa_sigma_kernel_numba(_dummy, 2.2, np.ones(2, dtype=np.float32))
         _percentile_kernel_numba(_dummy, 50.0)
         _median_kernel_numba(_dummy)
     except Exception:
@@ -877,9 +878,14 @@ def align_single_light_task(args: tuple) -> dict:
 # =========================================================================
 
 def _process_single_chunk_cpu(args):
-    source_arrays, y_start, y_end, w, c, kappa, lp_method, lp_strength = args
+    source_arrays, y_start, y_end, w, c, kappa, lp_method, lp_strength = args[:8]
+    weights = args[8] if len(args) > 8 else None
     actual_rows = y_end - y_start
     n_frames = len(source_arrays)
+    if weights is None:
+        weights = np.ones(n_frames, dtype=np.float32)
+    else:
+        weights = np.asarray(weights, dtype=np.float32)
 
     # Slicing directo de memoria (idéntico para matrices en RAM o archivos np.memmap en disco)
     sub_stack = np.empty((n_frames, actual_rows, w, c), dtype=np.float32)
@@ -904,7 +910,7 @@ def _process_single_chunk_cpu(args):
     # Rechazo estricto en CPU
     if HAS_NUMBA:
         flat_data = sub_stack.reshape(n_frames, -1)
-        chunk_result = _kappa_sigma_kernel_numba(flat_data, kappa).reshape((actual_rows, w, c))
+        chunk_result = _kappa_sigma_kernel_numba(flat_data, kappa, weights).reshape((actual_rows, w, c))
     else:
         for ch in range(c):
             channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
@@ -920,12 +926,15 @@ def _process_single_chunk_cpu(args):
             high = med + kappa * sigma
 
             in_range = valid_mask & (channel_data >= low) & (channel_data <= high)
-            counts = np.sum(in_range, axis=0)
-            sums = np.sum(np.where(in_range, channel_data, 0.0), axis=0)
+            w_mat = weights.reshape((n_frames, 1))
+            weighted_vals = np.where(in_range, channel_data * w_mat, 0.0)
+            sums = np.sum(weighted_vals, axis=0)
+            w_sums = np.sum(np.where(in_range, w_mat, 0.0), axis=0)
 
-            fallback = counts == 0
-            counts[fallback] = 1
-            res = sums / counts
+
+            fallback = w_sums == 0
+            w_sums[fallback] = 1.0
+            res = sums / w_sums
             
             med_fallback = np.nan_to_num(med, nan=0.0)
             res[fallback] = med_fallback[fallback]
@@ -943,7 +952,8 @@ def stream_stack_auto(
     kappa: float = 2.2, 
     max_workers: int = None,
     lp_method: str = "standard",
-    lp_strength: float = 0.5
+    lp_strength: float = 0.5,
+    weights: np.ndarray = None
 ) -> np.ndarray:
     """
     Motor canónico de integración matemática mediante franjas (chunks) 
@@ -963,10 +973,11 @@ def stream_stack_auto(
         else:
             source_arrays = frames_source
 
+        weights_arr = np.ascontiguousarray(weights, dtype=np.float32) if weights is not None else np.ones(len(source_arrays), dtype=np.float32)
         tasks = []
         for y in range(0, h, chunk_rows):
             y_end = min(y + chunk_rows, h)
-            tasks.append((source_arrays, y, y_end, w, c, kappa, lp_method, lp_strength))
+            tasks.append((source_arrays, y, y_end, w, c, kappa, lp_method, lp_strength, weights_arr))
 
         if max_workers is None:
             max_workers = max(1, min(4, (os.cpu_count() or 4) - 1))

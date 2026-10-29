@@ -661,6 +661,15 @@ class StackerTab(QWidget):
         )
         set_layout.addWidget(self.chk_linear_fit)
 
+        self.chk_weighted_stack = QCheckBox("Ponderación por Calidad Estelar (Weighted Stacking)")
+        self.chk_weighted_stack.setChecked(True)
+        self.chk_weighted_stack.setStyleSheet("color: #80d8ff; font-weight: 600; font-size: 11px;")
+        self.chk_weighted_stack.setToolTip(
+            "Pondera cada fotograma en el apilado Kappa-Sigma según su nitidez (FWHM) y puntuación de calidad estelar.\n"
+            "Las tomas más nítidas aportan mayor peso estadístico; las tomas con viento o peor foco aportan menos sin degradar el detalle."
+        )
+        set_layout.addWidget(self.chk_weighted_stack)
+
         left_layout.addWidget(self.grp_settings)
 
         # SECCIÓN 4: Antipolución en Apilado
@@ -897,6 +906,8 @@ class StackerTab(QWidget):
             self.row_kappa_widget.setVisible(not is_video)
         if hasattr(self, 'chk_linear_fit'):
             self.chk_linear_fit.setVisible(not is_video)
+        if hasattr(self, 'chk_weighted_stack'):
+            self.chk_weighted_stack.setVisible(not is_video)
         if hasattr(self, 'row_ground_widget'):
             self.row_ground_widget.setVisible(not is_video)
         if hasattr(self, 'row_mode_widget'):
@@ -1540,6 +1551,8 @@ class StackerTab(QWidget):
             self.spin_kappa.setValue(params.get("kappa", 2.2))
             if hasattr(self, 'chk_linear_fit'):
                 self.chk_linear_fit.setChecked(params.get("linear_fit", True))
+            if hasattr(self, 'chk_weighted_stack'):
+                self.chk_weighted_stack.setChecked(params.get("weighted_stacking", True))
             self.combo_lp_algo.setCurrentIndex(params.get("lp_method_idx", 0))
             self.slider_stack_lp.setValue(params.get("lp_strength", 50))
 
@@ -1582,6 +1595,7 @@ class StackerTab(QWidget):
         self.project_mgr.data["parameters"] = {
             "kappa": self.spin_kappa.value(),
             "linear_fit": self.chk_linear_fit.isChecked() if hasattr(self, 'chk_linear_fit') else True,
+            "weighted_stacking": self.chk_weighted_stack.isChecked() if hasattr(self, 'chk_weighted_stack') else True,
             "lp_method_idx": self.combo_lp_algo.currentIndex(),
             "lp_strength": self.slider_stack_lp.value()
         }
@@ -1622,6 +1636,8 @@ class StackerTab(QWidget):
         self.spin_kappa.setValue(2.2)
         if hasattr(self, 'chk_linear_fit'):
             self.chk_linear_fit.setChecked(True)
+        if hasattr(self, 'chk_weighted_stack'):
+            self.chk_weighted_stack.setChecked(True)
         self.combo_lp_algo.setCurrentIndex(0)
         self.slider_stack_lp.setValue(50)
         self.spin_feather.setValue(7)
@@ -1712,6 +1728,8 @@ class StackerTab(QWidget):
             "external_ground_path": external_path,
             "kappa": self.spin_kappa.value(),
             "linear_fit": self.chk_linear_fit.isChecked() if hasattr(self, 'chk_linear_fit') else True,
+            "weighted_stacking": self.chk_weighted_stack.isChecked() if hasattr(self, 'chk_weighted_stack') else True,
+            "culling_results": self.culling_results,
             "output_path": out_path,
             "lp_method": selected_lp_method,
             "lp_strength": selected_lp_strength,

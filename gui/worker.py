@@ -478,6 +478,37 @@ class StackingWorker(QThread):
             )
             self.progress_changed.emit(63)
 
+            use_quality_weights = bool(self.config.get("weighted_stacking", True))
+            culling_results = self.config.get("culling_results", {})
+            sky_weights = None
+
+            if use_quality_weights and culling_results:
+                raw_weights = []
+                frame_paths_ordered = [ref_path] + [lights[r["idx"] - 1] for r in aligned_results if r["success"]]
+                for fpath in frame_paths_ordered:
+                    if fpath in culling_results:
+                        cq = culling_results[fpath]
+                        score = cq.score if (cq.score is not None and not np.isnan(cq.score)) else 50.0
+                        w_val = (max(5.0, min(100.0, score)) / 100.0) ** 2
+                    else:
+                        w_val = 0.5
+                    raw_weights.append(w_val)
+
+                max_w = max(raw_weights) if raw_weights else 1.0
+                if max_w > 0:
+                    sky_weights = np.array([w / max_w for w in raw_weights], dtype=np.float32)
+                    min_w = float(np.min(sky_weights))
+                    avg_w = float(np.mean(sky_weights))
+                    self.status_changed.emit(
+                        f"-> [PONDERACIÓN] Pesos Kappa-Sigma asignados ({len(sky_weights)} tomas): "
+                        f"mín={min_w:.2f}, media={avg_w:.2f}, máx=1.00"
+                    )
+            elif use_quality_weights and not culling_results:
+                self.status_changed.emit(
+                    "-> [PONDERACIÓN] Sin análisis previo de calidad estelar. Usando ponderación uniforme (w=1.0). "
+                    "(Tip: Pulsa 'Analizar Calidad' antes de apilar para ponderar por FWHM)"
+                )
+
             t0_stack_sky = time.perf_counter()
             sky_stacked = stream_stack_auto(
                 sky_frames_collection, 
@@ -485,7 +516,8 @@ class StackingWorker(QThread):
                 chunk_rows=200, 
                 kappa=kappa,
                 lp_method=lp_method,
-                lp_strength=lp_strength
+                lp_strength=lp_strength,
+                weights=sky_weights
             )
 
             # Liberación inmediata de la colección de cielo de la memoria RAM / disco
