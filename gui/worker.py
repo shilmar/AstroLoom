@@ -137,6 +137,14 @@ class StackingWorker(QThread):
             # VALIDACIÓN PREVENTIVA DE GEOMETRÍA Y ORIENTACIÓN
             # ------------------------------------------------------------
             ref_path = lights[0]
+            ref_path = self.config.get("reference_frame")
+            if not ref_path or ref_path not in lights:
+                ref_path = lights[0]
+            else:
+                if lights[0] != ref_path:
+                    lights.remove(ref_path)
+                    lights.insert(0, ref_path)
+
             ref_h, ref_w = get_image_dimensions(ref_path)
 
             checks = [

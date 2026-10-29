@@ -360,6 +360,26 @@ class StackerTab(QWidget):
         self.btn_cull_discard.clicked.connect(self.auto_discard_defective_frames)
         row_cull_btns.addWidget(self.btn_cull_discard)
 
+        self.btn_cull_best_ref = QPushButton("Fijar Mejor Ref.")
+        self.btn_cull_best_ref.setIcon(get_icon("target", size=13, color="#a5d6a7"))
+        self.btn_cull_best_ref.setCursor(Qt.PointingHandCursor)
+        self.btn_cull_best_ref.setStyleSheet("""
+            QPushButton {
+                background-color: #15271d;
+                color: #a5d6a7;
+                font-weight: 600;
+                border: 1px solid #2e7d32;
+                border-radius: 4px;
+                padding: 5px 10px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: #2e7d32; color: #ffffff; }
+            QPushButton:disabled { background-color: #111827; color: #475569; border-color: #1f2937; }
+        """)
+        self.btn_cull_best_ref.setToolTip("Selecciona y fija automáticamente como base de alineación la toma con mejor FWHM y mayor calidad estelar")
+        self.btn_cull_best_ref.clicked.connect(self.auto_select_best_reference)
+        row_cull_btns.addWidget(self.btn_cull_best_ref)
+
         culling_vbox.addLayout(row_cull_btns)
 
         # Fila 2: Criterio óptico y balance de tomas aptas
@@ -1075,6 +1095,7 @@ class StackerTab(QWidget):
 
         self.btn_cull_analyze.setEnabled(False)
         self.btn_cull_discard.setEnabled(False)
+        self.btn_cull_best_ref.setEnabled(False)
         self.lbl_cull_summary.setText("Analizando calidad...")
         self.log_message(f"=== INICIANDO ANÁLISIS DE CALIDAD ESTELAR ({len(self.lights_list)} tomas) ===")
 
@@ -1098,6 +1119,7 @@ class StackerTab(QWidget):
         self.btn_cull_analyze.setEnabled(True)
         self.btn_cull_discard.setEnabled(True)
 
+        self.btn_cull_best_ref.setEnabled(True)
         defective_count = 0
         for r in results:
             self.culling_results[r.filepath] = r
@@ -1111,9 +1133,12 @@ class StackerTab(QWidget):
         if defective_count > 0:
             self.log_message(f"-> Pulsa 'Auto-Descartar' para excluir automáticamente las {defective_count} tomas defectuosas.")
 
+        self.auto_select_best_reference(silent=True)
+
     def _on_culling_error(self, err_msg: str):
         self.btn_cull_analyze.setEnabled(True)
         self.btn_cull_discard.setEnabled(True)
+        self.btn_cull_best_ref.setEnabled(True)
         self.lbl_cull_summary.setText("Error en análisis")
         self.log_message(f"[ERROR CRIBADO] {err_msg}")
 
@@ -1131,6 +1156,36 @@ class StackerTab(QWidget):
 
         self._refresh_list_view("Lights")
         self.log_message(f"[CRIBADO] Auto-descartadas {discarded_now} tomas defectuosas (viento/nubes/foco).")
+
+    def auto_select_best_reference(self, *args, silent: bool = False):
+        """Selecciona y fija automáticamente la toma con mejor calidad estelar y menor FWHM como referencia."""
+        if not self.culling_results:
+            self.start_culling_analysis()
+            return
+
+        is_silent = silent or (len(args) > 0 and isinstance(args[0], bool) and args[0] is True)
+        from core.frame_culling import pick_best_reference_frame
+        best = pick_best_reference_frame(list(self.culling_results.values()), excluded_paths=self.excluded_lights)
+        if best is None and self.culling_results:
+            best = pick_best_reference_frame(list(self.culling_results.values()), excluded_paths=None)
+
+        if not best or not best.filepath:
+            if not is_silent:
+                self.log_message("[REFERENCIA] No se pudo determinar una toma óptima.")
+            return
+
+        best_path = best.filepath
+        if best_path in self.lights_list:
+            self.lights_list.remove(best_path)
+            self.lights_list.insert(0, best_path)
+            self.load_frame_to_canvas(best_path)
+            self._refresh_list_view("Lights")
+            fwhm_str = f"{best.fwhm:.2f} px" if (best.fwhm and best.fwhm > 0) else "N/D"
+            score_str = f"{best.score:.1f}" if (best.score is not None and not np.isnan(best.score)) else "N/D"
+            self.log_message(
+                f"✓ [REFERENCIA ÓPTIMA] Base fijada: {os.path.basename(best_path)} "
+                f"(Score: {score_str}, FWHM: {fwhm_str}, Estrellas: {best.star_count})"
+            )
 
     def on_light_double_clicked(self, item):
         row = self.list_lights.row(item)
@@ -1566,6 +1621,10 @@ class StackerTab(QWidget):
 
     def start_stacking(self):
         active_lights = [p for p in self.lights_list if p not in self.excluded_lights]
+        if self.current_ref_path and self.current_ref_path in active_lights:
+            if active_lights[0] != self.current_ref_path:
+                active_lights.remove(self.current_ref_path)
+                active_lights.insert(0, self.current_ref_path)
         if len(active_lights) < 2:
             QMessageBox.warning(
                 self, "Aviso", 
@@ -1626,6 +1685,7 @@ class StackerTab(QWidget):
 
         cfg = {
             "lights": active_lights,
+            "reference_frame": self.current_ref_path or active_lights[0],
             "darks": self.darks_list,
             "flats": self.flats_list,
             "mask": self.computed_mask,
@@ -1752,6 +1812,10 @@ class StackerTab(QWidget):
 
     def start_substacking(self):
         active_lights = [p for p in self.lights_list if p not in self.excluded_lights]
+        if self.current_ref_path and self.current_ref_path in active_lights:
+            if active_lights[0] != self.current_ref_path:
+                active_lights.remove(self.current_ref_path)
+                active_lights.insert(0, self.current_ref_path)
         if len(active_lights) < 2:
             QMessageBox.warning(
                 self, "Aviso",

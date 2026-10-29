@@ -498,3 +498,25 @@ def batch_analyze_frame_quality(
             r.is_recommended = False
 
     return valid_results
+
+
+def pick_best_reference_frame(
+    results: List[FrameQualityResult],
+    excluded_paths: Optional[set] = None
+) -> Optional[FrameQualityResult]:
+    """
+    Selecciona el fotograma óptimo como referencia geométrica y fotométrica
+    a partir de las métricas de calidad estelar (mayor score, menor FWHM y mayor censo estelar).
+    """
+    candidates = [r for r in results if excluded_paths is None or r.filepath not in excluded_paths]
+    if not candidates:
+        return None
+
+    def sort_key(r: FrameQualityResult):
+        rec_priority = 1 if r.is_recommended else 0
+        score = r.score if not (math.isnan(r.score) or r.score is None) else 0.0
+        fwhm_val = -r.fwhm if (r.fwhm and not math.isnan(r.fwhm) and r.fwhm > 0) else -999.0
+        return (rec_priority, score, fwhm_val, r.star_count)
+
+    return max(candidates, key=sort_key)
+
