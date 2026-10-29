@@ -441,9 +441,11 @@ class StackingWorker(QThread):
                 return
 
             aligned_results.sort(key=lambda r: r["idx"])
+            integrated_light_paths = [ref_path]
             for res in aligned_results:
                 if res["success"]:
                     sky_frames_collection.append(res["sky_data"])
+                    integrated_light_paths.append(lights[res["idx"] - 1])
                     if res["gnd_data"] is not None:
                         ground_frames_collection.append(res["gnd_data"])
 
@@ -484,7 +486,7 @@ class StackingWorker(QThread):
 
             if use_quality_weights and culling_results:
                 raw_weights = []
-                frame_paths_ordered = [ref_path] + [lights[r["idx"] - 1] for r in aligned_results if r["success"]]
+                frame_paths_ordered = integrated_light_paths
                 for fpath in frame_paths_ordered:
                     if fpath in culling_results:
                         cq = culling_results[fpath]
