@@ -159,8 +159,9 @@ def apply_developer_pipeline(
         return None
 
     th, tw = target_img.shape[:2]
-    if precomputed_mask is not None and precomputed_mask.shape[:2] != (th, tw):
-        precomputed_mask = cv2.resize(precomputed_mask, (tw, th), interpolation=cv2.INTER_LINEAR)
+    if precomputed_mask is not None:
+        if precomputed_mask.shape[:2] != (th, tw):
+            precomputed_mask = cv2.resize(precomputed_mask, (tw, th), interpolation=cv2.INTER_LINEAR)
         if precomputed_mask.ndim == 2 and target_img.ndim == 3:
             precomputed_mask = np.repeat(precomputed_mask[..., np.newaxis], 3, axis=2)
     edge_shift = getattr(state, "gnd_edge_shift_val", 0)

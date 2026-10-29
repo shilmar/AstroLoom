@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QProgressDialog,
     QCheckBox
 )
-from PySide6.QtCore import Qt, QCoreApplication, QTimer, QEvent
+from PySide6.QtCore import Qt, QCoreApplication, QTimer, QEvent, QPoint
 from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap, QColor, QFont, QCursor
 from core.stacking import load_image_as_float32
 from core.stretch import (
@@ -78,7 +78,8 @@ from core.mask_layers import (
     MASK_TYPE_IMAGE_BASE, MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_STARS,
     MASK_TYPE_IMAGE_GROUND, MASK_TYPE_BRUSH, MASK_TYPE_LUMA, MASK_TYPE_COLOR,
     MASK_TYPE_GROUND, MASK_TYPE_SKY,
-    apply_pre_curve_adjustments, get_canvas_below_layer, compute_effective_layer_mask
+    apply_pre_curve_adjustments, get_canvas_below_layer, compute_effective_layer_mask,
+    apply_local_adjustments_to_image
 )
 from gui.widgets.curve_widget import CurveWidget
 from gui.widgets.live_histogram import LiveRGBHistogramWidget
@@ -847,7 +848,10 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.set_ground_tone_values(
             self.slider_gnd_ev.value(),
             self.slider_gnd_sh.value(),
-            self.slider_gnd_bp.value()
+            self.slider_gnd_bp.value(),
+            int(getattr(self, 'gnd_denoise_val', 0)),
+            int(getattr(self, 'gnd_antihalo_val', 0) * 100),
+            int(getattr(self, 'gnd_edge_shift_val', 0))
         )
 
         # Sincronización contextual de Estrellas y Fondo Nebular (Starless)
@@ -2651,10 +2655,14 @@ class DeveloperTab(QWidget):
                         )
                     else:
                         img = manual_stretch(b_src, black_point=bp_val, midtone=mtf_val)
-            if img is not None:
-                img = apply_pre_curve_adjustments(img, layer)
             sky_m = self.proxy_mask if self.proxy_mask is not None else self.current_mask
             gnd_m = np.clip(1.0 - sky_m, 0.0, 1.0) if sky_m is not None else None
+            if img is not None:
+                if gnd_m is not None:
+                    m_eff_2d = gnd_m[..., 0] if gnd_m.ndim == 3 else gnd_m
+                    img = apply_local_adjustments_to_image(img, m_eff_2d, layer)
+                else:
+                    img = apply_pre_curve_adjustments(img, layer)
             return img, gnd_m, False
 
         # 3. Capa de Fondo Nebular (Starless)
@@ -5549,6 +5557,8 @@ class DeveloperTab(QWidget):
             if hasattr(self, '_pan_refine_timer'):
                 self._pan_refine_timer.stop()
             self.is_zoomed_100 = False
+            self.canvas.is_zoomed = False
+            self.canvas.zoom_center_img = None
             if hasattr(self, 'btn_toggle_zoom'):
                 self.btn_toggle_zoom.blockSignals(True)
                 self.btn_toggle_zoom.setChecked(False)
@@ -5577,8 +5587,14 @@ class DeveloperTab(QWidget):
         if self.canvas.base_pixmap and not self.canvas.base_pixmap.isNull():
             self._fit_view_pixmap = self.canvas.base_pixmap.copy()
             self._fit_view_orig_rgb = self.canvas.orig_rgb
+            if getattr(self.canvas, '_zoom_background_pixmap', None) is None:
+                self.canvas._zoom_background_pixmap = self.canvas.base_pixmap.copy()
         self._slider_changed_during_zoom = False
         self.is_zoomed_100 = True
+        self.canvas.is_zoomed = True
+        w_i = float(self.canvas.base_pixmap.width()) if self.canvas.base_pixmap else 1.0
+        h_i = float(self.canvas.base_pixmap.height()) if self.canvas.base_pixmap else 1.0
+        self.canvas.zoom_center_img = QPoint(int(rel_x * w_i), int(rel_y * h_i))
         self.zoom_rel_coords = (rel_x, rel_y)
         if hasattr(self, 'btn_toggle_zoom'):
             self.btn_toggle_zoom.blockSignals(True)
@@ -5870,7 +5886,10 @@ class DeveloperTab(QWidget):
         self.lbl_gnd_ev.setText(f"{self.gnd_ev_val:+.2f} EV")
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_ground_tone_values(
-                val, self.slider_gnd_sh.value(), self.slider_gnd_bp.value()
+                val, self.slider_gnd_sh.value(), self.slider_gnd_bp.value(),
+                int(getattr(self, 'gnd_denoise_val', 0)),
+                int(getattr(self, 'gnd_antihalo_val', 0) * 100),
+                int(getattr(self, 'gnd_edge_shift_val', 0))
             )
         self.update_stretch_preview()
 
@@ -5879,7 +5898,10 @@ class DeveloperTab(QWidget):
         self.lbl_gnd_sh.setText(f"{val}%")
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_ground_tone_values(
-                self.slider_gnd_ev.value(), val, self.slider_gnd_bp.value()
+                self.slider_gnd_ev.value(), val, self.slider_gnd_bp.value(),
+                int(getattr(self, 'gnd_denoise_val', 0)),
+                int(getattr(self, 'gnd_antihalo_val', 0) * 100),
+                int(getattr(self, 'gnd_edge_shift_val', 0))
             )
         self.update_stretch_preview()
 
@@ -5889,7 +5911,10 @@ class DeveloperTab(QWidget):
         self.lbl_gnd_bp.setText(f"{display_val:+.3f}")
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_ground_tone_values(
-                self.slider_gnd_ev.value(), self.slider_gnd_sh.value(), val
+                self.slider_gnd_ev.value(), self.slider_gnd_sh.value(), val,
+                int(getattr(self, 'gnd_denoise_val', 0)),
+                int(getattr(self, 'gnd_antihalo_val', 0) * 100),
+                int(getattr(self, 'gnd_edge_shift_val', 0))
             )
         self.update_stretch_preview()
 

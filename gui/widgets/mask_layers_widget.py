@@ -837,13 +837,13 @@ class MaskLayersWidget(QWidget):
         props_layout.addWidget(self.grp_local_adj)
 
         # 7. Controles Especiales de Tono de Suelo (Visibles SOLO cuando se selecciona una capa de Suelo)
-        self.grp_gnd_special = QGroupBox("Ajustes Tonales Especiales de Suelo")
+        self.grp_gnd_special = QGroupBox("Ajustes Tonales Especiales de Suelo (Pre-Estirado Lineal)")
         self.grp_gnd_special.setObjectName("gnd_special_group")
         gnd_spec_layout = QVBoxLayout(self.grp_gnd_special)
         gnd_spec_layout.setContentsMargins(8, 12, 8, 8)
         gnd_spec_layout.setSpacing(6)
 
-        lbl_gnd_notice = QLabel("Ajustes dedicados para la superficie terrestre.")
+        lbl_gnd_notice = QLabel("Ajustes lineales pre-estirado (EV lineal, sombras, anti-halo y reducción de ruido).")
         lbl_gnd_notice.setStyleSheet("color: #a5d6a7; font-size: 11px; font-style: italic;")
         gnd_spec_layout.addWidget(lbl_gnd_notice)
 
@@ -1389,6 +1389,7 @@ class MaskLayersWidget(QWidget):
             'slider_hue', 'slider_adj_ev', 'slider_adj_contrast', 'slider_adj_shadows',
             'slider_adj_highlights', 'slider_adj_sat', 'slider_adj_temp', 'slider_adj_tint',
             'slider_gnd_special_ev', 'slider_gnd_special_sh', 'slider_gnd_special_bp',
+            'slider_gnd_special_dn', 'slider_gnd_special_antihalo', 'slider_gnd_special_edge_shift',
             'slider_stars_special', 'slider_sl_star_diff_strength', 'slider_sl_star_diff_radius',
             'slider_sl_star_diff_threshold', 'slider_sl_star_diff_color', 'slider_sl_clarity',
             'slider_sl_dehaze', 'slider_sl_ond_est', 'slider_sl_ond_bg', 'slider_sl_contrast',
@@ -1414,6 +1415,9 @@ class MaskLayersWidget(QWidget):
 
     def _on_slider_interaction_ended(self) -> None:
         self._is_scrubbing = False
+        layer = self.get_selected_layer()
+        if layer:
+            self.invalidate_layer_thumbnail(layer.id, rebuild_now=True)
         self.interaction_finished.emit()
         self.update_active_layer_histogram()
 
@@ -1782,11 +1786,13 @@ class MaskLayersWidget(QWidget):
         # --- CASO 1: CAPAS DE IMAGEN (RGB) ---
         if layer.layer_kind == LAYER_KIND_IMAGE:
             raw_img = None
+            mask_img = None
             if self._layer_image_provider is not None:
                 try:
-                    img_prov, _, _ = self._layer_image_provider(layer)
+                    img_prov, m_prov, _ = self._layer_image_provider(layer)
                     if img_prov is not None:
                         raw_img = img_prov
+                        mask_img = m_prov
                 except Exception:
                     raw_img = None
 
@@ -1802,9 +1808,18 @@ class MaskLayersWidget(QWidget):
 
             if raw_img is not None:
                 try:
+                    # En la capa de suelo, aislar el terreno usando la máscara para evitar que el cielo sature la miniatura
+                    if mask_img is not None and layer.mask_type == MASK_TYPE_IMAGE_GROUND:
+                        m_3d = mask_img if mask_img.ndim == 3 else mask_img[..., np.newaxis]
+                        if m_3d.shape[:2] != raw_img.shape[:2]:
+                            m_3d = cv2.resize(m_3d, (raw_img.shape[1], raw_img.shape[0]))
+                            if m_3d.ndim == 2:
+                                m_3d = m_3d[..., np.newaxis]
+                        raw_img = raw_img * m_3d
+
                     small = cv2.resize(raw_img, (tw, th), interpolation=cv2.INTER_AREA)
-                    # Si es una capa de imagen (que no sean solo estrellas) y sus valores son lineales oscuros, estirar para visibilidad
-                    if layer.mask_type != MASK_TYPE_IMAGE_STARS and small.ndim == 3 and np.percentile(small, 98) < 0.12:
+                    # Si es una capa de imagen (que no sean solo estrellas ni suelo aislado) y sus valores son lineales oscuros, estirar para visibilidad
+                    if layer.mask_type not in (MASK_TYPE_IMAGE_STARS, MASK_TYPE_IMAGE_GROUND) and small.ndim == 3 and np.percentile(small, 98) < 0.12:
                         from core.stretch import manual_stretch
                         small = manual_stretch(small, black_point=0.0, midtone=0.15)
                     u8 = (np.clip(small, 0.0, 1.0) * 255.0).astype(np.uint8)
@@ -2261,7 +2276,7 @@ class MaskLayersWidget(QWidget):
             border_c = "#43a047"
             title_c = "#81c784"
             bg_c = "#141f17"
-            adj_title = "Ajustes de Capa de Suelo"
+            adj_title = "Ajustes de Capa de Suelo (Post-Estirado)"
             mask_def_title = "Definición de Máscara de Suelo"
         elif mtype == MASK_TYPE_IMAGE_STARLESS:
             border_c = "#8e24aa"
@@ -2322,7 +2337,7 @@ class MaskLayersWidget(QWidget):
         # Tematizar de manera fija y distinguible los paneles contextuales dedicados
         if hasattr(self, 'grp_gnd_special'):
             self.grp_gnd_special.setStyleSheet(_make_box_qss("gnd_special_group", "#43a047", "#81c784", "#141f17"))
-            self.grp_gnd_special.setTitle("Ajustes Tonales Especiales de Suelo")
+            self.grp_gnd_special.setTitle("Ajustes Tonales Especiales de Suelo (Pre-Estirado Lineal)")
         if hasattr(self, 'grp_stars_special'):
             self.grp_stars_special.setStyleSheet(_make_box_qss("stars_special_group", "#fbc02d", "#ffd54f", "#221f14"))
             self.grp_stars_special.setTitle("Ajustes Especiales de Estrellas")
