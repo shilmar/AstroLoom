@@ -28,7 +28,8 @@ from core.stacking import (
     create_master_dark,
     create_master_flat,
     calibrate_light,
-    preprocess_subframe_lp,          
+    preprocess_subframe_lp,
+    compute_sky_background_stats,
     align_single_light_task,
     save_frame_float32,
     evaluate_storage_mode,
@@ -322,6 +323,15 @@ class StackingWorker(QThread):
                 ref_stats=ref_stats
             )
 
+            # Estadísticas robustas (Mediana + MAD) para Normalización Lineal Fotométrica
+            linear_fit_enabled = bool(self.config.get("linear_fit", True))
+            ref_stats = compute_sky_background_stats(ref_sky_processed, sky_mask)
+            ref_stats["linear_fit"] = linear_fit_enabled
+            if linear_fit_enabled:
+                med_str = f"[{ref_stats['median'][0]:.3f}, {ref_stats['median'][1]:.3f}, {ref_stats['median'][2]:.3f}]"
+                mad_str = f"[{ref_stats['mad'][0]:.4f}, {ref_stats['mad'][1]:.4f}, {ref_stats['mad'][2]:.4f}]"
+                self.status_changed.emit(f"-> [FOTOMETRÍA] Base Linear Fit fijada: Mediana={med_str}, MAD={mad_str}")
+
             # Para el apilado de cielo, excluir el suelo de la referencia (-1.0)
             if sky_mask is not None:
                 mask_bin = (sky_mask > 0.5).astype(np.uint8)
@@ -406,9 +416,12 @@ class StackingWorker(QThread):
                     aligned_results.append(res)
 
                     if res["success"]:
+                        fit_msg = ""
+                        if res.get("fit_scale") is not None and res.get("fit_offset") is not None:
+                            fit_msg = f" | Fit: a={res['fit_scale'][1]:.2f}, b={res['fit_offset'][1]:+.3f}"
                         self.status_changed.emit(
                             f"[Fase 2/4] [{res['idx']}/{total_lights}] {res['filename']} -> OK "
-                            f"({res['inliers']} inliers | Subpíxel | dx: {res['dx']:.1f}px, dy: {res['dy']:.1f}px)"
+                            f"({res['inliers']} inliers | Subpíxel | dx: {res['dx']:.1f}px, dy: {res['dy']:.1f}px{fit_msg})"
                         )
                     else:
                         discarded_count += 1

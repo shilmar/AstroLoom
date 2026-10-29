@@ -559,6 +559,61 @@ def preprocess_subframe_lp(
     return frame_rgb
 
 
+def compute_sky_background_stats(frame: np.ndarray, sky_mask: np.ndarray = None) -> dict:
+    """
+    Calcula la mediana y la dispersión (MAD) robusta del cielo por canal (RGB).
+    Utiliza submuestreo de paso 8 y filtra por la máscara de cielo si está presente.
+    """
+    sub = frame[::8, ::8]
+    if sky_mask is not None:
+        sm_sub = sky_mask[::8, ::8] > 0.5
+        if np.count_nonzero(sm_sub) >= 100:
+            pts = sub[sm_sub]
+        else:
+            pts = sub.reshape(-1, sub.shape[-1])
+    else:
+        pts = sub.reshape(-1, sub.shape[-1])
+
+    med = np.median(pts, axis=0).astype(np.float32)
+    mad = np.median(np.abs(pts - med), axis=0).astype(np.float32)
+    return {"median": med, "mad": mad}
+
+
+def apply_linear_fit_normalization(
+    frame: np.ndarray,
+    ref_stats: dict,
+    sky_mask: np.ndarray = None,
+    in_place: bool = True
+) -> tuple:
+    """
+    Normalización Fotométrica Lineal (Linear Fit / Scale & Zero-Offset):
+    I'_k = a_k * I_k + b_k
+    donde a = MAD_ref / MAD_k y b = MED_ref - a * MED_k.
+    Iguala el pedestal de fondo y la dispersión del cielo respecto a la referencia antes de Kappa-Sigma.
+    """
+    curr_stats = compute_sky_background_stats(frame, sky_mask)
+    ref_med = ref_stats["median"]
+    ref_mad = ref_stats["mad"]
+    curr_med = curr_stats["median"]
+    curr_mad = curr_stats["mad"]
+
+    # Factor de escala acotado para estabilidad numérica [0.2, 5.0]
+    scale = np.clip(ref_mad / np.maximum(curr_mad, 1e-6), 0.2, 5.0).astype(np.float32)
+    offset = (ref_med - scale * curr_med).astype(np.float32)
+
+    out = frame if in_place else frame.copy()
+    for ch in range(frame.shape[-1]):
+        a = float(scale[ch])
+        b = float(offset[ch])
+        if abs(a - 1.0) > 1e-4 or abs(b) > 1e-5:
+            ch_view = out[..., ch]
+            np.multiply(ch_view, a, out=ch_view)
+            np.add(ch_view, b, out=ch_view)
+            np.clip(ch_view, 0.0, 1.0, out=ch_view)
+
+    return out, {"scale": scale, "offset": offset}
+
+
 def detect_sky_stars(image_rgb: np.ndarray, sky_mask: np.ndarray = None, max_stars: int = 3500):
     h, w = image_rgb.shape[:2]
     gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
@@ -682,7 +737,9 @@ def align_single_light_task(args: tuple) -> dict:
         "gnd_data": None,
         "inliers": 0,
         "dx": 0.0,
-        "dy": 0.0
+        "dy": 0.0,
+        "fit_scale": None,
+        "fit_offset": None
     }
 
     try:
@@ -759,6 +816,17 @@ def align_single_light_task(args: tuple) -> dict:
             sky_mask=sky_mask,
             ref_stats=ref_stats
         )
+
+        # 2b. Normalización Fotométrica Lineal (Linear Fit) respecto a la referencia
+        if ref_stats is not None and ref_stats.get("linear_fit", True) and "mad" in ref_stats:
+            calibrated_processed, fit_info = apply_linear_fit_normalization(
+                calibrated_processed,
+                ref_stats,
+                sky_mask=sky_mask,
+                in_place=True
+            )
+            res["fit_scale"] = fit_info["scale"]
+            res["fit_offset"] = fit_info["offset"]
 
         # 3. Warp óptico exacto del frame de cielo procesado
         warped = cv2.warpPerspective(

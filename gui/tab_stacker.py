@@ -651,6 +651,16 @@ class StackerTab(QWidget):
         row_kappa.addWidget(self.spin_kappa)
         set_layout.addWidget(self.row_kappa_widget)
 
+        self.chk_linear_fit = QCheckBox("Normalización Fotométrica Lineal (Linear Fit)")
+        self.chk_linear_fit.setChecked(True)
+        self.chk_linear_fit.setStyleSheet("color: #a5d6a7; font-weight: 600; font-size: 11px;")
+        self.chk_linear_fit.setToolTip(
+            "Normaliza linealmente la mediana y dispersión del cielo de cada toma (I' = a·I + b) "
+            "con respecto a la referencia antes del apilado Kappa-Sigma.\n"
+            "Evita artefactos por variaciones del fondo, nubes finas o gradientes atmosféricos."
+        )
+        set_layout.addWidget(self.chk_linear_fit)
+
         left_layout.addWidget(self.grp_settings)
 
         # SECCIÓN 4: Antipolución en Apilado
@@ -885,6 +895,8 @@ class StackerTab(QWidget):
         self.box_substack_settings.setVisible(is_video)
         if hasattr(self, 'row_kappa_widget'):
             self.row_kappa_widget.setVisible(not is_video)
+        if hasattr(self, 'chk_linear_fit'):
+            self.chk_linear_fit.setVisible(not is_video)
         if hasattr(self, 'row_ground_widget'):
             self.row_ground_widget.setVisible(not is_video)
         if hasattr(self, 'row_mode_widget'):
@@ -1526,6 +1538,8 @@ class StackerTab(QWidget):
             
             params = data.get("parameters", {})
             self.spin_kappa.setValue(params.get("kappa", 2.2))
+            if hasattr(self, 'chk_linear_fit'):
+                self.chk_linear_fit.setChecked(params.get("linear_fit", True))
             self.combo_lp_algo.setCurrentIndex(params.get("lp_method_idx", 0))
             self.slider_stack_lp.setValue(params.get("lp_strength", 50))
 
@@ -1567,6 +1581,7 @@ class StackerTab(QWidget):
         self.project_mgr.data["ground_mode_idx"] = self.combo_ground.currentIndex()
         self.project_mgr.data["parameters"] = {
             "kappa": self.spin_kappa.value(),
+            "linear_fit": self.chk_linear_fit.isChecked() if hasattr(self, 'chk_linear_fit') else True,
             "lp_method_idx": self.combo_lp_algo.currentIndex(),
             "lp_strength": self.slider_stack_lp.value()
         }
@@ -1605,6 +1620,8 @@ class StackerTab(QWidget):
         self.combo_mode.setCurrentIndex(0)
         self.combo_ground.setCurrentIndex(0)
         self.spin_kappa.setValue(2.2)
+        if hasattr(self, 'chk_linear_fit'):
+            self.chk_linear_fit.setChecked(True)
         self.combo_lp_algo.setCurrentIndex(0)
         self.slider_stack_lp.setValue(50)
         self.spin_feather.setValue(7)
@@ -1694,6 +1711,7 @@ class StackerTab(QWidget):
             "ground_mode": selected_ground_mode,
             "external_ground_path": external_path,
             "kappa": self.spin_kappa.value(),
+            "linear_fit": self.chk_linear_fit.isChecked() if hasattr(self, 'chk_linear_fit') else True,
             "output_path": out_path,
             "lp_method": selected_lp_method,
             "lp_strength": selected_lp_strength,
