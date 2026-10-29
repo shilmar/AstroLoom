@@ -11,10 +11,11 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 | Prioridad | Tarea / Funcionalidad | Módulo | Inspiración | Dificultad (1-10) | Impacto (1-10) | Estado |
 | :---: | :--- | :--- | :--- | :---: | :---: | :---: |
 | **P1** | **Reducción de Ruido con IA Ligera (Astro Denoise Fase 2 - ONNX / NAFNet)** | Revelador | NoiseXTerminator / DeepSNR | 6.5 / 10 | 9.0 / 10 | ✅ Completado (v0.11.1) |
-| **P2** | **Corrección de Distorsión Óptica Periférica de Estrellas** | Apilador | Sequator (*Distort Mode*) | 7.5 / 10 | 8.5 / 10 | 🔍 En estudio |
-| **P3** | **Extracción de Gradientes por Puntos de Muestreo Interactivos** | Revelador | PixInsight (*DBE*) / GraXpert | 5.0 / 10 | 8.0 / 10 | ⏳ Planificado |
-| **P4** | **Procesado y Exportación en Lote (Batch Processing)** | Revelador / General | Lightroom / Adobe Camera Raw | 4.0 / 10 | 7.5 / 10 | ⏳ Pendiente |
-| **P5** | **Persistencia Avanzada y Sincronización de Preferencias** | Sistema | - | 3.0 / 10 | 5.0 / 10 | ⏳ Pendiente |
+| **P2** | **Revisión y Optimización del Módulo de Panorámicas y Mosaicos** | Panorámicas | PTGui / Hugin / Lightroom | 6.0 / 10 | 8.5 / 10 | 🚀 Próximo objetivo |
+| **P3** | **Corrección de Distorsión Óptica Periférica de Estrellas** | Apilador | Sequator (*Distort Mode*) | 7.5 / 10 | 8.5 / 10 | 🔍 En estudio |
+| **P4** | **Extracción de Gradientes por Puntos de Muestreo Interactivos** | Revelador | PixInsight (*DBE*) / GraXpert | 5.0 / 10 | 8.0 / 10 | ⏳ Planificado |
+| **P5** | **Procesado y Exportación en Lote (Batch Processing)** | Revelador / General | Lightroom / Adobe Camera Raw | 4.0 / 10 | 7.5 / 10 | ⏳ Pendiente |
+| **P6** | **Persistencia Avanzada y Sincronización de Preferencias** | Sistema | - | 3.0 / 10 | 5.0 / 10 | ⏳ Pendiente |
 
 ---
 
@@ -72,3 +73,17 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
   - Memorización de radios y tolerancias por defecto en máscaras, directorios de trabajo recientes, geometrías de ventana y configuraciones de rendimiento.
 * **Impacto:** **5.0 / 10**
 * **Dificultad / Coste:** **3.0 / 10**
+
+---
+
+### 5. Panorámicas y Mosaicos Gigapíxel
+
+#### 🔹 5.1 Revisión y Optimización del Módulo de Panorámicas / Mosaicos
+* **Herramientas de referencia:** PTGui Pro, Hugin, Lightroom Panorama Stitcher.
+* **Descripción técnica:** Auditoría y modernización integral de `gui/tab_panorama.py` y `core/panorama.py`:
+  - Fusión Dual-Zone de precisión (desacoplamiento de silueta terrestre y bóveda celeste para evitar solapamientos fantasma).
+  - Optimización de proyección cilíndrica/esférica y búsqueda multiescala de puntos de unión (*control points*) con emparejamiento estelar robusto.
+  - Corrección de costuras de exposición y balance fotométrico entre teselas consecutivas en 32 bits lineales.
+* **Impacto:** **8.5 / 10** *(Módulo actualmente identificado como básico; su evolución equiparará AstroLoom a las mejores herramientas dedicadas de mosaico nocturno).*
+* **Dificultad / Coste:** **6.0 / 10** *(Media-Alta).*
+* **Estado:** **🚀 Próximo objetivo activo.**

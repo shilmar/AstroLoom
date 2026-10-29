@@ -5,6 +5,43 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-10-29
+
+### Añadido
+* **Motor de Apilado: Auto-Selección Inteligente de Toma de Referencia:**
+  - Selección algorítmica de la toma maestra en `core/frame_culling.py:pick_best_reference_frame` guiada por análisis multifactorial de calidad óptica (mínima FWHM, mayor censo estelar, contraste y nitidez).
+  - Priorización automática de tomas marcadas como recomendadas por el culling, asegurando la máxima fidelidad geométrica y fotométrica del registro estelar sin intervención manual.
+* **Motor de Apilado: Normalización Fotométrica Previa (Linear Fit):**
+  - Implementación en `core/stacking.py:apply_linear_fit_normalization` y `compute_sky_background_stats` de un ajuste lineal fotométrico ($I'_k = a_k \cdot I_k + b_k$) antes del rechazo estadístico Kappa-Sigma.
+  - Igualación precisa del pedestal de fondo y la dispersión (MAD) del cielo respecto a la toma de referencia mediante submuestreo acelerado (paso 8) y filtrado por máscara de cielo.
+  - Neutralización transparente de variaciones de transparencia atmosférica, nubes pasajeras y gradientes dinámicos a lo largo de la sesión de captura.
+* **Motor de Apilado: Integración Kappa-Sigma Adaptativa Ponderada:**
+  - Ponderación matemática en el kernel Numba LLVM (`_kappa_sigma_kernel_numba`) y fallback NumPy donde cada sub-toma contribuye al promedio según su métrica de calidad inversa a la FWHM ($w_i \propto 1 / \text{FWHM}_i^2$).
+  - Maximización de la relación señal/ruido (SNR) final y reducción efectiva del halo difuso en estrellas de tomas afectadas por seeing degradado o rachas de viento.
+* **Motor de Apilado: Modos Flexibles de Integración de Suelo Terrestre:**
+  - Incorporación en `core/stacking.py` y `gui/tab_stacker.py` de tres estrategias diferenciadas para el canal terrestre:
+    - *Toma de Referencia Única:* Máxima fidelidad instantánea de un único fotograma nítido.
+    - *Min-Stack (Anti-ghosting / Vegetación):* Fusión por percentil mínimo ($P_{10}$) que elimina radicalmente fantasmas, estelas traslúcidas y movimiento de hojas o ramas causados por viento o personas en movimiento.
+    - *Mediana:* Supresión robusta de ruido térmico y artefactos transitorios en paisajes estáticos.
+* **Revelador: Supresión de Halos en Horizonte y Desplazamiento Perimétrico (Edge Shift):**
+  - Nuevo módulo algorítmico en `core/masking.py:suppress_horizon_halos` con clamping de luminancia local optimizado por caja delimitadora (*bounding box*, >8x más rápido) para eliminar bordes claros o halos residuales en la silueta del terreno sin tocar las texturas interiores.
+  - Desplazamiento perimétrico subpíxel (`shift_mask_edge`) para contraer o dilatar la máscara de cielo según la complejidad del contorno arbóreo o montañoso.
+  - Integración de los controles deslizantes correspondientes en el panel de cielo/suelo (`gui/developer/panels/panel_ground_sky.py`) y persistencia completa en presets y recetas (`core/developer_presets.py`).
+
+### Corregido
+* **Revelador: Sincronización Bidireccional de Zoom 1:1 (Canvas y Escala):**
+  - Corrección de desincronización de estado en `gui/tab_developer.py:on_canvas_zoom_toggled`: al pulsar el botón "Zoom 100% (C)" o pulsar 'C', `DeveloperTab.is_zoomed_100` cambiaba a `True` pero el lienzo (`canvas.is_zoomed`) quedaba en `False`, provocando que `canvas.get_render_geometry()` forzase el modo *Fit* (estirando el recorte a pantalla completa) y deshabilitase el paneo/arrastre con ratón.
+  - Sincronización unificada de `canvas.is_zoomed`, `zoom_center_img` y `_zoom_background_pixmap`, garantizando escala nativa de píxel 1.0 y desplazamiento suave idéntico tanto por botón, atajo de teclado como clic derecho.
+* **Revelador: Aislamiento y Sincronización de la Capa de Suelo en `MaskLayersWidget`:**
+  - Corrección del cálculo de miniatura en vivo para la Capa de Suelo: aislamiento estricto multiplicando los datos por la máscara de tierra invertida `(1 - sky_mask)`, evitando que el cielo sobreexponga la vista previa o falsee el cálculo de curvas y estirado MTF.
+  - Diferenciación y sincronización de controles en `DeveloperTab`: desacoplamiento riguroso entre ajustes lineales pre-estirado (EV lineal de suelo, sombras, reducción de ruido, anti-halo) y ajustes tonales post-estirado de la capa de suelo.
+* **Apilador: Resolución de Fuga de Ámbito `UnboundLocalError` en Worker:**
+  - Corrección en `gui/worker.py` donde la estructura de datos `aligned_results` se eliminaba de memoria de forma prematura antes de extraer y persistir las rutas de los fotogramas integrados resultantes.
+
+### Optimizado
+* **Revelador / Eclipses: Preservación Completa de Rango Dinámico Float32:**
+  - Auditoría y blindaje del paso de datos lineales de 32 bits flotantes desde el módulo de Eclipses HDR hacia la mesa de trabajo del Revelador, garantizando cero pérdida de rango dinámico ni redondeos a 16 o 8 bits antes de la compresión tonal.
+
 ## [0.11.4] - 2026-10-28
 
 ### Añadido

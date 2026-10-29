@@ -100,6 +100,16 @@ El apilador combina múltiples tomas cortas para emular una única exposición u
 * **Método de Alineación y Registro Estelar:**
   * Detección automática de patrones estelares (ORB/AKAZE) y refinamiento subpíxel por flujo óptico (*Lucas-Kanade*).
   * En modo vídeo, precomputa la cadena de homografías adyacentes en tiempo lineal $O(N)$ con consumo acotado de memoria RAM $O(W)$.
+* **Auto-Selección Inteligente de Toma de Referencia:**
+  * Al evaluar el cribado de tomas o iniciar el proceso, AstroLoom analiza las métricas de calidad óptica (menor FWHM, mayor censo estelar y contraste) y selecciona de forma automática la toma óptima como referencia maestra geométrica y fotométrica.
+* **Normalización Fotométrica Previa (Linear Fit):**
+  * Ajuste lineal por canal ($I'_k = a_k \cdot I_k + b_k$) antes del rechazo Kappa-Sigma. Iguala la dispersión y el pedestal del fondo de cada toma respecto a la referencia, neutralizando gradientes dinámicos, nubes tenues pasajeras o cambios en la transparencia atmosférica.
+* **Integración Kappa-Sigma Adaptativa Ponderada:**
+  * Ponderación matemática acelerada por JIT Numba donde cada toma aporta al apilado en proporción inversa a su FWHM ($1 / \text{FWHM}^2$), maximizando la nitidez estelar y la relación señal/ruido (SNR) final sin degradar zonas afectadas por viento o peor seeing.
+* **Modos de Integración de Suelo Terrestre:**
+  * **Toma de Referencia:** Conserva el paisaje estático nítido de la toma maestra seleccionada.
+  * **Min-Stack (Anti-ghosting / Vegetación):** Fusión por percentil mínimo ($P_{10}$) diseñada para eliminar ramas batientes, hierba mecida por el viento, vehículos o personas en movimiento en el horizonte.
+  * **Mediana:** Fusión estadística para reducción uniforme de ruido térmico en paisajes terrestres completamente inmóviles.
 * **Rechazo de Artefactos (Sigma-Clipping / MAD):**
   * Elimina automáticamente las rayas dejadas por satélites (Starlink), estrellas fugaces y aviones que crucen por el encuadre.
 * **Detección de Horizonte por IA y Creación/Edición de Máscaras:**
@@ -298,6 +308,9 @@ Restaura la resolución óptica y nitidez perdida debido a la difracción de la 
 Cuando realizamos una fotografía de paisaje nocturno, el suelo terrestre suele quedar demasiado oscuro o con una temperatura de color incompatible con el cielo.
 * **Exposición Suelo (EV):** Sube o baja la luz del suelo de forma independiente respecto al cielo (rango de -3.0 EV a +3.0 EV).
 * **Tono / Temperatura Suelo:** Permite darle un matiz más frío o cálido al paisaje terrestre sin contaminar el cielo estrellado.
+* **Supresión de Halos en Horizonte (Anti-Halo):** Algoritmo de oscurecimiento selectivo guiado por caja delimitadora en la frontera tierra/cielo. Erradica rebordes claros y flecos artificiales en siluetas de montañas, edificios o árboles sin degradar texturas interiores.
+* **Desplazamiento Perimétrico de Borde (Edge Shift):** Permite desplazar subpíxelmente el límite de la máscara hacia el cielo o el suelo, ajustando con precisión microscópica la transición óptica en horizontes complejos.
+* **Sincronización Pre-Estirado Lineal y Aislamiento de Capa:** Los ajustes de suelo operan en dos niveles rigurosamente desacoplados: ajustes físicos lineales en espacio float32 (EV lineal, sombras, reducción de ruido y supresión de halos) y ajustes tonales de capa post-estirado. Asimismo, la miniatura de la capa en el Gestor de Capas aísla estrictamente el suelo multiplicando por $(1 - \text{sky\_mask})$, eliminando sobreexposiciones parásitas provenientes del cielo.
 * **Memoria de Suelo:** Si capturaste una toma durante la hora azul o con larga exposición para el suelo, AstroLoom la recuerda y mantiene sus valores de exposición calibrados.
 
 ---
@@ -452,6 +465,7 @@ Permite ensamblar mosaicos gigantes del cielo nocturno (por ejemplo, el arco com
 | `Shift + Y` | Conmutar orientación del comparador Antes / Después (Vertical ↔ Horizontal). |
 | `W` | Activar pipeta interactiva de Balance de Blancos en el lienzo. |
 | `Z` | Activar / Desactivar lupa de inspección flotante con zoom dinámico. |
+| `C` | Conmutar Zoom 1:1 nativo (100% de píxeles reales) / Ajustar a pantalla (Fit). |
 | `M` | Conmutar modo de máscara y trazado de suelo. |
 | `Espacio + Arrastre` | Moverse por la imagen (*pan*) en cualquier nivel de zoom. |
 | `Rueda del Ratón` | Zoom continuo interactivo centrado en el cursor. |
