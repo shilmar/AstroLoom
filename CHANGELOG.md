@@ -5,6 +5,38 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.11.6] - 2026-10-30
+
+### Añadido
+* **Módulo de Panorámicas: Modo Ráfaga y Apilado Previo por Tesela (Burst Stacking):**
+  - Implementación en `core/panorama.py:stack_and_stitch_nightscape_panorama` y `gui/tab_panorama.py` de una canalización integral de 2 fases: pre-apilado multihilo de reducción de ruido en cada panel antes del cosido geométrico final.
+  - Modos de agrupación por tesela: selección fija de tomas (2 a 10 tomas por panel) o detección automática temporal por marca de tiempo EXIF (`group_panel_paths`).
+  - Soporte para monturas astronómicas: modo *Trípode Fijo* (alineación traslacional para suprimir ruido sin deformar el horizonte) y modo *Star Tracker* (compensación de rotación sidérea y seguimiento estelar).
+  - Desacoplamiento inteligente de cielo y suelo mediante auto-máscara IA (`compose_sky_ground_with_anti_ghosting`): apilado dual por tesela con transición continua en el horizonte y eliminación de estelas fantasma (*ghosting*).
+* **Módulo de Panorámicas: Motor de Alineación Guiada por Estrellas (Star Triangle Matching):**
+  - Nuevo pipeline de registro astronómico en `core/panorama.py`:
+    - Extracción morfológica de estrellas brillantes con filtrado Top-Hat y refinamiento de centroides subpíxel (`extract_bright_stars`).
+    - Construcción de descriptores invariantes de triángulos estelares / asterismos (`build_star_triangle_descriptors`) basados en ratios métricas de lados y ángulos.
+    - Correspondencia espacial acelerada con k-d tree (`match_star_triangles`) y estimación homográfica robusta RANSAC para coser teselas nocturnas profundas donde algoritmos tradicionales de visión artificial (ORB/SIFT) fallan por falta de textura diurna.
+* **Módulo de Panorámicas: Compensación Automática de Viñeteo:**
+  - Estimación estadística en `core/panorama.py:estimate_series_vignetting` de la caída perimétrica de luz en bordes y esquinas a partir del fondo de cielo de la serie panorámica.
+  - Modelado radial de ganancia (`apply_vignette_compensation`) para ecualizar la iluminación entre fotogramas adyacentes y erradicar bandas oscuras o costuras verticales.
+* **Módulo de Panorámicas: Control de Curvatura de Arco (Arch Curvature):**
+  - Control de deformación geométrica vertical en la proyección cilíndrica/esférica para nivelar o acentuar el arco de la Vía Láctea según la composición deseada.
+* **Módulo de Panorámicas: Persistencia Completa de Sesión (`.astropano`):**
+  - Serialización y restauración integral en `save_panorama_session` y `load_panorama_session` de paneles activos, modo ráfaga, parámetros de montura, estado de inclusión individual, geometría y ajustes fotométricos.
+
+### Corregido
+* **Eclipses: Prevención de Cierre Abrupto (Crash) por Concurrencia de Workers:**
+  - Deshabilitación de botones de acción (`btn_apply_filters` y `btn_detect_all`) durante la ejecución de la fusión HDR bracketing en `gui/tab_eclipse.py`.
+  - Protección con guardas contra sobreescritura del hilo `QThread` (`EclipseWorker`) en ejecución nativa, evitando el fallo de terminación forzada del proceso Qt (`QThread: Destroyed while thread is still running`).
+  - Reactivación coordinada y estilización de estado deshabilitado (`QPushButton:disabled`) en el botón de filtros coronales.
+* **Revelador: Ajuste Dimensional y Recorte de Capas StarNet en Zoom 1:1:**
+  - Corrección en `gui/tab_developer.py`: recorte espacial coordinado de las capas sin estrellas (`image_starless`) y sólo estrellas (`image_stars`) al activar la inspección a resolución nativa del 100%.
+  - Escalado y alineación del subrecorte para el caché de reducción de ruido neuronal Starless AI Denoise (`_process_starless_base`), eliminando desajustes de escala y artefactos de estiramiento en el lienzo.
+* **Lienzo (Canvas): Desacoplamiento de Interacciones de Paneo y Máscara:**
+  - Corrección en `gui/canvas.py`: navegación fluida con barra espaciadora o botón izquierdo del ratón en niveles de zoom elevados, evitando activaciones accidentales del cursor de mano abierta cuando las herramientas de trazado o pincel de máscara están operativas.
+
 ## [0.11.5] - 2026-10-29
 
 ### Añadido

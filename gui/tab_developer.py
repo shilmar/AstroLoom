@@ -3766,10 +3766,19 @@ class DeveloperTab(QWidget):
                 self._is_dirty = False
                 self._update_project_ui_status()
 
-    def _process_starless_base(self, starless: Optional[np.ndarray], mask_3d: Optional[np.ndarray] = None, is_full_res: bool = True) -> Optional[np.ndarray]:
+    def _process_starless_base(
+        self, 
+        starless: Optional[np.ndarray], 
+        mask_3d: Optional[np.ndarray] = None, 
+        is_full_res: bool = True,
+        crop_rect: Optional[tuple[int, int, int, int]] = None
+    ) -> Optional[np.ndarray]:
         """Aplica las mejoras lineales a la capa StarNet (Denoise, Claridad, Dehaze, Ondículas)."""
         if starless is None:
             return None
+
+        if crop_rect is None and getattr(self, 'is_zoomed_100', False):
+            crop_rect = getattr(self, '_zoom_crop_rect', None)
 
         # Bypass ultra-rápido si todos los filtros lineales están neutros
         is_neutral = (
@@ -3844,7 +3853,22 @@ class DeveloperTab(QWidget):
                 cached_ai = getattr(self, '_cache_starless_ai', None)
                 use_ai = getattr(self, 'starless_ai_denoise_enabled', False) and (cached_ai is not None)
                 if use_ai:
-                    if cached_ai.shape[:2] != proc_starless.shape[:2]:
+                    if crop_rect is not None:
+                        x1, y1, x2, y2 = crop_rect
+                        h_f, w_f = self.image_32bit.shape[:2] if self.image_32bit is not None else cached_ai.shape[:2]
+                        h_c, w_c = cached_ai.shape[:2]
+                        sx = w_c / float(w_f)
+                        sy = h_c / float(h_f)
+                        sx1 = max(0, min(w_c, int(round(x1 * sx))))
+                        sy1 = max(0, min(h_c, int(round(y1 * sy))))
+                        sx2 = max(0, min(w_c, int(round(x2 * sx))))
+                        sy2 = max(0, min(h_c, int(round(y2 * sy))))
+                        ai_sub = cached_ai[sy1:sy2, sx1:sx2]
+                        if ai_sub.shape[:2] != proc_starless.shape[:2]:
+                            ai_aligned = cv2.resize(ai_sub, (proc_starless.shape[1], proc_starless.shape[0]), interpolation=cv2.INTER_LINEAR)
+                        else:
+                            ai_aligned = ai_sub
+                    elif cached_ai.shape[:2] != proc_starless.shape[:2]:
                         ai_aligned = cv2.resize(cached_ai, (proc_starless.shape[1], proc_starless.shape[0]), interpolation=cv2.INTER_AREA)
                     else:
                         ai_aligned = cached_ai
@@ -3948,8 +3972,37 @@ class DeveloperTab(QWidget):
             self._zoom_crop_rect = (x1, y1, x2, y2)
 
             base = self.image_32bit[y1:y2, x1:x2].copy()
-            starless = self.image_starless[y1:y2, x1:x2].copy() if self.image_starless is not None else None
-            stars = self.image_stars[y1:y2, x1:x2].copy() if self.image_stars is not None else None
+            if self.image_starless is not None:
+                if self.image_starless.shape[:2] == (h_f, w_f):
+                    starless = self.image_starless[y1:y2, x1:x2].copy()
+                else:
+                    h_s, w_s = self.image_starless.shape[:2]
+                    sx = w_s / float(w_f)
+                    sy = h_s / float(h_f)
+                    sx1 = max(0, min(w_s, int(round(x1 * sx))))
+                    sy1 = max(0, min(h_s, int(round(y1 * sy))))
+                    sx2 = max(0, min(w_s, int(round(x2 * sx))))
+                    sy2 = max(0, min(h_s, int(round(y2 * sy))))
+                    sub = self.image_starless[sy1:sy2, sx1:sx2]
+                    starless = cv2.resize(sub, (cw, ch), interpolation=cv2.INTER_LINEAR) if sub.shape[:2] != (ch, cw) else sub.copy()
+            else:
+                starless = None
+
+            if self.image_stars is not None:
+                if self.image_stars.shape[:2] == (h_f, w_f):
+                    stars = self.image_stars[y1:y2, x1:x2].copy()
+                else:
+                    h_s, w_s = self.image_stars.shape[:2]
+                    sx = w_s / float(w_f)
+                    sy = h_s / float(h_f)
+                    sx1 = max(0, min(w_s, int(round(x1 * sx))))
+                    sy1 = max(0, min(h_s, int(round(y1 * sy))))
+                    sx2 = max(0, min(w_s, int(round(x2 * sx))))
+                    sy2 = max(0, min(h_s, int(round(y2 * sy))))
+                    sub = self.image_stars[sy1:sy2, sx1:sx2]
+                    stars = cv2.resize(sub, (cw, ch), interpolation=cv2.INTER_LINEAR) if sub.shape[:2] != (ch, cw) else sub.copy()
+            else:
+                stars = None
 
             if self.current_mask is not None:
                 if self.current_mask.shape[:2] != (h_f, w_f):
@@ -4002,7 +4055,8 @@ class DeveloperTab(QWidget):
         processed_starless = self._process_starless_base(
             starless,
             mask_3d=mask_3d,
-            is_full_res=(for_export or crop_active)
+            is_full_res=(for_export or crop_active),
+            crop_rect=self._zoom_crop_rect if self.is_zoomed_100 else None
         )
 
         # 4. Mezcla de capas
@@ -4126,8 +4180,39 @@ class DeveloperTab(QWidget):
         # Resolve starless and stars image slices
         if is_zoomed:
             x1, y1, x2, y2 = self._zoom_crop_rect
-            st_img = self.image_stars[y1:y2, x1:x2].copy() if self.image_stars is not None else None
-            sl_img = self.image_starless[y1:y2, x1:x2].copy() if self.image_starless is not None else None
+            if self.image_stars is not None and full_shape is not None:
+                h_f, w_f = full_shape
+                if self.image_stars.shape[:2] == (h_f, w_f):
+                    st_img = self.image_stars[y1:y2, x1:x2].copy()
+                else:
+                    h_s, w_s = self.image_stars.shape[:2]
+                    sx = w_s / float(w_f)
+                    sy = h_s / float(h_f)
+                    sx1 = max(0, min(w_s, int(round(x1 * sx))))
+                    sy1 = max(0, min(h_s, int(round(y1 * sy))))
+                    sx2 = max(0, min(w_s, int(round(x2 * sx))))
+                    sy2 = max(0, min(h_s, int(round(y2 * sy))))
+                    sub = self.image_stars[sy1:sy2, sx1:sx2]
+                    st_img = cv2.resize(sub, (x2 - x1, y2 - y1), interpolation=cv2.INTER_LINEAR) if sub.shape[:2] != (y2 - y1, x2 - x1) else sub.copy()
+            else:
+                st_img = None
+
+            if self.image_starless is not None and full_shape is not None:
+                h_f, w_f = full_shape
+                if self.image_starless.shape[:2] == (h_f, w_f):
+                    sl_img = self.image_starless[y1:y2, x1:x2].copy()
+                else:
+                    h_s, w_s = self.image_starless.shape[:2]
+                    sx = w_s / float(w_f)
+                    sy = h_s / float(h_f)
+                    sx1 = max(0, min(w_s, int(round(x1 * sx))))
+                    sy1 = max(0, min(h_s, int(round(y1 * sy))))
+                    sx2 = max(0, min(w_s, int(round(x2 * sx))))
+                    sy2 = max(0, min(h_s, int(round(y2 * sy))))
+                    sub = self.image_starless[sy1:sy2, sx1:sx2]
+                    sl_img = cv2.resize(sub, (x2 - x1, y2 - y1), interpolation=cv2.INTER_LINEAR) if sub.shape[:2] != (y2 - y1, x2 - x1) else sub.copy()
+            else:
+                sl_img = None
         elif is_full_res:
             st_img = self.image_stars if self.image_starless is not None else None
             sl_img = self.image_starless

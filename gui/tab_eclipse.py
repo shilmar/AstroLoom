@@ -1038,6 +1038,11 @@ class EclipseTab(QWidget):
             QPushButton:pressed {
                 background-color: #0d47a1;
             }
+            QPushButton:disabled {
+                background-color: #152238;
+                color: #546e7a;
+                border: 1px solid #1e293b;
+            }
         """)
         self.btn_apply_filters.clicked.connect(self._on_apply_filters_clicked)
         nrgf_layout.addWidget(self.btn_apply_filters)
@@ -1467,6 +1472,8 @@ class EclipseTab(QWidget):
 
     def _on_detect_all_clicked(self):
         """Lanza la detección automática del limbo en todas las tomas del bracketing."""
+        if self.worker is not None and self.worker.isRunning():
+            return
         if not self.bracketing_files:
             QMessageBox.warning(self, "Atención", "Carga tomas de bracketing antes de detectar el limbo.")
             return
@@ -1477,6 +1484,8 @@ class EclipseTab(QWidget):
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.btn_detect_all.setEnabled(False)
+        self.btn_fuse_hdr.setEnabled(False)
+        self.btn_apply_filters.setEnabled(False)
 
         ref_r = self.bracketing_files[self.ref_file_idx].get("radius") if self.bracketing_files else None
         params = {
@@ -1548,6 +1557,8 @@ class EclipseTab(QWidget):
             self._update_canvas_guide()
 
     def _on_fuse_hdr_clicked(self):
+        if self.worker is not None and self.worker.isRunning():
+            return
         active_files = []
         active_exposures = []
         active_centers = []
@@ -1581,6 +1592,8 @@ class EclipseTab(QWidget):
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.btn_fuse_hdr.setEnabled(False)
+        self.btn_apply_filters.setEnabled(False)
+        self.btn_detect_all.setEnabled(False)
 
         params = {
             "files": active_files,
@@ -1609,6 +1622,8 @@ class EclipseTab(QWidget):
         self.container_nrgf.setVisible(not is_mgn)
 
     def _on_apply_filters_clicked(self):
+        if self.worker is not None and self.worker.isRunning():
+            return
         base_img = self.fused_hdr_img if self.fused_hdr_img is not None else self.current_preview_img
         if base_img is None:
             QMessageBox.warning(self, "Atención", "No hay imagen cargada o fusionada sobre la cual aplicar filtros.")
@@ -1641,6 +1656,8 @@ class EclipseTab(QWidget):
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.btn_apply_filters.setEnabled(False)
+        self.btn_fuse_hdr.setEnabled(False)
+        self.btn_detect_all.setEnabled(False)
 
         params = {
             "image": base_img,

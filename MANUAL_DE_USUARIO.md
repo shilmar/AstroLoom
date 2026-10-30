@@ -439,15 +439,27 @@ Especializado en transformar cientos de fotos fijas en espectaculares círculos 
 
 ## 7. Módulo 6: Panorámicas (Mosaicos)
 
-Permite ensamblar mosaicos gigantes del cielo nocturno (por ejemplo, el arco completo de la Vía Láctea de horizonte a horizonte de 180° o 360°).
+Permite ensamblar mosaicos gigantes del cielo nocturno (por ejemplo, el arco completo de la Vía Láctea de horizonte a horizonte de 180° o 360°), integrando apilado por ráfagas y cosido de alta fidelidad astronómica.
 
-* **Proyección:**
-  * *Cilíndrica:* Recomendada para arcos amplios con horizonte plano.
-  * *Esférica:* Recomendada para grandes campos con distorsión angular acentuada.
-* **Alineación Híbrida Cielo-Tierra:**
-  * Evita que el suelo se deforme mientras resuelve la orientación relativa de las constelaciones.
-* **Blending Multibanda:**
-  * Iguala el brillo y el balance de blancos entre teselas adyacentes para que no se noten cortes ni cambios de iluminación en el cielo.
+* **Modo Ráfaga / Apilado Previo por Tesela (Burst Stacking):**
+  * Reduce drásticamente el ruido de cada panel antes del cosido final. Puedes definir un número fijo de tomas por tesela (2 a 10) o utilizar la detección automática por tiempo entre capturas.
+  * *Soporte de Montura:*
+    * **Trípode Fijo:** Alineación traslacional para promediar y limpiar ruido sin deformar el horizonte terrestre.
+    * **Star Tracker:** Seguimiento sidéreo que compensa el movimiento aparente de la esfera celeste.
+  * *Separación Cielo/Suelo con Auto-Máscara IA:* Desacopla automáticamente el terreno del firmamento y realiza una fusión con anti-ghosting para evitar desenfoques en vegetación u horizontes.
+* **Registro Guiado por Estrellas (Star Triangle Matching):**
+  * Utiliza un buscador astronómico basado en asterismos y triángulos de estrellas invariantes a rotación y escala para encontrar puntos de coincidencia precisos incluso en campos oscuros profundos donde algoritmos diurnos estándar (ORB/SIFT) no detectan suficiente contraste.
+* **Proyección y Geometría:**
+  * *Esférica:* Recomendada para grandes campos con distorsión angular acentuada y arcos de horizonte amplio.
+  * *Cilíndrica:* Recomendada para panorámicas lineales con horizonte plano.
+  * *Corrección de Ondulación (Wave Correction):* Nivela automáticamente la línea del horizonte.
+  * *Curvatura de Arco (Arch Curvature):* Permite ajustar la convexidad o concavidad vertical del arco galáctico para una composición armoniosa.
+* **Fotometría y Fusión:**
+  * *Compensación Automática de Viñeteo:* Muestrea el cielo de fondo de la serie para modelar y compensar la caída perimétrica de luz en bordes, eliminando bandas oscuras en las uniones.
+  * *Fusión Multibanda Laplaciana:* Descompone las teselas en múltiples bandas de frecuencia espacial (por defecto 5 niveles) para una transición suave y continua de iluminación sin saltos visibles.
+  * *Recorte Automático:* Encuentra y extrae el rectángulo máximo inscrito completamente cubierto de datos.
+* **Gestión de Sesiones (`.astropano`):**
+  * Guarda y restaura todas las teselas cargadas, casillas de inclusión, disposición de cuadrícula y parámetros de procesado para retomar proyectos en cualquier momento.
 
 ---
 

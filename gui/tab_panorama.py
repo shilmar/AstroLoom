@@ -25,7 +25,7 @@ from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QBrush, QCurs
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QPushButton, QFileDialog, QMessageBox, QSlider, QComboBox,
-    QCheckBox, QSpinBox, QTableWidget, QTableWidgetItem, QHeaderView,
+    QCheckBox, QSpinBox, QDoubleSpinBox, QTableWidget, QTableWidgetItem, QHeaderView,
     QProgressBar, QScrollArea, QSplitter, QFrame, QSizePolicy
 )
 
@@ -35,6 +35,9 @@ from core.panorama import (
     PanoramaPanelMetadata,
     extract_panel_metadata,
     stitch_nightscape_panorama,
+    stack_and_stitch_nightscape_panorama,
+    group_panel_paths,
+    estimate_series_vignetting,
     save_panorama_session,
     load_panorama_session
 )
@@ -66,16 +69,22 @@ class MetadataExtractWorker(QThread):
 
 
 class PanoramaStitchWorker(QThread):
-    """Hilo de procesamiento en segundo plano para el cosido de panorámica."""
+    """Hilo de procesamiento en segundo plano para el apilado y cosido de panorámica."""
     progress = Signal(int, str)
     finished = Signal(object)
     cancelled = Signal()
     error = Signal(str)
 
-    def __init__(self, panel_paths: List[str], settings: PanoramaSettings):
+    def __init__(
+        self,
+        panel_paths: List[str],
+        settings: PanoramaSettings,
+        grouped_panels: Optional[List[List[str]]] = None
+    ):
         super().__init__()
         self.panel_paths = panel_paths
         self.settings = settings
+        self.grouped_panels = grouped_panels
         self._is_cancelled = False
 
     def cancel(self):
@@ -83,12 +92,20 @@ class PanoramaStitchWorker(QThread):
 
     def run(self):
         try:
-            result = stitch_nightscape_panorama(
-                self.panel_paths,
-                self.settings,
-                progress_callback=self.progress.emit,
-                abort_flag=lambda: self._is_cancelled
-            )
+            if self.settings.burst_stacking and self.grouped_panels and len(self.grouped_panels) >= 2:
+                result = stack_and_stitch_nightscape_panorama(
+                    self.grouped_panels,
+                    self.settings,
+                    progress_callback=self.progress.emit,
+                    abort_flag=lambda: self._is_cancelled
+                )
+            else:
+                result = stitch_nightscape_panorama(
+                    self.panel_paths,
+                    self.settings,
+                    progress_callback=self.progress.emit,
+                    abort_flag=lambda: self._is_cancelled
+                )
             if self._is_cancelled:
                 self.cancelled.emit()
             else:
@@ -409,6 +426,47 @@ class PanoramaTab(QWidget):
         self.lbl_ingest_summary.setStyleSheet("color: #90a4ae; font-size: 11px;")
         ingest_layout.addWidget(self.lbl_ingest_summary)
 
+        # Controles de Modo Ráfaga / Apilar por tesela
+        self.box_burst = QGroupBox("Modo Ráfaga / Apilado Previo por Tesela")
+        self.box_burst.setCheckable(True)
+        self.box_burst.setChecked(False)
+        self.box_burst.setStyleSheet(
+            "QGroupBox { font-weight: bold; color: #80d8ff; margin-top: 4px; padding-top: 14px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
+        )
+
+        burst_layout = QVBoxLayout(self.box_burst)
+        burst_layout.setContentsMargins(6, 6, 6, 6)
+        burst_layout.setSpacing(6)
+
+        row_burst_cfg = QHBoxLayout()
+        row_burst_cfg.addWidget(QLabel("Tomas/tesela:"))
+        self.combo_burst_count = QComboBox()
+        self.combo_burst_count.addItem("2 tomas", 2)
+        self.combo_burst_count.addItem("3 tomas", 3)
+        self.combo_burst_count.addItem("4 tomas", 4)
+        self.combo_burst_count.addItem("5 tomas", 5)
+        self.combo_burst_count.addItem("6 tomas", 6)
+        self.combo_burst_count.addItem("8 tomas", 8)
+        self.combo_burst_count.addItem("9 tomas", 9)
+        self.combo_burst_count.addItem("10 tomas", 10)
+        self.combo_burst_count.addItem("Auto (Por tiempo)", 0)
+        row_burst_cfg.addWidget(self.combo_burst_count)
+
+        row_burst_cfg.addWidget(QLabel("Montura:"))
+        self.combo_mount_mode = QComboBox()
+        self.combo_mount_mode.addItem("Trípode Fijo", "tripod")
+        self.combo_mount_mode.addItem("Star Tracker", "tracker")
+        row_burst_cfg.addWidget(self.combo_mount_mode)
+        burst_layout.addLayout(row_burst_cfg)
+
+        self.chk_auto_mask = QCheckBox("Separar Cielo/Suelo (Auto-Máscara IA)")
+        self.chk_auto_mask.setChecked(False)
+        self.chk_auto_mask.setToolTip("Aísla el horizonte automáticamente para congelar el suelo y evitar trazas o ramas fantasma.")
+        burst_layout.addWidget(self.chk_auto_mask)
+
+        ingest_layout.addWidget(self.box_burst)
+
         left_layout.addWidget(self.sec_ingest)
 
         # --- SECCIÓN 2: DISPOSICIÓN Y GEOMETRÍA ---
@@ -466,6 +524,23 @@ class PanoramaTab(QWidget):
         self.chk_wave_correction.setChecked(True)
         geo_layout.addWidget(self.chk_wave_correction)
 
+        arch_bar = QHBoxLayout()
+        arch_bar.addWidget(QLabel("Deformación de Arco / Curvatura:"))
+        self.slider_arch = QSlider(Qt.Horizontal)
+        self.slider_arch.setRange(-25, 25)
+        self.slider_arch.setValue(0)
+        self.lbl_arch_val = QLabel("0%")
+        self.lbl_arch_val.setFixedWidth(36)
+        self.slider_arch.valueChanged.connect(lambda v: self.lbl_arch_val.setText(f"{v}%"))
+        self.slider_arch.setToolTip(
+            "Permite arquear la Vía Láctea y aplanar el suelo (como en Autopano Giga).\n"
+            "Valores negativos (-5% a -15%) elevan el centro, eliminando el efecto cuenco\n"
+            "y formando el arco majestuoso de la Vía Láctea."
+        )
+        arch_bar.addWidget(self.slider_arch)
+        arch_bar.addWidget(self.lbl_arch_val)
+        geo_layout.addLayout(arch_bar)
+
         left_layout.addWidget(self.sec_geo)
 
         # --- SECCIÓN 3: ALGORITMOS ASTRO Y FUSIÓN ---
@@ -480,6 +555,20 @@ class PanoramaTab(QWidget):
         )
         fusion_layout.addWidget(self.chk_astro_mode)
 
+        self.chk_star_matching = QCheckBox("Alineación por Identificación Estelar (Asterismos)")
+        self.chk_star_matching.setChecked(True)
+        self.chk_star_matching.setToolTip(
+            "Identifica las estrellas más brillantes y empareja constelaciones con precisión subpíxel para coser el cielo nocturno."
+        )
+        fusion_layout.addWidget(self.chk_star_matching)
+
+        self.chk_auto_mask_pano = QCheckBox("Desacoplar Cielo / Suelo (Auto-Máscara IA)")
+        self.chk_auto_mask_pano.setChecked(True)
+        self.chk_auto_mask_pano.setToolTip(
+            "Aísla el horizonte con IA para calibrar las estrellas con subpíxel y proteger las ramas y árboles del suelo sin duplicidades ni cortes."
+        )
+        fusion_layout.addWidget(self.chk_auto_mask_pano)
+
         # Precision sliders
         self.spin_min_inliers = PrecisionSliderRow(
             title="Coincidencias mínimas",
@@ -491,21 +580,43 @@ class PanoramaTab(QWidget):
         )
         fusion_layout.addWidget(self.spin_min_inliers)
 
-        self.chk_exposure_comp = QCheckBox("Compensación de Viñeteo y Ganancia entre Tomas")
+        vig_header = QHBoxLayout()
+        self.chk_exposure_comp = QCheckBox("Compensación de Viñeteo")
         self.chk_exposure_comp.setChecked(True)
-        fusion_layout.addWidget(self.chk_exposure_comp)
+        self.chk_vignette_auto = QCheckBox("Auto (Medir)")
+        self.chk_vignette_auto.setChecked(True)
+        self.chk_vignette_auto.setStyleSheet("color: #80d8ff; font-size: 11px;")
+        self.chk_vignette_auto.setToolTip("Mide la caída real de luz del cielo a través de los paneles de la serie.")
+        vig_header.addWidget(self.chk_exposure_comp)
+        vig_header.addWidget(self.chk_vignette_auto)
+        vig_header.addStretch()
+        fusion_layout.addLayout(vig_header)
+
+        self.slider_vignette = PrecisionSliderRow(
+            title="Fuerza Viñeteo",
+            min_val=0,
+            max_val=100,
+            default_val=50,
+            unit="%",
+            decimals=0,
+            label_width=140
+        )
+        fusion_layout.addWidget(self.slider_vignette)
 
         # Fusión
         fusion_layout.addWidget(QLabel("Tipo de Fusión:"))
         self.combo_blend = QComboBox()
-        self.combo_blend.addItem("Multibanda Laplaciana (Preserva estrellas nítidas)", "multiband")
+        self.combo_blend.addItem("Multibanda Laplaciana (Recomendada con Máscara IA)", "multiband")
         self.combo_blend.addItem("Degradado Suave por Distancia (Feathering)", "feather")
+        self.combo_blend.setToolTip(
+            "Fusión multibanda de alta fidelidad que elimina saltos de luz y gradientes sin emborronar ni duplicar las estrellas."
+        )
         fusion_layout.addWidget(self.combo_blend)
 
         self.spin_bands = PrecisionSliderRow(
             title="Niveles de Pirámide",
-            min_val=2,
-            max_val=7,
+            min_val=1,
+            max_val=6,
             default_val=5,
             decimals=0,
             label_width=140
@@ -651,9 +762,15 @@ class PanoramaTab(QWidget):
         self.table_panels.files_dropped.connect(self.load_filepaths)
         self.canvas.files_dropped.connect(self.load_filepaths)
 
+        # Ráfaga / Apilado previo
+        self.box_burst.toggled.connect(self._on_burst_mode_toggled)
+        self.combo_burst_count.currentIndexChanged.connect(lambda: self._refresh_table())
+
         # Configuración UI
         self.combo_layout_mode.currentIndexChanged.connect(self._on_layout_mode_changed)
         self.chk_focal_auto.toggled.connect(lambda c: self.spin_focal.setEnabled(not c))
+        self.chk_exposure_comp.toggled.connect(self._on_vignette_comp_toggled)
+        self.chk_vignette_auto.toggled.connect(self._on_vignette_auto_toggled)
 
         # Procesamiento
         self.btn_stitch.clicked.connect(self._start_stitching)
@@ -671,6 +788,30 @@ class PanoramaTab(QWidget):
         self.btn_zoom_100.clicked.connect(self.canvas.set_zoom_100)
         self.btn_zoom_fit.clicked.connect(self.canvas.fit_view)
         self.btn_toggle_crop.toggled.connect(self.canvas.set_show_cropped)
+
+    def _on_vignette_comp_toggled(self, checked: bool):
+        self.chk_vignette_auto.setEnabled(checked)
+        self.slider_vignette.setEnabled(checked and not self.chk_vignette_auto.isChecked())
+
+    def _on_vignette_auto_toggled(self, checked: bool):
+        self.slider_vignette.setEnabled(not checked if self.chk_exposure_comp.isChecked() else False)
+        if checked:
+            self._auto_estimate_vignetting()
+
+    def _auto_estimate_vignetting(self):
+        paths = [m.filepath for m in self.panels_metadata if m.is_included]
+        if paths and hasattr(self, 'chk_vignette_auto') and self.chk_vignette_auto.isChecked():
+            try:
+                est = estimate_series_vignetting(paths)
+                val_pct = int(round(est * 100))
+                self.slider_vignette.setValue(val_pct)
+                self.chk_vignette_auto.setText(f"Auto ({val_pct}%)")
+            except Exception:
+                pass
+
+    def _on_burst_mode_toggled(self, checked: bool):
+        self.btn_stitch.setText("Apilar y Coser Panorámica" if checked else "Coser Panorámica")
+        self._refresh_table()
 
     def _on_layout_mode_changed(self):
         is_grid = self.combo_layout_mode.currentData() == "grid"
@@ -723,21 +864,25 @@ class PanoramaTab(QWidget):
         self._meta_worker.start()
 
     def _on_panel_metadata_ready(self, local_idx: int, meta: PanoramaPanelMetadata):
-        # Encontrar y actualizar metadatos en la lista
+        # Encontrar y actualizar metadatos en la lista preservando el estado de inclusión
         for idx, m in enumerate(self.panels_metadata):
             if m.filepath == meta.filepath:
+                meta.is_included = m.is_included
                 self.panels_metadata[idx] = meta
                 self._update_table_row(idx, meta)
                 break
 
     def _on_all_metadata_ready(self):
-        # Actualizar focal estimada si está en modo Auto
-        focals = [m.focal_length_mm for m in self.panels_metadata if m.focal_length_mm is not None and m.focal_length_mm > 0]
-        if focals:
-            med_focal = float(np.median(focals))
-            self.spin_focal.setValue(int(round(med_focal)))
-            self.chk_focal_auto.setText(f"Focal Auto ({med_focal:.0f} mm):")
+        # Actualizar focal estimada solo si está en modo Auto
+        if self.chk_focal_auto.isChecked():
+            focals = [m.focal_length_mm for m in self.panels_metadata if m.focal_length_mm is not None and m.focal_length_mm > 0]
+            if focals:
+                med_focal = float(np.median(focals))
+                self.spin_focal.setValue(int(round(med_focal)))
+                self.chk_focal_auto.setText(f"Focal Auto ({med_focal:.0f} mm):")
         self._update_ingest_summary()
+        if self.chk_vignette_auto.isChecked():
+            self._auto_estimate_vignetting()
 
     def _update_table_row(self, row: int, meta: PanoramaPanelMetadata):
         if row < 0 or row >= self.table_panels.rowCount():
@@ -752,6 +897,19 @@ class PanoramaTab(QWidget):
         self.table_panels.blockSignals(True)
         self.table_panels.setRowCount(len(self.panels_metadata))
 
+        is_burst = getattr(self, "box_burst", None) is not None and self.box_burst.isChecked()
+        shots_n = self.combo_burst_count.currentData() if is_burst else 0
+
+        panel_tags = []
+        if is_burst and len(self.panels_metadata) > 0:
+            paths = [m.filepath for m in self.panels_metadata]
+            grouped = group_panel_paths(paths, shots_per_panel=shots_n)
+            path_to_tag = {}
+            for g_idx, grp in enumerate(grouped):
+                for s_idx, p in enumerate(grp):
+                    path_to_tag[p] = f"P{g_idx + 1} ({s_idx + 1}/{len(grp)})"
+            panel_tags = [path_to_tag.get(m.filepath, str(i + 1)) for i, m in enumerate(self.panels_metadata)]
+
         for row, meta in enumerate(self.panels_metadata):
             # 0. Usar (Checkbox)
             chk_item = QTableWidgetItem()
@@ -759,9 +917,12 @@ class PanoramaTab(QWidget):
             chk_item.setCheckState(Qt.Checked if meta.is_included else Qt.Unchecked)
             self.table_panels.setItem(row, 0, chk_item)
 
-            # 1. Índice
-            idx_item = QTableWidgetItem(str(row + 1))
+            # 1. Índice / Grupo de Tesela
+            idx_str = panel_tags[row] if (is_burst and row < len(panel_tags)) else str(row + 1)
+            idx_item = QTableWidgetItem(idx_str)
             idx_item.setTextAlignment(Qt.AlignCenter)
+            if is_burst:
+                idx_item.setForeground(QColor("#80d8ff"))
             self.table_panels.setItem(row, 1, idx_item)
 
             # 2. Archivo
@@ -793,7 +954,21 @@ class PanoramaTab(QWidget):
         total = len(self.panels_metadata)
         included = sum(1 for row in range(self.table_panels.rowCount())
                        if self.table_panels.item(row, 0) and self.table_panels.item(row, 0).checkState() == Qt.Checked)
-        self.lbl_ingest_summary.setText(f"{total} paneles ({included} seleccionados).")
+        is_burst = getattr(self, "box_burst", None) is not None and self.box_burst.isChecked()
+        if is_burst and included > 0:
+            paths = self._get_selected_panel_paths()
+            shots_n = self.combo_burst_count.currentData()
+            grouped = group_panel_paths(paths, shots_per_panel=shots_n)
+            has_singles = any(len(g) == 1 for g in grouped)
+            if has_singles and shots_n == 0:
+                self.lbl_ingest_summary.setText(
+                    f"{total} tomas ({included} sel. -> {len(grouped)} paneles). "
+                    "⚠ Hay paneles con 1 toma; selecciona '2 tomas' si tu serie es fija."
+                )
+            else:
+                self.lbl_ingest_summary.setText(f"{total} tomas ({included} seleccionadas -> {len(grouped)} paneles a apilar).")
+        else:
+            self.lbl_ingest_summary.setText(f"{total} paneles ({included} seleccionados).")
 
     def _on_remove_selected(self):
         selected_rows = sorted(set(idx.row() for idx in self.table_panels.selectedIndexes()), reverse=True)
@@ -837,34 +1012,55 @@ class PanoramaTab(QWidget):
 
     def _start_stitching(self):
         paths = self._get_selected_panel_paths()
-        if len(paths) < 2:
-            QMessageBox.warning(
-                self,
-                "Tomas Insuficientes",
-                "Por favor selecciona al menos 2 paneles con la casilla activada para componer la panorámica."
-            )
-            return
+        is_burst = self.box_burst.isChecked()
+        grouped = None
+
+        if is_burst:
+            shots_n = self.combo_burst_count.currentData()
+            grouped = group_panel_paths(paths, shots_per_panel=shots_n)
+            if len(grouped) < 2:
+                QMessageBox.warning(
+                    self,
+                    "Tomas Insuficientes",
+                    "Se requieren al menos 2 paneles o teselas distintas para componer la panorámica."
+                )
+                return
+        else:
+            if len(paths) < 2:
+                QMessageBox.warning(
+                    self,
+                    "Tomas Insuficientes",
+                    "Por favor selecciona al menos 2 paneles con la casilla activada para componer la panorámica."
+                )
+                return
 
         settings = PanoramaSettings(
             projection=self.combo_projection.currentData(),
             astro_mode=self.chk_astro_mode.isChecked(),
-            min_inliers=self.spin_min_inliers.value(),
+            star_matching=self.chk_star_matching.isChecked(),
+            min_inliers=int(self.spin_min_inliers.value()),
             exposure_comp=self.chk_exposure_comp.isChecked(),
             blend_mode=self.combo_blend.currentData(),
-            blend_bands=self.spin_bands.value(),
+            blend_bands=int(self.spin_bands.value()),
             auto_crop=self.chk_auto_crop.isChecked(),
             wave_correction=self.chk_wave_correction.isChecked(),
             layout_mode=self.combo_layout_mode.currentData(),
             grid_rows=self.spin_rows.value(),
             grid_cols=self.spin_cols.value(),
-            focal_length_override=None if self.chk_focal_auto.isChecked() else float(self.spin_focal.value())
+            focal_length_override=None if self.chk_focal_auto.isChecked() else float(self.spin_focal.value()),
+            burst_stacking=is_burst,
+            shots_per_panel=self.combo_burst_count.currentData() if is_burst else 0,
+            mount_mode=self.combo_mount_mode.currentData() if is_burst else "tripod",
+            use_auto_mask=self.chk_auto_mask_pano.isChecked(),
+            vignette_amount=(self.slider_vignette.value() / 100.0) if self.chk_exposure_comp.isChecked() else 0.0,
+            arch_curvature=(self.slider_arch.value() / 100.0)
         )
 
         self._set_processing_ui(True)
         self.progress_bar.setValue(0)
-        self.lbl_status.setText("Iniciando cosido panorámico nocturno...")
+        self.lbl_status.setText("Iniciando apilado y cosido panorámico..." if is_burst else "Iniciando cosido panorámico nocturno...")
 
-        self._stitch_worker = PanoramaStitchWorker(paths, settings)
+        self._stitch_worker = PanoramaStitchWorker(paths, settings, grouped_panels=grouped)
         self._stitch_worker.progress.connect(self._on_stitch_progress)
         self._stitch_worker.finished.connect(self._on_stitch_finished)
         self._stitch_worker.cancelled.connect(self._on_stitch_cancelled)
@@ -984,16 +1180,31 @@ class PanoramaTab(QWidget):
                     "time": m.time_str
                 } for m in self.panels_metadata
             ],
-            "projection": self.combo_projection.currentData(),
-            "astro_mode": self.chk_astro_mode.isChecked(),
-            "min_inliers": self.spin_min_inliers.value(),
-            "exposure_comp": self.chk_exposure_comp.isChecked(),
-            "blend_mode": self.combo_blend.currentData(),
-            "blend_bands": self.spin_bands.value(),
-            "auto_crop": self.chk_auto_crop.isChecked(),
+            # Ráfaga / Apilado previo por tesela
+            "burst_stacking": self.box_burst.isChecked(),
+            "burst_count": self.combo_burst_count.currentData(),
+            "mount_mode": self.combo_mount_mode.currentData(),
+            "use_auto_mask": self.chk_auto_mask.isChecked(),
+            # Disposición y Geometría
             "layout_mode": self.combo_layout_mode.currentData(),
             "grid_rows": self.spin_rows.value(),
-            "grid_cols": self.spin_cols.value()
+            "grid_cols": self.spin_cols.value(),
+            "projection": self.combo_projection.currentData(),
+            "focal_auto": self.chk_focal_auto.isChecked(),
+            "focal_override": self.spin_focal.value(),
+            "wave_correction": self.chk_wave_correction.isChecked(),
+            "arch_curvature": self.slider_arch.value(),
+            # Algoritmos Astro y Fusión
+            "astro_mode": self.chk_astro_mode.isChecked(),
+            "star_matching": self.chk_star_matching.isChecked(),
+            "min_inliers": self.spin_min_inliers.value(),
+            "exposure_comp": self.chk_exposure_comp.isChecked(),
+            "vignette_auto": self.chk_vignette_auto.isChecked(),
+            "vignette_amount": self.slider_vignette.value(),
+            "use_auto_mask": self.chk_auto_mask_pano.isChecked(),
+            "blend_mode": self.combo_blend.currentData(),
+            "blend_bands": self.spin_bands.value(),
+            "auto_crop": self.chk_auto_crop.isChecked()
         }
 
         if save_panorama_session(path, session_data):
@@ -1016,21 +1227,63 @@ class PanoramaTab(QWidget):
             QMessageBox.critical(self, "Error", "No se pudo cargar o interpretar el archivo de sesión.")
             return
 
-        # Restaurar paneles
-        paths = [p["filepath"] for p in data.get("panels", []) if os.path.exists(p.get("filepath", ""))]
+        # Restaurar paneles y su estado de inclusión
+        panel_infos = data.get("panels", [])
+        paths = [p["filepath"] for p in panel_infos if os.path.exists(p.get("filepath", ""))]
         if paths:
             self.panels_metadata.clear()
             self.load_filepaths(paths)
+            inc_map = {p["filepath"]: p.get("is_included", True) for p in panel_infos}
+            for row in range(self.table_panels.rowCount()):
+                item = self.table_panels.item(row, 0)
+                if row < len(self.panels_metadata):
+                    fp = self.panels_metadata[row].filepath
+                    is_inc = inc_map.get(fp, True)
+                    self.panels_metadata[row].is_included = is_inc
+                    if item:
+                        item.setCheckState(Qt.Checked if is_inc else Qt.Unchecked)
 
-        # Restaurar configuración
-        proj = data.get("projection", "cylindrical")
-        idx = self.combo_projection.findData(proj)
-        if idx >= 0:
-            self.combo_projection.setCurrentIndex(idx)
+        # Restaurar Ráfaga / Apilado previo
+        self.box_burst.setChecked(data.get("burst_stacking", False))
+        burst_c = data.get("burst_count", 2)
+        idx_bc = self.combo_burst_count.findData(burst_c)
+        if idx_bc >= 0:
+            self.combo_burst_count.setCurrentIndex(idx_bc)
 
+        mount = data.get("mount_mode", "tripod")
+        idx_mm = self.combo_mount_mode.findData(mount)
+        if idx_mm >= 0:
+            self.combo_mount_mode.setCurrentIndex(idx_mm)
+
+        self.chk_auto_mask.setChecked(data.get("use_auto_mask", False))
+
+        # Restaurar Disposición y Geometría
+        layout = data.get("layout_mode", "auto")
+        idx_l = self.combo_layout_mode.findData(layout)
+        if idx_l >= 0:
+            self.combo_layout_mode.setCurrentIndex(idx_l)
+
+        self.spin_rows.setValue(data.get("grid_rows", 1))
+        self.spin_cols.setValue(data.get("grid_cols", 1))
+
+        proj = data.get("projection", "spherical")
+        idx_p = self.combo_projection.findData(proj)
+        if idx_p >= 0:
+            self.combo_projection.setCurrentIndex(idx_p)
+
+        self.chk_focal_auto.setChecked(data.get("focal_auto", True))
+        self.spin_focal.setValue(data.get("focal_override", 24))
+        self.chk_wave_correction.setChecked(data.get("wave_correction", True))
+        self.slider_arch.setValue(data.get("arch_curvature", 0))
+
+        # Restaurar Algoritmos Astro y Fusión
         self.chk_astro_mode.setChecked(data.get("astro_mode", True))
-        self.spin_min_inliers.setValue(data.get("min_inliers", 15))
+        self.chk_star_matching.setChecked(data.get("star_matching", True))
+        self.spin_min_inliers.setValue(data.get("min_inliers", 6))
         self.chk_exposure_comp.setChecked(data.get("exposure_comp", True))
+        self.chk_vignette_auto.setChecked(data.get("vignette_auto", True))
+        self.slider_vignette.setValue(data.get("vignette_amount", 50))
+        self.chk_auto_mask_pano.setChecked(data.get("use_auto_mask", True))
 
         blend = data.get("blend_mode", "multiband")
         idx_b = self.combo_blend.findData(blend)
@@ -1040,11 +1293,5 @@ class PanoramaTab(QWidget):
         self.spin_bands.setValue(data.get("blend_bands", 5))
         self.chk_auto_crop.setChecked(data.get("auto_crop", True))
 
-        layout = data.get("layout_mode", "auto")
-        idx_l = self.combo_layout_mode.findData(layout)
-        if idx_l >= 0:
-            self.combo_layout_mode.setCurrentIndex(idx_l)
-
-        self.spin_rows.setValue(data.get("grid_rows", 1))
-        self.spin_cols.setValue(data.get("grid_cols", 1))
+        self._update_ingest_summary()
         QMessageBox.information(self, "Sesión Cargada", f"Sesión cargada exitosamente.")

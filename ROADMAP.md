@@ -11,7 +11,7 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 | Prioridad | Tarea / Funcionalidad | Módulo | Inspiración | Dificultad (1-10) | Impacto (1-10) | Estado |
 | :---: | :--- | :--- | :--- | :---: | :---: | :---: |
 | **P1** | **Reducción de Ruido con IA Ligera (Astro Denoise Fase 2 - ONNX / NAFNet)** | Revelador | NoiseXTerminator / DeepSNR | 6.5 / 10 | 9.0 / 10 | ✅ Completado (v0.11.1) |
-| **P2** | **Revisión y Optimización del Módulo de Panorámicas y Mosaicos** | Panorámicas | PTGui / Hugin / Lightroom | 6.0 / 10 | 8.5 / 10 | 🚀 Próximo objetivo |
+| **P2** | **Revisión y Optimización del Módulo de Panorámicas y Mosaicos** | Panorámicas | PTGui / Hugin / Lightroom | 6.0 / 10 | 8.5 / 10 | ✅ Completado (v0.11.6) |
 | **P3** | **Corrección de Distorsión Óptica Periférica de Estrellas** | Apilador | Sequator (*Distort Mode*) | 7.5 / 10 | 8.5 / 10 | 🔍 En estudio |
 | **P4** | **Extracción de Gradientes por Puntos de Muestreo Interactivos** | Revelador | PixInsight (*DBE*) / GraXpert | 5.0 / 10 | 8.0 / 10 | ⏳ Planificado |
 | **P5** | **Procesado y Exportación en Lote (Batch Processing)** | Revelador / General | Lightroom / Adobe Camera Raw | 4.0 / 10 | 7.5 / 10 | ⏳ Pendiente |
@@ -86,4 +86,4 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
   - Corrección de costuras de exposición y balance fotométrico entre teselas consecutivas en 32 bits lineales.
 * **Impacto:** **8.5 / 10** *(Módulo actualmente identificado como básico; su evolución equiparará AstroLoom a las mejores herramientas dedicadas de mosaico nocturno).*
 * **Dificultad / Coste:** **6.0 / 10** *(Media-Alta).*
-* **Estado:** **🚀 Próximo objetivo activo.**
+* **Estado:** **✅ Completado en v0.11.6.** Implementada la canalización de doble fase con modo ráfaga y pre-apilado multihilo por tesela (trípode y star tracker), registro guiado por asterismos y triángulos estelares con k-d tree, desacoplamiento cielo/suelo con auto-máscara IA y anti-ghosting, compensación automática de viñeteo, control de curvatura de arco y persistencia completa de sesiones `.astropano`.

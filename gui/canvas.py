@@ -649,7 +649,7 @@ class MaskCanvas(QWidget):
         is_space_held = getattr(self, '_space_held', False)
         is_pan_click = (
             (self.is_zoomed and event.button() == Qt.MiddleButton) or
-            (self.is_zoomed and event.button() == Qt.LeftButton and (is_space_held or not self.layer_brush_active))
+            (self.is_zoomed and event.button() == Qt.LeftButton and (is_space_held or not (self.layer_brush_active or self.enable_masking)))
         )
         if is_pan_click and not self.crop_mode and not self.eyedropper_active:
             self.is_panning = True
@@ -794,7 +794,7 @@ class MaskCanvas(QWidget):
                         self.update()
                 event.accept()
                 return
-            elif target_rect.contains(pos) and not self.eyedropper_active and not self.split_view_enabled and not self.layer_brush_active:
+            elif target_rect.contains(pos) and not self.eyedropper_active and not self.split_view_enabled and not (self.layer_brush_active or self.enable_masking):
                 self.setCursor(Qt.OpenHandCursor)
 
         if not self.enable_masking:
@@ -854,7 +854,7 @@ class MaskCanvas(QWidget):
             return
         if (event.button() in (Qt.LeftButton, Qt.MiddleButton)) and self.is_panning:
             self.is_panning = False
-            self.setCursor(Qt.OpenHandCursor if (self.is_zoomed and not self.layer_brush_active) else Qt.ArrowCursor)
+            self.setCursor(Qt.OpenHandCursor if (self.is_zoomed and not (self.layer_brush_active or self.enable_masking)) else Qt.ArrowCursor)
             self.pan_finished.emit()
             event.accept()
             return
@@ -1037,7 +1037,7 @@ class MaskCanvas(QWidget):
         if event.key() == Qt.Key_Space and not event.isAutoRepeat():
             self._space_held = False
             if self.is_zoomed and not self.is_panning:
-                self.setCursor(Qt.OpenHandCursor if (self.is_zoomed and not self.layer_brush_active) else Qt.ArrowCursor)
+                self.setCursor(Qt.OpenHandCursor if (self.is_zoomed and not (self.layer_brush_active or self.enable_masking)) else Qt.ArrowCursor)
                 self.update()
         super().keyReleaseEvent(event)
 
