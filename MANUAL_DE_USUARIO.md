@@ -26,8 +26,11 @@ Este manual ha sido redactado pensando en fotógrafos y aficionados: **sin fórm
    - [Sección 10: Guardado y Gestión de Proyectos (.devloom)](#sección-10-guardado-y-gestión-de-proyectos-devloom)
 5. [Módulo 3 y 4: Eclipses (HDR y Collage)](#5-módulos-3-y-4-eclipses-hdr-y-collage)
 6. [Módulo 5: Trazas de Estrellas (Startrails)](#6-módulo-5-trazas-de-estrellas-startrails)
-7. [Módulo 6: Panorámicas (Mosaicos)](#7-módulo-6-panorámicas-mosaicos)
-8. [Atajos de Teclado y Consejos de Productividad](#8-atajos-de-teclado-y-consejos-de-productividad)
+7. [Módulo 6: Lluvias de Meteoros](#7-módulo-6-lluvias-de-meteoros)
+   - [7.1 Filosofía y Arquitectura Híbrida](#71-filosofía-y-arquitectura-híbrida)
+   - [7.2 Flujo de Trabajo Paso a Paso](#72-flujo-de-trabajo-paso-a-paso)
+8. [Módulo 7: Panorámicas (Mosaicos)](#8-módulo-7-panorámicas-mosaicos)
+9. [Atajos de Teclado y Consejos de Productividad](#9-atajos-de-teclado-y-consejos-de-productividad)
 
 ---
 
@@ -50,8 +53,9 @@ AstroLoom opera internamente en **precisión de coma flotante de 32 bits** sin p
 | **3. Eclipses (HDR)** | Fusión de tomas con diferentes tiempos de exposición para revelar desde la luna hasta los filamentos tenues de la corona solar. |
 | **4. Eclipses (Collage)** | Monta la evolución cronológica del eclipse a lo largo de una trayectoria estética sobre el paisaje. |
 | **5. Startrails** | Genera trazas circulares continuas o con efecto cometa eliminando aviones y satélites. |
-| **6. Panorámicas** | Une mosaicos multi-panel horizontal y vertical con compensación de estrellas y terreno. |
-| **7. Configuración** | Preferencias de aceleración por GPU, rutas de StarNet++ e idioma. |
+| **6. Lluvias de Meteoros** | Detecta bólidos en cientos de tomas, los reproyecta al radiante celeste compensando la rotación terrestre y los compone con flujo neto. |
+| **7. Panorámicas** | Une mosaicos multi-panel horizontal y vertical con compensación de estrellas y terreno. |
+| **8. Configuración** | Preferencias de aceleración por GPU, rutas de StarNet++ e idioma. |
 
 ---
 
@@ -437,7 +441,89 @@ Especializado en transformar cientos de fotos fijas en espectaculares círculos 
 
 ---
 
-## 7. Módulo 6: Panorámicas (Mosaicos)
+## 7. Módulo 6: Lluvias de Meteoros
+
+El módulo de **Lluvias de Meteoros** está diseñado específicamente para capturar cientos de tomas a lo largo de una noche durante el pico de una lluvia de estrellas (Perseidas, Gemínidas, Líridas, etc.) y componer una imagen final donde todos los bólidos y meteoros reales converjan con rigor astronómico en el radiante celeste, eliminando automáticamente satélites y aviones, y fusionando cada traza sin emborronar las estrellas ni añadir ruido de fondo.
+
+### 7.1 Filosofía y Arquitectura Híbrida
+
+* **Escaneo Ultrarrápido en Binning 2:1 (Numba C-Level):**
+  * Analizar 100 a 200 fotos RAW de 24 a 45 megapíxeles a resolución nativa requeriría decenas de minutos. AstroLoom implementa un escaneo previo en submuestreo 2:1 optimizado con kernels paralelos Numba en CPU multi-hilo, detectando todas las trazas de la sesión en pocos segundos (~20 s para 160 tomas RAW).
+* **Fusión Fotométrica Garantizada en Resolución Nativa 1:1:**
+  * Una vez curadas y seleccionadas las trazas en la tabla, el motor lee exclusivamente los archivos originales al 100% de su resolución nativa (por ejemplo, $6064 \times 4040$). El escalado de coordenadas y el recorte vectorial se realizan con precisión subpíxel, garantizando la máxima nitidez de los detalles del bólido sin artefactos ni pérdida de resolución.
+* **Alineación Astrométrica y Reproyección al Radiante:**
+  * Al girar la Tierra durante la noche, las constelaciones se desplazan por el encuadre. Si se apilaran las fotos directamente, las trazas no convergerían en su origen físico real. AstroLoom calcula matrices homográficas mediante asterismos y triángulos estelares respecto a una toma de referencia, rotando cada meteoro para que apunte fielmente al radiante de la lluvia activa.
+* **Fusión por Cápsula Vectorial y Modo Aclarar (Lighten) Fotométrico:**
+  * En lugar de insertar rectángulos toscos que ensucian el cielo, AstroLoom genera una cápsula vectorial ceñida al trazo del meteoro con un desvanecimiento gaussiano suave (8 a 14 px).
+  * El motor calibra y neutraliza el fondo de cielo RGB local en cada fotograma antes de componer en modo *Aclarar (Lighten)* fotométrico. Esto evita por completo halos blanquecinos o descompensación tonal, integrando el meteoro de forma natural sobre el fondo estelar limpio.
+
+---
+
+### 7.2 Flujo de Trabajo Paso a Paso
+
+```mermaid
+flowchart TD
+    A["1. Cargar Tomas de la Sesión y Toma de Referencia"] --> B["2. Definir Máscara de Suelo (Proteger Paisaje)"]
+    B --> C["3. Configurar Parámetros y Filtros de Detección"]
+    C --> D["4. Escanear Sesión (Detección Rápida Numba)"]
+    D --> E["5. Curación en Galería de Culling (Aceptar/Descartar Trazas)"]
+    E --> F["6. Fusión 1:1 de Meteoros en el Lienzo"]
+    F --> G["7. Exportar Imagen Final (TIFF / PSD Multicapa / Revelador)"]
+```
+
+#### Paso 1: Carga de Archivos de la Sesión
+1. Haz clic en **"📂 Cargar Tomas de la Sesión"** y selecciona la serie completa de imágenes continuas capturadas durante la noche (archivos RAW, DNG o TIFF).
+2. Haz clic en **"⭐ Seleccionar Toma de Referencia"** y escoge el fotograma base que servirá de encuadre final (una toma limpia donde el paisaje terrestre o la Vía Láctea tengan la mejor exposición). También puedes usar una toma ya apilada en el Módulo Stacker.
+
+#### Paso 2: Configuración de Parámetros de Detección
+En el panel lateral izquierdo encontrarás los controles que gobiernan el algoritmo de detección diferencial:
+* **Umbral de Sensibilidad ($\sigma$ sobre el fondo):** Define cuántas desviaciones estándar por encima del ruido de fondo debe elevarse una traza para ser detectada (recomendado: $2.5\sigma$ a $3.5\sigma$).
+* **Longitud Mínima (px):** Filtra destellos de ruido térmico, rayos cósmicos o estrellas brillantes parpadeantes.
+* **Relación de Aspecto (Elongación):** Exige que el objeto sea visiblemente lineal (largo vs ancho), descartando estrellas puntuales o manchas circulares.
+* **Filtros Inteligentes Anti-Parásitos:**
+  * *🛡️ Filtro Anti-Satélites:* Analiza la continuidad colineal a través de fotogramas contiguos (satélites que cruzan en 2 o 3 tomas sucesivas) y los cruces en 'X' dentro del mismo fotograma, clasificándolos automáticamente como satélite.
+  * *✈️ Filtro Anti-Aviones:* Analiza la fotometría espectral a lo largo de la traza para detectar la alternancia cromática de las luces estroboscópicas de navegación aeronáutica (destellos rojos y verdes).
+  * *Filtrado de Esporádicos:* Compara la inclinación del vector de la traza respecto a la posición calculada del radiante astronómico. Las trazas que divergen significativamente se catalogan como "Esporádico".
+
+#### Paso 3: Definición del Suelo (Máscara de Terreno)
+Para evitar que el viento en copas de árboles, antenas o luces en tierra provoquen falsas detecciones:
+1. Haz clic en **"🎨 Editar Máscara de Suelo"** o utiliza la detección automática de horizonte con IA.
+2. El sistema aplica automáticamente una erosión morfológica de seguridad sobre los bordes del suelo para garantizar que ninguna rama en movimiento se confunda con un meteoro.
+
+#### Paso 4: Escaneo y Detección Automática
+1. Pulsa **"⚡ Escanear Meteoros"**.
+2. El motor procesará en segundo plano todas las tomas a gran velocidad. Al finalizar, la tabla inferior (**Galería de Trazas Detectadas / Culling**) se poblará automáticamente con cada candidato hallado.
+
+#### Paso 5: Galería de Culling Interactiva y Curación Manual
+La tabla de culling es la herramienta central de supervisión del fotógrafo:
+* **Información por Traza:** Cada fila muestra la casilla de inclusión, el ID único, el nombre de archivo origen, su clasificación (*Meteoro Radiante*, *Esporádico*, *Satélite*, *Avión*), longitud en píxeles, ángulo de inclinación, brillo de pico y divergencia en grados respecto al radiante.
+* **Acciones Masivas Rápidas:**
+  * **"Incluir Todos":** Activa todas las trazas del lote.
+  * **"Descartar Aviones/Satélites":** Desmarca con un solo clic cualquier traza clasificada como avión o satélite.
+  * **"Descartar Esporádicos":** Desmarca los bólidos erráticos que no proceden del radiante principal si deseas una composición purista de la lluvia.
+* **Inspección en el Visor:**
+  * Al hacer clic en cualquier fila de la tabla, el visor muestra la toma original correspondiente.
+  * **Resaltar Traza:** Dibuja una retícula amarilla en forma de cápsula alrededor del meteoro activo con su etiqueta de ID y longitud.
+  * **👁️ Resaltar Todas:** Muestra de forma simultánea sobre el lienzo todas las cápsulas y etiquetas de los meteoros activos seleccionados, permitiendo una visión de conjunto de la composición.
+  * **🔍 Centrar Traza (1:1):** Ajusta instantáneamente el zoom del visor al 100% centrado sobre el meteoro seleccionado para evaluar su color, detalle y veracidad sin tener que buscarlo manualmente.
+  * **👁️ Ver Compuesto:** Botón conmutable que permite alternar entre la toma individual seleccionada y el compuesto final fusionado, sin perder la selección en la tabla.
+
+#### Paso 6: Fusión Fotométrica y Generación del Compuesto
+1. Cuando estés satisfecho con las trazas marcadas en la tabla, pulsa **"✨ Fusión 1:1 de Meteoros"**.
+2. AstroLoom reproyectará con precisión subpíxel cada meteoro seleccionado a resolución nativa sobre la toma de referencia.
+3. El resultado se mostrará en pantalla con máxima fidelidad de color, cielo libre de halos y estrellas perfectamente definidas.
+
+#### Paso 7: Exportación y Sesión
+* **💾 Guardar Compuesto:** Exporta la imagen final fusionada en formato TIFF de 16 o 32 bits de alta profundidad.
+* **🚀 Enviar al Revelador:** Transfiere el resultado directamente a la pestaña *Editor / Revelador* para aplicar estirado GHS, curvas tonales o realce de color sin salir de AstroLoom.
+* **📑 Exportar PSD Multicapa:** Genera un archivo nativo de Adobe Photoshop (`.psd`) a 16 bits donde:
+  * La capa base contiene la toma de referencia o suelo apilado.
+  * Cada meteoro se exporta en una **capa independiente** configurada en modo de fusión *Aclarar*, recortada estrictamente a su recuadro de delimitación (*bounding box*) para optimizar el peso del archivo a unos pocos cientos de megabytes. Esto te permite ajustar la opacidad, borrar imperfecciones o aplicar máscaras individuales en Photoshop.
+* **💾 Guardar / Cargar Sesión (`.astrometeor`):** Permite guardar el estado completo del proyecto (rutas, clasificaciones y selecciones de la tabla de culling) para continuar el trabajo o re-exportar en cualquier momento futuro.
+
+---
+
+## 8. Módulo 7: Panorámicas (Mosaicos)
 
 Permite ensamblar mosaicos gigantes del cielo nocturno (por ejemplo, el arco completo de la Vía Láctea de horizonte a horizonte de 180° o 360°), integrando apilado por ráfagas y cosido de alta fidelidad astronómica.
 
@@ -463,7 +549,7 @@ Permite ensamblar mosaicos gigantes del cielo nocturno (por ejemplo, el arco com
 
 ---
 
-## 8. Atajos de Teclado y Consejos de Productividad
+## 9. Atajos de Teclado y Consejos de Productividad
 
 | Atajo | Acción |
 | :--- | :--- |

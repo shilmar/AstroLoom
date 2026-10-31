@@ -12,6 +12,7 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 | :---: | :--- | :--- | :--- | :---: | :---: | :---: |
 | **P1** | **Reducción de Ruido con IA Ligera (Astro Denoise Fase 2 - ONNX / NAFNet)** | Revelador | NoiseXTerminator / DeepSNR | 6.5 / 10 | 9.0 / 10 | ✅ Completado (v0.11.1) |
 | **P2** | **Revisión y Optimización del Módulo de Panorámicas y Mosaicos** | Panorámicas | PTGui / Hugin / Lightroom | 6.0 / 10 | 8.5 / 10 | ✅ Completado (v0.11.6) |
+| **M1** | **Módulo Integral de Lluvias de Meteoros y Bólidos** | Meteoros | Sequator / Starry Landscape Stacker / PixInsight | 7.0 / 10 | 9.0 / 10 | ✅ Completado (v0.12.0) |
 | **P3** | **Corrección de Distorsión Óptica Periférica de Estrellas** | Apilador | Sequator (*Distort Mode*) | 7.5 / 10 | 8.5 / 10 | 🔍 En estudio |
 | **P4** | **Extracción de Gradientes por Puntos de Muestreo Interactivos** | Revelador | PixInsight (*DBE*) / GraXpert | 5.0 / 10 | 8.0 / 10 | ⏳ Planificado |
 | **P5** | **Procesado y Exportación en Lote (Batch Processing)** | Revelador / General | Lightroom / Adobe Camera Raw | 4.0 / 10 | 7.5 / 10 | ⏳ Pendiente |

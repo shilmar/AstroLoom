@@ -13,7 +13,7 @@ import numpy as np
 import tifffile
 import multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-from typing import Optional, List, Dict, Tuple, Callable
+from typing import Optional, List, Dict, Tuple, Callable, Any, Union
 
 from PySide6.QtCore import QThread, Signal
 
@@ -772,19 +772,36 @@ class AIHorizonWorker(QThread):
     finished_success = Signal(object, str)  # (mask_array: np.ndarray float32, method_name: str)
     error_occurred = Signal(str)
 
-    def __init__(self, image_rgb: np.ndarray, feather_radius: int = 7, threshold: float = 0.5, parent=None):
+    def __init__(
+        self,
+        image_rgb: Any,
+        feather_radius: int = 7,
+        threshold: float = 0.5,
+        force_algorithmic: bool = False,
+        parent=None
+    ):
         super().__init__(parent)
         self.image_rgb = image_rgb
         self.feather_radius = feather_radius
         self.threshold = threshold
+        self.force_algorithmic = force_algorithmic
 
     def run(self):
         try:
+            target = self.image_rgb
+            if isinstance(target, str):
+                from core.stacking import load_image_as_float32
+                target = load_image_as_float32(target)
+
+            if target is None:
+                raise ValueError("No se proporciono una imagen valida para la deteccion de horizonte.")
+
             from core.ai_horizon import auto_detect_sky_mask
             mask, method = auto_detect_sky_mask(
-                self.image_rgb,
+                target,
                 feather_radius=self.feather_radius,
-                threshold=self.threshold
+                threshold=self.threshold,
+                force_algorithmic=self.force_algorithmic
             )
             self.finished_success.emit(mask, method)
         except Exception as e:

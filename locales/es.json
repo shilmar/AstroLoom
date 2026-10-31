@@ -5,9 +5,9 @@
     "version": "1.0"
   },
   "app": {
-    "title": "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.11.6)",
+    "title": "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.12.0)",
     "ready": "Listo para procesar",
-    "engine_badge": "● AstroLoom Engine v0.11.6",
+    "engine_badge": "● AstroLoom Engine v0.12.0",
     "ram_monitor": "RAM: {pct}% ({used:.1f} / {total:.1f} GB)",
     "language": "Idioma",
     "tabs": {
@@ -16,8 +16,9 @@
       "eclipse_hdr": "3. Eclipses (HDR)",
       "eclipse_collage": "4. Eclipses (Collage)",
       "startrails": "5. Trazas de Estrellas (Startrails)",
-      "panorama": "6. Panorámicas (Mosaicos)",
-      "settings": "7. Configuración / Ajustes"
+      "meteors": "6. Lluvias de Meteoros",
+      "panorama": "7. Panorámicas (Mosaicos)",
+      "settings": "8. Configuración / Ajustes"
     }
   },
   "common": {

@@ -14,6 +14,7 @@ from gui.tab_developer import DeveloperTab
 from gui.tab_eclipse import EclipseTab
 from gui.tab_eclipse_collage import EclipseCollageTab
 from gui.tab_startrails import StartrailsTab
+from gui.tab_meteors import MeteorTab
 from gui.tab_panorama import PanoramaTab
 from gui.tab_settings import SettingsTab
 
@@ -21,7 +22,7 @@ from gui.tab_settings import SettingsTab
 class MainWindow(QMainWindow):
     """Ventana principal de la interfaz gráfica de AstroLoom."""
 
-    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.11.6)"
+    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.12.0)"
 
 
     def __init__(self):
@@ -49,7 +50,7 @@ class MainWindow(QMainWindow):
         status_bar.addWidget(self.lbl_status, 1)
 
         # Píldora del Motor AstroLoom
-        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.11.6")
+        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.12.0")
         self.lbl_engine_badge.setStyleSheet(STYLE_STATUS_PILL)
         status_bar.addPermanentWidget(self.lbl_engine_badge)
 
@@ -110,7 +111,7 @@ class MainWindow(QMainWindow):
         """Actualiza todos los textos estáticos principales al cambiar de idioma."""
         self.setWindowTitle(tr("app.title", self.BASE_TITLE))
         self.lbl_status.setText(tr("app.ready", "Listo para procesar"))
-        self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.11.6"))
+        self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.12.0"))
 
         if hasattr(self, 'tab_widget'):
             self.tab_widget.setTabText(0, tr("app.tabs.stacker", "1. Apilador (Stacker)"))
@@ -118,8 +119,9 @@ class MainWindow(QMainWindow):
             self.tab_widget.setTabText(2, tr("app.tabs.eclipse_hdr", "3. Eclipses (HDR)"))
             self.tab_widget.setTabText(3, tr("app.tabs.eclipse_collage", "4. Eclipses (Collage)"))
             self.tab_widget.setTabText(4, tr("app.tabs.startrails", "5. Trazas de Estrellas (Startrails)"))
-            self.tab_widget.setTabText(5, tr("app.tabs.panorama", "6. Panorámicas (Mosaicos)"))
-            self.tab_widget.setTabText(6, tr("app.tabs.settings", "7. Configuración / Ajustes"))
+            self.tab_widget.setTabText(5, tr("app.tabs.meteors", "6. Lluvias de Meteoros"))
+            self.tab_widget.setTabText(6, tr("app.tabs.panorama", "7. Panorámicas (Mosaicos)"))
+            self.tab_widget.setTabText(7, tr("app.tabs.settings", "8. Configuración / Ajustes"))
 
         if hasattr(self, 'combo_lang_bar'):
             idx = self.combo_lang_bar.findData(get_i18n().get_current_language())
@@ -166,6 +168,7 @@ class MainWindow(QMainWindow):
         self.tab_eclipse = EclipseTab()
         self.tab_eclipse_collage = EclipseCollageTab()
         self.tab_startrails = StartrailsTab()
+        self.tab_meteors = MeteorTab()
         self.tab_panorama = PanoramaTab()
         self.tab_settings = SettingsTab()
 
@@ -174,8 +177,9 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.tab_eclipse, "3. Eclipses (HDR)")
         self.tab_widget.addTab(self.tab_eclipse_collage, "4. Eclipses (Collage)")
         self.tab_widget.addTab(self.tab_startrails, "5. Trazas de Estrellas (Startrails)")
-        self.tab_widget.addTab(self.tab_panorama, "6. Panorámicas (Mosaicos)")
-        self.tab_widget.addTab(self.tab_settings, "7. Configuración / Ajustes")
+        self.tab_widget.addTab(self.tab_meteors, "6. Lluvias de Meteoros")
+        self.tab_widget.addTab(self.tab_panorama, "7. Panorámicas (Mosaicos)")
+        self.tab_widget.addTab(self.tab_settings, "8. Configuración / Ajustes")
 
         self.setCentralWidget(self.tab_widget)
 
@@ -207,6 +211,12 @@ class MainWindow(QMainWindow):
 
         # 9. Transferencia de imagen desde el módulo de Panorámicas al Revelador
         self.tab_panorama.export_to_developer.connect(self._on_panorama_exported)
+
+        # 10. Transferencia de imagen desde el módulo de Meteoros al Revelador
+        self.tab_meteors.export_to_developer.connect(self._on_meteor_exported)
+        self.tab_meteors.set_stacker_mask_provider(
+            lambda: getattr(self.tab_stacker, "computed_mask", None)
+        )
 
     def _update_window_title(self, session_name: str) -> None:
         """Actualiza el texto de la barra de título con el archivo de proyecto activo."""
@@ -249,6 +259,15 @@ class MainWindow(QMainWindow):
         al Revelador / Editor y conmuta automáticamente a la pestaña 2.
         """
         final_mask = getattr(self.tab_startrails, "current_mask", None)
+        self.tab_developer.load_image_direct(output_path, mask=final_mask)
+        self.tab_widget.setCurrentIndex(1)
+
+    def _on_meteor_exported(self, output_path: str) -> None:
+        """
+        Transfiere el compuesto de lluvia de meteoros directamente
+        al Revelador / Editor y conmuta automáticamente a la pestaña 2.
+        """
+        final_mask = getattr(self.tab_meteors, "current_mask", None)
         self.tab_developer.load_image_direct(output_path, mask=final_mask)
         self.tab_widget.setCurrentIndex(1)
 

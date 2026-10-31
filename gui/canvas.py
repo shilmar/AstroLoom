@@ -3,11 +3,12 @@
 gui/canvas.py - Lienzo interactivo acelerado para previsualización, zoom 100%
 y dibujo interactivo de trazos para la segmentación de cielo y suelo.
 """
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
+import math
 import cv2
 import numpy as np
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QCursor, QImage, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QSizePolicy, QWidget
 from gui.widgets.drop_widgets import collect_image_files_from_mime
 
@@ -116,6 +117,8 @@ class MaskCanvas(QWidget):
         self._crop_drag_start_pos: Optional[QPointF] = None
         self._crop_drag_start_rect: Optional[QRectF] = None
         self.native_image_size: Optional[Tuple[int, int]] = None  # (width, height) reales del sensor
+        self.highlight_streak: Optional[Dict[str, Any]] = None
+        self.highlight_streaks_multi: List[Dict[str, Any]] = []
 
         if self.enable_masking:
             self.update_brush_cursor()
@@ -244,6 +247,8 @@ class MaskCanvas(QWidget):
         self.clipping_overlay = None
         self.clear_all_masking()
         self.scribble_pixmap = None
+        self.highlight_streak = None
+        self.highlight_streaks_multi = []
         self.update()
 
     def set_mask_visible(self, visible: bool) -> None:
@@ -451,6 +456,66 @@ class MaskCanvas(QWidget):
                         self.setCursor(Qt.ArrowCursor)
             self.magnifier_toggled.emit(active)
             self.update()
+
+    def set_highlight_reticle(
+        self,
+        start_pt: Tuple[float, float],
+        end_pt: Tuple[float, float],
+        bbox: Optional[Tuple[int, int, int, int]] = None,
+        color: str = "#ffea00",
+        label: str = "",
+        padding: float = 18.0,
+    ) -> None:
+        """Establece las coordenadas para resaltar una traza con un óvalo / cápsula luminosa."""
+        self.highlight_streak = {
+            "start_pt": (float(start_pt[0]), float(start_pt[1])),
+            "end_pt": (float(end_pt[0]), float(end_pt[1])),
+            "bbox": bbox,
+            "color": color,
+            "label": label,
+            "padding": float(padding),
+        }
+        self.update()
+
+    def clear_highlight_reticle(self) -> None:
+        """Elimina el resalte visual de la traza."""
+        if self.highlight_streak is not None:
+            self.highlight_streak = None
+            self.update()
+
+    def set_multi_highlight_reticles(self, reticles: List[Dict[str, Any]]) -> None:
+        """Establece múltiples cápsulas de resalte para mostrar todas las trazas simultáneamente."""
+        self.highlight_streaks_multi = list(reticles)
+        self.update()
+
+    def clear_multi_highlight_reticles(self) -> None:
+        """Elimina el resalte colectivo de trazas."""
+        if self.highlight_streaks_multi:
+            self.highlight_streaks_multi = []
+            self.update()
+
+    def center_on_image_point(self, pt: Tuple[float, float], zoom_in: bool = True) -> None:
+        """Centra la vista en coordenadas de la imagen, con opción de activar zoom 1:1."""
+        if not self.base_pixmap or self.base_pixmap.isNull():
+            return
+        w_i = self.base_pixmap.width()
+        h_i = self.base_pixmap.height()
+        ix = int(round(max(0.0, min(float(w_i - 1), float(pt[0])))))
+        iy = int(round(max(0.0, min(float(h_i - 1), float(pt[1])))))
+
+        if zoom_in:
+            if not self.is_zoomed:
+                self._zoom_background_pixmap = self.base_pixmap.copy()
+                self.is_zoomed = True
+            self.zoom_center_img = QPoint(ix, iy)
+            self._pan_visual_offset = QPoint(0, 0)
+            rel_x = ix / max(1.0, float(w_i))
+            rel_y = iy / max(1.0, float(h_i))
+            self.zoom_toggled.emit(True, rel_x, rel_y)
+        else:
+            if self.is_zoomed:
+                self.zoom_center_img = QPoint(ix, iy)
+        self.update()
 
     def _get_split_screen_coord(self) -> Optional[float]:
         """Calcula la coordenada en pantalla de la cortina (x para vertical, y para horizontal)."""
@@ -1269,6 +1334,10 @@ class MaskCanvas(QWidget):
         if self._drag_hover:
             self._draw_drag_feedback(painter)
 
+        # Retícula de Resalte de Trazas de Meteoros / Satélites
+        if self.highlight_streak or self.highlight_streaks_multi:
+            self._draw_streak_highlight(painter)
+
         # Lupa de Inspección Flotante (Floating Magnifier)
         if self.magnifier_active:
             self._draw_magnifier(painter)
@@ -1284,6 +1353,117 @@ class MaskCanvas(QWidget):
         # Anillos y cursor interactivo del Pincel de Ajuste Local
         if self.layer_brush_active and self._brush_hover_pos is not None:
             self._draw_layer_brush_cursor(painter)
+
+    def _draw_single_streak_capsule(
+        self,
+        painter: QPainter,
+        item: Dict[str, Any],
+        target_rect: QRectF,
+        source_rect: QRectF,
+        is_selected: bool = False
+    ) -> None:
+        """Renderiza una cápsula / óvalo individual alrededor de una traza con su etiqueta."""
+        x1, y1 = item["start_pt"]
+        x2, y2 = item["end_pt"]
+        pad = float(item.get("padding", 16.0))
+        col_str = item.get("color", "#ffea00")
+        label = item.get("label", "")
+
+        # Fallback a bbox si start_pt y end_pt son nulos
+        if abs(x1) < 1e-4 and abs(y1) < 1e-4 and abs(x2) < 1e-4 and abs(y2) < 1e-4:
+            bbox = item.get("bbox")
+            if bbox:
+                x1, y1 = float(bbox[0]), float(bbox[1])
+                x2, y2 = float(bbox[2]), float(bbox[3])
+
+        scale_x = target_rect.width() / source_rect.width()
+        scale_y = target_rect.height() / source_rect.height()
+
+        sx1 = target_rect.x() + (x1 - source_rect.x()) * scale_x
+        sy1 = target_rect.y() + (y1 - source_rect.y()) * scale_y
+        sx2 = target_rect.x() + (x2 - source_rect.x()) * scale_x
+        sy2 = target_rect.y() + (y2 - source_rect.y()) * scale_y
+
+        dx = sx2 - sx1
+        dy = sy2 - sy1
+        length = math.hypot(dx, dy)
+        mid_x = (sx1 + sx2) / 2.0
+        mid_y = (sy1 + sy2) / 2.0
+        angle_deg = math.degrees(math.atan2(dy, dx)) if length > 1e-4 else 0.0
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setClipRect(target_rect)
+
+        painter.translate(mid_x, mid_y)
+        painter.rotate(angle_deg)
+
+        rect = QRectF(-length / 2.0 - pad, -pad, length + 2.0 * pad, 2.0 * pad)
+        corner_r = pad
+
+        # Borde exterior oscuro para contraste garantizado
+        pen_w = 4.5 if is_selected else 3.0
+        painter.setPen(QPen(QColor(0, 0, 0, 200), pen_w))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(rect, corner_r, corner_r)
+
+        # Óvalo / cápsula luminosa principal
+        reticle_color = QColor(col_str)
+        if not reticle_color.isValid():
+            reticle_color = QColor("#ffea00")
+
+        pen_color_w = 2.5 if is_selected else 1.5
+        painter.setPen(QPen(reticle_color, pen_color_w, Qt.SolidLine))
+        alpha = 35 if is_selected else 18
+        painter.setBrush(QBrush(QColor(reticle_color.red(), reticle_color.green(), reticle_color.blue(), alpha)))
+        painter.drawRoundedRect(rect, corner_r, corner_r)
+
+        # Puntos de mira en los extremos de la traza
+        half_len = length / 2.0
+        painter.setPen(QPen(reticle_color, 2.5 if is_selected else 2.0))
+        painter.drawPoint(QPointF(-half_len, 0.0))
+        painter.drawPoint(QPointF(half_len, 0.0))
+        painter.restore()
+
+        # Etiqueta flotante con ID de la traza
+        if label:
+            painter.save()
+            painter.setClipRect(target_rect)
+            painter.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            fm = painter.fontMetrics()
+            tw = fm.horizontalAdvance(label) + 10
+            th = 16
+
+            lbl_x = max(target_rect.left() + 4, min(target_rect.right() - tw - 4, mid_x - tw / 2.0))
+            lbl_y = max(target_rect.top() + 4, mid_y - pad - th - 4.0)
+
+            badge_rect = QRectF(lbl_x, lbl_y, tw, th)
+            painter.setPen(QPen(reticle_color, 1.2 if is_selected else 0.8))
+            bg_alpha = 230 if is_selected else 180
+            painter.setBrush(QBrush(QColor(16, 20, 28, bg_alpha)))
+            painter.drawRoundedRect(badge_rect, 3.0, 3.0)
+
+            painter.setPen(reticle_color)
+            painter.drawText(badge_rect, Qt.AlignCenter, label)
+            painter.restore()
+
+    def _draw_streak_highlight(self, painter: QPainter) -> None:
+        """Renderiza las cápsulas / óvalos de resalte de alta visibilidad para trazas individuales o múltiples."""
+        if not self.base_pixmap or self.base_pixmap.isNull():
+            return
+
+        target_rect, source_rect, _ = self.get_render_geometry()
+        if target_rect.isEmpty() or source_rect.isEmpty():
+            return
+
+        # 1. Dibujar todas las cápsulas colectivas (si está activo "Resaltar Todas")
+        if self.highlight_streaks_multi:
+            for item in self.highlight_streaks_multi:
+                self._draw_single_streak_capsule(painter, item, target_rect, source_rect, is_selected=False)
+
+        # 2. Dibujar cápsula individual seleccionada (con trazo más grueso y prioridad visual)
+        if self.highlight_streak:
+            self._draw_single_streak_capsule(painter, self.highlight_streak, target_rect, source_rect, is_selected=True)
 
     def _draw_magnifier(self, painter: QPainter) -> None:
         """Renderiza una lupa circular flotante de alta precisión centrada en la posición del cursor."""

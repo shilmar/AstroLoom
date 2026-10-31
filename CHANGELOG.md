@@ -5,6 +5,38 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-31
+
+### Añadido
+* **Nuevo Módulo Dedicado: Lluvias de Meteoros (`gui/tab_meteors.py` y `core/meteors.py`):**
+  - **Detección Algorítmica Acelerada con Numba:** Sustracción temporal diferencial continua `_numba_positive_diff_and_stats` (nogil) y estimación robusta de ruido del cielo (MAD) para procesar cientos de tomas nocturnas a máxima velocidad.
+  - **Arquitectura Híbrida Rendimiento/Resolución:** Escaneo ultra-rápido en binning 2:1 (`load_fast_meteor_frame`, ~20s para 160+ tomas RAW Nikon NEF, Sony ARW, Canon CR2/CR3, DNG) y composición final con fidelidad nativa al 100% (resolución 1:1) exclusivamente para las tomas seleccionadas.
+  - **Fusión Fotométrica en Modo Aclarar (Lighten) con Calibración RGB:**
+    - Estimación robusta del pedestal de cielo por canal RGB (percentil 30) en el entorno local del bólido y en la imagen base, eliminando cualquier dominante de color o alteración cromática.
+    - Máscara vectorial en cápsula ajustada al FWHM de la traza con desvanecimiento gaussiano suave y puerta de ruido adaptativa (*Noise Gate* a 2.0σ).
+    - Fusión en modo Aclarar: `out_img += mask * max(0.0, patch_calibrado - out_img)`, erradicando al 100% la acumulación de ruido estocástico, la duplicación/engorde de estrellas y las auras luminosas artificiales.
+  - **Discriminación Inteligente de Satélites y Falsos Positivos:**
+    - *Persistencia orbital multicuadro:* Descarte automático de trazas colineales que continúan a lo largo de 2 o 3 fotogramas consecutivos con el mismo rumbo.
+    - *Cruces intra-fotograma:* Descarte de trazas que se intersectan en la misma exposición (geometría orbital incompatible con meteoroides).
+    - *Filtro de continuidad de haz:* Comprobación de perfil longitudinal (iluminación continua con análisis de huecos oscuros internos) para evitar falsos positivos por alineaciones casuales de estrellas.
+  - **Discriminación Cromática Adaptativa de Aviones:**
+    - Evaluación de exceso cromático relativo diferencial $(\Delta R, \Delta G, \Delta B)$ sobre el fondo del cielo local, inmune a fotos subexpuestas o de bajo flujo.
+    - Detección de balizas bicolores simultáneas (luces rojas a babor y verdes a estribor) y análisis de estrobos periódicos pulsantes con prominencia de caída entre destellos.
+  - **Reproyección Homográfica al Radiante Celeste:**
+    - Cálculo de matrices homográficas $H$ mediante asterismos estelares invariantes y RANSAC (`compute_frame_homography_to_ref`), compensando la rotación diurna de la Tierra para proyectar cada meteoro a su constelación de origen.
+    - Estimación por mínimos cuadrados del punto radiante óptimo e identificación automática de meteoros de la lluvia vs. esporádicos.
+  - **Galería de Culling y Lienzo Gráfico Interactivo:**
+    - Tabla interactiva con censo detallado (longitud, ángulo, flujo pico, divergencia respecto al radiante y continuidad de haz).
+    - Selección de usuario como verdad absoluta (`is_meteor`) respetada estrictamente en la composición.
+    - Botón de alternancia de visualización `[Ver Compuesto]` / `[Ver Toma]` para comparar el compuesto final contra tomas individuales sin perder el resultado.
+    - Retículas de resalte vectorial individuales y modo colectivo `[👁️ Resaltar Todas]`, con centrado y zoom 1:1 en el lienzo.
+  - **Exportación Multicapa PSD (Photoshop 16-bit):**
+    - Generación nativa de archivos PSD de 16 bits (`pytoshop`) con cada meteoro en su propia capa independiente en modo `Lighten` sobre fondo transparente.
+    - Optimización por caja delimitadora (*Bounding Box*): recorte espacial de cada capa al área activa del bólido, reduciendo el tamaño del archivo PSD de más de 2 GB a ~150 MB.
+    - Inclusión de vista previa compuesta previa (`ImageData`) para miniaturas en exploradores.
+  - **Persistencia de Sesión Completa (`.astrometeor`):**
+    - Guardado y restauración de tomas cargadas, toma de referencia, máscara de suelo, candidatos detectados, clasificación y parámetros de fusión.
+
 ## [0.11.6] - 2026-10-30
 
 ### Añadido
