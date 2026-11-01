@@ -168,7 +168,7 @@ def shift_mask_edge(mask: np.ndarray, shift_px: int) -> np.ndarray:
     else:
         res = cv2.erode(m_2d, kernel)
     if is_3d:
-        return res[..., np.newaxis]
+        return np.repeat(res[..., np.newaxis], mask.shape[2], axis=2)
     return res
 
 

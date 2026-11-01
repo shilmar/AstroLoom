@@ -164,12 +164,17 @@ def apply_developer_pipeline(
     if precomputed_mask is not None:
         if precomputed_mask.shape[:2] != (th, tw):
             precomputed_mask = cv2.resize(precomputed_mask, (tw, th), interpolation=cv2.INTER_LINEAR)
-        if precomputed_mask.ndim == 2 and target_img.ndim == 3:
-            precomputed_mask = np.repeat(precomputed_mask[..., np.newaxis], 3, axis=2)
+        if target_img.ndim == 3:
+            if precomputed_mask.ndim == 2:
+                precomputed_mask = np.repeat(precomputed_mask[..., np.newaxis], 3, axis=2)
+            elif precomputed_mask.ndim == 3 and precomputed_mask.shape[2] == 1:
+                precomputed_mask = np.repeat(precomputed_mask, 3, axis=2)
     edge_shift = getattr(state, "gnd_edge_shift_val", 0)
     if edge_shift != 0 and precomputed_mask is not None:
         from core.masking import shift_mask_edge
         precomputed_mask = shift_mask_edge(precomputed_mask, edge_shift)
+        if target_img.ndim == 3 and precomputed_mask.ndim == 3 and precomputed_mask.shape[2] == 1:
+            precomputed_mask = np.repeat(precomputed_mask, 3, axis=2)
     if image_starless is not None and image_starless.shape[:2] != (th, tw):
         image_starless = cv2.resize(image_starless, (tw, th), interpolation=cv2.INTER_AREA)
     if image_stars is not None and image_stars.shape[:2] != (th, tw):
@@ -406,12 +411,17 @@ def apply_developer_pipeline(
                 sample_s = stretched[::8, ::8]
                 if precomputed_mask is not None:
                     sample_m = precomputed_mask[::8, ::8]
-                    sky_median = float(np.median(sample_s[sample_m > 0.5])) if np.any(sample_m > 0.5) else float(np.median(sample_s))
+                    mask_m_2d = sample_m[..., 0] if sample_m.ndim == 3 else sample_m
+                    sky_median = float(np.median(sample_s[mask_m_2d > 0.5])) if np.any(mask_m_2d > 0.5) else float(np.median(sample_s))
                 else:
                     sky_median = float(np.median(sample_s))
             else:
-                if precomputed_mask is not None and np.any(precomputed_mask > 0.5):
-                    sky_median = float(np.median(stretched[precomputed_mask > 0.5]))
+                if precomputed_mask is not None:
+                    mask_2d = precomputed_mask[..., 0] if precomputed_mask.ndim == 3 else precomputed_mask
+                    if np.any(mask_2d > 0.5):
+                        sky_median = float(np.median(stretched[mask_2d > 0.5]))
+                    else:
+                        sky_median = float(np.median(stretched))
                 else:
                     sky_median = float(np.median(stretched))
             sn_contrasted = adjust_contrast(stretched, contrast_starless, pivot=sky_median, fast_draft=is_scrubbing)

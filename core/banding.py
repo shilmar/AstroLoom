@@ -140,18 +140,19 @@ def suppress_cmos_banding(
     img_f32 = image.astype(np.float32, copy=False)
     is_2d = (img_f32.ndim == 2)
     dir_lower = direction.lower()
+    mask_2d = (sky_mask[..., 0] if sky_mask.ndim == 3 else sky_mask) if sky_mask is not None else None
 
     if is_2d:
         out = img_f32.copy()
         if dir_lower in ("horizontal", "both"):
             out = _suppress_1d_banding_axis(
                 out, axis=0, amount=amount, protect_sigma=protect_sigma,
-                smooth_sigma=smooth_sigma, sky_mask=sky_mask
+                smooth_sigma=smooth_sigma, sky_mask=mask_2d
             )
         if dir_lower in ("vertical", "both"):
             out = _suppress_1d_banding_axis(
                 out, axis=1, amount=amount, protect_sigma=protect_sigma,
-                smooth_sigma=smooth_sigma, sky_mask=sky_mask
+                smooth_sigma=smooth_sigma, sky_mask=mask_2d
             )
         return out
 
@@ -163,12 +164,12 @@ def suppress_cmos_banding(
         if dir_lower in ("horizontal", "both"):
             ch_data = _suppress_1d_banding_axis(
                 ch_data, axis=0, amount=amount, protect_sigma=protect_sigma,
-                smooth_sigma=smooth_sigma, sky_mask=sky_mask
+                smooth_sigma=smooth_sigma, sky_mask=mask_2d
             )
         if dir_lower in ("vertical", "both"):
             ch_data = _suppress_1d_banding_axis(
                 ch_data, axis=1, amount=amount, protect_sigma=protect_sigma,
-                smooth_sigma=smooth_sigma, sky_mask=sky_mask
+                smooth_sigma=smooth_sigma, sky_mask=mask_2d
             )
         out[..., ch] = ch_data
 

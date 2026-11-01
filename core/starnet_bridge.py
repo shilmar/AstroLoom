@@ -113,10 +113,11 @@ def run_starnet(
             else:
                 mask_aligned = sky_mask
 
-            sky_pixels = input_data[mask_aligned > 0.5]
+            mask_2d = mask_aligned[..., 0] if mask_aligned.ndim == 3 else mask_aligned
+            sky_pixels = input_data[mask_2d > 0.5]
             bg_color = np.median(sky_pixels, axis=0) if len(sky_pixels) > 0 else np.array([0.005, 0.005, 0.005], dtype=np.float32)
 
-            mask_3d = mask_aligned[..., np.newaxis]
+            mask_3d = np.repeat(mask_2d[..., np.newaxis], 3, axis=2)
             input_data = (input_data * mask_3d) + (bg_color * (1.0 - mask_3d))
 
         in_tif = os.path.join(temp_dir, "starnet_in.tif")

@@ -3958,7 +3958,8 @@ class DeveloperTab(QWidget):
             mask_3d = None
             if self.current_mask is not None and base is not None:
                 h_f, w_f = base.shape[:2]
-                m_f = cv2.resize(self.current_mask, (w_f, h_f), interpolation=cv2.INTER_LINEAR) if self.current_mask.shape[:2] != (h_f, w_f) else self.current_mask
+                m_clean = self.current_mask[..., 0] if self.current_mask.ndim == 3 else self.current_mask
+                m_f = cv2.resize(m_clean, (w_f, h_f), interpolation=cv2.INTER_LINEAR) if m_clean.shape[:2] != (h_f, w_f) else m_clean
                 mask_3d = np.repeat(m_f[..., np.newaxis], 3, axis=2)
             crop_active = False
             self._zoom_crop_rect = None
@@ -4011,10 +4012,11 @@ class DeveloperTab(QWidget):
                 stars = None
 
             if self.current_mask is not None:
-                if self.current_mask.shape[:2] != (h_f, w_f):
-                    m_f = cv2.resize(self.current_mask, (w_f, h_f), interpolation=cv2.INTER_LINEAR)
+                m_clean = self.current_mask[..., 0] if self.current_mask.ndim == 3 else self.current_mask
+                if m_clean.shape[:2] != (h_f, w_f):
+                    m_f = cv2.resize(m_clean, (w_f, h_f), interpolation=cv2.INTER_LINEAR)
                 else:
-                    m_f = self.current_mask
+                    m_f = m_clean
                 m_sub = m_f[y1:y2, x1:x2]
                 mask_3d = np.repeat(m_sub[..., np.newaxis], 3, axis=2)
             else:
@@ -4050,10 +4052,14 @@ class DeveloperTab(QWidget):
             starless = cv2.resize(starless, (bw, bh), interpolation=cv2.INTER_AREA)
         if stars is not None and stars.shape[:2] != (bh, bw):
             stars = cv2.resize(stars, (bw, bh), interpolation=cv2.INTER_AREA)
-        if mask_3d is not None and mask_3d.shape[:2] != (bh, bw):
-            mask_3d = cv2.resize(mask_3d, (bw, bh), interpolation=cv2.INTER_LINEAR)
-            if mask_3d.ndim == 2:
-                mask_3d = np.repeat(mask_3d[..., np.newaxis], 3, axis=2)
+        if mask_3d is not None:
+            if mask_3d.shape[:2] != (bh, bw):
+                mask_3d = cv2.resize(mask_3d, (bw, bh), interpolation=cv2.INTER_LINEAR)
+            if base.ndim == 3:
+                if mask_3d.ndim == 2:
+                    mask_3d = np.repeat(mask_3d[..., np.newaxis], 3, axis=2)
+                elif mask_3d.ndim == 3 and mask_3d.shape[2] == 1:
+                    mask_3d = np.repeat(mask_3d, 3, axis=2)
 
         if self.image_starless is None or starless is None or stars is None:
             return base, mask_3d

@@ -5,6 +5,16 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-11-01
+
+### Corregido
+* **Estabilidad Dimensional de Máscaras y Resolución de `IndexError` en el Revelador:**
+  - Corrección en `core/masking.py:shift_mask_edge` para preservar la profundidad de canales (`mask.shape[2]`), impidiendo que el desplazamiento perimétrico de máscara reduzca matrices RGB tridimensionales a un único canal `(H, W, 1)`.
+  - Normalización dimensional en `gui/developer/pipeline.py:apply_developer_pipeline` para expandir de forma robusta máscaras 2D o monocanal a 3 canales cuando la imagen de trabajo es RGB.
+  - Blindaje con vista 2D de máscara (`stretched[mask_2d > 0.5]`) en el cálculo de mediana de cielo para el contraste selectivo de fondo starless (`contrast_starless`), neutralizando fallos de dimensionalidad durante scrubbing interactivo y refresco en zoom 1:1.
+  - Normalización 2D segura en `gui/tab_developer.py:_compose_active_base` al generar `mask_3d` en exportación y previsualización con zoom 100%.
+  - Protección dimensional de entrada análoga en `core/banding.py:suppress_cmos_banding`, `core/starnet_bridge.py:run_starnet` y `core/starnet_onnx.py:run_starnet_onnx`.
+
 ## [0.12.1] - 2026-11-01
 
 ### Añadido
