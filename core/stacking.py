@@ -12,7 +12,9 @@ import tifffile
 import tempfile
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from typing import Optional, List, Tuple
 from astropy.io import fits
+from core.banding import suppress_cmos_banding
 
 # Aceleración nativa de CPU con Numba (fallback transparente a NumPy si no está disponible)
 try:
@@ -48,7 +50,7 @@ if HAS_NUMBA:
         for p in prange(total_items):
             cnt_val = 0
             for i in range(n_frames):
-                if data[i, p] >= 0.0:
+                if data[i, p] > -0.5:
                     cnt_val += 1
 
             if cnt_val == 0:
@@ -59,7 +61,7 @@ if HAS_NUMBA:
             idx = 0
             for i in range(n_frames):
                 val = data[i, p]
-                if val >= 0.0:
+                if val > -0.5:
                     v[idx] = val
                     idx += 1
 
@@ -91,7 +93,7 @@ if HAS_NUMBA:
             w_sum = 0.0
             for i in range(n_frames):
                 val = data[i, p]
-                if val >= 0.0 and low <= val <= high:
+                if val > -0.5 and low <= val <= high:
                     w = weights[i]
                     s += val * w
                     w_sum += w
@@ -112,7 +114,7 @@ if HAS_NUMBA:
         for p in prange(total_items):
             cnt_val = 0
             for i in range(n_frames):
-                if data[i, p] >= 0.0:
+                if data[i, p] > -0.5:
                     cnt_val += 1
 
             if cnt_val == 0:
@@ -123,7 +125,7 @@ if HAS_NUMBA:
             idx = 0
             for i in range(n_frames):
                 val = data[i, p]
-                if val >= 0.0:
+                if val > -0.5:
                     v[idx] = val
                     idx += 1
 
@@ -145,7 +147,7 @@ if HAS_NUMBA:
         for p in prange(total_items):
             cnt_val = 0
             for i in range(n_frames):
-                if data[i, p] >= 0.0:
+                if data[i, p] > -0.5:
                     cnt_val += 1
 
             if cnt_val == 0:
@@ -156,7 +158,7 @@ if HAS_NUMBA:
             idx = 0
             for i in range(n_frames):
                 val = data[i, p]
-                if val >= 0.0:
+                if val > -0.5:
                     v[idx] = val
                     idx += 1
 
@@ -178,8 +180,31 @@ if HAS_NUMBA:
         pass
 
 
-def load_image_as_float32(filepath: str, color_space: str = None) -> np.ndarray:
-    """Carga imágenes optimizando memoria con operaciones in-place y espacio de color configurado."""
+def _is_raw_file(filepath: str) -> bool:
+    ext = os.path.splitext(filepath)[1].lower()
+    return ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw']
+
+
+def get_raw_cfa_dimensions(filepath: str) -> tuple[int, int]:
+    """Obtiene (alto, ancho) de la matriz pura del sensor (CFA) sin rotación ni interpolación."""
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw']:
+        with rawpy.imread(filepath) as raw:
+            return raw.sizes.raw_height, raw.sizes.raw_width
+    return get_image_dimensions(filepath)
+
+
+def load_image_as_float32(
+    filepath: str, 
+    color_space: str = None,
+    master_dark: np.ndarray = None,
+    master_flat: np.ndarray = None,
+    master_bias: np.ndarray = None
+) -> np.ndarray:
+    """
+    Carga imágenes optimizando memoria con operaciones in-place y espacio de color configurado.
+    Soporta calibración matemática en el espacio de fotositos del sensor (CFA) antes del debayering.
+    """
     if color_space is None:
         from core.config_manager import get_config_val
         color_space = get_config_val("icc_profile", "srgb")
@@ -191,6 +216,35 @@ def load_image_as_float32(filepath: str, color_space: str = None) -> np.ndarray:
         raw_cs = get_rawpy_colorspace(color_space)
 
         with rawpy.imread(filepath) as raw:
+            # Calibración pre-debayer sobre el sensor (CFA) si hay tomas maestras
+            if master_dark is not None or master_flat is not None or master_bias is not None:
+                cfa = raw.raw_image.astype(np.float32)
+
+                # 1. Sustracción de exceso térmico / píxeles calientes
+                if master_dark is not None and master_dark.ndim == 2:
+                    if master_bias is not None and master_bias.ndim == 2:
+                        thermal_excess = master_dark
+                    else:
+                        pedestal = float(np.median(master_dark))
+                        thermal_excess = master_dark - pedestal
+                    cfa -= thermal_excess
+                elif master_bias is not None and master_bias.ndim == 2:
+                    pedestal = float(np.median(master_bias))
+                    cfa -= (master_bias - pedestal)
+
+                # 2. Corrección de Flat en espacio CFA sobre señal óptica
+                if master_flat is not None and master_flat.ndim == 2:
+                    black_pedestal = float(raw.black_level_per_channel[0]) if hasattr(raw, 'black_level_per_channel') else float(np.median(cfa))
+                    signal = cfa - black_pedestal
+                    safe_flat = np.where(master_flat > 1e-4, master_flat, 1.0)
+                    signal /= safe_flat
+                    cfa = signal + black_pedestal
+                    del signal, safe_flat
+
+                # Inyectar matriz corregida en el buffer C++ de LibRaw
+                raw.raw_image[:] = np.clip(np.round(cfa), 0, 65535).astype(np.uint16)
+                del cfa
+
             rgb = raw.postprocess(
                 gamma=(2.222, 4.5),
                 no_auto_bright=True,
@@ -218,7 +272,7 @@ def load_image_as_float32(filepath: str, color_space: str = None) -> np.ndarray:
             denom = d_max - d_min + 1e-8
             data -= d_min
             data /= denom
-            return data
+            res = data
 
     elif ext in ['.tif', '.tiff']:
         data = tifffile.imread(filepath).astype(np.float32)
@@ -246,7 +300,6 @@ def load_image_as_float32(filepath: str, color_space: str = None) -> np.ndarray:
                 target_cs = normalize_colorspace_name(color_space)
                 if src_cs != target_cs:
                     res = convert_colorspace(res, src_space=src_cs, dst_space=target_cs)
-        return res
 
     else:
         bgr = cv2.imread(filepath, cv2.IMREAD_COLOR)
@@ -255,7 +308,13 @@ def load_image_as_float32(filepath: str, color_space: str = None) -> np.ndarray:
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB).astype(np.float32)
         del bgr
         rgb *= np.float32(1.0 / 255.0)
-        return rgb
+        res = rgb
+
+    # Calibración para imágenes no-RAW que ya vienen desmosaizadas
+    if (master_dark is not None or master_flat is not None or master_bias is not None) and res.ndim == 3:
+        res = calibrate_light(res, master_dark=master_dark, master_flat=master_flat, master_bias=master_bias)
+
+    return res
 
 
 def get_image_dimensions(filepath: str) -> tuple[int, int]:
@@ -286,14 +345,24 @@ def _median_stack_chunked(file_paths: list, chunk_size: int = 500, temp_dir: str
     """
     Calcula la mediana de una lista de tomas en disco sin cargar todas a la vez en RAM.
     Vuelca cada toma a un binario temporal y lee por franjas horizontales.
+    Si las tomas son RAW, opera directamente sobre la matriz monocroma del sensor (CFA 2D).
     """
     if not file_paths:
         return None
+
+    is_cfa = _is_raw_file(file_paths[0])
     if len(file_paths) == 1:
+        if is_cfa:
+            with rawpy.imread(file_paths[0]) as raw:
+                return raw.raw_image.astype(np.float32)
         return load_image_as_float32(file_paths[0])
 
-    h, w = get_image_dimensions(file_paths[0])
-    c = 3
+    if is_cfa:
+        h, w = get_raw_cfa_dimensions(file_paths[0])
+        c = 1
+    else:
+        h, w = get_image_dimensions(file_paths[0])
+        c = 3
 
     work_dir = temp_dir if (temp_dir and os.path.isdir(temp_dir)) else tempfile.gettempdir()
     tmp_files = []
@@ -303,7 +372,11 @@ def _median_stack_chunked(file_paths: list, chunk_size: int = 500, temp_dir: str
         # 1. Volcar cada imagen a binario en disco en paralelo (multi-hilo en CPU)
         def _process_calib_frame(item):
             i, p = item
-            img = load_image_as_float32(p)
+            if is_cfa:
+                with rawpy.imread(p) as raw:
+                    img = raw.raw_image.astype(np.float32)
+            else:
+                img = load_image_as_float32(p)
             tmp_p = os.path.join(work_dir, f"calib_tmp_{pid}_{i:04d}.bin")
             img.tofile(tmp_p)
             del img
@@ -314,25 +387,38 @@ def _median_stack_chunked(file_paths: list, chunk_size: int = 500, temp_dir: str
             tmp_files = list(executor.map(_process_calib_frame, enumerate(file_paths)))
 
         # 2. Asignar matriz final
-        master = np.empty((h, w, c), dtype=np.float32)
+        shape_master = (h, w) if is_cfa else (h, w, c)
+        master = np.empty(shape_master, dtype=np.float32)
         n_frames = len(tmp_files)
 
         # 3. Mediana por bloques de filas con mapeo de memoria directo
-        mms = [np.memmap(tf, dtype=np.float32, mode="r", shape=(h, w, c)) for tf in tmp_files]
+        shape_mm = (h, w) if is_cfa else (h, w, c)
+        mms = [np.memmap(tf, dtype=np.float32, mode="r", shape=shape_mm) for tf in tmp_files]
         try:
             for y1 in range(0, h, chunk_size):
                 y2 = min(h, y1 + chunk_size)
                 chunk_rows = y2 - y1
 
-                chunk_buf = np.empty((n_frames, chunk_rows, w, c), dtype=np.float32)
-                for f_idx, mm in enumerate(mms):
-                    chunk_buf[f_idx] = mm[y1:y2]
+                if is_cfa:
+                    chunk_buf = np.empty((n_frames, chunk_rows, w), dtype=np.float32)
+                    for f_idx, mm in enumerate(mms):
+                        chunk_buf[f_idx] = mm[y1:y2]
 
-                if HAS_NUMBA:
-                    flat_chunk = chunk_buf.reshape(n_frames, -1)
-                    master[y1:y2] = _median_kernel_numba(flat_chunk).reshape((chunk_rows, w, c))
+                    if HAS_NUMBA:
+                        flat_chunk = chunk_buf.reshape(n_frames, -1)
+                        master[y1:y2] = _median_kernel_numba(flat_chunk).reshape((chunk_rows, w))
+                    else:
+                        master[y1:y2] = np.median(chunk_buf, axis=0).astype(np.float32)
                 else:
-                    master[y1:y2] = np.median(chunk_buf, axis=0).astype(np.float32)
+                    chunk_buf = np.empty((n_frames, chunk_rows, w, c), dtype=np.float32)
+                    for f_idx, mm in enumerate(mms):
+                        chunk_buf[f_idx] = mm[y1:y2]
+
+                    if HAS_NUMBA:
+                        flat_chunk = chunk_buf.reshape(n_frames, -1)
+                        master[y1:y2] = _median_kernel_numba(flat_chunk).reshape((chunk_rows, w, c))
+                    else:
+                        master[y1:y2] = np.median(chunk_buf, axis=0).astype(np.float32)
                 del chunk_buf
         finally:
             for mm in mms:
@@ -366,9 +452,8 @@ def create_master_dark(dark_paths: list, master_bias: np.ndarray = None, temp_di
     if not dark_paths:
         return None
     master_dark = _median_stack_chunked(dark_paths, chunk_size=500, temp_dir=temp_dir)
-    if master_bias is not None:
+    if master_bias is not None and master_bias.shape == master_dark.shape:
         np.subtract(master_dark, master_bias, out=master_dark)
-        np.maximum(master_dark, 0.0, out=master_dark)
     gc.collect()
     return master_dark
 
@@ -379,17 +464,37 @@ def create_master_flat(flat_paths: list, master_dark: np.ndarray = None, master_
     pedestal = master_bias if master_bias is not None else master_dark
     master_flat = _median_stack_chunked(flat_paths, chunk_size=500, temp_dir=temp_dir)
 
-    if pedestal is not None:
+    if pedestal is not None and pedestal.shape == master_flat.shape:
         np.subtract(master_flat, pedestal, out=master_flat)
-        np.maximum(master_flat, 0.0, out=master_flat)
+    elif master_flat.ndim == 2 and _is_raw_file(flat_paths[0]):
+        # Si no hay bias/dark maestro para el flat, sustraer el pedestal de nivel negro del sensor
+        try:
+            with rawpy.imread(flat_paths[0]) as r_sample:
+                b_level = float(r_sample.black_level_per_channel[0])
+                if b_level > 0.0:
+                    master_flat -= b_level
+        except Exception:
+            pass
 
-    for ch in range(master_flat.shape[2]):
-        channel_data = master_flat[:, :, ch]
-        norm_val = float(np.mean(channel_data))
-        if norm_val > 1e-5:
-            channel_data /= norm_val
-        else:
-            channel_data.fill(1.0)
+    if master_flat.ndim == 2:
+        # Normalizar cada uno de los 4 canales de la matriz Bayer 2x2 de forma independiente a media 1.0
+        # para que la respuesta espectral del panel de flats no distorsione el balance cromático (RGB) del sensor
+        for r_idx in (0, 1):
+            for c_idx in (0, 1):
+                sub = master_flat[r_idx::2, c_idx::2]
+                norm_val = float(np.mean(sub))
+                if norm_val > 1e-5:
+                    sub /= norm_val
+                else:
+                    sub.fill(1.0)
+    else:
+        for ch in range(master_flat.shape[2]):
+            channel_data = master_flat[:, :, ch]
+            norm_val = float(np.mean(channel_data))
+            if norm_val > 1e-5:
+                channel_data /= norm_val
+            else:
+                channel_data.fill(1.0)
 
     gc.collect()
     return master_flat
@@ -402,17 +507,21 @@ def calibrate_light(
     master_bias: np.ndarray = None
 ) -> np.ndarray:
     """Aplica calibración con operaciones in-place."""
+    if light_img.ndim == 3:
+        if (master_dark is not None and master_dark.ndim == 2) or \
+           (master_flat is not None and master_flat.ndim == 2) or \
+           (master_bias is not None and master_bias.ndim == 2):
+            # Ya fue calibrado en fotositos del sensor (CFA) antes del debayering
+            return light_img
+
     if master_dark is not None:
         np.subtract(light_img, master_dark, out=light_img)
-        np.maximum(light_img, 0.0, out=light_img)
     elif master_bias is not None:
         np.subtract(light_img, master_bias, out=light_img)
-        np.maximum(light_img, 0.0, out=light_img)
 
     if master_flat is not None:
         safe_flat = np.where(master_flat > 1e-4, master_flat, 1.0)
         np.divide(light_img, safe_flat, out=light_img)
-        np.clip(light_img, 0.0, 1.0, out=light_img)
         del safe_flat
 
     return light_img
@@ -450,12 +559,16 @@ def preprocess_subframe_lp(
     method: str = "standard",
     strength: float = 0.5,
     sky_mask: np.ndarray = None,
-    ref_stats: dict = None
+    ref_stats: dict = None,
+    deband: bool = False
 ) -> np.ndarray:
     """
     Aplica sustracción de gradiente o normalización local in-place canal por canal.
     Pico de asignación en memoria < 95 MiB (cero arrays 3D duplicados).
     """
+    if deband:
+        frame_rgb = suppress_cmos_banding(frame_rgb, direction="horizontal", amount=1.0, sky_mask=sky_mask)
+
     if strength <= 1e-4 or method in ["standard", "min_rejection"]:
         return frame_rgb
 
@@ -719,6 +832,107 @@ def evaluate_storage_mode(strategy: str, num_frames: int, h: int, w: int, c: int
     return StorageModeDecision(False, "Caché en Disco SSD (psutil no disponible para medir RAM libre)")
 
 
+def compute_tps_remap_grid(
+    src_pts: np.ndarray,
+    dst_pts: np.ndarray,
+    H_matrix: np.ndarray,
+    w: int,
+    h: int,
+    grid_size: int = 24,
+    min_inliers: int = 30
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Computes dense (map_x, map_y) coordinate grids using regularized Thin-Plate Spline (TPS).
+    
+    Guarded with spatial cell binning and strict physical limits (< 10.0 px) to prevent divergence.
+    """
+    if len(src_pts) < min_inliers:
+        return None
+
+    try:
+        from scipy.interpolate import RBFInterpolator
+    except ImportError:
+        return None
+
+    try:
+        H_inv = np.linalg.inv(H_matrix)
+        dst_raw = dst_pts.reshape(-1, 2)
+        src_raw = src_pts.reshape(-1, 2)
+
+        dst_hom = np.hstack([dst_raw, np.ones((len(dst_raw), 1), dtype=np.float32)])
+        src_proj = (H_inv @ dst_hom.T).T
+        src_proj = src_proj[:, :2] / np.maximum(1e-6, src_proj[:, 2:3])
+
+        residuals = src_raw - src_proj
+        max_res = float(np.max(np.linalg.norm(residuals, axis=1)))
+
+        # Solo aplicar TPS si los residuos ópticos son apreciables (> 0.35 px) pero no anómalos (< 10.0 px)
+        if max_res < 0.35 or max_res > 10.0:
+            return None
+
+        # Binning espacial regular (6x6) para evitar singularidades y sobredimensionamiento
+        grid_bins = 6
+        bx = np.linspace(0, w, grid_bins + 1)
+        by = np.linspace(0, h, grid_bins + 1)
+        bin_centers = []
+        bin_residuals = []
+
+        for i in range(grid_bins):
+            for j in range(grid_bins):
+                m = (dst_raw[:, 0] >= bx[j]) & (dst_raw[:, 0] < bx[j+1]) & (dst_raw[:, 1] >= by[i]) & (dst_raw[:, 1] < by[i+1])
+                if np.sum(m) >= 1:
+                    bin_centers.append([0.5 * (bx[j] + bx[j+1]), 0.5 * (by[i] + by[i+1])])
+                    bin_residuals.append(np.median(residuals[m], axis=0))
+
+        if len(bin_centers) < 12:
+            return None
+
+        bin_centers = np.array(bin_centers, dtype=np.float32)
+        bin_residuals = np.array(bin_residuals, dtype=np.float32)
+
+        rbf = RBFInterpolator(bin_centers, bin_residuals, kernel="thin_plate_spline", smoothing=2.0)
+
+        gx = np.linspace(0, w - 1, grid_size, dtype=np.float32)
+        gy = np.linspace(0, h - 1, grid_size, dtype=np.float32)
+        grid_x, grid_y = np.meshgrid(gx, gy)
+        grid_pts = np.column_stack([grid_x.ravel(), grid_y.ravel()])
+
+        disp_grid = rbf(grid_pts).reshape(grid_size, grid_size, 2).astype(np.float32)
+
+        # Límite físico estricto: deformación residual óptica no debe exceder 10.0 px ni ser NaN
+        if float(np.max(np.abs(disp_grid))) > 10.0 or np.isnan(disp_grid).any():
+            return None
+
+        disp_x = cv2.resize(disp_grid[..., 0], (w, h), interpolation=cv2.INTER_CUBIC)
+        disp_y = cv2.resize(disp_grid[..., 1], (w, h), interpolation=cv2.INTER_CUBIC)
+
+        base_y, base_x = np.indices((h, w), dtype=np.float32)
+        denom = 1.0 / np.maximum(1e-6, H_inv[2, 0] * base_x + H_inv[2, 1] * base_y + H_inv[2, 2])
+        map_x = (H_inv[0, 0] * base_x + H_inv[0, 1] * base_y + H_inv[0, 2]) * denom + disp_x
+        map_y = (H_inv[1, 0] * base_x + H_inv[1, 1] * base_y + H_inv[1, 2]) * denom + disp_y
+
+        return map_x.astype(np.float32), map_y.astype(np.float32)
+    except Exception:
+        return None
+
+
+def _load_memmap_master(path: str, h: int, w: int, raw_shape: tuple = None) -> Optional[np.ndarray]:
+    """Mapea en memoria un archivo binario maestro identificando si es CFA 2D o RGB 3D."""
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        file_bytes = os.path.getsize(path)
+        total_floats = file_bytes // 4
+        if raw_shape and total_floats == (raw_shape[0] * raw_shape[1]):
+            return np.memmap(path, dtype=np.float32, mode='r', shape=raw_shape)
+        elif total_floats == (h * w * 3):
+            return np.memmap(path, dtype=np.float32, mode='r', shape=(h, w, 3))
+        elif total_floats == (h * w):
+            return np.memmap(path, dtype=np.float32, mode='r', shape=(h, w))
+    except Exception:
+        pass
+    return None
+
+
 def align_single_light_task(args: tuple) -> dict:
     (
         idx, path, total_lights, temp_dir, mode,
@@ -745,20 +959,20 @@ def align_single_light_task(args: tuple) -> dict:
 
     try:
         # Carga instantánea por mapeo de memoria sin ocupar memoria en heap
-        master_dark = np.memmap(p_md, dtype=np.float32, mode='r', shape=(h, w, 3)) if (p_md and os.path.exists(p_md)) else None
-        master_bias = np.memmap(p_mb, dtype=np.float32, mode='r', shape=(h, w, 3)) if (p_mb and os.path.exists(p_mb) and master_dark is None) else None
-        master_flat = np.memmap(p_mf, dtype=np.float32, mode='r', shape=(h, w, 3)) if (p_mf and os.path.exists(p_mf)) else None
+        raw_shape = get_raw_cfa_dimensions(path) if _is_raw_file(path) else None
+        master_dark = _load_memmap_master(p_md, h, w, raw_shape)
+        master_bias = _load_memmap_master(p_mb, h, w, raw_shape) if (p_mb and os.path.exists(p_mb) and master_dark is None) else None
+        master_flat = _load_memmap_master(p_mf, h, w, raw_shape)
         sky_mask = np.memmap(p_mask, dtype=np.float32, mode='r', shape=(h, w)) if (p_mask and os.path.exists(p_mask)) else None
         ref_gray = np.asarray(np.memmap(p_ref_gray, dtype=np.uint8, mode='r', shape=(h, w))) if (p_ref_gray and os.path.exists(p_ref_gray)) else None
 
-        raw_frame = load_image_as_float32(path)
-        calibrated_frame = calibrate_light(
-            raw_frame, 
-            master_dark=master_dark, 
-            master_flat=master_flat, 
+        calibrated_frame = load_image_as_float32(
+            path,
+            master_dark=master_dark,
+            master_flat=master_flat,
             master_bias=master_bias
         )
-        del master_dark, master_flat, master_bias, raw_frame
+        del master_dark, master_flat, master_bias
 
         curr_kp, curr_desc, _ = detect_sky_stars(calibrated_frame, sky_mask=sky_mask)
         if curr_desc is None or len(curr_kp) < 15:
@@ -798,6 +1012,19 @@ def align_single_light_task(args: tuple) -> dict:
             H_matrix = np.vstack([H_aff, [0.0, 0.0, 1.0]])
 
         num_inliers = int(np.sum(inliers)) if inliers is not None else 0
+
+        # Refinamiento TPS no rígido: solo apto para tomas de cielo profundo (tracker) sin suelo estático.
+        # En trípode fijo (fixed_tripod con suelo estático) la escena se compone de suelo estático y cielo móvil;
+        # la proyección RANSAC homográfica planar es estrictamente la proyección matemática correcta.
+        tps_maps = None
+        if mode != "fixed_tripod" and inliers is not None and num_inliers >= 30 and len(src_pts) >= 30:
+            inlier_mask = inliers.ravel() > 0
+            tps_maps = compute_tps_remap_grid(
+                src_pts[inlier_mask],
+                dst_pts[inlier_mask],
+                H_matrix,
+                w, h
+            )
         del dst_pts, src_pts, inliers
 
         # 1. Preservar toma de suelo estática para trípode fijo 100% limpia de sustracciones
@@ -829,26 +1056,42 @@ def align_single_light_task(args: tuple) -> dict:
             res["fit_scale"] = fit_info["scale"]
             res["fit_offset"] = fit_info["offset"]
 
-        # 3. Warp óptico exacto del frame de cielo procesado
-        warped = cv2.warpPerspective(
-            calibrated_processed, H_matrix, (w, h),
-            flags=cv2.INTER_CUBIC,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=-1.0
-        )
+        # 3. Warp optico exacto del frame de cielo procesado (TPS Lanczos4 o Homografia Cubica)
+        if tps_maps is not None:
+            warped = cv2.remap(
+                calibrated_processed, tps_maps[0], tps_maps[1],
+                interpolation=cv2.INTER_LANCZOS4,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=-1.0
+            )
+        else:
+            warped = cv2.warpPerspective(
+                calibrated_processed, H_matrix, (w, h),
+                flags=cv2.INTER_CUBIC,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=-1.0
+            )
         del calibrated_processed, calibrated_frame
 
-        # 4. Excluir el suelo desplazado para que NUNCA contamine el cielo apilado (método Sequator)
+        # 4. Excluir el suelo desplazado para que NUNCA contamine el cielo apilado (metodo Sequator)
         if sky_mask is not None:
             mask_bin = (sky_mask > 0.5).astype(np.uint8)
             kernel_safe = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
             safe_sky = cv2.erode(mask_bin, kernel_safe)
-            warped_mask = cv2.warpPerspective(
-                safe_sky, H_matrix, (w, h),
-                flags=cv2.INTER_NEAREST,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=0
-            )
+            if tps_maps is not None:
+                warped_mask = cv2.remap(
+                    safe_sky, tps_maps[0], tps_maps[1],
+                    interpolation=cv2.INTER_NEAREST,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=0
+                )
+            else:
+                warped_mask = cv2.warpPerspective(
+                    safe_sky, H_matrix, (w, h),
+                    flags=cv2.INTER_NEAREST,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=0
+                )
             warped[warped_mask == 0] = -1.0
             del warped_mask, safe_sky, mask_bin
         del sky_mask
@@ -915,7 +1158,7 @@ def _process_single_chunk_cpu(args):
         else:
             for ch in range(c):
                 channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
-                valid_mask = channel_data >= 0.0
+                valid_mask = channel_data > -0.5
                 ch_masked = np.where(valid_mask, channel_data, np.nan)
                 chunk_result[:, :, ch] = np.nan_to_num(np.nanmedian(ch_masked, axis=0), nan=0.0).reshape((actual_rows, w))
         del sub_stack
@@ -929,7 +1172,7 @@ def _process_single_chunk_cpu(args):
         else:
             for ch in range(c):
                 channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
-                valid_mask = channel_data >= 0.0
+                valid_mask = channel_data > -0.5
                 ch_masked = np.where(valid_mask, channel_data, np.nan)
                 chunk_result[:, :, ch] = np.nan_to_num(np.nanpercentile(ch_masked, target_p, axis=0), nan=0.0).reshape((actual_rows, w))
         del sub_stack
@@ -942,7 +1185,7 @@ def _process_single_chunk_cpu(args):
     else:
         for ch in range(c):
             channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
-            valid_mask = channel_data >= 0.0
+            valid_mask = channel_data > -0.5
             ch_masked = np.where(valid_mask, channel_data, np.nan)
             
             med = np.nanmedian(ch_masked, axis=0)
@@ -1026,6 +1269,7 @@ def stream_stack_auto(
         del mms
 
     gc.collect()
+    np.clip(stacked_out, 0.0, 1.0, out=stacked_out)
     return stacked_out
 
 

@@ -96,13 +96,18 @@ class FileListRow(QWidget):
             return
         self.lbl_quality.setVisible(True)
 
+        fwhm_str = f"{res.fwhm:.1f} px" if (res.fwhm is not None and not np.isnan(res.fwhm) and res.fwhm > 0) else "N/D"
+        c_ecc_str = f"{res.center_ecc:.2f}" if (res.center_ecc is not None and not np.isnan(res.center_ecc)) else "N/D"
+        cor_ecc_str = f"{res.corner_ecc:.2f}" if (res.corner_ecc is not None and not np.isnan(res.corner_ecc)) else "N/D"
         tip = (
             f"Puntuación: {res.score:.1f}%\n"
-            f"Nitidez (FWHM): {res.fwhm:.1f} px\n"
-            f"Redondez centro (eje óptico): {res.center_ecc:.2f}\n"
-            f"Coma esquinas: {res.corner_ecc:.2f}\n"
+            f"Nitidez (FWHM): {fwhm_str}\n"
+            f"Redondez centro (eje óptico): {c_ecc_str}\n"
+            f"Coma esquinas: {cor_ecc_str}\n"
             f"Estrellas detectadas: {res.star_count}"
         )
+        if getattr(res, "optical_diagnosis_msg", ""):
+            tip += f"\nÓptica: {res.optical_diagnosis_msg}"
         if res.defect_reason:
             tip += f"\nMotivo: {res.defect_reason}"
         self.lbl_quality.setToolTip(tip)
@@ -239,6 +244,20 @@ class StackerTab(QWidget):
         files_layout = self.grp_files.content_layout
         files_layout.setContentsMargins(10, 8, 10, 10)
         files_layout.setSpacing(8)
+
+        btn_box = QHBoxLayout()
+        btn_box.setSpacing(6)
+        self.btn_add_files = QPushButton("Añadir Tomas...")
+        self.btn_add_files.setIcon(get_icon("plus", size=13, color="#80d8ff"))
+        self.btn_add_files.setStyleSheet("font-weight: bold; color: #80d8ff;")
+        self.btn_add_files.clicked.connect(self.add_current_tab_files)
+        self.btn_clear_files = QPushButton("Limpiar Pestaña")
+        self.btn_clear_files.setIcon(get_icon("trash", size=13, color="#ff8a80"))
+        self.btn_clear_files.setStyleSheet("font-weight: bold; color: #ff8a80;")
+        self.btn_clear_files.clicked.connect(self.clear_current_tab_files)
+        btn_box.addWidget(self.btn_add_files)
+        btn_box.addWidget(self.btn_clear_files)
+        files_layout.addLayout(btn_box)
 
         self.tabs_files = QTabWidget()
         self.tabs_files.setMinimumHeight(160)
@@ -438,20 +457,6 @@ class StackerTab(QWidget):
 
         files_layout.addWidget(self.culling_bar)
         self.tabs_files.currentChanged.connect(self._on_files_tab_changed)
-
-        btn_box = QHBoxLayout()
-        btn_box.setSpacing(6)
-        self.btn_add_files = QPushButton("Añadir Tomas...")
-        self.btn_add_files.setIcon(get_icon("plus", size=13, color="#80d8ff"))
-        self.btn_add_files.setStyleSheet("font-weight: bold; color: #80d8ff;")
-        self.btn_add_files.clicked.connect(self.add_current_tab_files)
-        self.btn_clear_files = QPushButton("Limpiar Pestaña")
-        self.btn_clear_files.setIcon(get_icon("trash", size=13, color="#ff8a80"))
-        self.btn_clear_files.setStyleSheet("font-weight: bold; color: #ff8a80;")
-        self.btn_clear_files.clicked.connect(self.clear_current_tab_files)
-        btn_box.addWidget(self.btn_add_files)
-        btn_box.addWidget(self.btn_clear_files)
-        files_layout.addLayout(btn_box)
 
         left_layout.addWidget(self.grp_files)
 
@@ -1184,6 +1189,12 @@ class StackerTab(QWidget):
         total = len(results)
         aptas = total - defective_count
         self.log_message(f"✓ [CRIBADO] Análisis completado: {aptas}/{total} tomas excelentes/aceptables, {defective_count} con anomalías.")
+
+        from core.frame_culling import diagnose_session_optics
+        session_optics = diagnose_session_optics(results)
+        if session_optics.get("has_systematic_defect"):
+            self.log_message(f"ℹ [DIAGNÓSTICO ÓPTICO] {session_optics['summary']}")
+
         if defective_count > 0:
             self.log_message(f"-> Pulsa 'Auto-Descartar' para excluir automáticamente las {defective_count} tomas defectuosas.")
 

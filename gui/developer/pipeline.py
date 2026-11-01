@@ -24,6 +24,8 @@ from core.deconvolution import (
 from core.orton import apply_astronomical_orton
 from core.star_diffusion import apply_star_diffusion
 from core.mask_layers import apply_all_mask_layers
+from core.dualband import apply_dualband_palette, unclip_stars, unpurple
+from core.pcc import apply_pcc_gains
 from gui.developer.developer_state import DeveloperState
 
 
@@ -196,13 +198,33 @@ def apply_developer_pipeline(
                 img = precomputed_pre_lp_base
                 milestone_pre_lp = precomputed_pre_lp_base
             else:
+                # 0a. Paletas Dual-Band OSC y Correcciones Estelares (Fase 1)
+                dual_mode = getattr(state, 'dualband_mode', 'none')
+                if dual_mode and dual_mode != 'none':
+                    boost = getattr(state, 'dualband_oiii_boost', 100) / 100.0
+                    img = apply_dualband_palette(target_img, palette=dual_mode, boost_oiii=boost)
+                else:
+                    img = target_img.copy()
+
+                unclip_amt = getattr(state, 'unclip_stars_val', 0) / 100.0
+                if unclip_amt > 1e-4:
+                    img = unclip_stars(img)
+
+                unpurple_amt = getattr(state, 'unpurple_val', 0) / 100.0
+                if unpurple_amt > 1e-4:
+                    img = unpurple(img, amount=unpurple_amt)
+
+                # 0b. Ganancias Fotometricas PCC (si estan activas)
+                pcc_kr = getattr(state, 'pcc_kr', 1.0)
+                pcc_kb = getattr(state, 'pcc_kb', 1.0)
+                if abs(pcc_kr - 1.0) > 1e-4 or abs(pcc_kb - 1.0) > 1e-4:
+                    img = apply_pcc_gains(img, pcc_kr, pcc_kb)
+
                 # 1. Balance de blancos
                 temp_val = state.temp_val / 1000.0
                 tint_val = state.tint_val / 1000.0
                 if abs(temp_val) > 1e-5 or abs(tint_val) > 1e-5:
-                    img = apply_white_balance(target_img, temp_val, tint_val)
-                else:
-                    img = target_img.copy()
+                    img = apply_white_balance(img, temp_val, tint_val)
 
                 # 2. Saturación diferencial cielo / suelo
                 sat_sky_val = state.sat_sky_val / 100.0
@@ -295,6 +317,19 @@ def apply_developer_pipeline(
                         sky_mask=precomputed_mask,
                         is_draft=is_scrubbing
                     )
+
+            # Supresión de Banding CMOS de sensor en espacio lineal
+            if getattr(state, "banding_val", 0) > 0:
+                from core.banding import suppress_cmos_banding
+                b_dirs = ["horizontal", "vertical", "both"]
+                b_idx = min(len(b_dirs) - 1, max(0, getattr(state, "banding_dir_idx", 0)))
+                img = suppress_cmos_banding(
+                    img,
+                    direction=b_dirs[b_idx],
+                    amount=state.banding_val / 100.0,
+                    sky_mask=precomputed_mask
+                )
+
             milestone_linear = img
 
         # 6. Estirado Tonal (MTF o GHS)

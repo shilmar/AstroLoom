@@ -28,6 +28,12 @@ class DeveloperState:
     sat_sky_val: int = 100
     sat_gnd_val: int = 100
     vibrance_val: int = 0
+    pcc_kr: float = 1.0
+    pcc_kb: float = 1.0
+    dualband_mode: str = "none"
+    dualband_oiii_boost: int = 100
+    unclip_stars_val: int = 0
+    unpurple_val: int = 0
 
     # Light Pollution / Gradients
     lp_val: int = 0
@@ -51,6 +57,8 @@ class DeveloperState:
     denoise_val: int = 0
     denoise_color_val: int = 50
     denoise_mask_val: int = 50
+    banding_val: int = 0
+    banding_dir_idx: int = 0
     starless_is_stretched: bool = False
 
     # Orton Effect

@@ -13,7 +13,7 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 | **P1** | **Reducción de Ruido con IA Ligera (Astro Denoise Fase 2 - ONNX / NAFNet)** | Revelador | NoiseXTerminator / DeepSNR | 6.5 / 10 | 9.0 / 10 | ✅ Completado (v0.11.1) |
 | **P2** | **Revisión y Optimización del Módulo de Panorámicas y Mosaicos** | Panorámicas | PTGui / Hugin / Lightroom | 6.0 / 10 | 8.5 / 10 | ✅ Completado (v0.11.6) |
 | **M1** | **Módulo Integral de Lluvias de Meteoros y Bólidos** | Meteoros | Sequator / Starry Landscape Stacker / PixInsight | 7.0 / 10 | 9.0 / 10 | ✅ Completado (v0.12.0) |
-| **P3** | **Corrección de Distorsión Óptica Periférica de Estrellas** | Apilador | Sequator (*Distort Mode*) | 7.5 / 10 | 8.5 / 10 | 🔍 En estudio |
+| **P3** | **Corrección de Distorsión Óptica Periférica de Estrellas** | Apilador | Sequator (*Distort Mode*) | 7.5 / 10 | 8.5 / 10 | ✅ Completado (v0.12.1) |
 | **P4** | **Extracción de Gradientes por Puntos de Muestreo Interactivos** | Revelador | PixInsight (*DBE*) / GraXpert | 5.0 / 10 | 8.0 / 10 | ⏳ Planificado |
 | **P5** | **Procesado y Exportación en Lote (Batch Processing)** | Revelador / General | Lightroom / Adobe Camera Raw | 4.0 / 10 | 7.5 / 10 | ⏳ Pendiente |
 | **P6** | **Persistencia Avanzada y Sincronización de Preferencias** | Sistema | - | 3.0 / 10 | 5.0 / 10 | ⏳ Pendiente |
@@ -52,6 +52,7 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
   - Registro elástico local basado en deformación por mallas de interpolación (*Thin Plate Splines* - TPS) o corrección radial por cuadrantes.
 * **Impacto:** **8.5 / 10** *(Diferencia crítica de calidad entre apilados estándar y profesionales en esquinas).*
 * **Dificultad / Coste:** **7.5 / 10** *(Alta: Requiere modelado matemático de deformación no rígida subpíxel).*
+* **Estado:** **✅ Completado en v0.12.1.** Implementado el registro elástico no rígido por mallas de deformación *Thin Plate Splines* (TPS) con interpolación de alta fidelidad `Lanczos4` (`core/stacking.py:compute_tps_remap_grid`), resolviendo la distorsión geométrica periférica y de campo amplio en tomas de seguimiento/cielo profundo.
 
 ---
 

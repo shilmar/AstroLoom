@@ -1,9 +1,9 @@
-"""Color and White Balance collapsible panels for AstroLoom Developer."""
+"""Color, White Balance, Photometric Calibration and Dual-Band collapsible panels for AstroLoom Developer."""
 from __future__ import annotations
 
 from typing import Optional, Callable
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QComboBox
 )
 from PySide6.QtCore import Qt, Signal as pyqtSignal
 
@@ -13,11 +13,12 @@ from gui.icons import get_icon
 
 
 class ColorWbPanel(QWidget):
-    """Encapsulates White Balance and Saturation / Vibrance controls."""
+    """Encapsulates White Balance, PCC, Saturation, and Dual-Band Narrowband controls."""
 
     # Signals for reactive pipeline updates
     parameter_changed = pyqtSignal()
     pipette_toggled = pyqtSignal(bool)
+    pcc_requested = pyqtSignal()
     action_committed = pyqtSignal()
     interaction_started = pyqtSignal()
     interaction_finished = pyqtSignal()
@@ -31,6 +32,14 @@ class ColorWbPanel(QWidget):
         self.sat_gnd_val: float = 1.0
         self.vibrance_val: float = 0.0
 
+        # Dual-band & Stellar correction
+        self.dualband_mode: str = "none"
+        self.dualband_oiii_boost: int = 100
+        self.unclip_stars_val: int = 0
+        self.unpurple_val: int = 0
+        self.pcc_kr: float = 1.0
+        self.pcc_kb: float = 1.0
+
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -38,7 +47,7 @@ class ColorWbPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        # --- SECCIÓN: Balance de Blancos ---
+        # --- SECCIÓN: Balance de Blancos y Calibración ---
         self.sec_wb = CollapsibleSection(
             "Balance de Blancos y Calibración",
             is_expanded=True,
@@ -87,6 +96,27 @@ class ColorWbPanel(QWidget):
         row_wb_btn.addWidget(btn_reset_wb)
         wb_layout.addLayout(row_wb_btn)
 
+        # Fila Calibración Fotométrica del Color (PCC Real)
+        row_pcc = QHBoxLayout()
+        self.btn_pcc = QPushButton("Calibración PCC (Gaia)")
+        self.btn_pcc.setIcon(get_icon("star", color="#ffd54f", size=13))
+        self.btn_pcc.setCursor(Qt.PointingHandCursor)
+        self.btn_pcc.setToolTip("Calibra el color físico exacto de las estrellas contra el estándar solar Gaia G2V (BP - RP = 0.82)")
+        self.btn_pcc.setStyleSheet("font-weight: bold; color: #ffd54f; margin-top: 2px;")
+        self.btn_pcc.clicked.connect(self._on_pcc_clicked)
+
+        self.btn_reset_pcc = QPushButton("Restablecer")
+        self.btn_reset_pcc.setToolTip("Restablecer ganancias fotométricas a 1.000")
+        self.btn_reset_pcc.clicked.connect(self.reset_pcc)
+
+        row_pcc.addWidget(self.btn_pcc, stretch=3)
+        row_pcc.addWidget(self.btn_reset_pcc, stretch=1)
+        wb_layout.addLayout(row_pcc)
+
+        self.lbl_pcc_status = QLabel("PCC: Inactivo (Ganancias 1.000)")
+        self.lbl_pcc_status.setStyleSheet("color: #888888; font-size: 11px;")
+        wb_layout.addWidget(self.lbl_pcc_status)
+
         self.sec_wb.set_content_widget(w_wb)
         layout.addWidget(self.sec_wb)
 
@@ -134,6 +164,61 @@ class ColorWbPanel(QWidget):
 
         self.sec_color.set_content_widget(w_sat)
         layout.addWidget(self.sec_color)
+
+        # --- SECCIÓN: Paletas Dual-Band OSC y Reparación Estelar (Fase 1) ---
+        self.sec_dualband = CollapsibleSection(
+            "Paletas Dual-Band y Corrección Estelar",
+            is_expanded=False,
+            on_reset=self.reset_dualband,
+            icon_name="sparkles"
+        )
+        w_db = QWidget()
+        db_layout = QVBoxLayout(w_db)
+        db_layout.setContentsMargins(6, 4, 6, 6)
+        db_layout.setSpacing(8)
+
+        row_pal = QHBoxLayout()
+        lbl_pal = QLabel("Paleta OSC:")
+        lbl_pal.setFixedWidth(115)
+        self.combo_dualband = QComboBox()
+        self.combo_dualband.addItems([
+            "Desactivado (RGB)",
+            "HOO Bicolor",
+            "SHO Hubble Sintético",
+            "Foraxx Dinámico",
+            "Cannistra Bicolor"
+        ])
+        self.combo_dualband.currentIndexChanged.connect(self._on_dualband_combo_changed)
+        row_pal.addWidget(lbl_pal)
+        row_pal.addWidget(self.combo_dualband)
+        db_layout.addLayout(row_pal)
+
+        self.row_oiii_boost = PrecisionSliderRow("Boost [OIII]:", 10, 300, 100, scale=100.0, decimals=2, unit="x", label_width=115)
+        self.slider_oiii_boost = self.row_oiii_boost.slider
+        self.lbl_oiii_boost = self.row_oiii_boost.lbl_value
+        self.slider_oiii_boost.valueChanged.connect(self._on_oiii_boost_changed)
+        self.slider_oiii_boost.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_oiii_boost.sliderReleased.connect(self._on_slider_released)
+        db_layout.addWidget(self.row_oiii_boost)
+
+        self.row_unclip = PrecisionSliderRow("Rescate Núcleo:", 0, 100, 0, scale=1.0, decimals=0, unit="%", label_width=115)
+        self.slider_unclip = self.row_unclip.slider
+        self.lbl_unclip = self.row_unclip.lbl_value
+        self.slider_unclip.valueChanged.connect(self._on_unclip_changed)
+        self.slider_unclip.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_unclip.sliderReleased.connect(self._on_slider_released)
+        db_layout.addWidget(self.row_unclip)
+
+        self.row_unpurple = PrecisionSliderRow("Atenuar Magenta:", 0, 100, 0, scale=1.0, decimals=0, unit="%", label_width=115)
+        self.slider_unpurple = self.row_unpurple.slider
+        self.lbl_unpurple = self.row_unpurple.lbl_value
+        self.slider_unpurple.valueChanged.connect(self._on_unpurple_changed)
+        self.slider_unpurple.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_unpurple.sliderReleased.connect(self._on_slider_released)
+        db_layout.addWidget(self.row_unpurple)
+
+        self.sec_dualband.set_content_widget(w_db)
+        layout.addWidget(self.sec_dualband)
 
     # -------------------------------------------------------------
     # Sliders & Value synchronization
@@ -197,6 +282,46 @@ class ColorWbPanel(QWidget):
     def _on_pipette_toggled(self, checked: bool) -> None:
         self.pipette_toggled.emit(checked)
 
+    def _on_pcc_clicked(self) -> None:
+        self.pcc_requested.emit()
+
+    def set_pcc_gains(self, kr: float, kb: float) -> None:
+        self.pcc_kr = float(kr)
+        self.pcc_kb = float(kb)
+        if hasattr(self, 'lbl_pcc_status'):
+            if abs(self.pcc_kr - 1.0) > 1e-4 or abs(self.pcc_kb - 1.0) > 1e-4:
+                self.lbl_pcc_status.setText(f"✓ PCC Activo: R={self.pcc_kr:.3f}, B={self.pcc_kb:.3f}")
+                self.lbl_pcc_status.setStyleSheet("color: #ffd54f; font-size: 11px; font-weight: bold;")
+            else:
+                self.lbl_pcc_status.setText("PCC: Inactivo (Ganancias 1.000)")
+                self.lbl_pcc_status.setStyleSheet("color: #888888; font-size: 11px;")
+        self.parameter_changed.emit()
+
+    def reset_pcc(self) -> None:
+        self.set_pcc_gains(1.0, 1.0)
+        self.action_committed.emit()
+
+    def _on_dualband_combo_changed(self, idx: int) -> None:
+        modes = ["none", "hoo", "sho", "foraxx", "cannistra"]
+        self.dualband_mode = modes[idx] if 0 <= idx < len(modes) else "none"
+        self.parameter_changed.emit()
+        self.action_committed.emit()
+
+    def _on_oiii_boost_changed(self, val: int) -> None:
+        self.dualband_oiii_boost = val
+        self.lbl_oiii_boost.setText(f"{val / 100.0:.2f}x")
+        self.parameter_changed.emit()
+
+    def _on_unclip_changed(self, val: int) -> None:
+        self.unclip_stars_val = val
+        self.lbl_unclip.setText(f"{val}%")
+        self.parameter_changed.emit()
+
+    def _on_unpurple_changed(self, val: int) -> None:
+        self.unpurple_val = val
+        self.lbl_unpurple.setText(f"{val}%")
+        self.parameter_changed.emit()
+
     # -------------------------------------------------------------
     # Public controls API
     # -------------------------------------------------------------
@@ -212,6 +337,7 @@ class ColorWbPanel(QWidget):
         self.slider_tint.setValue(0)
         self.temp_val = 0.0
         self.tint_val = 0.0
+        self.set_pcc_gains(1.0, 1.0)
 
         self.spin_temp.blockSignals(False)
         self.spin_tint.blockSignals(False)
@@ -243,9 +369,36 @@ class ColorWbPanel(QWidget):
         self.parameter_changed.emit()
         self.action_committed.emit()
 
+    def reset_dualband(self) -> None:
+        self.combo_dualband.blockSignals(True)
+        self.slider_oiii_boost.blockSignals(True)
+        self.slider_unclip.blockSignals(True)
+        self.slider_unpurple.blockSignals(True)
+
+        self.combo_dualband.setCurrentIndex(0)
+        self.slider_oiii_boost.setValue(100)
+        self.slider_unclip.setValue(0)
+        self.slider_unpurple.setValue(0)
+        self.dualband_mode = "none"
+        self.dualband_oiii_boost = 100
+        self.unclip_stars_val = 0
+        self.unpurple_val = 0
+        self.lbl_oiii_boost.setText("1.00x")
+        self.lbl_unclip.setText("0%")
+        self.lbl_unpurple.setText("0%")
+
+        self.combo_dualband.blockSignals(False)
+        self.slider_oiii_boost.blockSignals(False)
+        self.slider_unclip.blockSignals(False)
+        self.slider_unpurple.blockSignals(False)
+
+        self.parameter_changed.emit()
+        self.action_committed.emit()
+
     def reset_all(self) -> None:
         self.reset_wb()
         self.reset_saturation()
+        self.reset_dualband()
 
     def get_state(self) -> dict:
         return {
@@ -254,6 +407,12 @@ class ColorWbPanel(QWidget):
             "sat_sky_val": self.slider_sat_sky.value(),
             "sat_gnd_val": self.slider_sat_gnd.value(),
             "vibrance_val": self.slider_vibrance.value(),
+            "dualband_mode": self.dualband_mode,
+            "dualband_oiii_boost": self.slider_oiii_boost.value(),
+            "unclip_stars_val": self.slider_unclip.value(),
+            "unpurple_val": self.slider_unpurple.value(),
+            "pcc_kr": self.pcc_kr,
+            "pcc_kb": self.pcc_kb,
         }
 
     def set_state(self, state: dict) -> None:
@@ -284,6 +443,31 @@ class ColorWbPanel(QWidget):
                 self.slider_vibrance.setValue(val)
                 self.vibrance_val = val / 100.0
                 self.lbl_vibrance.setText(f"{self.vibrance_val:+.2f}")
+            if "dualband_mode" in state:
+                mode_str = str(state["dualband_mode"]).lower()
+                modes = ["none", "hoo", "sho", "foraxx", "cannistra"]
+                idx = modes.index(mode_str) if mode_str in modes else 0
+                self.combo_dualband.setCurrentIndex(idx)
+                self.dualband_mode = modes[idx]
+            if "dualband_oiii_boost" in state:
+                val = state["dualband_oiii_boost"]
+                self.slider_oiii_boost.setValue(val)
+                self.dualband_oiii_boost = val
+                self.lbl_oiii_boost.setText(f"{val / 100.0:.2f}x")
+            if "unclip_stars_val" in state:
+                val = state["unclip_stars_val"]
+                self.slider_unclip.setValue(val)
+                self.unclip_stars_val = val
+                self.lbl_unclip.setText(f"{val}%")
+            if "unpurple_val" in state:
+                val = state["unpurple_val"]
+                self.slider_unpurple.setValue(val)
+                self.unpurple_val = val
+                self.lbl_unpurple.setText(f"{val}%")
+            if "pcc_kr" in state or "pcc_kb" in state:
+                kr = float(state.get("pcc_kr", 1.0))
+                kb = float(state.get("pcc_kb", 1.0))
+                self.set_pcc_gains(kr, kb)
         finally:
             self.block_signals(False)
 
@@ -293,5 +477,7 @@ class ColorWbPanel(QWidget):
             self.slider_tint, self.spin_tint,
             self.slider_sat_sky, self.slider_sat_gnd,
             self.slider_vibrance,
+            self.combo_dualband, self.slider_oiii_boost,
+            self.slider_unclip, self.slider_unpurple
         ):
             w.blockSignals(blocked)

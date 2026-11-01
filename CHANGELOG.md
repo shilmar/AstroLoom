@@ -5,6 +5,50 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-01
+
+### Añadido
+* **Calibración Fotométrica del Color (PCC Real contra Catálogo Gaia DR3 / Locus Estelar G2V):**
+  - Implementación en `core/pcc.py` de fotometría de apertura circular con sustracción de anillo de fondo sobre estrellas no saturadas (`detect_stars_photometry`).
+  - Ajuste de regresión robusta Theil-Sen (`fit_theil_sen_pcc`) sobre las razones $\log(R/G)$ y $\log(B/G)$ referenciadas a los índices de color del catálogo Gaia $(BP - RP)$.
+  - Anclaje fotométrico riguroso al estándar solar espectral G2V ($(BP - RP) = 0.82$) con estimación robusta de locus estelar en modo offline cuando no hay metadatos astrométricos de campo.
+  - Aplicación no destructiva de ganancias fotométricas (`apply_pcc_gains`) que calibra el color físico exacto de las estrellas preservando la neutralidad del fondo cósmico.
+  - Integración en el panel de balance de blancos (`gui/developer/panels/panel_color_wb.py`) con botón de acción `Calibración PCC (Gaia)`, estado dinámico en vivo y botón de restablecimiento.
+* **Procesado Especializado de Filtros Dual-Band OSC y Paletas de Banda Estrecha:**
+  - Implementación en `core/dualband.py:extract_ha_oiii` y `apply_dualband_palette` de extracción matemática de $H\alpha$ y $[OIII]$ desde sensores de color OSC con compensación de diafonía cromática (*crosstalk*).
+  - Incorporación de 4 paletas astronómicas clásicas y modernas para astrofotografía de emisión:
+    - **HOO Bicolor:** Mapeo natural ($R = H\alpha$, $G/B = [OIII]$).
+    - **SHO Hubble Sintético:** Generación de canal $SII$ sintético ponderado desde $H\alpha$ y composición tricromática con gradiente de contraste.
+    - **Foraxx Dinámico:** Modulación no lineal del canal verde basada en solapamiento de intensidades relativas de $H\alpha$ y $[OIII]$.
+    - **Cannistra Bicolor:** Fusión adaptativa en el canal verde preservando la visibilidad de filamentos débiles de $[OIII]$.
+  - Control de ganancia `Boost [OIII]` paramétrico (0.10x a 3.00x) y sección colapsable dedicada en el Revelador (`Paletas Dual-Band y Corrección Estelar`).
+* **Herramientas de Corrección y Reparación Estelar Avanzada:**
+  - **Recuperación de Núcleos Saturados (Unclip Stars):** Función `unclip_stars` en `core/dualband.py` que calcula las proporciones cromáticas reales en la periferia no saturada del disco estelar y las proyecta hacia el centro sobreexpuesto, erradicando núcleos estelares lavados o quemados a blanco plano.
+  - **Supresión de Aberración Cromática y Halos Magenta (Unpurple):** Algoritmo selectivo en `core/dualband.py:unpurple` que reduce halos púrpuras y violetas en bordes de estrellas brillantes sin comprometer la nebulosidad legítima de hidrógeno alfa ($H\alpha$).
+* **Supresión de Ruido Banding CMOS de Sensor (Banding Reduction):**
+  - Nuevo módulo algorítmico en `core/banding.py:suppress_cmos_banding` para erradicar patrones de líneas y bandas estructuradas originadas por conversores ADC y raíles de potencia en sensores CMOS a sensibilidades ISO elevadas.
+  - Protección de estrellas y nebulosas mediante máscara adaptativa basada en la mediana y desviación absoluta respecto a la mediana (MAD) del fondo.
+  - Separación de frecuencias por filtrado paso bajo 1D gaussiano para suprimir exclusivamente el banding de alta frecuencia sin alterar gradientes astronómicos suaves.
+  - Controles en el Revelador (`panel_starnet.py`): deslizador de intensidad (0% a 100%) y selector de orientación (Horizontal, Vertical o Ambos ejes).
+* **Alineación Elástica No Rígida por Thin Plate Splines (TPS con Remap Lanczos4):**
+  - Implementación en `core/stacking.py:compute_tps_remap_grid` de deformación elástica subpíxel por mallas *Thin Plate Splines* combinada con interpolación `cv2.INTER_LANCZOS4`.
+  - Resuelve la distorsión periférica diferencial en las esquinas generada por rotación de campo en objetivos gran angular y reflectores en modo seguimiento (*tracker* / cielo profundo).
+* **Diagnóstico Óptico 3x3 de Campo y Sesión (Curvatura vs Sensor Tilt):**
+  - Implementación en `core/frame_culling.py:compute_3x3_optical_diagnosis` de rejilla 3x3 para mapear FWHM y excentricidad en centro, laterales y esquinas del encuadre.
+  - Clasificación analítica de anomalías: Curvatura de campo simétrica vs Inclinación de sensor (*Sensor Tilt*) / flexión mecánica.
+  - Diagnóstico individual integrado en el tooltip del badge de calidad de la lista de tomas (`FileListRow`).
+  - Diagnóstico sintético global de sesión (`diagnose_session_optics`) emitido en el registro del Apilador con recomendaciones de ajuste de backfocus, colimación o espaciado del aplanador.
+* **Calibración Matemática en Espacio Puro CFA (Pre-Debayer):**
+  - Soporte en `core/stacking.py:load_image_as_float32` para restar el exceso térmico del Master Dark y normalizar por Master Flat directamente sobre los fotositos de la matriz Bayer (CFA) antes de la interpolación de color.
+
+### Mejorado
+* **Ergonomía de Ingesta en el Apilador (Sección 2: Calibración y Tomas):**
+  - Reubicación de los botones «Añadir Tomas...» y «Limpiar Pestaña» al inicio de la Sección 2 en `gui/tab_stacker.py`, situándolos en la cabecera directamente encima de las pestañas (`Lights`, `Darks`, `Flats`, `Bias`, `Suelo`).
+  - Evita que los botones de carga queden desplazados hacia abajo o por debajo de la barra de control de calidad y cribado estelar (`culling_bar`).
+* **Robustez de Integración Kappa-Sigma:**
+  - Ajuste de umbral de máscara a `channel_data > -0.5` en los bucles de acumulación en `core/stacking.py` para prevenir exclusiones indebidas de valores oscuros válidos.
+  - Aseguramiento de rango físico `[0.0, 1.0]` mediante recorte in-place en la salida final apilada (`stream_stack_auto`).
+
 ## [0.12.0] - 2026-10-31
 
 ### Añadido

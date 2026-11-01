@@ -17,9 +17,9 @@ Este manual ha sido redactado pensando en fotógrafos y aficionados: **sin fórm
    - [Sección 2: Contaminación Lumínica y Gradientes](#sección-2-contaminación-lumínica-y-gradientes)
    - [Sección 3: Estirado No Lineal (MTF vs GHS)](#sección-3-estirado-no-lineal-mtf-vs-ghs)
    - [Sección 4: Curvas Tonales (Contraste S-Curve)](#sección-4-curvas-tonales)
-   - [Sección 5: StarNet++ y Fondo Nebular (Claridad, Ondículas y Glow Orton)](#sección-5-starnet-y-fondo-nebular)
+   - [Sección 5: StarNet++ y Fondo Nebular (Claridad, Ondículas, Denoise y Banding CMOS)](#sección-5-starnet-y-fondo-nebular)
    - [Sección 5b: Deconvolución Óptica y Enfoque (Richardson-Lucy)](#sección-5b-deconvolución-óptica-y-enfoque-richardson-lucy)
-   - [Sección 6: Balance de Blancos y Calibración](#sección-6-balance-de-blancos-y-calibración)
+   - [Sección 6: Balance de Blancos, Calibración Fotométrica (PCC) y Filtros Dual-Band](#sección-6-balance-de-blancos-y-calibración)
    - [Sección 7: Color, Saturación e Intensidad de Nebulosa](#sección-7-color-saturación-e-intensidad-de-nebulosa)
    - [Sección 8: Tono y Exposición del Suelo](#sección-8-tono-y-exposición-del-suelo)
    - [Sección 9: Gestor de Capas, Máscaras IA y Exportación PSD](#sección-9-gestor-de-capas-máscaras-ia-y-exportación-psd)
@@ -85,11 +85,13 @@ flowchart TD
 El apilador combina múltiples tomas cortas para emular una única exposición ultra-limpia sin ruido y sin que las estrellas salgan movidas por la rotación de la Tierra.
 
 ### Pestañas de Archivos
+* **Botones Superiores de Ingesta:** En la cabecera superior, justo encima del selector de pestañas, los botones **«Añadir Tomas...»** y **«Limpiar Pestaña»** permanecen siempre visibles y a mano sin importar la longitud de tu lista de archivos.
 * **⭐ Lights (Tomas de luz):** Las fotos principales de tu cielo nocturno.
 * **🌑 Darks (Tomas oscuras):** Fotos tomadas con la tapa del objetivo puesta a la misma temperatura e ISO. Sirven para eliminar píxeles calientes (*hot pixels*) y ruido térmico.
 * **💡 Flats (Tomas planas):** Fotos a una superficie blanca uniforme con el mismo enfoque y apertura. Eliminan el viñeteo de las esquinas y las manchas de polvo del sensor.
 * **⚡ Bias (Tomas de lectura):** Fotos ultrarrápidas con tapa puesta (mínima velocidad de obturación). Eliminan el ruido de lectura electrónico del sensor.
 * **🏞️ Suelo (Foreground):** Una o varias tomas fijas enfocadas y expuestas especialmente para el paisaje terrestre.
+* **Calibración Matemática en Espacio Puro CFA (Pre-Debayer):** Al cargar tomas maestras de calibración (Darks, Flats, Bias), AstroLoom sustrae el exceso térmico y corrige el viñeteo directamente sobre los fotodiodos de la matriz Bayer antes de la interpolación de color, garantizando máxima fidelidad cromática y cero artefactos de esquina.
 
 ### Opciones Clave del Apilador
 * **Tipo de Salida:**
@@ -103,9 +105,14 @@ El apilador combina múltiples tomas cortas para emular una única exposición u
   * *Exportación:* Generación directa en contenedor MP4 y casilla para exportar la secuencia completa de imágenes individuales JPEG.
 * **Método de Alineación y Registro Estelar:**
   * Detección automática de patrones estelares (ORB/AKAZE) y refinamiento subpíxel por flujo óptico (*Lucas-Kanade*).
+  * **Alineación Elástica No Rígida por Thin Plate Splines (TPS):** En tomas de cielo profundo o con montura de seguimiento (*tracker*), genera una malla elástica de deformación subpíxel con interpolación `cv2.INTER_LANCZOS4`, erradicando la distorsión periférica diferencial en las esquinas por rotación de campo en objetivos gran angular.
   * En modo vídeo, precomputa la cadena de homografías adyacentes en tiempo lineal $O(N)$ con consumo acotado de memoria RAM $O(W)$.
 * **Auto-Selección Inteligente de Toma de Referencia:**
   * Al evaluar el cribado de tomas o iniciar el proceso, AstroLoom analiza las métricas de calidad óptica (menor FWHM, mayor censo estelar y contraste) y selecciona de forma automática la toma óptima como referencia maestra geométrica y fotométrica.
+* **Diagnóstico Óptico 3x3 y Detección de Curvatura de Campo / Sensor Tilt:**
+  * Al pulsar **«Analizar Calidad»**, la suite evalúa el FWHM y la excentricidad estelar en 9 zonas del sensor ($3\times 3$).
+  * En la lista de tomas, el tooltip de calidad desglosa las medidas y clasifica anomalías individuales.
+  * Además, al finalizar el análisis, el registro del sistema ofrece un informe global determinando si la sesión sufre de **Curvatura de Campo** (necesidad de corregir backfocus con el aplanador) o de **Inclinación de Sensor / Tilt Mecánico** (holguras en el enfocador o anillo adaptador).
 * **Normalización Fotométrica Previa (Linear Fit):**
   * Ajuste lineal por canal ($I'_k = a_k \cdot I_k + b_k$) antes del rechazo Kappa-Sigma. Iguala la dispersión y el pedestal del fondo de cada toma respecto a la referencia, neutralizando gradientes dinámicos, nubes tenues pasajeras o cambios en la transparencia atmosférica.
 * **Integración Kappa-Sigma Adaptativa Ponderada:**
@@ -239,6 +246,9 @@ Esta sección permite separar la fotografía en dos realidades independientes: e
 * **Reducción de Ruido (Astro Denoise Multietapa):** Limpia el ruido preservando el detalle mediante filtrado bilateral en luminancia y suavizado de crominancia en espacio YCrCb. Mediante el icono de engranaje (⚙️), permite acceder a:
   * **Ruido Color (Croma):** Filtra manchas térmicas y ruido de color del sensor sin lavar los colores estelares ni los filamentos tenues.
   * **Máscara Bordes/Sombras:** Pondera la doble máscara inteligente (luminancia invertida para actuar en fondos oscuros de bajo SNR y gradiente Sobel para blindar estrellas y filamentos de contraste).
+* **Supresión de Banding CMOS de Sensor (Banding Reduction):**
+  * Control deslizante de reducción (0% a 100%) y selector de orientación (**Horizontal**, **Vertical** o **Ambos**).
+  * Erradica las líneas y bandas fijas producidas por circuitos ADC y raíles de potencia en sensores CMOS a sensibilidades ISO elevadas, aislando el fondo y protegiendo el relieve nebular y estelar mediante separación de frecuencias 1D.
 * **Reducción de Ruido por IA (NAFNet / ONNX Runtime):**
   * Motor neuronal convolucional especializado (*Nonlinear Activation Free Network*) ejecutado localmente sin dependencias en la nube.
   * Diseñado para suprimir el grano profundo en fondos estelares y paisajes nocturnos de alta sensibilidad ISO, blindando el filo de las estrellas y el micro-contraste estructural de las nebulosas.
@@ -294,10 +304,25 @@ Restaura la resolución óptica y nitidez perdida debido a la difracción de la 
 
 ---
 
-### Sección 6: Balance de Blancos y Calibración
+### Sección 6: Balance de Blancos, Calibración Fotométrica (PCC) y Filtros Dual-Band
 * **Temperatura (Azul ↔ Ámbar):** Corrige si la noche se ve demasiado anaranjada o excesivamente gélida.
 * **Tinte (Verde ↔ Magenta):** Corrige dominantes verdosas del sensor o del *airglow* atmosférico.
 * **🎯 Cuentagotas Gris Neutro:** Haz clic en una zona del cielo donde no haya estrellas ni Vía Láctea (un parche de cielo oscuro libre de nebulosas) para neutralizar la dominante de color al instante.
+* **⭐ Calibración Fotométrica del Color (PCC Real contra Gaia DR3 / Locus Estelar G2V):**
+  * Pulsa **«Calibración PCC (Gaia)»** para calcular la fotometría de apertura circular sobre las estrellas y ajustar las pendientes de ganancia fotométrica ($k_r, k_b$) según el estándar solar G2V ($(BP - RP) = 0.82$), devolviendo el color físico astrofísico real de las estrellas sin alterar el fondo cósmico ni lavar nebulosas.
+  * Pulsa **«Restablecer»** para regresar a ganancias unitarias neutras.
+
+#### 🌌 Paletas Dual-Band OSC y Corrección Estelar
+Diseñado para fotógrafos que disparan con filtros de doble banda estrecha ($H\alpha + [OIII]$ tipo L-eNhance, L-eXtreme, Optolong L-QFilter, Antlia, Askar) en cámaras a color (OSC / DSLR / Mirrorless):
+* **Paleta OSC:**
+  * *Desactivado (RGB):* Imagen en color natural.
+  * *HOO Bicolor:* Mapea $H\alpha$ a rojo y $[OIII]$ a verde y azul.
+  * *SHO Hubble Sintético:* Sintetiza una banda de azufre ($SII$) a partir de $H\alpha$ y genera la clásica paleta dorada y azul del telescopio espacial Hubble.
+  * *Foraxx Dinámico:* Algoritmo moderno de modulación cromática no lineal entre $H\alpha$ y $[OIII]$ para contraste y dinamismo máximo.
+  * *Cannistra Bicolor:* Mezcla adaptativa que realza estructuras tenues de oxígeno ionizado.
+* **Boost [OIII] (0.10x - 3.00x):** Multiplica la presencia de las emisiones azul-verdosas de oxígeno $[OIII]$, habitualmente mucho más débiles que el hidrógeno $H\alpha$.
+* **Recuperar Núcleos Estelares (Unclip Stars):** Devuelve la saturación y relación cromática a estrellas cuyos centros se han quemado a blanco puro, usando la información espectral de su corona.
+* **Atenuar Halos Violetas (Unpurple):** Reduce la aberración cromática púrpura/magenta en torno a estrellas brillantes sin decolorar las nebulosas de emisión rojas.
 
 ---
 

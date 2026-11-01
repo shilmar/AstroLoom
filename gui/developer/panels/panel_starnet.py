@@ -354,6 +354,29 @@ class StarNetPanel(QWidget):
         self.slider_denoise_mask.valueChanged.connect(lambda v: self.lbl_denoise_mask.setText(f"{v}%"))
         layout_dn_adv.addWidget(self.slider_denoise_mask)
 
+        # Fila 3: Banding CMOS de Sensor
+        row_band = QHBoxLayout()
+        row_band_lbl = self._make_resettable_label(QLabel("Banding CMOS:"), lambda: self.slider_banding.setValue(0), "0%")
+        row_band_lbl.setStyleSheet("font-size: 11px; color: #cfd8dc;")
+        row_band.addWidget(row_band_lbl)
+
+        self.combo_banding_dir = QComboBox()
+        self.combo_banding_dir.addItems(["Horizontal", "Vertical", "Ambos"])
+        self.combo_banding_dir.setFixedSize(84, 20)
+        self.combo_banding_dir.setStyleSheet("font-size: 10px; background-color: #1e2230; color: #cfd8dc; border: 1px solid #33394d;")
+        row_band.addWidget(self.combo_banding_dir)
+
+        self.lbl_banding = QLabel("0%")
+        self.lbl_banding.setStyleSheet("font-size: 11px; color: #80cbc4; font-weight: bold;")
+        row_band.addWidget(self.lbl_banding)
+        layout_dn_adv.addLayout(row_band)
+
+        self.slider_banding = QSlider(Qt.Horizontal)
+        self.slider_banding.setRange(0, 100)
+        self.slider_banding.setValue(0)
+        self.slider_banding.valueChanged.connect(lambda v: self.lbl_banding.setText(f"{v}%"))
+        layout_dn_adv.addWidget(self.slider_banding)
+
         self.btn_denoise_expand.toggled.connect(self.w_denoise_advanced.setVisible)
         tools_layout.addWidget(self.w_denoise_advanced)
 
@@ -474,6 +497,8 @@ class StarNetPanel(QWidget):
             "denoise_val": self.slider_denoise.value(),
             "denoise_color_val": self.slider_denoise_color.value(),
             "denoise_mask_val": self.slider_denoise_mask.value(),
+            "banding_val": self.slider_banding.value(),
+            "banding_dir_idx": self.combo_banding_dir.currentIndex(),
         }
         if hasattr(self, 'panel_effects'):
             state.update(self.panel_effects.get_state())
@@ -521,6 +546,12 @@ class StarNetPanel(QWidget):
                 val = state["denoise_mask_val"]
                 self.slider_denoise_mask.setValue(val)
                 self.lbl_denoise_mask.setText(f"{val}%")
+            if "banding_val" in state:
+                val = state["banding_val"]
+                self.slider_banding.setValue(val)
+                self.lbl_banding.setText(f"{val}%")
+            if "banding_dir_idx" in state:
+                self.combo_banding_dir.setCurrentIndex(state["banding_dir_idx"])
             if hasattr(self, 'panel_effects'):
                 self.panel_effects.set_state(state)
         finally:
@@ -533,7 +564,8 @@ class StarNetPanel(QWidget):
             self.slider_contrast_starless, self.slider_clarity,
             self.slider_dehaze, self.slider_ond_est,
             self.slider_ond_bg, self.slider_denoise,
-            self.slider_denoise_color, self.slider_denoise_mask
+            self.slider_denoise_color, self.slider_denoise_mask,
+            self.slider_banding, self.combo_banding_dir
         ):
             if w is not None:
                 w.blockSignals(blocked)

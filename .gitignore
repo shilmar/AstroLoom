@@ -57,3 +57,5 @@ dist/
 *.spec
 *-crash-report.xml
 
+tests/*
+

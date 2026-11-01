@@ -240,7 +240,14 @@ class StackingWorker(QThread):
             ref_path = lights[0]
             self.status_changed.emit(f"[Fase 2/4] Preparando toma de referencia: {os.path.basename(ref_path)}")
             
-            ref_raw = load_image_as_float32(ref_path)
+            icc_profile = self.config.get("icc_profile", "srgb")
+            ref_raw = load_image_as_float32(
+                ref_path,
+                color_space=icc_profile,
+                master_dark=master_dark,
+                master_flat=master_flat,
+                master_bias=master_bias
+            )
             h, w, c = ref_raw.shape
 
             use_ram_buffer, storage_msg = evaluate_storage_mode(

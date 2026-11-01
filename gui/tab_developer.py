@@ -666,6 +666,9 @@ class DeveloperTab(QWidget):
         self.lbl_denoise_color = self.panel_starnet.lbl_denoise_color
         self.slider_denoise_mask = self.panel_starnet.slider_denoise_mask
         self.lbl_denoise_mask = self.panel_starnet.lbl_denoise_mask
+        self.slider_banding = self.panel_starnet.slider_banding
+        self.lbl_banding = self.panel_starnet.lbl_banding
+        self.combo_banding_dir = self.panel_starnet.combo_banding_dir
         self.btn_denoise_expand = self.panel_starnet.btn_denoise_expand
         self.w_denoise_advanced = self.panel_starnet.w_denoise_advanced
 
@@ -710,6 +713,8 @@ class DeveloperTab(QWidget):
         self.slider_denoise.valueChanged.connect(self.on_denoise_changed)
         self.slider_denoise_color.valueChanged.connect(self.on_denoise_color_changed)
         self.slider_denoise_mask.valueChanged.connect(self.on_denoise_mask_changed)
+        self.slider_banding.valueChanged.connect(self.on_banding_changed)
+        self.combo_banding_dir.currentIndexChanged.connect(lambda _: self.update_stretch_preview())
 
         # Los controles de Orton y Difusión ya se gestionan dentro de panel_effects
         self.panel_effects.parameter_changed.connect(self._on_effects_parameter_changed)
@@ -782,6 +787,7 @@ class DeveloperTab(QWidget):
         # Conexiones reactivas del panel
         self.panel_color_wb.parameter_changed.connect(self._on_color_wb_parameter_changed)
         self.panel_color_wb.pipette_toggled.connect(self._on_toggle_wb_pipette)
+        self.panel_color_wb.pcc_requested.connect(self.apply_pcc_calibration)
         self.panel_color_wb.action_committed.connect(self._commit_action)
 
         left_layout.addWidget(self.panel_color_wb)
@@ -4093,13 +4099,20 @@ class DeveloperTab(QWidget):
 
         curve_state = tuple((m, tuple(pts)) for m, pts in sorted(self.curve_widget.get_state().items())) if hasattr(self, 'curve_widget') else ()
 
-        # Hito 0a: Parámetros Pre-Polución (Balance de blancos, Saturación, Vibrance)
+        # Hito 0a: Parámetros Pre-Polución (Dual-Band, Corrección Estelar, PCC, Balance de blancos, Saturación, Vibrance)
+        col_st = self.panel_color_wb.get_state() if hasattr(self, 'panel_color_wb') else {}
         key_pre_lp = (
             id(target_img),
             id(precomputed_mask),
             is_full_res,
             is_zoomed,
             crop_rect,
+            col_st.get("dualband_mode", "none"),
+            int(col_st.get("dualband_oiii_boost", 100)),
+            int(col_st.get("unclip_stars_val", 0)),
+            int(col_st.get("unpurple_val", 0)),
+            round(float(col_st.get("pcc_kr", 1.0)), 4),
+            round(float(col_st.get("pcc_kb", 1.0)), 4),
             round(float(self.temp_val), 4),
             round(float(self.tint_val), 4),
             round(float(self.sat_sky_val), 4),
@@ -5415,7 +5428,33 @@ class DeveloperTab(QWidget):
             self.sat_sky_val = self.panel_color_wb.sat_sky_val
             self.sat_gnd_val = self.panel_color_wb.sat_gnd_val
             self.vibrance_val = self.panel_color_wb.vibrance_val
+            self.pcc_kr = getattr(self.panel_color_wb, 'pcc_kr', 1.0)
+            self.pcc_kb = getattr(self.panel_color_wb, 'pcc_kb', 1.0)
+            self.dualband_mode = getattr(self.panel_color_wb, 'dualband_mode', 'none')
+            self.dualband_oiii_boost = getattr(self.panel_color_wb, 'dualband_oiii_boost', 100)
+            self.unclip_stars_val = getattr(self.panel_color_wb, 'unclip_stars_val', 0)
+            self.unpurple_val = getattr(self.panel_color_wb, 'unpurple_val', 0)
         self.update_stretch_preview()
+
+    def apply_pcc_calibration(self):
+        """Calcula y aplica la Calibración Fotométrica del Color (PCC) contra Gaia/Locus estelar."""
+        target = self.preview_proxy if self.preview_proxy is not None else self.image_32bit
+        if target is None:
+            return
+
+        from core.pcc import detect_stars_photometry, fit_theil_sen_pcc
+        stars = detect_stars_photometry(target)
+        if len(stars) < 10:
+            self.log_message("PCC: Estrellas insuficientes no saturadas para calibración fotométrica (< 10).")
+            return
+
+        kr, kg, kb = fit_theil_sen_pcc(stars)
+        if hasattr(self, 'panel_color_wb'):
+            self.panel_color_wb.set_pcc_gains(kr, kb)
+            self.panel_color_wb.action_committed.emit()
+        self._on_color_wb_parameter_changed()
+        self.update_stretch_preview(immediate=True)
+        self.log_message(f"PCC completado con {len(stars)} estrellas. Ganancias: R={kr:.3f}, G=1.000, B={kb:.3f}")
 
     def _set_curve_mode(self, mode: str) -> None:
         """Cambia el modo activo de la curva y sincroniza los botones de selección."""
@@ -5869,7 +5908,12 @@ class DeveloperTab(QWidget):
                 denoise_mask=val
             )
         self.update_stretch_preview()
-        
+
+    def on_banding_changed(self, val: int):
+        if hasattr(self, 'lbl_banding'):
+            self.lbl_banding.setText(f"{val}%")
+        self.update_stretch_preview()
+
     def on_ond_estructura_changed(self, val: int):
         self.multiescala_estructura = val / 100.0
         self.lbl_ond_est.setText(f"{self.multiescala_estructura:+.2f}")
