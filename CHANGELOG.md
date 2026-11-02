@@ -5,6 +5,55 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-02
+
+### Añadido
+* **Extracción y Neutralización de Gradientes de Fondo por Muestreo Interactivo (RBF 2D / DBE / GraXpert):**
+  - Implementación en `core/background_extraction.py` del motor de interpolación multiescala 2D con `scipy.interpolate.RBFInterpolator` (base multicuádrica inversa `inverse_multiquadric` con regularización de curvatura `epsilon=1.0`).
+  - Detección y generación automática de malla de puntos de ancla en el cielo (`generate_sky_sample_points`) con exclusión morfológica estricta del terreno terrestre (`sky_mask` con erosión perimétrica de seguridad de 5 px).
+  - Inmunidad estelar completa en el muestreo de fondo mediante estimación de baja intensidad por percentil 15 (`np.percentile(patch, 15)`) dentro de cada ventana local (`box_size`).
+  - Modelado analítico de superficies polinómicas bidimensionales de Grado 1 (lineal / plano inclinado) y Grado 2 (cuadrático / viñeteo parabólico suave) en `extract_background_polynomial`.
+  - Soporte de dos modos matemáticos de corrección:
+    - **Sustracción:** Para resplandores aditivos de luz (contaminación lumínica dispersa, lunas o crepúsculo).
+    - **División:** Para gradientes ópticos multiplicativos (viñeteo o sombras de sensor).
+  - Inmunidad absoluta de la silueta terrestre: preservación al 100% de los píxeles de suelo sin alteraciones, saltos tonales ni halos perimétricos en el horizonte.
+  - Integración nativa profunda en el historial de **Deshacer (`Ctrl+Z`) y Rehacer (`Ctrl+Y`)** en `gui/tab_developer.py` (`type: "bg_extract"`).
+* **Herramientas de Muestreo de Fondo en el Lienzo (`MaskCanvas` en `gui/canvas.py`):**
+  - Modo interactivo de edición de puntos (`bg_sample_mode`):
+    - *Clic izquierdo:* Añadir un nuevo punto o hacer clic y arrastrar para reposicionar un punto existente.
+    - *Clic derecho:* Eliminar el punto seleccionado bajo el cursor.
+  - Representación visual intuitiva de las cajas de muestra con bordes luminosos y centro con retícula, adaptándose al nivel de zoom (coordenadas normalizadas [0.0, 1.0] inmunes al encuadre o zoom 1:1).
+  - Indicador dinámico en tiempo real del recuento de puntos de muestreo en el panel del revelador.
+* **Recuadro de Color Interactivo (Swatch) y Pipeta de Tinte para Contaminación Lumínica:**
+  - Incorporación en `gui/developer/panels/panel_light_pollution.py` de un recuadro visual de color (`btn_lp_swatch` / `lbl_tint_swatch`) de 22×22 px junto al selector de tinte, reflejando en tiempo real el color espectral activo (ámbar de sodio, LED cálido, LED frío, blanco neutro o personalizado).
+  - Interacción directa con el selector de color del sistema: un clic sobre el recuadro abre `QColorDialog` para seleccionar o ajustar cualquier color RGB manualmente.
+  - Insignia y cursor contextualizados en el lienzo (`_draw_eyedropper_badge` en `gui/canvas.py`): la pipeta muestra mensajes dinámicos según el objetivo de la muestra (*"Clic: balancear WB"*, *"Clic: punto simetría SP"*, *"Clic: centro cúpula LP"*, *"Clic: muestrear tinte LP"*, *"Clic: seleccionar color"*).
+* **Modernización del Sistema de Temas y Chevrons Vectoriales SVG:**
+  - Creación de iconos vectoriales SVG para flechas de colapso y despliegue (`chevron_up.svg`, `chevron_down.svg`, `chevron_up_hover.svg`, `chevron_down_hover.svg`, `chevron_up_disabled.svg`, `chevron_down_disabled.svg`) en `gui/assets/`.
+  - Integración en `gui/theme.py` y `gui/main_window.py` para erradicar el renderizado inconsistente de caracteres Unicode en diferentes versiones de Windows.
+  - Refinamiento de estilos de barras de desplazamiento (scrollbars), bordes sutiles y ergonomía de paneles laterales.
+
+### Corregido
+* **Mapeo de Presets Cromáticos de Contaminación Lumínica en el Pipeline:**
+  - Corrección en `gui/developer/pipeline.py` de la lista de identificadores de presets (`["sodium", "warm_led", "cold_led", "neutral", "custom"]`), resolviendo un desajuste crítico que provocaba que todos los presets excepto sodio cayeran al fallback predeterminado de vapor de sodio.
+* **Sincronización Bidireccional de la Pipeta de Tinte con el Panel Modular:**
+  - Corrección en `gui/tab_developer.py:_on_eyedropper_color_sampled`: la captura de tinte ahora invoca `self.panel_lp.set_custom_tint()`, actualizando correctamente el estado paramétrico, el combo selector y el recuadro de color visual.
+  - Muestreo espectral directo desde el búfer lineal previo a la cúpula (`_cache_ms_pre_lp_img`), asegurando que la muestra capture el balance de blancos real de la toma sin verse falseada por el estirado no lineal posterior.
+  - Erradicación del efecto en el que la reducción de contaminación lumínica viraba permanentemente hacia el azul al muestrear colores no amarillos.
+
+### Mejorado
+* **Reorganización Estructural del Flujo de Trabajo en el Revelador:**
+  - Reordenación pedagógica de las secciones del acordeón en `gui/tab_developer.py` y paneles modulares:
+    1. *Paisaje y Máscara de Suelo (Horizonte IA)*
+    2. *Balance de Blancos y Calibración*
+    3. *Gradientes y Contaminación Lumínica*
+    4. *Estirado Tonal y Contraste*
+    5. *Desacoplo Estelar y Fondo*
+    [Avanzado] *Deconvolución Óptica y Enfoque (R-L)*
+    *Máscaras y Capas de Ajuste Local*
+* **Localización Completa (ES / EN):**
+  - Incorporación de todas las cadenas de interfaz y mensajes de registro para el nuevo motor RBF, cajas de muestreo, modelos polinómicos y herramientas interactivas de gradientes.
+
 ## [0.12.2] - 2026-11-01
 
 ### Corregido

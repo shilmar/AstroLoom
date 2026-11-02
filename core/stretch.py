@@ -14,6 +14,7 @@ from core.orton import (
     ORTON_PRESET_TINTS
 )
 from core.star_diffusion import apply_star_diffusion
+from core.background_extraction import extract_background_rbf, generate_sky_sample_points
 
 def adjust_saturation_dual(
     img_rgb: np.ndarray, 

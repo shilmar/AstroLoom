@@ -45,7 +45,7 @@ class DeconvolutionPanel(QWidget):
 
         # --- SECCIÓN: Deconvolución Óptica y Enfoque (R-L) ---
         self.sec_deconv = CollapsibleSection(
-            "Deconvolución Óptica y Enfoque (R-L)",
+            "[Avanzado] Deconvolución Óptica y Enfoque (R-L)",
             is_expanded=False,
             on_reset=self.reset_deconv,
             icon_name="microscope"

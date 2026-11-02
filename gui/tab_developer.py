@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QCoreApplication, QTimer, QEvent, QPoint
 from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap, QColor, QFont, QCursor
 from core.stacking import load_image_as_float32
+from core.background_extraction import generate_sky_sample_points, extract_background_rbf
 from core.stretch import (
     calculate_mtf_params, 
     manual_stretch, 
@@ -449,6 +450,67 @@ class DeveloperTab(QWidget):
 
         left_layout.addWidget(self.panel_presets)
 
+        # --- PASO 1: Paisaje y Máscara de Suelo (Módulo gui.developer.panels.GroundSkyPanel) ---
+        self.panel_ground_sky = GroundSkyPanel()
+        self.sec_gnd_tone = self.panel_ground_sky.sec_gnd_tone
+        self.lbl_gnd_mask_status = self.panel_ground_sky.lbl_gnd_mask_status
+        self.btn_edit_ground_mask = self.panel_ground_sky.btn_edit_ground_mask
+        self.card_gnd_info = self.panel_ground_sky.card_gnd_info
+        self.lbl_gnd_info = self.panel_ground_sky.lbl_gnd_info
+        self.btn_go_to_ground_layer = self.panel_ground_sky.btn_go_to_ground_layer
+        self._hidden_gnd_container = self.panel_ground_sky._hidden_gnd_container
+        self.lbl_gnd_ev = self.panel_ground_sky.lbl_gnd_ev
+        self.slider_gnd_ev = self.panel_ground_sky.slider_gnd_ev
+        self.lbl_gnd_sh = self.panel_ground_sky.lbl_gnd_sh
+        self.slider_gnd_sh = self.panel_ground_sky.slider_gnd_sh
+        self.lbl_gnd_bp = self.panel_ground_sky.lbl_gnd_bp
+        self.slider_gnd_bp = self.panel_ground_sky.slider_gnd_bp
+
+        self.panel_ground_sky.edit_mask_requested.connect(self._open_mask_tool_from_section)
+        self.panel_ground_sky.ai_mask_requested.connect(self._detect_mask_ai_from_toolbar)
+        self.panel_ground_sky.overlay_toggled.connect(self._on_top_mask_overlay_toggled)
+        self.panel_ground_sky.delete_mask_requested.connect(self._delete_mask)
+        self.panel_ground_sky.go_to_layer_requested.connect(lambda: self._jump_to_mask_layers(MASK_TYPE_IMAGE_GROUND))
+        self.panel_ground_sky.reset_requested.connect(self.reset_gnd_tone)
+        self.slider_gnd_ev.valueChanged.connect(self.on_gnd_ev_changed)
+        self.slider_gnd_sh.valueChanged.connect(self.on_gnd_shadows_changed)
+        self.slider_gnd_bp.valueChanged.connect(self.on_gnd_bp_changed)
+
+        left_layout.addWidget(self.panel_ground_sky)
+
+        # --- PASO 2: Balance de Blancos y Calibración (Módulo gui.developer.panels.ColorWbPanel) ---
+        self.panel_color_wb = ColorWbPanel()
+        self.sec_wb = self.panel_color_wb.sec_wb
+        self.row_temp = self.panel_color_wb.row_temp
+        self.slider_temp = self.panel_color_wb.slider_temp
+        self.spin_temp = self.panel_color_wb.spin_temp
+        self.lbl_temp = self.panel_color_wb.lbl_temp
+        self.row_tint = self.panel_color_wb.row_tint
+        self.slider_tint = self.panel_color_wb.slider_tint
+        self.spin_tint = self.panel_color_wb.spin_tint
+        self.lbl_tint = self.panel_color_wb.lbl_tint
+        self.btn_panel_pipette = self.panel_color_wb.btn_panel_pipette
+        self.btn_pipette = self.panel_color_wb.btn_pipette
+
+        self.sec_color = self.panel_color_wb.sec_color
+        self.row_sat_sky = self.panel_color_wb.row_sat_sky
+        self.slider_sat_sky = self.panel_color_wb.slider_sat_sky
+        self.lbl_sat_sky = self.panel_color_wb.lbl_sat_sky
+        self.row_sat_gnd = self.panel_color_wb.row_sat_gnd
+        self.slider_sat_gnd = self.panel_color_wb.slider_sat_gnd
+        self.lbl_sat_gnd = self.panel_color_wb.lbl_sat_gnd
+        self.row_vibrance = self.panel_color_wb.row_vibrance
+        self.slider_vibrance = self.panel_color_wb.slider_vibrance
+        self.lbl_vibrance = self.panel_color_wb.lbl_vibrance
+
+        # Conexiones reactivas del panel
+        self.panel_color_wb.parameter_changed.connect(self._on_color_wb_parameter_changed)
+        self.panel_color_wb.pipette_toggled.connect(self._on_toggle_wb_pipette)
+        self.panel_color_wb.pcc_requested.connect(self.apply_pcc_calibration)
+        self.panel_color_wb.action_committed.connect(self._commit_action)
+
+        left_layout.addWidget(self.panel_color_wb)
+
         # --- SECCIÓN 2: Extracción de Fondo y Polución Lumínica (Módulo gui.developer.panels.LightPollutionPanel) ---
         self.panel_lp = LightPollutionPanel()
         self.sec_gradients = self.panel_lp.sec_bg
@@ -493,6 +555,10 @@ class DeveloperTab(QWidget):
         self.panel_lp.auto_detect_lp_requested.connect(self.auto_detect_lp_center)
         self.panel_lp.center_pipette_toggled.connect(self._on_toggle_lp_center_pipette)
         self.panel_lp.color_pipette_toggled.connect(self._on_toggle_lp_color_pipette)
+        self.panel_lp.sample_tool_toggled.connect(self._on_toggle_bg_sample_tool)
+        self.panel_lp.auto_grid_requested.connect(self.auto_generate_bg_samples)
+        self.panel_lp.clear_points_requested.connect(self.clear_bg_samples)
+        self.panel_lp.sample_box_size_changed.connect(self.canvas.set_bg_sample_box_size)
         self.panel_lp.action_committed.connect(self._commit_action)
 
         left_layout.addWidget(self.panel_lp)
@@ -759,66 +825,6 @@ class DeveloperTab(QWidget):
 
         left_layout.addWidget(self.panel_deconv)
 
-        # --- SECCIONES 6 Y 7: Balance de Blancos y Color/Saturación (Módulo gui.developer.panels.ColorWbPanel) ---
-        self.panel_color_wb = ColorWbPanel()
-        self.sec_wb = self.panel_color_wb.sec_wb
-        self.row_temp = self.panel_color_wb.row_temp
-        self.slider_temp = self.panel_color_wb.slider_temp
-        self.spin_temp = self.panel_color_wb.spin_temp
-        self.lbl_temp = self.panel_color_wb.lbl_temp
-        self.row_tint = self.panel_color_wb.row_tint
-        self.slider_tint = self.panel_color_wb.slider_tint
-        self.spin_tint = self.panel_color_wb.spin_tint
-        self.lbl_tint = self.panel_color_wb.lbl_tint
-        self.btn_panel_pipette = self.panel_color_wb.btn_panel_pipette
-        self.btn_pipette = self.panel_color_wb.btn_pipette
-
-        self.sec_color = self.panel_color_wb.sec_color
-        self.row_sat_sky = self.panel_color_wb.row_sat_sky
-        self.slider_sat_sky = self.panel_color_wb.slider_sat_sky
-        self.lbl_sat_sky = self.panel_color_wb.lbl_sat_sky
-        self.row_sat_gnd = self.panel_color_wb.row_sat_gnd
-        self.slider_sat_gnd = self.panel_color_wb.slider_sat_gnd
-        self.lbl_sat_gnd = self.panel_color_wb.lbl_sat_gnd
-        self.row_vibrance = self.panel_color_wb.row_vibrance
-        self.slider_vibrance = self.panel_color_wb.slider_vibrance
-        self.lbl_vibrance = self.panel_color_wb.lbl_vibrance
-
-        # Conexiones reactivas del panel
-        self.panel_color_wb.parameter_changed.connect(self._on_color_wb_parameter_changed)
-        self.panel_color_wb.pipette_toggled.connect(self._on_toggle_wb_pipette)
-        self.panel_color_wb.pcc_requested.connect(self.apply_pcc_calibration)
-        self.panel_color_wb.action_committed.connect(self._commit_action)
-
-        left_layout.addWidget(self.panel_color_wb)
-
-        # --- SECCIÓN 8: Ajuste Tonal Suelo (Paisaje) (Módulo gui.developer.panels.GroundSkyPanel) ---
-        self.panel_ground_sky = GroundSkyPanel()
-        self.sec_gnd_tone = self.panel_ground_sky.sec_gnd_tone
-        self.lbl_gnd_mask_status = self.panel_ground_sky.lbl_gnd_mask_status
-        self.btn_edit_ground_mask = self.panel_ground_sky.btn_edit_ground_mask
-        self.card_gnd_info = self.panel_ground_sky.card_gnd_info
-        self.lbl_gnd_info = self.panel_ground_sky.lbl_gnd_info
-        self.btn_go_to_ground_layer = self.panel_ground_sky.btn_go_to_ground_layer
-        self._hidden_gnd_container = self.panel_ground_sky._hidden_gnd_container
-        self.lbl_gnd_ev = self.panel_ground_sky.lbl_gnd_ev
-        self.slider_gnd_ev = self.panel_ground_sky.slider_gnd_ev
-        self.lbl_gnd_sh = self.panel_ground_sky.lbl_gnd_sh
-        self.slider_gnd_sh = self.panel_ground_sky.slider_gnd_sh
-        self.lbl_gnd_bp = self.panel_ground_sky.lbl_gnd_bp
-        self.slider_gnd_bp = self.panel_ground_sky.slider_gnd_bp
-
-        self.panel_ground_sky.edit_mask_requested.connect(self._open_mask_tool_from_section)
-        self.panel_ground_sky.go_to_layer_requested.connect(lambda: self._jump_to_mask_layers(MASK_TYPE_IMAGE_GROUND))
-        self.panel_ground_sky.reset_requested.connect(self.reset_gnd_tone)
-        self.slider_gnd_ev.valueChanged.connect(self.on_gnd_ev_changed)
-        self.slider_gnd_sh.valueChanged.connect(self.on_gnd_shadows_changed)
-        self.slider_gnd_bp.valueChanged.connect(self.on_gnd_bp_changed)
-
-        # Ocultar sección de suelo del panel izquierdo (gestionada en la Capa de Suelo de capas)
-        self.sec_gnd_tone.setVisible(False)
-        left_layout.addWidget(self.panel_ground_sky)
-
         # --- SECCIÓN 9: Máscaras y Capas de Ajuste Local ---
         self.sec_masks = CollapsibleSection("Máscaras y Capas de Ajuste Local", is_expanded=False, icon_name="layers")
         self.mask_layers_widget = MaskLayersWidget()
@@ -1012,6 +1018,8 @@ class DeveloperTab(QWidget):
         self.canvas.brush_size_changed.connect(self._on_brush_size_changed)
         self.canvas.layer_brush_stroke_finished.connect(self._on_layer_brush_stroke_finished)
         self.canvas.layer_brush_radius_changed.connect(self.mask_layers_widget.set_brush_radius_from_canvas)
+        self.canvas.bg_samples_changed.connect(self._on_canvas_bg_samples_changed)
+        self.canvas.bg_sample_mode_toggled.connect(self.panel_lp.set_sample_tool_active)
 
         # 4. Contenedor derecho: Histograma RGB en Vivo + Capas y Máscaras
         self.right_container = QWidget()
@@ -1028,13 +1036,22 @@ class DeveloperTab(QWidget):
         right_header_layout.setContentsMargins(6, 2, 6, 2)
         right_header_layout.setSpacing(6)
 
-        lbl_right_title = QLabel("CAPAS E HISTOGRAMA")
+        lbl_right_title = QLabel("HISTOGRAMA Y CAPAS")
         lbl_right_title.setStyleSheet("font-weight: 700; font-size: 11px; color: #80d8ff; letter-spacing: 0.6px;")
         right_header_layout.addWidget(lbl_right_title)
         right_header_layout.addStretch()
         right_container_layout.addWidget(right_header, 0)
 
-        # Scroll área para la columna derecha
+        # Widget Histograma RGB en Vivo (Fijo en la parte superior, fuera del scroll)
+        self.live_histogram = LiveRGBHistogramWidget(self)
+        self.live_histogram.clippingChanged.connect(self._on_live_histogram_clipping_changed)
+
+        self.sec_histogram = CollapsibleSection("Histograma RGB en Vivo", is_expanded=True, icon_name="activity")
+        self.sec_histogram.set_content_widget(self.live_histogram)
+        self.sec_histogram.toggled.connect(lambda exp: self._refresh_histograms_now() if exp else None)
+        right_container_layout.addWidget(self.sec_histogram, 0)
+
+        # Scroll área para la columna derecha (solo para capas y ajustes locales)
         self.right_scroll_area = QScrollArea()
         self.right_scroll_area.setWidgetResizable(True)
         self.right_scroll_area.setFrameShape(QFrame.NoFrame)
@@ -1047,15 +1064,6 @@ class DeveloperTab(QWidget):
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 4, 0)
         right_layout.setSpacing(6)
-
-        # Widget Histograma RGB en Vivo
-        self.live_histogram = LiveRGBHistogramWidget(self)
-        self.live_histogram.clippingChanged.connect(self._on_live_histogram_clipping_changed)
-
-        self.sec_histogram = CollapsibleSection("Histograma RGB en Vivo", is_expanded=True, icon_name="activity")
-        self.sec_histogram.set_content_widget(self.live_histogram)
-        self.sec_histogram.toggled.connect(lambda exp: self._refresh_histograms_now() if exp else None)
-        right_layout.addWidget(self.sec_histogram)
 
         # Capas y Máscaras (sec_masks)
         self.sec_masks.set_expanded(True)
@@ -1360,63 +1368,6 @@ class DeveloperTab(QWidget):
         self.btn_mask_tool.toggled.connect(self._on_toggle_mask_tool)
         tb_layout.addWidget(self.btn_mask_tool)
 
-        # 8b. Botón Detección Automática con IA Ligera (1-Click)
-        self.btn_top_ai_mask = QPushButton("Máscara IA")
-        self.btn_top_ai_mask.setIcon(get_icon("sparkles", color="#ffffff", size=13))
-        self.btn_top_ai_mask.setCursor(Qt.PointingHandCursor)
-        self.btn_top_ai_mask.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6a1b9a, stop:1 #8e24aa);
-                color: #ffffff;
-                font-weight: bold;
-                border: 1px solid #ba68c8;
-                border-radius: 4px;
-                padding: 4px 10px;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #7b1fa2, stop:1 #9c27b0);
-                border-color: #ce93d8;
-            }
-            QPushButton:pressed {
-                background-color: #4a148c;
-            }
-        """)
-        self.btn_top_ai_mask.setToolTip("Detección y segmentación automática de cielo y suelo mediante IA ligera U²-Net (1-Click)")
-        self.btn_top_ai_mask.clicked.connect(self._detect_mask_ai_from_toolbar)
-        tb_layout.addWidget(self.btn_top_ai_mask)
-
-        # 8c. Botón Visualización Rápida de Máscara de Suelo (Overlay)
-        self.btn_top_mask_overlay = QPushButton("Ver Máscara")
-        self.btn_top_mask_overlay.setIcon(get_icon("eye", color="#94a3b8", hover_color="#ffffff", active_color="#4ade80", size=13))
-        self.btn_top_mask_overlay.setCheckable(True)
-        self.btn_top_mask_overlay.setEnabled(False)
-        self.btn_top_mask_overlay.setCursor(Qt.PointingHandCursor)
-        self.btn_top_mask_overlay.setStyleSheet("""
-            QPushButton {
-                background-color: #262933;
-                color: #a0a0a0;
-                border: 1px solid #3b4252;
-                font-weight: normal;
-                border-radius: 4px;
-                padding: 4px 10px;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #3b4252;
-                border-color: #88c0d0;
-                color: #eceff4;
-            }
-            QPushButton:disabled {
-                color: #4c566a;
-                background-color: #1a1c23;
-                border: 1px solid #2a2e39;
-            }
-        """)
-        self.btn_top_mask_overlay.setToolTip("Muestra u oculta la superposición de la máscara de cielo y suelo en el visor.")
-        self.btn_top_mask_overlay.toggled.connect(self._on_top_mask_overlay_toggled)
-        tb_layout.addWidget(self.btn_top_mask_overlay)
-
         # Espaciador elástico
         tb_layout.addStretch()
 
@@ -1488,22 +1439,22 @@ class DeveloperTab(QWidget):
         # Secciones del acordeón
         if hasattr(self, 'sec_presets'):
             self.sec_presets.set_title(tr("developer.sections.presets", "Presets y Estilos de Revelado"))
+        if hasattr(self, 'sec_gnd_tone'):
+            self.sec_gnd_tone.set_title(tr("developer.sections.ground_tone", "1. Paisaje y Máscara de Suelo (Horizonte IA)"))
+        if hasattr(self, 'sec_wb'):
+            self.sec_wb.set_title(tr("developer.sections.wb", "2. Balance de Blancos y Calibración"))
+        if hasattr(self, 'sec_color'):
+            self.sec_color.set_title(tr("developer.sections.color", "Color y Saturación"))
         if hasattr(self, 'sec_gradients'):
-            self.sec_gradients.set_title(tr("developer.sections.gradients", "Gradientes y Contaminación Lumínica"))
+            self.sec_gradients.set_title(tr("developer.sections.gradients", "3. Gradientes y Contaminación Lumínica"))
         if hasattr(self, 'sec_stretch'):
-            self.sec_stretch.set_title(tr("developer.sections.stretch", "Estirado Tonal y Contraste"))
+            self.sec_stretch.set_title(tr("developer.sections.stretch", "4. Estirado Tonal y Contraste"))
         if hasattr(self, 'sec_curves'):
             self.sec_curves.set_title(tr("developer.sections.curves", "Curva Tonal Interactiva (RGB / Saturación)"))
         if hasattr(self, 'sec_starnet'):
-            self.sec_starnet.set_title(tr("developer.sections.starnet", "StarNet++ AI — Desacoplo de Estrellas"))
+            self.sec_starnet.set_title(tr("developer.sections.starnet", "5. Desacoplo Estelar y Fondo"))
         if hasattr(self, 'sec_deconv'):
-            self.sec_deconv.set_title(tr("developer.sections.deconv", "Deconvolución Óptica y Enfoque (R-L)"))
-        if hasattr(self, 'sec_wb'):
-            self.sec_wb.set_title(tr("developer.sections.wb", "Balance de Blancos y Calibración"))
-        if hasattr(self, 'sec_color'):
-            self.sec_color.set_title(tr("developer.sections.color", "Color y Saturación"))
-        if hasattr(self, 'sec_gnd_tone'):
-            self.sec_gnd_tone.set_title(tr("developer.sections.ground_tone", "Ajuste Tonal Suelo (Paisaje)"))
+            self.sec_deconv.set_title(tr("developer.sections.deconv", "[Avanzado] Deconvolución Óptica y Enfoque (R-L)"))
         if hasattr(self, 'sec_histogram'):
             self.sec_histogram.set_title(tr("developer.sections.histogram", "Histograma RGB en Vivo"))
         if hasattr(self, 'sec_masks'):
@@ -2248,24 +2199,6 @@ class DeveloperTab(QWidget):
             }
         """
 
-        if hasattr(self, 'btn_top_mask_overlay'):
-            self.btn_top_mask_overlay.setEnabled(has_mask)
-            self.btn_top_mask_overlay.blockSignals(True)
-            self.btn_top_mask_overlay.setChecked(is_active)
-            self.btn_top_mask_overlay.blockSignals(False)
-            self.btn_top_mask_overlay.setStyleSheet(qss_active if is_active else qss_inactive)
-            if is_active:
-                self.btn_top_mask_overlay.setText("Máscara Visible")
-                src = f" ({self._mask_source_name})" if self._mask_source_name else ""
-                self.btn_top_mask_overlay.setToolTip(f"Ocultar superposición de la máscara{src}. La máscara sigue activa internamente.")
-            else:
-                self.btn_top_mask_overlay.setText("Ver Máscara")
-                if has_mask:
-                    src = f" ({self._mask_source_name})" if self._mask_source_name else ""
-                    self.btn_top_mask_overlay.setToolTip(f"Mostrar superposición de la máscara{src} sobre la imagen.")
-                else:
-                    self.btn_top_mask_overlay.setToolTip("No hay máscara activa de cielo/suelo calculada.")
-
         if hasattr(self, 'btn_mask_overlay_toggle'):
             self.btn_mask_overlay_toggle.setEnabled(has_mask)
             self.btn_mask_overlay_toggle.blockSignals(True)
@@ -2273,6 +2206,9 @@ class DeveloperTab(QWidget):
             self.btn_mask_overlay_toggle.blockSignals(False)
             self.btn_mask_overlay_toggle.setStyleSheet(qss_active if is_active else qss_inactive)
             self.btn_mask_overlay_toggle.setText("Visible" if is_active else "Ver")
+
+        if hasattr(self, 'panel_ground_sky') and hasattr(self.panel_ground_sky, 'set_overlay_state'):
+            self.panel_ground_sky.set_overlay_state(is_active)
 
     def _on_top_mask_overlay_toggled(self, checked: bool) -> None:
         """Alterna la visibilidad del overlay de la máscara cielo/suelo en el visor interactivo."""
@@ -2487,6 +2423,9 @@ class DeveloperTab(QWidget):
         is_mask_present = (self.current_mask is not None)
         is_visible = (getattr(self.canvas, 'show_mask_overlay', False) and is_mask_present)
         self._set_mask_overlay_ui_state(is_visible)
+
+        if hasattr(self, 'panel_ground_sky') and hasattr(self.panel_ground_sky, 'update_mask_ui_state'):
+            self.panel_ground_sky.update_mask_ui_state(is_mask_present, self._mask_source_name, is_visible)
 
         if not hasattr(self, 'lbl_gnd_mask_status'):
             return
@@ -2849,7 +2788,7 @@ class DeveloperTab(QWidget):
                 self.btn_lp_color_pipette.setChecked(False)
             if hasattr(self, 'mask_layers_widget'):
                 self.mask_layers_widget.set_color_picker_active(False)
-            self.canvas.set_eyedropper_active(True)
+            self.canvas.set_eyedropper_active(True, "Clic: balancear WB")
         else:
             if getattr(self, '_eyedropper_target', 'wb') == 'wb':
                 self.canvas.set_eyedropper_active(False)
@@ -2866,7 +2805,7 @@ class DeveloperTab(QWidget):
                 self.btn_lp_color_pipette.setChecked(False)
             if hasattr(self, 'mask_layers_widget'):
                 self.mask_layers_widget.set_color_picker_active(False)
-            self.canvas.set_eyedropper_active(True)
+            self.canvas.set_eyedropper_active(True, "Clic: punto simetría SP")
         else:
             if getattr(self, '_eyedropper_target', 'wb') == 'ghs_sp':
                 self.canvas.set_eyedropper_active(False)
@@ -2884,7 +2823,7 @@ class DeveloperTab(QWidget):
                 self.btn_lp_color_pipette.setChecked(False)
             if hasattr(self, 'mask_layers_widget'):
                 self.mask_layers_widget.set_color_picker_active(False)
-            self.canvas.set_eyedropper_active(True)
+            self.canvas.set_eyedropper_active(True, "Clic: centro cúpula LP")
         else:
             if getattr(self, '_eyedropper_target', 'wb') == 'lp_center':
                 self.canvas.set_eyedropper_active(False)
@@ -2902,7 +2841,7 @@ class DeveloperTab(QWidget):
                 self.btn_lp_center_pipette.setChecked(False)
             if hasattr(self, 'mask_layers_widget'):
                 self.mask_layers_widget.set_color_picker_active(False)
-            self.canvas.set_eyedropper_active(True)
+            self.canvas.set_eyedropper_active(True, "Clic: muestrear tinte LP")
         else:
             if getattr(self, '_eyedropper_target', 'wb') == 'lp_color':
                 self.canvas.set_eyedropper_active(False)
@@ -2920,7 +2859,7 @@ class DeveloperTab(QWidget):
                 self.btn_lp_center_pipette.setChecked(False)
             if hasattr(self, 'btn_lp_color_pipette') and self.btn_lp_color_pipette.isChecked():
                 self.btn_lp_color_pipette.setChecked(False)
-            self.canvas.set_eyedropper_active(True)
+            self.canvas.set_eyedropper_active(True, "Clic: seleccionar color")
             self.log_message("[MÁSCARA COLOR] Pipeta activa: haz clic sobre cualquier zona del visor para capturar su color.")
         else:
             if getattr(self, '_eyedropper_target', 'wb') == 'mask_color':
@@ -3011,11 +2950,21 @@ class DeveloperTab(QWidget):
             return
 
         if getattr(self, '_eyedropper_target', 'wb') == 'lp_color':
+            coords = getattr(self.canvas, 'last_sampled_coords', None)
+            if coords is not None and getattr(self, '_cache_ms_pre_lp_img', None) is not None:
+                h_lp, w_lp = self._cache_ms_pre_lp_img.shape[:2]
+                ix = int(np.clip(coords[0] * w_lp, 0, w_lp - 1))
+                iy = int(np.clip(coords[1] * h_lp, 0, h_lp - 1))
+                patch = self._cache_ms_pre_lp_img[max(0, iy - 2):min(h_lp, iy + 3), max(0, ix - 2):min(w_lp, ix + 3)]
+                r, g, b = np.mean(patch, axis=(0, 1))[:3]
+
             max_c = max(1e-4, max(r, g, b))
             tint = (float(r / max_c), float(g / max_c), float(b / max_c))
             self.lp_custom_tint = tint
             self.lp_tint_type = "custom"
-            if hasattr(self, 'combo_lp_tint'):
+            if hasattr(self, 'panel_lp') and self.panel_lp is not None:
+                self.panel_lp.set_custom_tint(tint[0], tint[1], tint[2])
+            elif hasattr(self, 'combo_lp_tint'):
                 idx = self.combo_lp_tint.findData("custom")
                 if idx >= 0:
                     self.combo_lp_tint.blockSignals(True)
@@ -5733,24 +5682,121 @@ class DeveloperTab(QWidget):
         self.update_stretch_preview(immediate=True)
         self._update_canvas_info_label()
 
+    def _on_toggle_bg_sample_tool(self, active: bool):
+        if active and self.image_32bit is None:
+            self.panel_lp.set_sample_tool_active(False)
+            self.log_message("[AVISO] Carga una toma antes de activar la herramienta de muestreo de fondo.")
+            return
+        self.canvas.set_bg_sample_mode(active)
+        if active:
+            self.log_message("[FONDO] Herramienta de Muestreo (DBE) activa: Clic izquierdo = Añadir/Arrastrar muestra. Clic derecho = Eliminar muestra.")
+            if not self.canvas.get_bg_samples():
+                self.auto_generate_bg_samples()
+
+    def auto_generate_bg_samples(self):
+        if self.image_32bit is None:
+            self.log_message("[AVISO] Carga una toma antes de generar puntos de muestreo.")
+            return
+        h, w = self.image_32bit.shape[:2]
+        box_size = getattr(self.panel_lp, 'rbf_box_size', 25)
+        sample_img = self.preview_proxy if self.preview_proxy is not None else self.image_32bit
+        pts = generate_sky_sample_points(h, w, sky_mask=self.current_mask, img_rgb=sample_img, box_size=box_size)
+        self.canvas.set_bg_samples(pts)
+        self.panel_lp.set_points_count(len(pts))
+        self.log_message(f"[FONDO] Generados automáticamente {len(pts)} puntos de muestreo en el cielo.")
+
+    def clear_bg_samples(self):
+        self.canvas.clear_bg_samples()
+        self.panel_lp.set_points_count(0)
+        self.log_message("[FONDO] Puntos de muestreo eliminados.")
+
+    def _on_canvas_bg_samples_changed(self):
+        pts = self.canvas.get_bg_samples()
+        self.panel_lp.set_points_count(len(pts))
+
     def on_extract_background_clicked(self):
         if self.image_32bit is None:
             return
 
-        degree = 1 if (hasattr(self, 'combo_poly_degree') and "Lineal" in self.combo_poly_degree.currentText()) else 2
-        deg_label = "Lineal (Grado 1)" if degree == 1 else "Cuadrático (Grado 2)"
-        self.log_message(f"[FONDO] Extrayendo gradiente con modelo Polinómico {deg_label}...")
-        try:
-            corrected = extract_background_polynomial(
-                self.image_32bit, 
-                sky_mask=self.current_mask, 
-                degree=degree
-            )
-            self.on_bg_extraction_success(corrected)
-            self.log_message(f"[FONDO] Gradiente polinómico ({deg_label}) neutralizado con éxito.")
-        except Exception as e:
-            self.log_message(f"[ERROR FONDO] Fallo en cálculo polinómico: {e}")
-            self.on_bg_extraction_error(str(e))
+        model_text = self.panel_lp.combo_poly_degree.currentText()
+        if "Muestreo" in model_text or "RBF" in model_text:
+            pts = self.canvas.get_bg_samples()
+            if len(pts) < 4:
+                self.auto_generate_bg_samples()
+                pts = self.canvas.get_bg_samples()
+            if len(pts) < 4:
+                QMessageBox.warning(self, "Aviso", "No se detectó suficiente cielo para muestrear fondo.")
+                return
+
+            mode = getattr(self.panel_lp, 'rbf_mode', 'subtraction')
+            box_size = getattr(self.panel_lp, 'rbf_box_size', 25)
+            self.log_message(f"[FONDO] Extrayendo gradiente con modelo RBF ({len(pts)} puntos, modo {mode})...")
+
+            # Guardar instantánea para Deshacer
+            undo_item = {
+                "type": "bg_extract",
+                "image_32bit": self.image_32bit.copy(),
+                "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
+                "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
+                "starless_is_stretched": getattr(self, "starless_is_stretched", False),
+                "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
+                "current_mask": self.current_mask.copy() if self.current_mask is not None else None,
+            }
+            self.undo_stack.append(undo_item)
+            if len(self.undo_stack) > self.MAX_UNDO_STEPS:
+                self.undo_stack.pop(0)
+            self.redo_stack.clear()
+            self._update_undo_redo_buttons()
+
+            try:
+                sky_m = self.current_mask if self.current_mask is not None else getattr(self.canvas, 'last_mask_array', None)
+                corrected, _ = extract_background_rbf(
+                    self.image_32bit,
+                    sample_points=pts,
+                    sky_mask=sky_m,
+                    box_size=box_size,
+                    mode=mode,
+                    kernel="multiquadric",
+                    smoothing=0.15,
+                    epsilon=1.0
+                )
+                self.on_bg_extraction_success(corrected)
+                self.canvas.set_bg_sample_mode(False)
+                self.log_message(f"[FONDO] Gradiente RBF ({len(pts)} puntos) neutralizado con éxito. Usa Ctrl+Z para revertir.")
+            except Exception as e:
+                self.log_message(f"[ERROR FONDO] Fallo en interpolación RBF: {e}")
+                self.on_bg_extraction_error(str(e))
+        else:
+            degree = 1 if "Lineal" in model_text else 2
+            deg_label = "Lineal (Grado 1)" if degree == 1 else "Cuadrático (Grado 2)"
+            self.log_message(f"[FONDO] Extrayendo gradiente con modelo Polinómico {deg_label}...")
+
+            undo_item = {
+                "type": "bg_extract",
+                "image_32bit": self.image_32bit.copy(),
+                "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
+                "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
+                "starless_is_stretched": getattr(self, "starless_is_stretched", False),
+                "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
+                "current_mask": self.current_mask.copy() if self.current_mask is not None else None,
+            }
+            self.undo_stack.append(undo_item)
+            if len(self.undo_stack) > self.MAX_UNDO_STEPS:
+                self.undo_stack.pop(0)
+            self.redo_stack.clear()
+            self._update_undo_redo_buttons()
+
+            try:
+                corrected = extract_background_polynomial(
+                    self.image_32bit, 
+                    sky_mask=self.current_mask, 
+                    degree=degree
+                )
+                self.on_bg_extraction_success(corrected)
+                self.log_message(f"[FONDO] Gradiente polinómico ({deg_label}) neutralizado con éxito. Usa Ctrl+Z para revertir.")
+            except Exception as e:
+                self.log_message(f"[ERROR FONDO] Fallo en cálculo polinómico: {e}")
+                self.on_bg_extraction_error(str(e))
 
     def on_bg_extraction_success(self, corrected_img: np.ndarray):
         self._set_ai_processing_state(False)
@@ -6820,9 +6866,10 @@ class DeveloperTab(QWidget):
         self._is_undoing_or_redoing = True
         try:
             target = self.undo_stack.pop()
-            if target.get("type") == "crop":
+            if target.get("type") in ("crop", "bg_extract"):
+                op_type = target.get("type")
                 redo_item = {
-                    "type": "crop",
+                    "type": op_type,
                     "image_32bit": self.image_32bit.copy(),
                     "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
                     "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
@@ -6847,7 +6894,8 @@ class DeveloperTab(QWidget):
                 self.update_stretch_preview(immediate=True)
                 self._update_canvas_info_label()
                 self._update_mask_status_ui()
-                self.log_message(f"↺ Deshacer recorte: Restaurada imagen original ({w}x{h} px)")
+                op_label = "extracción de gradiente" if op_type == "bg_extract" else "recorte"
+                self.log_message(f"↺ Deshacer {op_label}: Restaurada imagen ({w}x{h} px)")
             elif target.get("type") == "starless":
                 redo_item = {
                     "type": "starless",
@@ -6941,9 +6989,10 @@ class DeveloperTab(QWidget):
         self._is_undoing_or_redoing = True
         try:
             target = self.redo_stack.pop()
-            if target.get("type") == "crop":
+            if target.get("type") in ("crop", "bg_extract"):
+                op_type = target.get("type")
                 undo_item = {
-                    "type": "crop",
+                    "type": op_type,
                     "image_32bit": self.image_32bit.copy(),
                     "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
                     "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
@@ -6968,7 +7017,8 @@ class DeveloperTab(QWidget):
                 self.update_stretch_preview(immediate=True)
                 self._update_canvas_info_label()
                 self._update_mask_status_ui()
-                self.log_message(f"↻ Rehacer recorte: Recorte restaurado ({w}x{h} px)")
+                op_label = "extracción de gradiente" if op_type == "bg_extract" else "recorte"
+                self.log_message(f"↻ Rehacer {op_label}: Restaurada ({w}x{h} px)")
             elif target.get("type") == "starless":
                 undo_item = {
                     "type": "starless",

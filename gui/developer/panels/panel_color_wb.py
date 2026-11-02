@@ -49,7 +49,7 @@ class ColorWbPanel(QWidget):
 
         # --- SECCIÓN: Balance de Blancos y Calibración ---
         self.sec_wb = CollapsibleSection(
-            "Balance de Blancos y Calibración",
+            "2. Balance de Blancos y Calibración",
             is_expanded=True,
             on_reset=self.reset_wb,
             icon_name="thermometer"
@@ -192,6 +192,14 @@ class ColorWbPanel(QWidget):
         row_pal.addWidget(lbl_pal)
         row_pal.addWidget(self.combo_dualband)
         db_layout.addLayout(row_pal)
+
+        lbl_db_hint = QLabel(
+            "Uso exclusivo para tomas capturadas con filtros físicos de doble banda estrecha (Hα/[OIII]).\n"
+            "Para fotografía de paisaje y Vía Láctea RGB estándar, mantener en 'Desactivado (RGB)'."
+        )
+        lbl_db_hint.setWordWrap(True)
+        lbl_db_hint.setStyleSheet("color: #78909c; font-size: 10px; line-height: 1.3;")
+        db_layout.addWidget(lbl_db_hint)
 
         self.row_oiii_boost = PrecisionSliderRow("Boost [OIII]:", 10, 300, 100, scale=100.0, decimals=2, unit="x", label_width=115)
         self.slider_oiii_boost = self.row_oiii_boost.slider

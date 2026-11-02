@@ -25,6 +25,11 @@ class LightPollutionPanel(QWidget):
     auto_detect_lp_requested = pyqtSignal()
     center_pipette_toggled = pyqtSignal(bool)
     color_pipette_toggled = pyqtSignal(bool)
+    sample_tool_toggled = pyqtSignal(bool)
+    auto_grid_requested = pyqtSignal()
+    clear_points_requested = pyqtSignal()
+    sample_box_size_changed = pyqtSignal(int)
+    rbf_mode_changed = pyqtSignal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -39,6 +44,8 @@ class LightPollutionPanel(QWidget):
         self.lp_tint_strength: float = 0.50
         self.lp_mode: str = "attenuate"
         self.lp_legacy_1d: bool = False
+        self.rbf_mode: str = "subtraction"
+        self.rbf_box_size: int = 25
 
         self._setup_ui()
 
@@ -49,7 +56,7 @@ class LightPollutionPanel(QWidget):
 
         # --- SECCIÓN: Gradientes y Contaminación Lumínica ---
         self.sec_bg = CollapsibleSection(
-            "Gradientes y Contaminación Lumínica",
+            "3. Gradientes y Contaminación Lumínica",
             is_expanded=False,
             on_reset=self.reset_gradients,
             icon_name="sparkles"
@@ -59,15 +66,83 @@ class LightPollutionPanel(QWidget):
         layout_bg.setContentsMargins(6, 4, 6, 6)
         layout_bg.setSpacing(8)
 
-        # Selector de Modelo Polinómico de Fondo (Astrofotografía de Paisaje)
+        # Selector de Modelo de Fondo (Astrofotografía de Paisaje)
         row_engine = QHBoxLayout()
         row_engine.addWidget(QLabel("Modelo:"))
         self.combo_poly_degree = QComboBox()
-        self.combo_poly_degree.addItems(["Cuadrático (Grado 2)", "Lineal (Grado 1)"])
-        self.combo_poly_degree.setToolTip("Grado 2 (Cuadrático): Modela curvaturas y viñeteo suave.\nGrado 1 (Lineal): Modela rampas y gradientes planos.")
+        self.combo_poly_degree.addItems([
+            "Muestreo RBF (Puntos 2D)",
+            "Cuadrático (Grado 2)",
+            "Lineal (Grado 1)"
+        ])
+        self.combo_poly_degree.setToolTip(
+            "Muestreo RBF: Interpolación 2D multiescala por muestras de cielo libre (DBE / GraXpert).\n"
+            "Cuadrático (Grado 2): Modela curvaturas y viñeteo suave.\n"
+            "Lineal (Grado 1): Modela rampas y gradientes planos."
+        )
+        self.combo_poly_degree.currentIndexChanged.connect(self._on_model_changed)
         row_engine.addWidget(self.combo_poly_degree)
         self.combo_bg_engine = self.combo_poly_degree  # Alias de compatibilidad
         layout_bg.addLayout(row_engine)
+
+        # Controles interactivos de Muestreo RBF (DBE)
+        self.w_rbf_controls = QWidget()
+        self.w_rbf_controls.setStyleSheet("background-color: #1e2129; border-radius: 6px;")
+        layout_rbf = QVBoxLayout(self.w_rbf_controls)
+        layout_rbf.setContentsMargins(6, 6, 6, 6)
+        layout_rbf.setSpacing(6)
+
+        # Fila 1: Botones de herramientas de puntos
+        row_rbf_btns = QHBoxLayout()
+        row_rbf_btns.setSpacing(4)
+
+        self.btn_sample_tool = QPushButton("Puntos")
+        self.btn_sample_tool.setIcon(get_icon("crosshair", color="#94a3b8", active_color="#80d8ff", size=12))
+        self.btn_sample_tool.setCheckable(True)
+        self.btn_sample_tool.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
+            "QPushButton:checked { background: #3b4252; color: #80d8ff; border: 1px solid #80d8ff; }"
+        )
+        self.btn_sample_tool.setToolTip("Activa la edición interactiva en el lienzo:\n- Clic izquierdo: Añadir o arrastrar punto.\n- Clic derecho: Eliminar punto.")
+        self.btn_sample_tool.toggled.connect(self.sample_tool_toggled.emit)
+        row_rbf_btns.addWidget(self.btn_sample_tool)
+
+        self.btn_auto_grid = QPushButton("Rejilla Auto")
+        self.btn_auto_grid.setIcon(get_icon("sparkles", color="#80d8ff", size=12))
+        self.btn_auto_grid.setStyleSheet("font-size: 11px; padding: 4px; font-weight: bold; color: #80d8ff;")
+        self.btn_auto_grid.setToolTip("Genera automáticamente una malla de muestras en el cielo excluyendo suelo y estrellas.")
+        self.btn_auto_grid.clicked.connect(self.auto_grid_requested.emit)
+        row_rbf_btns.addWidget(self.btn_auto_grid)
+
+        self.btn_clear_points = QPushButton("Borrar")
+        self.btn_clear_points.setStyleSheet("font-size: 11px; padding: 4px; color: #ffb74d;")
+        self.btn_clear_points.setToolTip("Elimina todos los puntos de muestreo del lienzo.")
+        self.btn_clear_points.clicked.connect(self.clear_points_requested.emit)
+        row_rbf_btns.addWidget(self.btn_clear_points)
+
+        layout_rbf.addLayout(row_rbf_btns)
+
+        # Fila 2: Contador de puntos y modo (Sustracción / División)
+        row_rbf_mode = QHBoxLayout()
+        self.lbl_points_count = QLabel("Puntos: 0")
+        self.lbl_points_count.setStyleSheet("font-size: 11px; font-weight: bold; color: #80d8ff;")
+        row_rbf_mode.addWidget(self.lbl_points_count)
+
+        self.combo_rbf_mode = QComboBox()
+        self.combo_rbf_mode.addItem("Sustracción", "subtraction")
+        self.combo_rbf_mode.addItem("División", "division")
+        self.combo_rbf_mode.setToolTip("Sustracción: Para resplandor aditivo (polución/luna).\nDivisión: Para viñeteo óptico o gradientes multiplicativos.")
+        self.combo_rbf_mode.currentIndexChanged.connect(self._on_rbf_mode_changed)
+        row_rbf_mode.addWidget(self.combo_rbf_mode, stretch=1)
+        layout_rbf.addLayout(row_rbf_mode)
+
+        # Fila 3: Tamaño de caja de muestreo
+        self.row_box_size = PrecisionSliderRow("Caja Muestra:", 10, 60, 25, unit="px", label_width=115)
+        self.slider_box_size = self.row_box_size.slider
+        self.slider_box_size.valueChanged.connect(self._on_box_size_changed)
+        layout_rbf.addWidget(self.row_box_size)
+
+        layout_bg.addWidget(self.w_rbf_controls)
 
         self.btn_extract_bg = QPushButton("Eliminar Gradientes")
         self.btn_extract_bg.setIcon(get_icon("sparkles", color="#80d8ff", size=13))
@@ -181,6 +256,14 @@ class LightPollutionPanel(QWidget):
         self.combo_lp_tint.currentIndexChanged.connect(self._on_lp_tint_combo_changed)
         row_lp_tint.addWidget(self.combo_lp_tint, stretch=1)
 
+        self.btn_lp_swatch = QPushButton()
+        self.btn_lp_swatch.setFixedSize(22, 22)
+        self.btn_lp_swatch.setCursor(Qt.PointingHandCursor)
+        self.btn_lp_swatch.setToolTip("Muestra visual del color del tinte. Clic para seleccionar manualmente.")
+        self.btn_lp_swatch.clicked.connect(self._on_swatch_clicked)
+        self.lbl_tint_swatch = self.btn_lp_swatch
+        row_lp_tint.addWidget(self.btn_lp_swatch)
+
         self.btn_lp_color_pipette = QPushButton("Muestrear Color")
         self.btn_lp_color_pipette.setIcon(get_icon("pipette", color="#94a3b8", active_color="#ffd54f", size=12))
         self.btn_lp_color_pipette.setCheckable(True)
@@ -225,12 +308,35 @@ class LightPollutionPanel(QWidget):
 
         layout_bg.addWidget(self.w_lp_params)
 
+        self._update_swatch()
         self.sec_bg.set_content_widget(w_bg)
         layout.addWidget(self.sec_bg)
 
     # -------------------------------------------------------------
     # Sliders & Value synchronization
     # -------------------------------------------------------------
+    def _on_model_changed(self, idx: int) -> None:
+        is_rbf = ("Muestreo" in self.combo_poly_degree.currentText())
+        self.w_rbf_controls.setVisible(is_rbf)
+        if not is_rbf and self.btn_sample_tool.isChecked():
+            self.btn_sample_tool.setChecked(False)
+
+    def _on_rbf_mode_changed(self, idx: int) -> None:
+        self.rbf_mode = self.combo_rbf_mode.currentData() or "subtraction"
+        self.rbf_mode_changed.emit(self.rbf_mode)
+
+    def _on_box_size_changed(self, val: int) -> None:
+        self.rbf_box_size = int(val)
+        self.sample_box_size_changed.emit(self.rbf_box_size)
+
+    def set_points_count(self, count: int) -> None:
+        self.lbl_points_count.setText(f"Puntos: {count}")
+
+    def set_sample_tool_active(self, active: bool) -> None:
+        self.btn_sample_tool.blockSignals(True)
+        self.btn_sample_tool.setChecked(active)
+        self.btn_sample_tool.blockSignals(False)
+
     def _on_slider_released(self) -> None:
         self.interaction_finished.emit()
         self.action_committed.emit()
@@ -326,11 +432,47 @@ class LightPollutionPanel(QWidget):
         self.slider_lp_h.blockSignals(False)
         self.parameter_changed.emit()
 
+    def _update_swatch(self) -> None:
+        if not hasattr(self, "btn_lp_swatch"):
+            return
+        from core.light_pollution import LP_PRESET_TINTS
+        tint_type = self.combo_lp_tint.currentData() or self.lp_tint_type
+        if tint_type == "custom":
+            rgb = self.lp_custom_tint
+        else:
+            rgb = LP_PRESET_TINTS.get(tint_type, (1.0, 1.0, 1.0))
+        r_u8 = int(np.clip(rgb[0] * 255.0, 0, 255))
+        g_u8 = int(np.clip(rgb[1] * 255.0, 0, 255))
+        b_u8 = int(np.clip(rgb[2] * 255.0, 0, 255))
+        self.btn_lp_swatch.setStyleSheet(
+            f"QPushButton {{ background-color: rgb({r_u8}, {g_u8}, {b_u8}); border: 1px solid #90a4ae; border-radius: 4px; }}"
+            f"QPushButton:hover {{ border: 1.5px solid #80d8ff; }}"
+        )
+        self.btn_lp_swatch.setToolTip(f"Tinte activo: RGB({r_u8}, {g_u8}, {b_u8}). Clic para elegir color.")
+
+    def _on_swatch_clicked(self) -> None:
+        from PySide6.QtWidgets import QColorDialog
+        from PySide6.QtGui import QColor
+        from core.light_pollution import LP_PRESET_TINTS
+        tint_type = self.combo_lp_tint.currentData() or self.lp_tint_type
+        if tint_type == "custom":
+            rgb = self.lp_custom_tint
+        else:
+            rgb = LP_PRESET_TINTS.get(tint_type, (1.0, 1.0, 1.0))
+        cur_col = QColor(int(np.clip(rgb[0] * 255.0, 0, 255)), int(np.clip(rgb[1] * 255.0, 0, 255)), int(np.clip(rgb[2] * 255.0, 0, 255)))
+        col = QColorDialog.getColor(cur_col, self, "Seleccionar Tinte de Contaminación Lumínica")
+        if col.isValid():
+            r, g, b = col.redF(), col.greenF(), col.blueF()
+            max_c = max(1e-4, max(r, g, b))
+            self.set_custom_tint(r / max_c, g / max_c, b / max_c)
+            self.action_committed.emit()
+
     def _on_lp_tint_combo_changed(self, idx: int) -> None:
         tint_type = self.combo_lp_tint.currentData() or "sodium"
         if self.lp_tint_type == tint_type:
             return
         self.lp_tint_type = tint_type
+        self._update_swatch()
         self.parameter_changed.emit()
         self.action_committed.emit()
 
@@ -392,6 +534,7 @@ class LightPollutionPanel(QWidget):
         finally:
             self.block_signals(False)
 
+        self._update_swatch()
         self.parameter_changed.emit()
         self.action_committed.emit()
 
@@ -408,9 +551,13 @@ class LightPollutionPanel(QWidget):
     def set_custom_tint(self, r: float, g: float, b: float) -> None:
         """Sets custom sampled tint and activates custom mode."""
         self.lp_custom_tint = (float(r), float(g), float(b))
+        self.lp_tint_type = "custom"
         custom_idx = self.combo_lp_tint.findData("custom")
         if custom_idx >= 0:
+            self.combo_lp_tint.blockSignals(True)
             self.combo_lp_tint.setCurrentIndex(custom_idx)
+            self.combo_lp_tint.blockSignals(False)
+        self._update_swatch()
         self.parameter_changed.emit()
 
     def get_state(self) -> Dict[str, Any]:
@@ -425,11 +572,28 @@ class LightPollutionPanel(QWidget):
             "lp_tint_strength": self.slider_lp_tint_strength.value(),
             "lp_mode_idx": self.combo_lp_mode.currentIndex(),
             "lp_legacy_1d": self.chk_lp_legacy_1d.isChecked(),
+            "bg_model_idx": self.combo_poly_degree.currentIndex(),
+            "rbf_mode_idx": self.combo_rbf_mode.currentIndex(),
+            "rbf_box_size": self.rbf_box_size,
         }
 
     def set_state(self, state: Dict[str, Any]) -> None:
         self.block_signals(True)
         try:
+            if "bg_model_idx" in state:
+                idx = int(state["bg_model_idx"])
+                if 0 <= idx < self.combo_poly_degree.count():
+                    self.combo_poly_degree.setCurrentIndex(idx)
+                    self._on_model_changed(idx)
+            if "rbf_mode_idx" in state:
+                idx = int(state["rbf_mode_idx"])
+                if 0 <= idx < self.combo_rbf_mode.count():
+                    self.combo_rbf_mode.setCurrentIndex(idx)
+                    self.rbf_mode = self.combo_rbf_mode.itemData(idx) or "subtraction"
+            if "rbf_box_size" in state:
+                val = int(state["rbf_box_size"])
+                self.rbf_box_size = val
+                self.slider_box_size.setValue(val)
             if "lp_val" in state:
                 val = state["lp_val"]
                 self.slider_lp.setValue(val)
@@ -476,6 +640,7 @@ class LightPollutionPanel(QWidget):
                 self.lp_legacy_1d = val
         finally:
             self.block_signals(False)
+        self._update_swatch()
 
     def block_signals(self, blocked: bool) -> None:
         for w in (
@@ -483,7 +648,8 @@ class LightPollutionPanel(QWidget):
             self.slider_lp_cy, self.spin_lp_cy, self.slider_lp_w,
             self.spin_lp_w, self.slider_lp_h, self.spin_lp_h,
             self.combo_lp_tint, self.slider_lp_tint_strength,
-            self.combo_lp_mode, self.chk_lp_legacy_1d
+            self.combo_lp_mode, self.chk_lp_legacy_1d,
+            self.combo_poly_degree, self.combo_rbf_mode, self.slider_box_size
         ):
             if w is not None:
                 w.blockSignals(blocked)

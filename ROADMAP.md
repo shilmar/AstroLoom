@@ -14,7 +14,7 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
 | **P2** | **Revisión y Optimización del Módulo de Panorámicas y Mosaicos** | Panorámicas | PTGui / Hugin / Lightroom | 6.0 / 10 | 8.5 / 10 | ✅ Completado (v0.11.6) |
 | **M1** | **Módulo Integral de Lluvias de Meteoros y Bólidos** | Meteoros | Sequator / Starry Landscape Stacker / PixInsight | 7.0 / 10 | 9.0 / 10 | ✅ Completado (v0.12.0) |
 | **P3** | **Corrección de Distorsión Óptica Periférica de Estrellas** | Apilador | Sequator (*Distort Mode*) | 7.5 / 10 | 8.5 / 10 | ✅ Completado (v0.12.1) |
-| **P4** | **Extracción de Gradientes por Puntos de Muestreo Interactivos** | Revelador | PixInsight (*DBE*) / GraXpert | 5.0 / 10 | 8.0 / 10 | ⏳ Planificado |
+| **P4** | **Extracción de Gradientes por Puntos de Muestreo Interactivos** | Revelador | PixInsight (*DBE*) / GraXpert | 5.0 / 10 | 8.0 / 10 | ✅ Completado (v0.13.0) |
 | **P5** | **Procesado y Exportación en Lote (Batch Processing)** | Revelador / General | Lightroom / Adobe Camera Raw | 4.0 / 10 | 7.5 / 10 | ⏳ Pendiente |
 | **P6** | **Persistencia Avanzada y Sincronización de Preferencias** | Sistema | - | 3.0 / 10 | 5.0 / 10 | ⏳ Pendiente |
 
@@ -41,6 +41,7 @@ Este documento recopila las propuestas de mejora, nuevas características y tare
   - Interpolación matemática multiescala 2D mediante RBF (*Radial Basis Functions*) o Splines Bivariadas para eliminar gradientes complejos de polución lumínica local irregular no modelables por polinomios de grado 2.
 * **Impacto:** **8.0 / 10** *(Solución definitiva para cielos con múltiples cúpulas urbanas o gradientes atmosféricos caóticos).*
 * **Dificultad / Coste:** **5.0 / 10** *(Media: UI interactiva de puntos de ancla en el lienzo y ajuste RBF con Scipy).*
+* **Estado:** **✅ Completado en v0.13.0.** Implementado el motor de interpolación multiescala 2D con `scipy.interpolate.RBFInterpolator` (`core/background_extraction.py`) con soporte para sustracción y división, generación automática de malla inmune al terreno (`sky_mask` con erosión de seguridad), herramientas interactivas de edición de puntos en el lienzo `MaskCanvas` e integración completa con el historial de deshacer/rehacer.
 
 ---
 

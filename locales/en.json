@@ -5,9 +5,9 @@
     "version": "1.0"
   },
   "app": {
-    "title": "AstroLoom - Astrophotography & Nightscape Suite (v0.12.2)",
+    "title": "AstroLoom - Astrophotography & Nightscape Suite (v0.13.0)",
     "ready": "Ready to process",
-    "engine_badge": "● AstroLoom Engine v0.12.2",
+    "engine_badge": "● AstroLoom Engine v0.13.0",
     "ram_monitor": "RAM: {pct}% ({used:.1f} / {total:.1f} GB)",
     "language": "Language",
     "tabs": {
@@ -42,14 +42,14 @@
     "activity_log": "Activity Log:",
     "sections": {
       "presets": "Presets & Developing Styles",
-      "gradients": "Gradients & Light Pollution",
-      "stretch": "Tonal Stretch & Contrast",
-      "curves": "Interactive Tone Curve (RGB / Saturation)",
-      "starnet": "StarNet++ AI — Star Separation",
-      "deconv": "Optical Deconvolution & Sharpening (R-L)",
-      "wb": "White Balance & Calibration",
+      "ground_tone": "1. Landscape & Ground Mask (AI Horizon)",
+      "wb": "2. White Balance & Calibration",
       "color": "Color & Saturation",
-      "ground_tone": "Landscape Ground Tone Adjustment",
+      "gradients": "3. Gradients & Light Pollution",
+      "stretch": "4. Tonal Stretch & Contrast",
+      "curves": "Interactive Tone Curve (RGB / Saturation)",
+      "starnet": "5. Star Decoupling & Background",
+      "deconv": "[Advanced] Optical Deconvolution & Sharpening (R-L)",
       "masks": "Masks & Local Adjustment Layers"
     },
     "stretch": {

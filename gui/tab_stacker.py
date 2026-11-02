@@ -421,30 +421,6 @@ class StackerTab(QWidget):
         self.combo_cull_profile.addItem("Equilibrado (Estándar)", "balanced")
         self.combo_cull_profile.addItem("Exigente (Tracker/Telescopio)", "strict")
         self.combo_cull_profile.setToolTip(lbl_cull_profile.toolTip())
-        self.combo_cull_profile.setStyleSheet("""
-            QComboBox {
-                background-color: #161b26;
-                color: #e2e8f0;
-                border: 1px solid #28324a;
-                border-radius: 4px;
-                padding: 3px 8px;
-                font-size: 11px;
-            }
-            QComboBox:hover {
-                border-color: #38bdf8;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 18px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #161b26;
-                color: #e2e8f0;
-                selection-background-color: #0284c7;
-                selection-color: #ffffff;
-                border: 1px solid #28324a;
-            }
-        """)
         row_cull_opts.addWidget(self.combo_cull_profile)
         row_cull_opts.addStretch(1)
 

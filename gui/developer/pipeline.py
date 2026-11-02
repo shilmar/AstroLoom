@@ -261,9 +261,9 @@ def apply_developer_pipeline(
             lp_strength = state.lp_val / 100.0
             if lp_strength > 1e-4:
                 mask_2d = precomputed_mask[..., 0] if precomputed_mask is not None else None
-                lp_tints = ["sodium", "mercury", "led", "skyglow", "custom"]
+                lp_tints = ["sodium", "warm_led", "cold_led", "neutral", "custom"]
                 tint_key = lp_tints[state.lp_tint_idx] if 0 <= state.lp_tint_idx < len(lp_tints) else "sodium"
-                tint_rgb = LP_PRESET_TINTS.get(tint_key, state.lp_custom_tint)
+                tint_rgb = state.lp_custom_tint if tint_key == "custom" else LP_PRESET_TINTS.get(tint_key, (1.0, 1.0, 1.0))
                 lp_modes = ["attenuate", "subtractive"]
                 lp_mode = lp_modes[state.lp_mode_idx] if 0 <= state.lp_mode_idx < len(lp_modes) else "attenuate"
 

@@ -38,6 +38,8 @@ class MaskCanvas(QWidget):
     pan_started = Signal()
     pan_moved = Signal(int, int)                 # (dx, dy) desplazamiento en píxeles
     pan_finished = Signal()
+    bg_samples_changed = Signal()
+    bg_sample_mode_toggled = Signal(bool)
 
     def __init__(self, parent: Optional[QWidget] = None, enable_masking: bool = True):
         super().__init__(parent)
@@ -100,6 +102,7 @@ class MaskCanvas(QWidget):
 
         # Pipeta de Balance de Blancos (Eyedropper)
         self.eyedropper_active: bool = False
+        self.eyedropper_hint: str = "Clic: balancear WB"
         self.last_sampled_coords: Optional[tuple[float, float]] = None
         self.last_sampled_display_rgb: Optional[tuple[float, float, float]] = None
 
@@ -119,6 +122,13 @@ class MaskCanvas(QWidget):
         self.native_image_size: Optional[Tuple[int, int]] = None  # (width, height) reales del sensor
         self.highlight_streak: Optional[Dict[str, Any]] = None
         self.highlight_streaks_multi: List[Dict[str, Any]] = []
+
+        # Herramienta Interactiva de Muestreo de Fondo (DBE / RBF)
+        self.bg_sample_mode: bool = False
+        self.bg_samples: List[Tuple[float, float]] = []
+        self.bg_sample_box_size: int = 25
+        self._bg_hovered_idx: Optional[int] = None
+        self._bg_dragging_idx: Optional[int] = None
 
         if self.enable_masking:
             self.update_brush_cursor()
@@ -421,8 +431,9 @@ class MaskCanvas(QWidget):
         self.set_split_orientation(new_ori)
         return new_ori
 
-    def set_eyedropper_active(self, active: bool) -> None:
+    def set_eyedropper_active(self, active: bool, hint: str = "Clic: balancear WB") -> None:
         """Activa o desactiva la pipeta de balance de blancos interactiva."""
+        self.eyedropper_hint = hint
         if self.eyedropper_active != active:
             self.eyedropper_active = active
             if active:
@@ -493,6 +504,86 @@ class MaskCanvas(QWidget):
         if self.highlight_streaks_multi:
             self.highlight_streaks_multi = []
             self.update()
+
+    def set_bg_sample_mode(self, enabled: bool) -> None:
+        """Activa o desactiva el modo de edición de puntos de muestreo de fondo (DBE / RBF)."""
+        self.bg_sample_mode = bool(enabled)
+        if enabled:
+            if self.crop_mode:
+                self.set_crop_mode(False)
+            if self.eyedropper_active:
+                self.set_eyedropper_active(False)
+            if self.layer_brush_active:
+                self.set_layer_brush_enabled(False)
+            self.setCursor(Qt.CrossCursor)
+        else:
+            self._bg_hovered_idx = None
+            self._bg_dragging_idx = None
+            if not self.enable_masking:
+                self.setCursor(Qt.ArrowCursor)
+        self.bg_sample_mode_toggled.emit(self.bg_sample_mode)
+        self.update()
+
+    def set_bg_samples(self, points: List[Tuple[float, float]]) -> None:
+        """Establece la lista de puntos de muestreo en coordenadas normalizadas [0.0, 1.0]."""
+        self.bg_samples = [(float(x), float(y)) for x, y in points if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0]
+        self.bg_samples_changed.emit()
+        self.update()
+
+    def get_bg_samples(self) -> List[Tuple[float, float]]:
+        """Retorna la lista actual de puntos de muestreo normalizados."""
+        return list(self.bg_samples)
+
+    def clear_bg_samples(self) -> None:
+        """Elimina todos los puntos de muestreo del lienzo."""
+        if self.bg_samples:
+            self.bg_samples.clear()
+            self._bg_hovered_idx = None
+            self._bg_dragging_idx = None
+            self.bg_samples_changed.emit()
+            self.update()
+
+    def set_bg_sample_box_size(self, size: int) -> None:
+        """Ajusta el tamaño visual de la caja de muestreo en píxeles."""
+        self.bg_sample_box_size = max(5, min(100, int(size)))
+        self.update()
+
+    def _norm_img_to_widget(self, nx: float, ny: float) -> Optional[QPointF]:
+        """Convierte una coordenada normalizada [0.0, 1.0] de la imagen a coordenadas del widget."""
+        target_rect, source_rect, scale = self.get_render_geometry()
+        if not self.base_pixmap or self.base_pixmap.isNull() or scale <= 0:
+            return None
+
+        # Sincronización exacta en modo Zoom 1:1 con recorte externo (desacopla el viewport del sensor completo)
+        if self.is_zoomed and self.external_zoom_handler and self.external_crop_rect is not None and self.external_full_shape is not None:
+            x1, y1, _, _ = self.external_crop_rect
+            fh, fw = self.external_full_shape
+            sensor_x = nx * float(fw)
+            sensor_y = ny * float(fh)
+            crop_px_x = sensor_x - float(x1)
+            crop_px_y = sensor_y - float(y1)
+            sx = target_rect.x() + (crop_px_x - source_rect.x()) * scale
+            sy = target_rect.y() + (crop_px_y - source_rect.y()) * scale
+            return QPointF(sx, sy)
+
+        iw = float(self.base_pixmap.width())
+        ih = float(self.base_pixmap.height())
+        px_x = nx * iw
+        px_y = ny * ih
+        sx = target_rect.x() + (px_x - source_rect.x()) * scale
+        sy = target_rect.y() + (px_y - source_rect.y()) * scale
+        return QPointF(sx, sy)
+
+    def _hit_test_bg_sample(self, screen_pt: QPointF, tolerance_px: float = 14.0) -> Optional[int]:
+        """Detecta si una posición de pantalla colisiona con un punto de ancla de fondo."""
+        for idx, (nx, ny) in enumerate(self.bg_samples):
+            s_pt = self._norm_img_to_widget(nx, ny)
+            if s_pt is not None:
+                dx = screen_pt.x() - s_pt.x()
+                dy = screen_pt.y() - s_pt.y()
+                if (dx * dx + dy * dy) <= (tolerance_px * tolerance_px):
+                    return idx
+        return None
 
     def center_on_image_point(self, pt: Tuple[float, float], zoom_in: bool = True) -> None:
         """Centra la vista en coordenadas de la imagen, con opción de activar zoom 1:1."""
@@ -609,6 +700,41 @@ class MaskCanvas(QWidget):
             return
 
         pos = event.position().toPoint()
+
+        # -2. Manejo de Puntos de Muestreo de Fondo (DBE / RBF)
+        if self.bg_sample_mode:
+            pt = event.position()
+            target_rect, _, _ = self.get_render_geometry()
+            if target_rect.contains(pt):
+                hit_idx = self._hit_test_bg_sample(pt)
+                if event.button() == Qt.LeftButton:
+                    if hit_idx is not None:
+                        self._bg_dragging_idx = hit_idx
+                        self.setCursor(Qt.ClosedHandCursor)
+                    else:
+                        norm = self._widget_to_norm_img(pt)
+                        if norm is not None:
+                            # Proteger el terreno: no permitir colocar muestras de fondo en el suelo si hay máscara
+                            if getattr(self, 'last_mask_array', None) is not None:
+                                mh, mw = self.last_mask_array.shape[:2]
+                                my = int(np.clip(norm.y() * (mh - 1), 0, mh - 1))
+                                mx = int(np.clip(norm.x() * (mw - 1), 0, mw - 1))
+                                if self.last_mask_array[my, mx] < 0.35:
+                                    event.accept()
+                                    return
+                            self.bg_samples.append((float(norm.x()), float(norm.y())))
+                            self.bg_samples_changed.emit()
+                    self.update()
+                    event.accept()
+                    return
+                elif event.button() == Qt.RightButton:
+                    if hit_idx is not None:
+                        self.bg_samples.pop(hit_idx)
+                        self._bg_hovered_idx = None
+                        self.bg_samples_changed.emit()
+                        self.update()
+                        event.accept()
+                        return
 
         # -1. Manejo prioritario del Recorte Interactivo (Crop Tool)
         if self.crop_mode and event.button() == Qt.LeftButton:
@@ -775,6 +901,29 @@ class MaskCanvas(QWidget):
     def mouseMoveEvent(self, event) -> None:
         pos = event.position().toPoint()
 
+        # -2. Manejo de Puntos de Muestreo de Fondo (DBE / RBF)
+        if self.bg_sample_mode:
+            pt = event.position()
+            if self._bg_dragging_idx is not None and 0 <= self._bg_dragging_idx < len(self.bg_samples):
+                norm = self._widget_to_norm_img(pt)
+                if norm is not None:
+                    self.bg_samples[self._bg_dragging_idx] = (float(norm.x()), float(norm.y()))
+                    self.bg_samples_changed.emit()
+                    self.update()
+                event.accept()
+                return
+            else:
+                hit_idx = self._hit_test_bg_sample(pt)
+                if hit_idx != self._bg_hovered_idx:
+                    self._bg_hovered_idx = hit_idx
+                    self.update()
+                if hit_idx is not None:
+                    self.setCursor(Qt.PointingHandCursor)
+                else:
+                    self.setCursor(Qt.CrossCursor)
+                event.accept()
+                return
+
         # -1. Manejo de Recorte Interactivo (Crop Tool)
         if self.crop_mode:
             pt = event.position()
@@ -892,6 +1041,15 @@ class MaskCanvas(QWidget):
         super().mouseDoubleClickEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if self.bg_sample_mode and self._bg_dragging_idx is not None:
+            self._bg_dragging_idx = None
+            hit_idx = self._hit_test_bg_sample(event.position())
+            self.setCursor(Qt.PointingHandCursor if hit_idx is not None else Qt.CrossCursor)
+            self.bg_samples_changed.emit()
+            self.update()
+            event.accept()
+            return
+
         if event.button() == Qt.LeftButton and self.layer_brush_active:
             if self._brush_drawing:
                 self._brush_drawing = False
@@ -1354,6 +1512,60 @@ class MaskCanvas(QWidget):
         if self.layer_brush_active and self._brush_hover_pos is not None:
             self._draw_layer_brush_cursor(painter)
 
+        # Superposición de Puntos de Muestreo de Fondo (DBE / RBF)
+        if self.bg_sample_mode or self.bg_samples:
+            self._draw_bg_samples_overlay(painter)
+
+    def _draw_bg_samples_overlay(self, painter: QPainter) -> None:
+        """Renderiza las cajas de muestreo interactivo de fondo en el lienzo con estética DBE / GraXpert."""
+        if not self.bg_samples or not self.base_pixmap or self.base_pixmap.isNull():
+            return
+        target_rect, source_rect, scale = self.get_render_geometry()
+        if scale <= 0:
+            return
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        if self.is_zoomed:
+            # En Zoom 1:1, mostrar la caja con el tamaño nativo exacto en píxeles del parche muestreado
+            box_px = max(6.0, float(self.bg_sample_box_size))
+        else:
+            # En vista ajustada (Fit), tamaño ergonómico visible de 18 px
+            box_px = 18.0
+        half_box = box_px / 2.0
+
+        for idx, (nx, ny) in enumerate(self.bg_samples):
+            s_pt = self._norm_img_to_widget(nx, ny)
+            if s_pt is None:
+                continue
+            sx, sy = s_pt.x(), s_pt.y()
+            if not target_rect.adjusted(-box_px, -box_px, box_px, box_px).contains(s_pt):
+                continue
+
+            is_active = (idx == self._bg_hovered_idx or idx == self._bg_dragging_idx)
+            if is_active:
+                pen_color = QColor("#ffd54f")
+                fill_color = QColor(255, 213, 79, 65)
+                cross_color = QColor("#ffffff")
+                stroke_w = 2.0
+            else:
+                pen_color = QColor("#80d8ff")
+                fill_color = QColor(0, 170, 255, 35)
+                cross_color = QColor("#80d8ff")
+                stroke_w = 1.2
+
+            box_rect = QRectF(sx - half_box, sy - half_box, box_px, box_px)
+            painter.setPen(QPen(pen_color, stroke_w))
+            painter.setBrush(QBrush(fill_color))
+            painter.drawRect(box_rect)
+
+            painter.setPen(QPen(cross_color, 1.0))
+            painter.drawLine(QPointF(sx - 3, sy), QPointF(sx + 3, sy))
+            painter.drawLine(QPointF(sx, sy - 3), QPointF(sx, sy + 3))
+
+        painter.restore()
+
     def _draw_single_streak_capsule(
         self,
         painter: QPainter,
@@ -1620,7 +1832,7 @@ class MaskCanvas(QWidget):
         f.setBold(False)
         f.setPointSize(8)
         painter.setFont(f)
-        painter.drawText(int(bx + 42), int(by + 36), "Clic: balancear WB")
+        painter.drawText(int(bx + 42), int(by + 36), getattr(self, "eyedropper_hint", "Clic: balancear WB"))
 
         painter.restore()
 
@@ -1942,12 +2154,24 @@ class MaskCanvas(QWidget):
         target_rect, source_rect, scale = self.get_render_geometry()
         if not self.base_pixmap or self.base_pixmap.isNull() or scale <= 0:
             return None
-        iw = float(self.base_pixmap.width())
-        ih = float(self.base_pixmap.height())
+
         rel_x = (pt.x() - target_rect.x()) / scale
         rel_y = (pt.y() - target_rect.y()) / scale
         px_x = source_rect.x() + rel_x
         px_y = source_rect.y() + rel_y
+
+        # Sincronización exacta en modo Zoom 1:1 con recorte externo
+        if self.is_zoomed and self.external_zoom_handler and self.external_crop_rect is not None and self.external_full_shape is not None:
+            x1, y1, _, _ = self.external_crop_rect
+            fh, fw = self.external_full_shape
+            sensor_x = float(x1) + px_x
+            sensor_y = float(y1) + px_y
+            nx = float(np.clip(sensor_x / float(fw), 0.0, 1.0))
+            ny = float(np.clip(sensor_y / float(fh), 0.0, 1.0))
+            return QPointF(nx, ny)
+
+        iw = float(self.base_pixmap.width())
+        ih = float(self.base_pixmap.height())
         nx = float(np.clip(px_x / iw, 0.0, 1.0))
         ny = float(np.clip(px_y / ih, 0.0, 1.0))
         return QPointF(nx, ny)

@@ -50,8 +50,8 @@ class StretchingPanel(QWidget):
 
         # --- SECCIÓN: Estirado Tonal y Contraste (MTF / GHS) ---
         self.sec_stretch = CollapsibleSection(
-            "Estirado Tonal y Contraste",
-            is_expanded=True,
+            "4. Estirado Tonal y Contraste",
+            is_expanded=False,
             on_reset=self.reset_sliders,
             icon_name="chart"
         )

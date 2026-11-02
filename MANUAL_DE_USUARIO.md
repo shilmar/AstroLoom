@@ -154,28 +154,44 @@ Permite aplicar recetas rápidas o guardar tus ajustes favoritos para usarlos en
 ---
 
 ### Sección 2: Contaminación Lumínica y Gradientes
-La atmósfera y las ciudades lejanas crean cúpulas de luz brillante en el horizonte que apagan el brillo de la Vía Láctea. Esta sección elimina esa luz parásita mediante dos enfoques complementarios:
+La atmósfera, la luna y los núcleos urbanos generan gradientes y cúpulas de luz brillante en el horizonte que apagan el contraste de las nebulosas y la Vía Láctea. Esta sección combina dos motores avanzados:
 
-#### A. Extracción Analítica de Gradiente (Modelo Polinómico)
-* **Qué hace:** Modela la superficie matemática del fondo del cielo nocturno y la sustrae para dejar el fondo plano y homogéneo.
-* **Modelo Polinómico:**
-  * **Cuadrático (Grado 2) (Recomendado):** Ajusta una superficie parabólica suave capaz de corregir domos luminosos y viñeteo residual simultáneamente.
-  * **Lineal (Grado 1):** Ajusta un plano inclinado bidimensional ideal para gradientes simples en una dirección fija.
-* **Aislamiento del Suelo:** Al pulsar **"Extraer Fondo"**, el algoritmo utiliza automáticamente la máscara de cielo actual para muestrear exclusivamente las zonas celestes, garantizando que siluetas oscuras de árboles o montañas no falseen el cálculo ni originen halos negros en el horizonte.
-* **Velocidad:** Cálculo nativo e instantáneo en milisegundos sin necesidad de binarios externos ni archivos temporales.
+#### A. Extracción de Gradientes de Fondo (Muestreo RBF 2D y Superficies Polinómicas)
+Permite modelar con precisión matemática la superficie del fondo cósmico y sustraerla o dividirla para lograr un cielo homogéneo, plano y libre de dominantes:
 
-#### B. Reducción Paramétrica y Domo 2D
-* **Atenuar Cúpula de Luz (Gradiente 1D):**
-  * *Qué hace:* Aplica una atenuación vertical suave que oscurece el resplandor del horizonte devolviendo el contraste a la parte baja del cielo.
-* **Reducción Paramétrica 2D (Domo Elíptico):**
-  * *Qué hace:* Modela con exactitud la cúpula de luz real de una ciudad, permitiendo descentrarla y darle forma.
-  * **Intensidad (%):** Cuánta luz de la cúpula queremos retirar (un 30-60% suele ser ideal).
-  * **Posición Centro X / Y:** Dónde está situada la ciudad en la foto.
-    * *Consejo:* Usa el botón **"🎯 Marcar en Canvas"** y haz clic directamente sobre el punto más brillante del horizonte en tu imagen.
-  * **Anchura (W) y Altura (H):** Ajusta si la contaminación es un domo ancho y bajo o alto y concentrado.
-  * **Tinte de Contaminación:** Elige el color de las farolas (Sodio Cálido / Ámbar, Mercurio Frío, LED Blanco Neutro o Personalizado).
-  * **Fuerza del Tinte (%):** Permite descontaminar el color amarillento sin dejar zonas grises artificiales.
-  * **Modo (Atenuar vs Sustraer):** *Atenuar* reduce la intensidad preservando las estrellas; *Sustraer* resta el fondo como un filtro astronómico de polución.
+* **Modelos Disponibles:**
+  * **Muestreo RBF (Puntos 2D) (Recomendado):** Interpolación multiescala bidimensional mediante *Radial Basis Functions* (similar a PixInsight DBE o GraXpert). Modela gradientes caóticos, asimétricos o con múltiples cúpulas urbanas.
+  * **Cuadrático (Grado 2):** Ajusta una superficie parabólica analítica suave para corregir viñeteo residual o resplandores amplios.
+  * **Lineal (Grado 1):** Ajusta un plano inclinado bidimensional para rampas luminosas en una dirección fija.
+* **Herramientas de Muestreo Interactivo (Modo RBF):**
+  * **Botón "Puntos" (Edición en Lienzo):** Activa el modo de edición interactiva directamente en el visor de imagen:
+    * *Clic izquierdo:* Añadir una nueva muestra de fondo o hacer clic y arrastrar para reubicar una muestra existente.
+    * *Clic derecho:* Eliminar la muestra seleccionada bajo el cursor.
+  * **Botón "Rejilla Auto":** Genera automáticamente una distribución inteligente de puntos en el cielo, excluyendo de forma estricta el suelo terrestre y descartando estrellas mediante análisis estadístico por percentil bajo.
+  * **Botón "Borrar":** Elimina al instante todos los puntos de muestreo activos en el lienzo.
+  * **Caja Muestra (px):** Ajusta el radio de análisis (10 a 60 px) para promediar el cielo en cada ancla sin ser afectado por estrellas tenues.
+  * **Modo de Corrección:**
+    * *Sustracción:* Para resplandores aditivos de luz (contaminación lumínica, claridad crepuscular o brillo lunar).
+    * *División:* Para gradientes ópticos multiplicativos (viñeteo o transmisión óptica desigual).
+* **Botón "Eliminar Gradientes":** Aplica la neutralización analítica sobre el fondo del cielo protegiendo el 100% de la silueta del terreno terrestre. La operación se integra por completo en el historial de **Deshacer (`Ctrl+Z`) y Rehacer (`Ctrl+Y`)**.
+
+#### B. Reducción Paramétrica y Cúpula 2D de Contaminación Lumínica
+Modela analíticamente cúpulas de luz urbanas situadas en el horizonte mediante superficies super-gaussianas 2D:
+
+* **Atenuar Cúpula (%):** Deslizador principal de reducción de brillo parásito en el cielo.
+* **Botón "Cúpula 2D":** Despliega los controles analíticos avanzados:
+  * **Centro X / Centro Y:** Ubicación espacial del foco de la ciudad. Puedes usar el botón **"Pinchar Centro"** para hacer clic directamente sobre el punto más brillante del horizonte en el lienzo, o pulsar **"Auto-Detectar"** para análisis automático por luminancia.
+  * **Ancho (W) y Alto (H):** Controlan la dispersión horizontal y el ascenso vertical de la cúpula hacia el cenit.
+  * **Tinte Cromático:** Selector de fuente lumínica:
+    * *Vapor de Sodio (Ámbar):* Tinte clásico de lámparas de sodio a baja/alta presión (589 nm).
+    * *LED Urbano Cálido:* Alumbrado público moderno (3000K–3500K).
+    * *LED Frío / Mercurio:* Iluminación comercial fría o lámparas de vapor de mercurio.
+    * *Atenuación Neutra:* Atenuación pura de luminancia sin desbalance de color.
+    * *Personalizado:* Muestreado directamente o elegido manualmente.
+  * **Cuadradito de Color (Swatch):** Muestra en tiempo real el color de tinte actualmente activo. Haz clic sobre él para abrir el selector de color del sistema (`QColorDialog`) y ajustar o seleccionar manualmente cualquier color RGB.
+  * **Botón "Muestrear Color":** Activa la pipeta interactiva en el lienzo. Al hacer clic sobre cualquier zona con resplandor, analiza el búfer lineal pre-LP y extrae el tinte espectral exacto sin artefactos de estirado.
+  * **Neutralización (%):** Porcentaje de corrección cromática selectiva (0% = atenuación neutra, 100% = neutralización cromática completa).
+  * **Modo (Atenuación Suave vs Sustracción Física):** *Atenuación* reduce proporcionalmente el brillo; *Sustracción* retira el flujo de fotones aditivo del resplandor de fondo.
 
 ---
 

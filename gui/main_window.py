@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QStatusBar, QLabel, QWidget, QHBoxLayout, QComboBox
 
 from core.i18n import tr, get_i18n
-from gui.theme import apply_theme, STYLE_STATUS_PILL
+from gui.theme import apply_theme, STYLE_STATUS_PILL, CHEVRON_DOWN_PATH, CHEVRON_DOWN_HOVER_PATH
 from gui.tab_stacker import StackerTab
 from gui.tab_developer import DeveloperTab
 from gui.tab_eclipse import EclipseTab
@@ -22,7 +22,7 @@ from gui.tab_settings import SettingsTab
 class MainWindow(QMainWindow):
     """Ventana principal de la interfaz gráfica de AstroLoom."""
 
-    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.12.2)"
+    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.13.0)"
 
 
     def __init__(self):
@@ -50,7 +50,7 @@ class MainWindow(QMainWindow):
         status_bar.addWidget(self.lbl_status, 1)
 
         # Píldora del Motor AstroLoom
-        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.12.2")
+        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.13.0")
         self.lbl_engine_badge.setStyleSheet(STYLE_STATUS_PILL)
         status_bar.addPermanentWidget(self.lbl_engine_badge)
 
@@ -63,25 +63,39 @@ class MainWindow(QMainWindow):
 
         # Selector de Idioma en tiempo real
         self.combo_lang_bar = QComboBox()
-        self.combo_lang_bar.setStyleSheet("""
-            QComboBox {
+        self.combo_lang_bar.setStyleSheet(f"""
+            QComboBox {{
                 background-color: #141724;
                 border: 1px solid #232738;
                 border-radius: 4px;
-                padding: 1px 6px;
+                padding: 1px 18px 1px 6px;
                 color: #80d8ff;
                 font-weight: bold;
                 font-size: 11px;
-            }
-            QComboBox::drop-down {
+            }}
+            QComboBox:hover {{
+                border-color: #38bdf8;
+            }}
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 16px;
                 border: none;
-                width: 14px;
-            }
-            QComboBox QAbstractItemView {
+                background: transparent;
+            }}
+            QComboBox::down-arrow {{
+                image: url({CHEVRON_DOWN_PATH});
+                width: 9px;
+                height: 9px;
+            }}
+            QComboBox::down-arrow:hover {{
+                image: url({CHEVRON_DOWN_HOVER_PATH});
+            }}
+            QComboBox QAbstractItemView {{
                 background-color: #1a1e2e;
                 color: #e0e0e0;
                 selection-background-color: #28334a;
-            }
+            }}
         """)
         avail_langs = get_i18n().get_available_languages()
         for code, name in avail_langs:
@@ -111,7 +125,7 @@ class MainWindow(QMainWindow):
         """Actualiza todos los textos estáticos principales al cambiar de idioma."""
         self.setWindowTitle(tr("app.title", self.BASE_TITLE))
         self.lbl_status.setText(tr("app.ready", "Listo para procesar"))
-        self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.12.2"))
+        self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.13.0"))
 
         if hasattr(self, 'tab_widget'):
             self.tab_widget.setTabText(0, tr("app.tabs.stacker", "1. Apilador (Stacker)"))

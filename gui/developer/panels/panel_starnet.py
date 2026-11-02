@@ -36,7 +36,7 @@ class StarNetPanel(QWidget):
         main_layout.setSpacing(0)
 
         # --- SECCIÓN 5: StarNet++ AI - Desacoplo y Procesado de Capas ---
-        self.sec_starnet = CollapsibleSection("StarNet++ AI — Desacoplo de Estrellas", is_expanded=False, icon_name="star")
+        self.sec_starnet = CollapsibleSection("5. Desacoplo Estelar y Fondo", is_expanded=False, icon_name="star")
         w_starnet = QWidget()
         layout_starnet = QVBoxLayout(w_starnet)
         layout_starnet.setContentsMargins(6, 4, 6, 6)

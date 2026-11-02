@@ -6,8 +6,18 @@ Proporciona la paleta de colores cromática 'Cosmic Dark Pro', estilos reutiliza
 para botones primarios y de transferencia entre módulos, y la hoja de estilos QSS
 maestra que garantiza una identidad visual unificada en todas las pestañas.
 """
+import os
 from typing import Optional
 from PySide6.QtWidgets import QWidget, QApplication
+
+_CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+_ASSETS_DIR = os.path.join(_CURRENT_DIR, "assets")
+CHEVRON_DOWN_PATH = os.path.join(_ASSETS_DIR, "chevron_down.svg").replace("\\", "/")
+CHEVRON_DOWN_HOVER_PATH = os.path.join(_ASSETS_DIR, "chevron_down_hover.svg").replace("\\", "/")
+CHEVRON_DOWN_DISABLED_PATH = os.path.join(_ASSETS_DIR, "chevron_down_disabled.svg").replace("\\", "/")
+CHEVRON_UP_PATH = os.path.join(_ASSETS_DIR, "chevron_up.svg").replace("\\", "/")
+CHEVRON_UP_HOVER_PATH = os.path.join(_ASSETS_DIR, "chevron_up_hover.svg").replace("\\", "/")
+CHEVRON_UP_DISABLED_PATH = os.path.join(_ASSETS_DIR, "chevron_up_disabled.svg").replace("\\", "/")
 
 # =============================================================================
 # 1. PALETA DE COLORES MAESTRA (Cosmic Dark Pro)
@@ -302,15 +312,56 @@ def get_application_stylesheet() -> str:
         QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
             border: 1px solid {BORDER_FOCUS};
         }}
-        QSpinBox::up-button, QSpinBox::down-button,
-        QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
-            background-color: #181b28;
-            border: none;
+        QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{
+            background-color: #12141c;
+            color: {TEXT_MUTED};
+            border-color: #1e2230;
+        }}
+        QSpinBox::up-button, QDoubleSpinBox::up-button {{
+            subcontrol-origin: border;
+            subcontrol-position: top right;
             width: 16px;
+            border-left: 1px solid #2a2e42;
+            border-bottom: 1px solid #1e2230;
+            border-top-right-radius: 4px;
+            background-color: #181b28;
+        }}
+        QSpinBox::down-button, QDoubleSpinBox::down-button {{
+            subcontrol-origin: border;
+            subcontrol-position: bottom right;
+            width: 16px;
+            border-left: 1px solid #2a2e42;
+            border-bottom-right-radius: 4px;
+            background-color: #181b28;
         }}
         QSpinBox::up-button:hover, QSpinBox::down-button:hover,
         QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {{
             background-color: #252b3d;
+        }}
+        QSpinBox::up-button:pressed, QSpinBox::down-button:pressed,
+        QDoubleSpinBox::up-button:pressed, QDoubleSpinBox::down-button:pressed {{
+            background-color: #121520;
+        }}
+        QSpinBox::up-button:disabled, QSpinBox::down-button:disabled,
+        QDoubleSpinBox::up-button:disabled, QDoubleSpinBox::down-button:disabled {{
+            background-color: #12141c;
+            border-color: #1e2230;
+        }}
+        QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+            image: url({CHEVRON_UP_PATH});
+            width: 8px;
+            height: 8px;
+        }}
+        QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled {{
+            image: url({CHEVRON_UP_DISABLED_PATH});
+        }}
+        QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+            image: url({CHEVRON_DOWN_PATH});
+            width: 8px;
+            height: 8px;
+        }}
+        QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {{
+            image: url({CHEVRON_DOWN_DISABLED_PATH});
         }}
 
         /* --- DESPLEGABLES (QComboBox) --- */
@@ -318,16 +369,46 @@ def get_application_stylesheet() -> str:
             background-color: {BG_INPUT};
             border: 1px solid #2a2e42;
             border-radius: 4px;
-            padding: 4px 8px;
+            padding: 4px 24px 4px 8px;
             color: {TEXT_PRIMARY};
             font-size: 11px;
+        }}
+        QComboBox:hover {{
+            border-color: #38bdf8;
         }}
         QComboBox:focus {{
             border: 1px solid {BORDER_FOCUS};
         }}
+        QComboBox:disabled {{
+            background-color: #12141c;
+            color: {TEXT_MUTED};
+            border-color: #1e2230;
+        }}
         QComboBox::drop-down {{
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+            width: 22px;
             border: none;
-            width: 20px;
+            background: transparent;
+        }}
+        QComboBox::drop-down:hover {{
+            background-color: rgba(56, 189, 248, 0.12);
+            border-top-right-radius: 4px;
+            border-bottom-right-radius: 4px;
+        }}
+        QComboBox::down-arrow {{
+            image: url({CHEVRON_DOWN_PATH});
+            width: 10px;
+            height: 10px;
+        }}
+        QComboBox::down-arrow:hover {{
+            image: url({CHEVRON_DOWN_HOVER_PATH});
+        }}
+        QComboBox::down-arrow:on {{
+            image: url({CHEVRON_DOWN_HOVER_PATH});
+        }}
+        QComboBox::down-arrow:disabled {{
+            image: url({CHEVRON_DOWN_DISABLED_PATH});
         }}
         QComboBox QAbstractItemView {{
             background-color: {BG_CARD};
