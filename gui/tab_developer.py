@@ -112,6 +112,7 @@ from gui.developer.panels.panel_presets import PresetsPanel
 from gui.developer.panels.panel_ground_sky import GroundSkyPanel
 from gui.developer.panels.panel_starnet import StarNetPanel
 from gui.developer.panels.panel_crop import CropToolbar
+from gui.developer.panels.panel_dust import DustPanel
 from gui.developer.developer_state import DeveloperState
 from gui.developer.pipeline import ResolutionPyramid, apply_developer_pipeline
 from gui.developer.async_worker import AsyncPipelineManager
@@ -510,6 +511,17 @@ class DeveloperTab(QWidget):
         self.panel_color_wb.action_committed.connect(self._commit_action)
 
         left_layout.addWidget(self.panel_color_wb)
+
+        # --- SECCIÓN: Corrección de Manchas y Polvo del Sensor (Módulo gui.developer.panels.DustPanel) ---
+        self.panel_dust = DustPanel()
+        self.panel_dust.auto_detect_requested.connect(self._on_auto_detect_dust)
+        self.panel_dust.visualize_toggled.connect(self._on_visualize_dust_toggled)
+        self.panel_dust.spot_mode_toggled.connect(self._on_dust_spot_mode_toggled)
+        self.panel_dust.clear_spots_requested.connect(self._on_clear_dust_spots)
+        self.panel_dust.parameter_changed.connect(self._on_dust_parameter_changed)
+        self.panel_dust.action_committed.connect(self._commit_action)
+
+        left_layout.addWidget(self.panel_dust)
 
         # --- SECCIÓN 2: Extracción de Fondo y Polución Lumínica (Módulo gui.developer.panels.LightPollutionPanel) ---
         self.panel_lp = LightPollutionPanel()
@@ -1020,6 +1032,8 @@ class DeveloperTab(QWidget):
         self.canvas.layer_brush_radius_changed.connect(self.mask_layers_widget.set_brush_radius_from_canvas)
         self.canvas.bg_samples_changed.connect(self._on_canvas_bg_samples_changed)
         self.canvas.bg_sample_mode_toggled.connect(self.panel_lp.set_sample_tool_active)
+        self.canvas.dust_spots_changed.connect(self._on_canvas_dust_spots_changed)
+        self.canvas.dust_spot_mode_toggled.connect(self.panel_dust.btn_manual_spot.setChecked)
 
         # 4. Contenedor derecho: Histograma RGB en Vivo + Capas y Máscaras
         self.right_container = QWidget()
@@ -3354,6 +3368,12 @@ class DeveloperTab(QWidget):
             self.toggle_right_panel()
             event.accept()
             return
+        elif event.key() == Qt.Key_A:
+            if hasattr(self, 'panel_dust'):
+                cur = self.panel_dust.chk_visualize.isChecked()
+                self.panel_dust.chk_visualize.setChecked(not cur)
+            event.accept()
+            return
         super().keyPressEvent(event)
 
     def _apply_styles(self) -> None:
@@ -4328,15 +4348,15 @@ class DeveloperTab(QWidget):
     def _refresh_histograms_now(self):
         if getattr(self, '_hist_throttle_timer', None) is not None:
             self._hist_throttle_timer.stop()
-        # Omitir cálculo síncrono durante arrastre activo para garantizar 60 FPS
-        if getattr(self, '_is_scrubbing_heavy_slider', False) or getattr(self, '_is_slider_pressed', False):
-            return
         stretched = getattr(self, '_last_rendered_preview', None)
         if stretched is None or self.is_zoomed_100:
             return
-        # Evaluar estrictamente los histogramas cuyos contenedores están visibles
+        # El histograma en vivo optimizado (< 0.2 ms) se actualiza de forma fluida
         if hasattr(self, 'live_histogram') and self.live_histogram.isVisible():
             self.live_histogram.update_from_image(stretched)
+        # Omitir widgets más pesados durante arrastre activo para garantizar 60 FPS
+        if getattr(self, '_is_scrubbing_heavy_slider', False) or getattr(self, '_is_slider_pressed', False):
+            return
         if hasattr(self, 'curve_widget') and self.curve_widget.isVisible():
             self.curve_widget.set_histogram_from_image(stretched)
         if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.isVisible():
@@ -4477,10 +4497,10 @@ class DeveloperTab(QWidget):
                     qimg_b = QImage(disp_bc.data, w_b, h_b, 3 * w_b, QImage.Format_RGB888)
                     self.canvas.set_before_pixmap(QPixmap.fromImage(qimg_b))
 
-                # Actualización diferida del histograma durante reposo
+                # Actualización fluida y controlada del histograma en vivo
                 if not self.is_zoomed_100 and hasattr(self, '_hist_throttle_timer'):
-                    if not getattr(self, '_is_scrubbing_heavy_slider', False) and not self._hist_throttle_timer.isActive():
-                        self._hist_throttle_timer.start(70)
+                    if not self._hist_throttle_timer.isActive():
+                        self._hist_throttle_timer.start(50)
 
                 self._update_canvas_info_label()
 
@@ -5410,6 +5430,64 @@ class DeveloperTab(QWidget):
         self._on_color_wb_parameter_changed()
         self.update_stretch_preview(immediate=True)
         self.log_message(f"PCC completado con {len(stars)} estrellas. Ganancias: R={kr:.3f}, G=1.000, B={kb:.3f}")
+
+    def _on_auto_detect_dust(self, sensitivity: int):
+        """Ejecuta la detección automática de manchas de polvo del sensor en el revelador."""
+        target = self.preview_proxy if self.preview_proxy is not None else self.image_32bit
+        if target is None:
+            return
+
+        from core.dust import detect_dust_spots
+        spots = detect_dust_spots(
+            target,
+            sensitivity=float(sensitivity),
+            sky_mask=self.current_mask,
+        )
+        self.canvas.set_dust_spots(spots)
+        self.panel_dust.update_spot_count(len(spots))
+        self.developer_state.dust_spots = spots
+        self.developer_state.dust_sensitivity = sensitivity
+        self.developer_state.dust_mode = self.panel_dust.mode
+        self.log_message(f"Detección de polvo: {len(spots)} manchas encontradas y curadas.")
+        self.update_stretch_preview()
+        self._commit_action()
+
+    def _on_visualize_dust_toggled(self, active: bool, threshold: int):
+        """Activa o desactiva la previsualización de diagnóstico de paso alto (Visualize Spots)."""
+        self.developer_state.dust_visualize = active
+        self.developer_state.dust_visualize_threshold = threshold
+        self.update_stretch_preview()
+
+    def _on_dust_spot_mode_toggled(self, enabled: bool):
+        """Activa o desactiva la colocación manual de manchas en el lienzo."""
+        self.canvas.set_dust_spot_mode(enabled)
+
+    def _on_clear_dust_spots(self):
+        """Elimina todas las manchas registradas y re-renderiza el revelador."""
+        self.canvas.clear_dust_spots()
+        self.developer_state.dust_spots = []
+        self.panel_dust.update_spot_count(0)
+        self.log_message("Manchas de polvo eliminadas.")
+        self.update_stretch_preview()
+        self._commit_action()
+
+    def _on_dust_parameter_changed(self):
+        """Sincroniza los parámetros del panel de polvo con DeveloperState."""
+        if hasattr(self, 'panel_dust'):
+            self.developer_state.dust_sensitivity = self.panel_dust.sensitivity
+            self.developer_state.dust_mode = self.panel_dust.mode
+            self.developer_state.dust_visualize = self.panel_dust.visualize
+            self.developer_state.dust_visualize_threshold = self.panel_dust.visualize_threshold
+        self.update_stretch_preview()
+
+    def _on_canvas_dust_spots_changed(self):
+        """Responde a la adición, arrastre o borrado de manchas de polvo sobre el lienzo."""
+        spots = self.canvas.get_dust_spots()
+        self.developer_state.dust_spots = spots
+        if hasattr(self, 'panel_dust'):
+            self.panel_dust.update_spot_count(len(spots))
+        self.update_stretch_preview()
+        self._commit_action()
 
     def _set_curve_mode(self, mode: str) -> None:
         """Cambia el modo activo de la curva y sincroniza los botones de selección."""
@@ -6824,6 +6902,10 @@ class DeveloperTab(QWidget):
             state.update(self.panel_starnet.get_state())
         if hasattr(self, 'panel_ground_sky') and self.panel_ground_sky is not None:
             state.update(self.panel_ground_sky.get_state())
+        if hasattr(self, 'panel_dust') and self.panel_dust is not None:
+            state["dust_spots"] = self.canvas.get_dust_spots() if hasattr(self, 'canvas') else []
+            state["dust_sensitivity"] = self.panel_dust.sensitivity
+            state["dust_mode"] = self.panel_dust.mode
         state["curves"] = self.curve_widget.get_state() if hasattr(self, 'curve_widget') else None
         state["mask_layers"] = self.mask_layers_widget.get_state() if hasattr(self, 'mask_layers_widget') else None
         state["starless_is_stretched"] = getattr(self, "starless_is_stretched", False)
@@ -6835,7 +6917,7 @@ class DeveloperTab(QWidget):
             return True
         for k, v1 in s1.items():
             v2 = s2.get(k)
-            if k in ("curves", "mask_layers"):
+            if k in ("curves", "mask_layers", "dust_spots"):
                 if v1 != v2:
                     return True
             elif isinstance(v1, float):
@@ -7183,6 +7265,14 @@ class DeveloperTab(QWidget):
 
         if hasattr(self, 'panel_ground_sky'):
             self.panel_ground_sky.set_state(state)
+
+        if hasattr(self, 'panel_dust') and self.panel_dust is not None:
+            spots = state.get("dust_spots", [])
+            self.canvas.set_dust_spots(spots)
+            self.panel_dust.update_spot_count(len(spots))
+            self.developer_state.dust_spots = spots
+            if "dust_sensitivity" in state:
+                self.panel_dust.slider_sens.setValue(int(state["dust_sensitivity"]))
         if "starless_is_stretched" in state:
             self.starless_is_stretched = state["starless_is_stretched"]
             self.gnd_ev_val = self.panel_ground_sky.slider_gnd_ev.value() / 100.0

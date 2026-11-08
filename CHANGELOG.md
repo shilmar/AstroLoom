@@ -5,6 +5,40 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-09
+
+### Añadido
+* **Detección, Curación y Diagnóstico de Manchas de Polvo de Sensor (`core/dust.py` y `gui/developer/panels/panel_dust.py`):**
+  - Implementación del pipeline clásico no destructivo de detección morfológica de manchas y anillos oscuros de polvo en cielo y fondo plano (`detect_dust_spots`) mediante diferencia gaussiana normalizada por textura local y filtros de circularidad, relación de aspecto y factor de llenado.
+  - Algoritmo de selección inteligente de parche donante (`pick_donor_source`) que explora 48 posiciones a lo largo de 3 anillos concéntricos (2.4r, 3.2r, 4.2r), evaluando similitud de textura, varianza interna homogénea y prevención estricta de colisiones con manchas vecinas o bordes de encuadre.
+  - Motor de curación continua (`heal_single_spot` / `apply_dust_healing`) con tres modalidades:
+    - *Curar (Tonal Seamless):* Fusión de textura y gradiente mediante aproximación de Poisson / convolución normalizada sobre retícula con bordes suaves (*smoothstep feathering*).
+    - *Inpainting Puro:* Reconstrucción fluida de fondo sin requerir parche donante vía Telea.
+    - *Clonar (Directo):* Transferencia directa de píxeles desde la zona de referencia con remapado bilineal subpíxel (`cv2.remap`).
+  - Modo de inspección de alto contraste («Visualizar Manchas» / *Visualize Spots*, atajo de teclado **`A`**): filtro paso alto que resalta en blanco brillante sobre negro hasta las motas más tenues y difusas del sensor, con control de umbral dinámico en tiempo real.
+  - Herramientas interactivas en el lienzo (`MaskCanvas` en `gui/canvas.py`): colocación manual de manchas con clic izquierdo, arrastre libre para reubicar, eliminación con clic derecho y retículas circulares con cruz central proporcionales al zoom.
+  - Integración nativa en el pipeline lineal temprano (`gui/developer/pipeline.py`), en el estado del revelador (`DeveloperState`) y en el historial completo de Deshacer (`Ctrl+Z`) y Rehacer (`Ctrl+Y`).
+* **Refinamiento de Bordes por Filtro Cruzado Guiado (`core/masking.py:refine_mask_guided_cross` / `guided_cross`):**
+  - Nuevo algoritmo de filtrado guiado cruzado O(1) con `cv2.boxFilter` guiado por la luminancia logarítmica de la escena (`log1p(255 * L) / log(256)`).
+  - Imanta con precisión fotométrica los contornos y transiciones de cualquier máscara a las ramas, crestas montañosas, estructuras o siluetas reales del paisaje.
+  - Integración en el Gestor de Capas (`core/mask_layers.py` y `gui/widgets/mask_layers_widget.py`) con casilla *"Refinar Bordes (Guided Cross)"*, control de intensidad (0% a 100%) y radio adaptativo (`0.04 * long_edge`).
+* **Protección de Driver Gráfico contra Cuelgues (Crash Sentinel en `core/gpu_backend.py`):**
+  - Patrón centinela de inicialización mediante archivo marcador persistente (`gpu-init.marker` en AppData/directorio de configuración).
+  - Si un fallo o cuelgue irrecuperable a nivel de driver gráfico de bajo nivel (CUDA / OpenCL) cierra abruptamente el proceso, el centinela permanece activo y el siguiente arranque de AstroLoom conmuta automáticamente a modo seguro CPU, evitando bucles de fallos irrecuperables.
+  - Métodos de diagnóstico e inspección: `is_crash_sentinel_active()` y `clear_gpu_crash_sentinel()`.
+* **Cálculo Fusionado de Histograma en Vivo de 1 Pasada (`core/histogram.py`):**
+  - Nuevo motor de histograma de alta velocidad que evalúa simultáneamente los canales R, G, B y Luma Rec.709 (`(54*r + 183*g + 19*b) >> 8`) en una sola pasada de memoria sin asignaciones intermedias.
+  - Aceleración Numba JIT `@njit(fastmath=True, nogil=True)` con soporte nativo para `float32`, `uint8`, `uint16` y monocromo, respaldado por un fallback vectorizado eficiente en OpenCV/NumPy.
+  - Detección ultrarrápida y unificada de advertencias de recorte (*clipping*) en sombras puras (0) y altas luces quemadas (255).
+  - Rediseño de `gui/widgets/live_histogram.py`: eliminación de las 4 pasadas independientes con `np.histogram`, logrando actualizaciones a más de 60 FPS durante la edición.
+
+### Corregido
+* **Garantía Estricta de Monotonicidad en Curvas Tonales:**
+  - Incorporación de `np.maximum.accumulate` en `core/stretch.py:apply_curve_lut`, `core/mask_layers.py:compute_curve_lut_from_points` y `gui/widgets/curve_widget.py`.
+  - Erradicación de inversiones de pendiente, artefactos de solarización o gradientes negativos accidentales en curvas RGB y capas de ajuste.
+* **Estabilidad y Jerarquía de Widgets en Secciones Colapsables (`CollapsibleSection`):**
+  - Corrección en `gui/widgets/collapsible_section.py:setContentLayout` para detectar layouts con contenedor existente y delegar a `set_content_widget`, evitando excepciones o reparenting erróneo en PySide6.
+
 ## [0.13.0] - 2026-11-02
 
 ### Añadido

@@ -364,6 +364,11 @@ class CollapsibleSection(QWidget):
     setTitle = set_title
 
     def setContentLayout(self, layout) -> None:
+        if layout is not None and hasattr(layout, 'parentWidget'):
+            pw = layout.parentWidget()
+            if pw is not None and pw is not self.content_area:
+                self.set_content_widget(pw)
+                return
         self.content_layout.addLayout(layout)
 
     def addWidget(self, widget) -> None:

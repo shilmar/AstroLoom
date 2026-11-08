@@ -8,6 +8,7 @@ from gui.developer.panels.panel_presets import PresetsPanel
 from gui.developer.panels.panel_ground_sky import GroundSkyPanel
 from gui.developer.panels.panel_starnet import StarNetPanel
 from gui.developer.panels.panel_crop import CropToolbar
+from gui.developer.panels.panel_dust import DustPanel
 
 __all__ = [
     "ColorWbPanel",
@@ -19,4 +20,5 @@ __all__ = [
     "GroundSkyPanel",
     "StarNetPanel",
     "CropToolbar",
+    "DustPanel",
 ]

@@ -97,9 +97,14 @@ class DeveloperState:
     # Layer & Canvas view mode
     layer_idx: int = 0
 
-    # Complex sub-states (Curves & Mask Layers)
+    # Complex sub-states (Curves, Mask Layers, and Sensor Dust Spots)
     curves: Optional[Dict[str, Any]] = None
     mask_layers: Optional[Dict[str, Any]] = None
+    dust_spots: List[Dict[str, Any]] = field(default_factory=list)
+    dust_sensitivity: int = 50
+    dust_visualize: bool = False
+    dust_visualize_threshold: int = 50
+    dust_mode: str = "heal"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert state into a dictionary compatible with history snapshots and presets."""
@@ -130,7 +135,7 @@ class DeveloperState:
         current_dict = self.to_dict()
         for k, v1 in current_dict.items():
             v2 = other_dict.get(k)
-            if k in ("curves", "mask_layers"):
+            if k in ("curves", "mask_layers", "dust_spots"):
                 if v1 != v2:
                     return True
             elif isinstance(v1, float) and v2 is not None:

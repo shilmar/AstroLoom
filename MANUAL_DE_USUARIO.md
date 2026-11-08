@@ -193,6 +193,22 @@ Modela analíticamente cúpulas de luz urbanas situadas en el horizonte mediante
   * **Neutralización (%):** Porcentaje de corrección cromática selectiva (0% = atenuación neutra, 100% = neutralización cromática completa).
   * **Modo (Atenuación Suave vs Sustracción Física):** *Atenuación* reduce proporcionalmente el brillo; *Sustracción* retira el flujo de fotones aditivo del resplandor de fondo.
 
+#### C. Corrección y Curación de Manchas de Polvo del Sensor (Sensor Dust Healing)
+Módulo no destructivo especializado en erradicar motas de polvo del sensor, sombras y anillos (*donuts*) en áreas lisas de cielo o fondo:
+* **Sensibilidad:** Deslizador (0 a 100) que regula el umbral de detección. Valores superiores permiten capturar motas tenues o difusas en cielos crepusculares o degradados suaves.
+* **Modo de Curación:**
+  * *Curar (Tonal Seamless):* (Recomendado) Reconstrucción continua mediante aproximación de Poisson / convolución normalizada que iguala gradiente y tono de fondo preservando el grano.
+  * *Inpainting Puro:* Reconstrucción fluida sin necesidad de zona donante mediante inpainting Navier-Stokes/Telea.
+  * *Clonar (Directo):* Transferencia directa de píxeles desde el parche donante seleccionado con muestreo bilineal subpíxel.
+* **Detección Automática («Auto-Detectar»):** Escanea el cielo libre descartando estrellas y texturas complejas, encontrando las motas y seleccionando de forma automática parches donantes limpios y sin colisiones.
+* **Herramienta Manual en Lienzo («🎯 Colocar / Editar Manchas»):**
+  * *Clic izquierdo:* Añade una nueva mota bajo el cursor o haz clic y arrastra sobre una existente para reposicionarla.
+  * *Clic derecho:* Elimina la mota sobre la que se hace clic.
+* **Modo de Diagnóstico («Visualizar Manchas» / Atajo `A`):**
+  * Activa una vista de inspección por paso alto donde el cielo se vuelve negro y las motas de polvo brillan en blanco intenso.
+  * Pulsa la tecla **`A`** en cualquier momento para alternar rápidamente entre la vista normal y la vista de diagnóstico.
+  * Deslizador de umbral de visualización para ajustar la sensibilidad del diagnóstico de inspección.
+
 ---
 
 ### Sección 3: Estirado No Lineal (MTF vs GHS)
@@ -370,6 +386,10 @@ El compositor multicapa de AstroLoom funciona de manera análoga a Adobe Photosh
 
 * **Máscaras con Inteligencia Artificial:**
   * Pulsa **"Generar Máscara IA"**: el modelo neuronal detecta árboles, montañas, personas y arquitectura, creando un recorte limpio sin halos ni bordes blancos entre el cielo y la tierra.
+
+* **Refinar Bordes por Filtro Guiado Cruzado (Guided Cross):**
+  * Casilla **«Refinar Bordes (Guided Cross)»** y deslizador de **Intensidad (0% a 100%)** en la definición de cada capa de máscara.
+  * Imanta de forma no destructiva los contornos de la máscara a las aristas y microestructuras reales de la escena (copas de árboles, crestas montañosas, horizontes complejos o arquitectura) utilizando la luminancia logarítmica de la fotografía como guía fotométrica continua.
 
 * **Pila de Capas con Miniaturas Visuales Dinámicas (S / M / L):**
   - **Previsualización Fotorrealista en Vivo:** Cada fila de la lista muestra una miniatura nítida con el contenido real de la capa: las estrellas aisladas sobre fondo oscuro en la capa de estrellas, el gas y polvo galáctico a todo color en la capa *Starless*, la silueta del paisaje en la capa de suelo, y máscaras monocromáticas en capas de pincel, luminancia o color.

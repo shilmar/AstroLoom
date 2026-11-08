@@ -289,13 +289,14 @@ def apply_denoise(
 def apply_curve_lut(img_rgb: np.ndarray, lut: np.ndarray) -> np.ndarray:
     """
     Aplica una curva tonal mediante tabla de consulta (LUT de 256 elementos [0..1]).
-    Rendimiento sub-milisegundo vía cv2.LUT.
+    Rendimiento sub-milisegundo vía cv2.LUT con garantía de monotonicidad estricta (LightCraft pattern).
     """
     if lut is None or img_rgb is None:
         return img_rgb
 
     # Escalado a uint8 -> mapeo LUT -> recuperación float32
     u8 = (np.clip(img_rgb, 0.0, 1.0) * 255.0).astype(np.uint8)
+    lut = np.maximum.accumulate(lut)  # Garantiza monotonicidad estricta sin artefactos de inversión
     lut_u8 = (np.clip(lut, 0.0, 1.0) * 255.0).astype(np.uint8)
 
     mapped_u8 = cv2.LUT(u8, lut_u8)

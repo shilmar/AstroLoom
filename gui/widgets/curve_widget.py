@@ -334,6 +334,9 @@ class CurveWidget(QWidget):
             except Exception:
                 lut_arr = np.interp(grid_x, xs, ys).astype(np.float32)
 
+        if self._mode == MODE_RGB:
+            lut_arr = np.maximum.accumulate(lut_arr)  # Monotonía forzada para curvas tonales RGB
+
         self.lut = np.clip(lut_arr, 0.0, 1.0)
 
     # -------------------------------------------------------------

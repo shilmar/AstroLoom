@@ -10,7 +10,12 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any, Tuple
 import cv2
 import numpy as np
-from core.masking import generate_luminance_mask, generate_color_range_mask
+from core.masking import (
+    generate_luminance_mask,
+    generate_color_range_mask,
+    refine_mask_guided_cross,
+    guided_cross
+)
 from core.stretch import apply_white_balance, adjust_contrast
 
 try:
@@ -150,6 +155,11 @@ class MaskLayer:
     color_hue: float = 0.0          # 0.0 a 360.0 grados
     color_tolerance: float = 30.0   # Tolerancia angular en grados
     color_min_sat: float = 0.08     # Saturación mínima
+
+    # Refinamiento de bordes por Filtro Cruzado Guiado (guided_cross / LightCraft)
+    refine_edges: bool = False      # Activa refinado automático contra la escena
+    refine_strength: float = 0.0    # Intensidad del refinado [0.0, 1.0]
+    refine_radius: Optional[int] = None  # Radio de filtrado (None = 0.04 * long_edge)
 
     # Ajustes locales de revelado
     exposure: float = 0.0           # -3.00 EV a +3.00 EV
@@ -303,6 +313,14 @@ def compute_layer_mask(
     if layer.inverted:
         m = 1.0 - m
 
+    # Refinamiento de bordes por Filtro Cruzado Guiado (guided_cross de LightCraft)
+    if getattr(layer, "refine_edges", False) and getattr(layer, "refine_strength", 0.0) > 1e-4:
+        m = refine_mask_guided_cross(
+            m, base_rgb,
+            strength=layer.refine_strength,
+            radius=getattr(layer, "refine_radius", None)
+        )
+
     return np.clip(m, 0.0, 1.0).astype(np.float32)
 
 
@@ -334,6 +352,7 @@ def compute_curve_lut_from_points(points: Optional[List[Tuple[float, float]]], r
         lut_arr = np.clip(pchip(grid_x), 0.0, 1.0).astype(np.float32)
     except Exception:
         lut_arr = np.clip(np.interp(grid_x, xs, ys), 0.0, 1.0).astype(np.float32)
+    lut_arr = np.maximum.accumulate(lut_arr)  # Monotonía garantizada
     return lut_arr
 
 

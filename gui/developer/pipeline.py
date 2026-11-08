@@ -203,13 +203,20 @@ def apply_developer_pipeline(
                 img = precomputed_pre_lp_base
                 milestone_pre_lp = precomputed_pre_lp_base
             else:
+                # 0. Curación de Manchas de Polvo de Sensor (Fase Lineal Temprana)
+                if getattr(state, "dust_spots", None):
+                    from core.dust import apply_dust_healing
+                    base_img = apply_dust_healing(target_img, state.dust_spots, mode=getattr(state, "dust_mode", "heal"))
+                else:
+                    base_img = target_img
+
                 # 0a. Paletas Dual-Band OSC y Correcciones Estelares (Fase 1)
                 dual_mode = getattr(state, 'dualband_mode', 'none')
                 if dual_mode and dual_mode != 'none':
                     boost = getattr(state, 'dualband_oiii_boost', 100) / 100.0
-                    img = apply_dualband_palette(target_img, palette=dual_mode, boost_oiii=boost)
+                    img = apply_dualband_palette(base_img, palette=dual_mode, boost_oiii=boost)
                 else:
-                    img = target_img.copy()
+                    img = base_img.copy()
 
                 unclip_amt = getattr(state, 'unclip_stars_val', 0) / 100.0
                 if unclip_amt > 1e-4:
@@ -751,6 +758,14 @@ def apply_developer_pipeline(
             precomputed_mask,
             radius=3,
             strength=antihalo_strength
+        )
+
+    # 16. Diagnóstico de Visualización de Manchas (Visualize Spots Overlay)
+    if getattr(state, "dust_visualize", False):
+        from core.dust import visualize_dust_spots
+        stretched = visualize_dust_spots(
+            stretched,
+            threshold=float(getattr(state, "dust_visualize_threshold", 50))
         )
 
     final_result = np.ascontiguousarray(stretched, dtype=np.float32)

@@ -715,6 +715,28 @@ class MaskLayersWidget(QWidget):
 
         self.layout_mask_def.addWidget(self.panel_ground)
 
+        # Fila Refinar Bordes (Guided Cross / LightCraft)
+        row_refine = QHBoxLayout()
+        self.chk_layer_refine = QCheckBox("Refinar Bordes (Guided Cross)")
+        self.chk_layer_refine.setToolTip(
+            "Imanta los bordes de la máscara a las aristas reales de la escena usando el Filtro Guiado Cruzado de LightCraft"
+        )
+        self.chk_layer_refine.toggled.connect(self._on_layer_refine_toggled)
+        row_refine.addWidget(self.chk_layer_refine)
+
+        self.slider_refine_strength = QSlider(Qt.Horizontal)
+        self.slider_refine_strength.setRange(0, 100)
+        self.slider_refine_strength.setValue(100)
+        self.slider_refine_strength.setEnabled(False)
+        self.slider_refine_strength.valueChanged.connect(self._on_layer_refine_strength_changed)
+        self.slider_refine_strength.sliderReleased.connect(self._on_mask_param_interaction_finished)
+        row_refine.addWidget(self.slider_refine_strength, stretch=1)
+
+        self.lbl_refine_val = QLabel("100%")
+        self.lbl_refine_val.setStyleSheet("color: #80d8ff; font-weight: bold; min-width: 35px;")
+        row_refine.addWidget(self.lbl_refine_val)
+        self.layout_mask_def.addLayout(row_refine)
+
         # Botón de visualización en lienzo
         self.btn_preview_mask = QPushButton(" Previsualizar Máscara en Lienzo")
         self.btn_preview_mask.setIcon(get_icon("eye", color="#80d8ff", size=13))
@@ -1778,7 +1800,7 @@ class MaskLayersWidget(QWidget):
         if cache is None:
             layer._thumb_pixmap_cache = cache = {}
 
-        cache_key = (mode, tw, th, layer.enabled, layer.inverted)
+        cache_key = (mode, tw, th, layer.enabled, layer.inverted, getattr(layer, 'refine_edges', False), getattr(layer, 'refine_strength', 0.0))
         if cache_key in cache:
             return cache[cache_key]
 
@@ -2127,6 +2149,13 @@ class MaskLayersWidget(QWidget):
             self.chk_layer_enabled.setChecked(layer.enabled)
             self.chk_layer_invert.setChecked(layer.inverted)
             self.chk_layer_invert.setEnabled(not is_sys)
+            refine_on = getattr(layer, "refine_edges", False)
+            refine_k = int(round(getattr(layer, "refine_strength", 1.0) * 100))
+            self.chk_layer_refine.setChecked(refine_on)
+            self.chk_layer_refine.setEnabled(not is_sys)
+            self.slider_refine_strength.setEnabled(refine_on and not is_sys)
+            self.slider_refine_strength.setValue(refine_k if refine_k > 0 else 100)
+            self.lbl_refine_val.setText(f"{self.slider_refine_strength.value()}%")
 
             # Fila C: Opacidad
             op_pct = int(round(layer.opacity * 100))
@@ -2395,6 +2424,31 @@ class MaskLayersWidget(QWidget):
             elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
                 self.starnet_visibility_changed.emit(False)
             self.update_active_layer_histogram()
+            self.layers_changed.emit()
+
+    def _on_layer_refine_toggled(self, checked: bool) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if layer:
+            layer.refine_edges = checked
+            if checked and getattr(layer, "refine_strength", 0.0) <= 1e-4:
+                layer.refine_strength = float(self.slider_refine_strength.value()) / 100.0
+            self.slider_refine_strength.setEnabled(checked)
+            self.invalidate_layer_thumbnail(layer.id)
+            self._rebuild_list_items(select_layer_id=layer.id)
+            if self.btn_preview_mask.isChecked():
+                self._emit_mask_preview()
+            self.layers_changed.emit()
+
+    def _on_layer_refine_strength_changed(self, value: int) -> None:
+        self.lbl_refine_val.setText(f"{value}%")
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if layer:
+            layer.refine_strength = float(value) / 100.0
+            self.invalidate_layer_thumbnail(layer.id)
+            if self.btn_preview_mask.isChecked():
+                self._emit_mask_preview()
             self.layers_changed.emit()
 
     def _on_layer_invert_toggled(self, checked: bool) -> None:

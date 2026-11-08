@@ -40,6 +40,8 @@ class MaskCanvas(QWidget):
     pan_finished = Signal()
     bg_samples_changed = Signal()
     bg_sample_mode_toggled = Signal(bool)
+    dust_spots_changed = Signal()
+    dust_spot_mode_toggled = Signal(bool)
 
     def __init__(self, parent: Optional[QWidget] = None, enable_masking: bool = True):
         super().__init__(parent)
@@ -129,6 +131,13 @@ class MaskCanvas(QWidget):
         self.bg_sample_box_size: int = 25
         self._bg_hovered_idx: Optional[int] = None
         self._bg_dragging_idx: Optional[int] = None
+
+        # Herramienta Interactiva de Corrección de Manchas de Polvo (Sensor Dust Spot Mode)
+        self.dust_spot_mode: bool = False
+        self.dust_spots: List[Dict[str, Any]] = []
+        self._dust_hovered_idx: Optional[int] = None
+        self._dust_dragging_idx: Optional[int] = None
+        self.default_dust_radius: float = 0.015
 
         if self.enable_masking:
             self.update_brush_cursor()
@@ -543,6 +552,64 @@ class MaskCanvas(QWidget):
             self.bg_samples_changed.emit()
             self.update()
 
+    def set_dust_spot_mode(self, enabled: bool) -> None:
+        """Activa o desactiva la colocación y edición interactiva de manchas de polvo."""
+        self.dust_spot_mode = enabled
+        if enabled:
+            if getattr(self, 'bg_sample_mode', False):
+                self.set_bg_sample_mode(False)
+            if getattr(self, 'layer_brush_active', False):
+                self.set_layer_brush_enabled(False)
+            self.setCursor(Qt.CrossCursor)
+        else:
+            self._dust_hovered_idx = None
+            self._dust_dragging_idx = None
+            if not self.enable_masking:
+                self.setCursor(Qt.ArrowCursor)
+        self.dust_spot_mode_toggled.emit(self.dust_spot_mode)
+        self.update()
+
+    def set_dust_spots(self, spots: List[Dict[str, Any]]) -> None:
+        """Establece la lista de manchas de polvo registradas."""
+        self.dust_spots = [dict(s) for s in spots]
+        self.dust_spots_changed.emit()
+        self.update()
+
+    def get_dust_spots(self) -> List[Dict[str, Any]]:
+        """Retorna la lista de manchas de polvo actuales."""
+        return [dict(s) for s in self.dust_spots]
+
+    def clear_dust_spots(self) -> None:
+        """Elimina todas las manchas de polvo del lienzo."""
+        if self.dust_spots:
+            self.dust_spots.clear()
+            self._dust_hovered_idx = None
+            self._dust_dragging_idx = None
+            self.dust_spots_changed.emit()
+            self.update()
+
+    def _hit_test_dust_spot(self, widget_pt: QPointF) -> Optional[int]:
+        """Detecta si un punto del widget colisiona con el retículo de alguna mota de polvo."""
+        if not self.dust_spots or not self.base_pixmap or self.base_pixmap.isNull():
+            return None
+        target_rect, _, scale = self.get_render_geometry()
+        if scale <= 0:
+            return None
+        h_f = self.base_pixmap.height()
+        w_f = self.base_pixmap.width()
+        long_edge = float(max(w_f, h_f))
+
+        for idx in reversed(range(len(self.dust_spots))):
+            spot = self.dust_spots[idx]
+            s_pt = self._norm_img_to_widget(spot["x"], spot["y"])
+            if s_pt is None:
+                continue
+            r_px = max(6.0, spot.get("radius", self.default_dust_radius) * long_edge * scale)
+            dist = math.hypot(widget_pt.x() - s_pt.x(), widget_pt.y() - s_pt.y())
+            if dist <= r_px + 4.0:
+                return idx
+        return None
+
     def set_bg_sample_box_size(self, size: int) -> None:
         """Ajusta el tamaño visual de la caja de muestreo en píxeles."""
         self.bg_sample_box_size = max(5, min(100, int(size)))
@@ -700,6 +767,39 @@ class MaskCanvas(QWidget):
             return
 
         pos = event.position().toPoint()
+
+        # -3. Manejo de Manchas de Polvo (Sensor Dust Spot Mode)
+        if self.dust_spot_mode:
+            pt = event.position()
+            target_rect, _, _ = self.get_render_geometry()
+            if target_rect.contains(pt):
+                hit_idx = self._hit_test_dust_spot(pt)
+                if event.button() == Qt.LeftButton:
+                    if hit_idx is not None:
+                        self._dust_dragging_idx = hit_idx
+                        self.setCursor(Qt.ClosedHandCursor)
+                    else:
+                        norm = self._widget_to_norm_img(pt)
+                        if norm is not None:
+                            new_spot = {
+                                "x": float(norm.x()),
+                                "y": float(norm.y()),
+                                "radius": self.default_dust_radius,
+                                "strength": 1.0,
+                            }
+                            self.dust_spots.append(new_spot)
+                            self.dust_spots_changed.emit()
+                    self.update()
+                    event.accept()
+                    return
+                elif event.button() == Qt.RightButton:
+                    if hit_idx is not None:
+                        self.dust_spots.pop(hit_idx)
+                        self._dust_hovered_idx = None
+                        self.dust_spots_changed.emit()
+                        self.update()
+                        event.accept()
+                        return
 
         # -2. Manejo de Puntos de Muestreo de Fondo (DBE / RBF)
         if self.bg_sample_mode:
@@ -901,6 +1001,30 @@ class MaskCanvas(QWidget):
     def mouseMoveEvent(self, event) -> None:
         pos = event.position().toPoint()
 
+        # -3. Manejo de Manchas de Polvo (Sensor Dust Spot Mode)
+        if self.dust_spot_mode:
+            pt = event.position()
+            if self._dust_dragging_idx is not None and 0 <= self._dust_dragging_idx < len(self.dust_spots):
+                norm = self._widget_to_norm_img(pt)
+                if norm is not None:
+                    self.dust_spots[self._dust_dragging_idx]["x"] = float(norm.x())
+                    self.dust_spots[self._dust_dragging_idx]["y"] = float(norm.y())
+                    self.dust_spots_changed.emit()
+                    self.update()
+                event.accept()
+                return
+            else:
+                hit_idx = self._hit_test_dust_spot(pt)
+                if hit_idx != self._dust_hovered_idx:
+                    self._dust_hovered_idx = hit_idx
+                    self.update()
+                if hit_idx is not None:
+                    self.setCursor(Qt.PointingHandCursor)
+                else:
+                    self.setCursor(Qt.CrossCursor)
+                event.accept()
+                return
+
         # -2. Manejo de Puntos de Muestreo de Fondo (DBE / RBF)
         if self.bg_sample_mode:
             pt = event.position()
@@ -1041,6 +1165,15 @@ class MaskCanvas(QWidget):
         super().mouseDoubleClickEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if self.dust_spot_mode and self._dust_dragging_idx is not None:
+            self._dust_dragging_idx = None
+            hit_idx = self._hit_test_dust_spot(event.position())
+            self.setCursor(Qt.PointingHandCursor if hit_idx is not None else Qt.CrossCursor)
+            self.dust_spots_changed.emit()
+            self.update()
+            event.accept()
+            return
+
         if self.bg_sample_mode and self._bg_dragging_idx is not None:
             self._bg_dragging_idx = None
             hit_idx = self._hit_test_bg_sample(event.position())
@@ -1516,6 +1649,10 @@ class MaskCanvas(QWidget):
         if self.bg_sample_mode or self.bg_samples:
             self._draw_bg_samples_overlay(painter)
 
+        # Superposición de Manchas de Polvo y Curación (Sensor Dust Spots)
+        if self.dust_spot_mode or self.dust_spots:
+            self._draw_dust_spots_overlay(painter)
+
     def _draw_bg_samples_overlay(self, painter: QPainter) -> None:
         """Renderiza las cajas de muestreo interactivo de fondo en el lienzo con estética DBE / GraXpert."""
         if not self.bg_samples or not self.base_pixmap or self.base_pixmap.isNull():
@@ -1563,6 +1700,51 @@ class MaskCanvas(QWidget):
             painter.setPen(QPen(cross_color, 1.0))
             painter.drawLine(QPointF(sx - 3, sy), QPointF(sx + 3, sy))
             painter.drawLine(QPointF(sx, sy - 3), QPointF(sx, sy + 3))
+
+        painter.restore()
+
+    def _draw_dust_spots_overlay(self, painter: QPainter) -> None:
+        """Renderiza las retículas circulares de manchas de polvo del sensor."""
+        if not self.dust_spots or not self.base_pixmap or self.base_pixmap.isNull():
+            return
+        target_rect, source_rect, scale = self.get_render_geometry()
+        if scale <= 0:
+            return
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        h_f = self.base_pixmap.height()
+        w_f = self.base_pixmap.width()
+        long_edge = float(max(w_f, h_f))
+
+        for idx, spot in enumerate(self.dust_spots):
+            s_pt = self._norm_img_to_widget(spot["x"], spot["y"])
+            if s_pt is None:
+                continue
+            sx, sy = s_pt.x(), s_pt.y()
+            r_px = max(6.0, spot.get("radius", self.default_dust_radius) * long_edge * scale)
+
+            is_active = (idx == self._dust_hovered_idx or idx == self._dust_dragging_idx)
+            if is_active:
+                pen_color = QColor("#ff4081")  # Rosa magenta brillante
+                fill_color = QColor(255, 64, 129, 65)
+                cross_color = QColor("#ffffff")
+                stroke_w = 2.0
+            else:
+                pen_color = QColor("#e040fb")  # Púrpura cósmico
+                fill_color = QColor(224, 64, 251, 35)
+                cross_color = QColor("#e040fb")
+                stroke_w = 1.3
+
+            # Retícula circular
+            painter.setPen(QPen(pen_color, stroke_w, Qt.DashLine if not is_active else Qt.SolidLine))
+            painter.setBrush(QBrush(fill_color))
+            painter.drawEllipse(QPointF(sx, sy), r_px, r_px)
+
+            # Cruz central
+            painter.setPen(QPen(cross_color, 1.0))
+            painter.drawLine(QPointF(sx - 4, sy), QPointF(sx + 4, sy))
+            painter.drawLine(QPointF(sx, sy - 4), QPointF(sx, sy + 4))
 
         painter.restore()
 

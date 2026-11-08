@@ -1,9 +1,11 @@
 # core/gpu_backend.py
 """
 core/gpu_backend.py - Detección e inicialización de aceleración GPU (CuPy/CUDA, PyTorch CUDA y OpenCV OpenCL/UMat).
-Proporciona aceleración opcional con tolerancia total a fallos y respaldo automático en CPU (100% functional).
+Proporciona aceleración opcional con tolerancia total a fallos, respaldo automático en CPU
+y protección contra cuelgues de driver mediante el patrón Crash Sentinel (LightCraft).
 """
 import logging
+import os
 from typing import Optional, Tuple, Dict, Any
 import numpy as np
 import cv2
@@ -16,50 +18,128 @@ _OPENCL_AVAILABLE = False
 _GPU_DEVICE_NAME = ""
 _cp = None
 _torch = None
+_USE_GPU = False
+_CRASH_SENTINEL_TRIGGERED = False
 
-# 1. Detección de CuPy (CUDA nativo)
-try:
-    import cupy as _cp
-    num_devices = _cp.cuda.runtime.getDeviceCount()
-    if num_devices > 0:
-        props = _cp.cuda.runtime.getDeviceProperties(0)
-        gpu_raw_name = props.get("name", b"GPU NVIDIA")
-        if isinstance(gpu_raw_name, bytes):
-            _GPU_DEVICE_NAME = gpu_raw_name.decode("utf-8", errors="ignore")
-        else:
-            _GPU_DEVICE_NAME = str(gpu_raw_name)
-        _CUPY_AVAILABLE = True
-except Exception:
-    _CUPY_AVAILABLE = False
-    _cp = None
 
-# 2. Detección de PyTorch (CUDA / ROCm)
-try:
-    import torch as _torch
-    if _torch.cuda.is_available():
-        _TORCH_CUDA_AVAILABLE = True
-        if not _GPU_DEVICE_NAME:
-            _GPU_DEVICE_NAME = _torch.cuda.get_device_name(0)
-except Exception:
-    _TORCH_CUDA_AVAILABLE = False
-    _torch = None
+def get_gpu_marker_path() -> str:
+    """Retorna la ruta al archivo centinela de inicialización GPU (Crash Sentinel)."""
+    appdata = os.environ.get("APPDATA")
+    if appdata and os.path.isdir(appdata):
+        marker_dir = os.path.join(appdata, "AstroLoom")
+    else:
+        marker_dir = os.path.join(os.path.expanduser("~"), ".astroloom")
+    try:
+        os.makedirs(marker_dir, exist_ok=True)
+        return os.path.join(marker_dir, "gpu-init.marker")
+    except Exception:
+        fallback_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(fallback_root, "gpu-init.marker")
 
-# 3. Detección de OpenCV OpenCL (Transparent API / UMat)
-try:
-    if cv2.ocl.haveOpenCL():
-        cv2.ocl.setUseOpenCL(True)
-        if cv2.ocl.useOpenCL():
-            _OPENCL_AVAILABLE = True
-            if not _GPU_DEVICE_NAME:
-                dev = cv2.ocl.Device.getDefault()
-                if dev:
-                    _GPU_DEVICE_NAME = dev.name()
+
+def _init_gpu_backends(force: bool = False) -> None:
+    """
+    Inicializa la detección de aceleración GPU con protección por Crash Sentinel (LightCraft pattern).
+    Si ocurre un cuelgue irrecuperable a nivel de driver en un arranque previo, el centinela permanece
+    y este método desactiva la GPU automáticamente, arrancando de forma segura en modo CPU.
+    """
+    global _CUPY_AVAILABLE, _TORCH_CUDA_AVAILABLE, _OPENCL_AVAILABLE
+    global _GPU_DEVICE_NAME, _cp, _torch, _USE_GPU, _CRASH_SENTINEL_TRIGGERED
+
+    marker_path = get_gpu_marker_path()
+
+    # Si no se fuerza el reintento y el marcador existe, hubo cuelgue previo de driver
+    if not force and os.path.isfile(marker_path):
+        _CRASH_SENTINEL_TRIGGERED = True
+        logger.warning(
+            f"[Crash Sentinel] Se detectó un fallo crítico previo en driver GPU (marcador {marker_path}). "
+            "Aceleración GPU desactivada por seguridad para prevenir cuelgues del proceso. Fallback seguro a CPU."
+        )
+        _CUPY_AVAILABLE = False
+        _TORCH_CUDA_AVAILABLE = False
+        _OPENCL_AVAILABLE = False
+        _USE_GPU = False
+        _GPU_DEVICE_NAME = "CPU (Fallback seguro tras cuelgue de driver GPU)"
+        return
+
+    # Escribir archivo marcador antes de sondear backends nativos
+    try:
+        with open(marker_path, "w", encoding="utf-8") as f:
+            f.write("gpu-init-in-progress\n")
+    except Exception as e:
+        logger.debug(f"[Crash Sentinel] No se pudo escribir marcador: {e}")
+
+    try:
+        _CRASH_SENTINEL_TRIGGERED = False
+
+        # 1. Detección de CuPy (CUDA nativo)
+        try:
+            import cupy as cp_mod
+            num_devices = cp_mod.cuda.runtime.getDeviceCount()
+            if num_devices > 0:
+                props = cp_mod.cuda.runtime.getDeviceProperties(0)
+                gpu_raw_name = props.get("name", b"GPU NVIDIA")
+                if isinstance(gpu_raw_name, bytes):
+                    _GPU_DEVICE_NAME = gpu_raw_name.decode("utf-8", errors="ignore")
                 else:
-                    _GPU_DEVICE_NAME = "OpenCL GPU"
-except Exception:
-    _OPENCL_AVAILABLE = False
+                    _GPU_DEVICE_NAME = str(gpu_raw_name)
+                _CUPY_AVAILABLE = True
+                _cp = cp_mod
+        except Exception:
+            _CUPY_AVAILABLE = False
+            _cp = None
 
-_USE_GPU = _CUPY_AVAILABLE or _TORCH_CUDA_AVAILABLE or _OPENCL_AVAILABLE
+        # 2. Detección de PyTorch (CUDA / ROCm)
+        try:
+            import torch as torch_mod
+            if torch_mod.cuda.is_available():
+                _TORCH_CUDA_AVAILABLE = True
+                _torch = torch_mod
+                if not _GPU_DEVICE_NAME:
+                    _GPU_DEVICE_NAME = torch_mod.cuda.get_device_name(0)
+        except Exception:
+            _TORCH_CUDA_AVAILABLE = False
+            _torch = None
+
+        # 3. Detección de OpenCV OpenCL (Transparent API / UMat)
+        try:
+            if cv2.ocl.haveOpenCL():
+                cv2.ocl.setUseOpenCL(True)
+                if cv2.ocl.useOpenCL():
+                    _OPENCL_AVAILABLE = True
+                    if not _GPU_DEVICE_NAME:
+                        dev = cv2.ocl.Device.getDefault()
+                        _GPU_DEVICE_NAME = dev.name() if dev else "OpenCL GPU"
+        except Exception:
+            _OPENCL_AVAILABLE = False
+
+        _USE_GPU = _CUPY_AVAILABLE or _TORCH_CUDA_AVAILABLE or _OPENCL_AVAILABLE
+
+    finally:
+        # Si la inicialización terminó sin que el proceso colapsara a nivel nativo C/C++, eliminar centinela
+        try:
+            if os.path.isfile(marker_path):
+                os.remove(marker_path)
+        except Exception:
+            pass
+
+
+def is_crash_sentinel_active() -> bool:
+    """Indica si el centinela de cuelgue GPU está activo debido a un fallo previo."""
+    return _CRASH_SENTINEL_TRIGGERED
+
+
+def clear_gpu_crash_sentinel() -> bool:
+    """Elimina el marcador del centinela de cuelgue y reintenta la detección GPU."""
+    marker_path = get_gpu_marker_path()
+    if os.path.isfile(marker_path):
+        try:
+            os.remove(marker_path)
+        except Exception as e:
+            logger.error(f"[Crash Sentinel] No se pudo eliminar el marcador GPU: {e}")
+            return False
+    _init_gpu_backends(force=True)
+    return True
 
 
 def is_cupy_installed() -> bool:
@@ -125,6 +205,7 @@ def get_gpu_backend_info() -> Dict[str, Any]:
         "torch_cuda_available": _TORCH_CUDA_AVAILABLE,
         "opencl_available": _OPENCL_AVAILABLE,
         "opencl_active": cv2.ocl.useOpenCL() if _OPENCL_AVAILABLE else False,
+        "crash_sentinel_triggered": _CRASH_SENTINEL_TRIGGERED,
     }
 
 
@@ -167,3 +248,7 @@ def accelerated_gaussian_blur(
         except Exception:
             pass
     return cv2.GaussianBlur(img, ksize, sigmaX=sigma_x, sigmaY=sigma_y, borderType=border_type)
+
+
+# Ejecutar inicialización protegida al importar el módulo
+_init_gpu_backends()

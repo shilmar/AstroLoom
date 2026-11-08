@@ -400,3 +400,96 @@ def generate_color_range_mask(
         mask = 1.0 - mask
 
     return mask.astype(np.float32)
+
+
+def refine_mask_guided_cross(
+    mask: np.ndarray,
+    image_rgb: np.ndarray,
+    strength: float = 1.0,
+    radius: Optional[int] = None,
+    eps: float = 0.02
+) -> np.ndarray:
+    """
+    Refinamiento de bordes de máscara por Filtro Cruzado Guiado (guided_cross / LightCraft).
+    Imanta los contornos de la máscara a las aristas y microestructuras reales de la escena
+    utilizando la luminancia logarítmica como guía fotométrica.
+
+    Fórmula:
+        guia = log(1.0 + 255.0 * L) / log(256.0)
+        alpha_refinado = GuidedFilter(guia=guia, src=alpha, radius=sigma, eps=eps)
+        alpha_final = alpha + (alpha_refinado - alpha) * sqrt(strength)
+    """
+    if mask is None or image_rgb is None:
+        return mask
+    if strength <= 1e-4:
+        return mask
+
+    is_3d = (mask.ndim == 3 and mask.shape[2] == 1)
+    m_2d = mask[..., 0] if mask.ndim == 3 else mask
+    m_f = np.clip(m_2d.astype(np.float32), 0.0, 1.0)
+    h, w = m_f.shape[:2]
+
+    # 1. Preparar imagen guía: calcular luminancia perceptual
+    if image_rgb.ndim == 3 and image_rgb.shape[2] >= 3:
+        if image_rgb.shape[:2] != (h, w):
+            ref_img = cv2.resize(image_rgb, (w, h), interpolation=cv2.INTER_LINEAR)
+        else:
+            ref_img = image_rgb
+
+        if ref_img.dtype == np.uint8:
+            ref_f = ref_img.astype(np.float32) / 255.0
+        else:
+            ref_f = np.clip(ref_img, 0.0, 1.0).astype(np.float32)
+
+        lum = (0.2126 * ref_f[..., 0] + 0.7152 * ref_f[..., 1] + 0.0722 * ref_f[..., 2]).astype(np.float32)
+    else:
+        if image_rgb.shape[:2] != (h, w):
+            ref_img = cv2.resize(image_rgb, (w, h), interpolation=cv2.INTER_LINEAR)
+        else:
+            ref_img = image_rgb
+        if ref_img.dtype == np.uint8:
+            lum = ref_img.astype(np.float32) / 255.0
+        else:
+            lum = np.clip(ref_img, 0.0, 1.0).astype(np.float32)
+
+    # 2. Guía en escala logarítmica normalizada en [0.0, 1.0]
+    guide_log = np.log1p(255.0 * lum) / np.log(256.0)
+
+    # 3. Radio adaptativo proporcional al eje mayor (sigma ≈ 0.04 * long_edge)
+    if radius is None or radius <= 0:
+        long_edge = max(h, w)
+        r = max(3, int(round(0.04 * long_edge)))
+    else:
+        r = max(1, int(radius))
+
+    # 4. Filtro guiado con cv2.boxFilter O(1)
+    ksize = (2 * r + 1, 2 * r + 1)
+    mean_I = cv2.boxFilter(guide_log, -1, ksize)
+    mean_p = cv2.boxFilter(m_f, -1, ksize)
+    mean_Ip = cv2.boxFilter(guide_log * m_f, -1, ksize)
+    cov_Ip = mean_Ip - mean_I * mean_p
+
+    mean_II = cv2.boxFilter(guide_log * guide_log, -1, ksize)
+    var_I = mean_II - mean_I * mean_I
+
+    a = cov_Ip / (var_I + eps)
+    b = mean_p - a * mean_I
+
+    mean_a = cv2.boxFilter(a, -1, ksize)
+    mean_b = cv2.boxFilter(b, -1, ksize)
+
+    q = mean_a * guide_log + mean_b
+    q = np.clip(q, 0.0, 1.0)
+
+    # 5. Ponderación no lineal con raíz cuadrada de la intensidad
+    k = float(np.clip(strength, 0.0, 1.0))
+    alpha_final = m_f + (q - m_f) * np.sqrt(k)
+    alpha_final = np.clip(alpha_final, 0.0, 1.0).astype(np.float32)
+
+    if is_3d:
+        return alpha_final[..., np.newaxis]
+    return alpha_final
+
+
+# Alias canónico
+guided_cross = refine_mask_guided_cross
