@@ -1,0 +1,20 @@
+[package]
+name = "astroloom_rs"
+version = "0.14.0"
+edition = "2021"
+
+[lib]
+name = "astroloom_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+numpy = "0.23"
+rayon = "1.10"
+nalgebra = "0.33"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"

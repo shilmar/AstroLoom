@@ -12,7 +12,12 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from scipy.stats import theilslopes
+
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
 
 
 def detect_stars_photometry(
@@ -113,6 +118,12 @@ def fit_theil_sen_pcc(
     f_g = np.array([s["flux_g"] for s in stars], dtype=np.float64)
     f_b = np.array([s["flux_b"] for s in stars], dtype=np.float64)
 
+    if HAS_RUST:
+        cat = np.ascontiguousarray(bp_rp_catalog, dtype=np.float64) if bp_rp_catalog is not None else None
+        return astroloom_rs.fit_theil_sen_pcc_rs(f_r, f_g, f_b, cat)
+
+    from scipy.stats import theilslopes
+
     eps = 1e-7
     log_rg = np.log10((f_r + eps) / (f_g + eps))
     log_bg = np.log10((f_b + eps) / (f_g + eps))
@@ -167,6 +178,9 @@ def apply_pcc_gains(
 ) -> np.ndarray:
     """Applies PCC channel multipliers while preserving sky background neutral pedestal."""
     img = np.ascontiguousarray(img_rgb, dtype=np.float32)
+
+    if HAS_RUST:
+        return astroloom_rs.apply_pcc_gains_rs(img, float(k_r), float(k_b), bool(preserve_neutral_bg))
 
     if preserve_neutral_bg:
         bg_r = float(np.percentile(img[..., 0], 10))

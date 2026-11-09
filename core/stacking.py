@@ -16,6 +16,13 @@ from typing import Optional, List, Tuple
 from astropy.io import fits
 from core.banding import suppress_cmos_banding
 
+# Aceleración nativa en Rust vía PyO3 / Rayon (máxima prioridad)
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
 # Aceleración nativa de CPU con Numba (fallback transparente a NumPy si no está disponible)
 try:
     import numba
@@ -218,32 +225,50 @@ def load_image_as_float32(
         with rawpy.imread(filepath) as raw:
             # Calibración pre-debayer sobre el sensor (CFA) si hay tomas maestras
             if master_dark is not None or master_flat is not None or master_bias is not None:
-                cfa = raw.raw_image.astype(np.float32)
-
-                # 1. Sustracción de exceso térmico / píxeles calientes
-                if master_dark is not None and master_dark.ndim == 2:
-                    if master_bias is not None and master_bias.ndim == 2:
-                        thermal_excess = master_dark
+                if HAS_RUST and hasattr(astroloom_rs, "calibrate_raw_cfa_inplace_rs"):
+                    if master_dark is not None and master_dark.ndim == 2:
+                        dark_ped = 0.0 if (master_bias is not None and master_bias.ndim == 2) else float(np.median(master_dark))
+                    elif master_bias is not None and master_bias.ndim == 2:
+                        dark_ped = float(np.median(master_bias))
                     else:
-                        pedestal = float(np.median(master_dark))
-                        thermal_excess = master_dark - pedestal
-                    cfa -= thermal_excess
-                elif master_bias is not None and master_bias.ndim == 2:
-                    pedestal = float(np.median(master_bias))
-                    cfa -= (master_bias - pedestal)
+                        dark_ped = 0.0
+                    black_ped = float(raw.black_level_per_channel[0]) if hasattr(raw, 'black_level_per_channel') else float(np.median(raw.raw_image))
 
-                # 2. Corrección de Flat en espacio CFA sobre señal óptica
-                if master_flat is not None and master_flat.ndim == 2:
-                    black_pedestal = float(raw.black_level_per_channel[0]) if hasattr(raw, 'black_level_per_channel') else float(np.median(cfa))
-                    signal = cfa - black_pedestal
-                    safe_flat = np.where(master_flat > 1e-4, master_flat, 1.0)
-                    signal /= safe_flat
-                    cfa = signal + black_pedestal
-                    del signal, safe_flat
+                    astroloom_rs.calibrate_raw_cfa_inplace_rs(
+                        raw.raw_image,
+                        master_dark=np.ascontiguousarray(master_dark, dtype=np.float32) if (master_dark is not None and master_dark.ndim == 2) else None,
+                        master_flat=np.ascontiguousarray(master_flat, dtype=np.float32) if (master_flat is not None and master_flat.ndim == 2) else None,
+                        master_bias=np.ascontiguousarray(master_bias, dtype=np.float32) if (master_bias is not None and master_bias.ndim == 2) else None,
+                        black_level=black_ped,
+                        dark_pedestal=dark_ped
+                    )
+                else:
+                    cfa = raw.raw_image.astype(np.float32)
 
-                # Inyectar matriz corregida en el buffer C++ de LibRaw
-                raw.raw_image[:] = np.clip(np.round(cfa), 0, 65535).astype(np.uint16)
-                del cfa
+                    # 1. Sustracción de exceso térmico / píxeles calientes
+                    if master_dark is not None and master_dark.ndim == 2:
+                        if master_bias is not None and master_bias.ndim == 2:
+                            thermal_excess = master_dark
+                        else:
+                            pedestal = float(np.median(master_dark))
+                            thermal_excess = master_dark - pedestal
+                        cfa -= thermal_excess
+                    elif master_bias is not None and master_bias.ndim == 2:
+                        pedestal = float(np.median(master_bias))
+                        cfa -= (master_bias - pedestal)
+
+                    # 2. Corrección de Flat en espacio CFA sobre señal óptica
+                    if master_flat is not None and master_flat.ndim == 2:
+                        black_pedestal = float(raw.black_level_per_channel[0]) if hasattr(raw, 'black_level_per_channel') else float(np.median(cfa))
+                        signal = cfa - black_pedestal
+                        safe_flat = np.where(master_flat > 1e-4, master_flat, 1.0)
+                        signal /= safe_flat
+                        cfa = signal + black_pedestal
+                        del signal, safe_flat
+
+                    # Inyectar matriz corregida en el buffer C++ de LibRaw
+                    raw.raw_image[:] = np.clip(np.round(cfa), 0, 65535).astype(np.uint16)
+                    del cfa
 
             rgb = raw.postprocess(
                 gamma=(2.222, 4.5),
@@ -848,10 +873,16 @@ def compute_tps_remap_grid(
     if len(src_pts) < min_inliers:
         return None
 
-    try:
-        from scipy.interpolate import RBFInterpolator
-    except ImportError:
-        return None
+    # Motor nativo fusionado en Rust sin asignación de matrices temporales ni scipy
+    if HAS_RUST and hasattr(astroloom_rs, "compute_tps_remap_grid_rs"):
+        res = astroloom_rs.compute_tps_remap_grid_rs(
+            np.ascontiguousarray(src_pts, dtype=np.float32),
+            np.ascontiguousarray(dst_pts, dtype=np.float32),
+            np.ascontiguousarray(H_matrix, dtype=np.float64),
+            int(w), int(h), int(grid_size), int(min_inliers)
+        )
+        if res is not None:
+            return res
 
     try:
         H_inv = np.linalg.inv(H_matrix)
@@ -886,17 +917,25 @@ def compute_tps_remap_grid(
         if len(bin_centers) < 12:
             return None
 
-        bin_centers = np.array(bin_centers, dtype=np.float32)
-        bin_residuals = np.array(bin_residuals, dtype=np.float32)
+        bin_centers = np.ascontiguousarray(bin_centers, dtype=np.float32)
+        bin_residuals = np.ascontiguousarray(bin_residuals, dtype=np.float32)
 
-        rbf = RBFInterpolator(bin_centers, bin_residuals, kernel="thin_plate_spline", smoothing=2.0)
-
-        gx = np.linspace(0, w - 1, grid_size, dtype=np.float32)
-        gy = np.linspace(0, h - 1, grid_size, dtype=np.float32)
-        grid_x, grid_y = np.meshgrid(gx, gy)
-        grid_pts = np.column_stack([grid_x.ravel(), grid_y.ravel()])
-
-        disp_grid = rbf(grid_pts).reshape(grid_size, grid_size, 2).astype(np.float32)
+        # 1. Cómputo TPS acelerado en Rust sin dependencias externas (máxima prioridad)
+        if HAS_RUST and hasattr(astroloom_rs, "compute_tps_grid_rs"):
+            disp_grid = astroloom_rs.compute_tps_grid_rs(
+                bin_centers, bin_residuals, grid_size, grid_size, float(w), float(h), 2.0
+            )
+        else:
+            try:
+                from scipy.interpolate import RBFInterpolator
+            except ImportError:
+                return None
+            rbf = RBFInterpolator(bin_centers, bin_residuals, kernel="thin_plate_spline", smoothing=2.0)
+            gx = np.linspace(0, w - 1, grid_size, dtype=np.float32)
+            gy = np.linspace(0, h - 1, grid_size, dtype=np.float32)
+            grid_x, grid_y = np.meshgrid(gx, gy)
+            grid_pts = np.column_stack([grid_x.ravel(), grid_y.ravel()])
+            disp_grid = rbf(grid_pts).reshape(grid_size, grid_size, 2).astype(np.float32)
 
         # Límite físico estricto: deformación residual óptica no debe exceder 10.0 px ni ser NaN
         if float(np.max(np.abs(disp_grid))) > 10.0 or np.isnan(disp_grid).any():
@@ -1139,78 +1178,110 @@ def _process_single_chunk_cpu(args):
     chunk_result = np.empty((actual_rows, w, c), dtype=np.float32)
 
     if lp_method == "min_rejection" and lp_strength > 1e-4:
-        target_p = max(5.0, 50.0 - (lp_strength * 40.0))
-        if HAS_NUMBA:
-            flat_data = sub_stack.reshape(n_frames, -1)
-            chunk_result = _percentile_kernel_numba(flat_data, target_p).reshape((actual_rows, w, c))
-        else:
-            for ch in range(c):
-                channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
-                res = np.percentile(channel_data, target_p, axis=0)
-                chunk_result[:, :, ch] = res.reshape((actual_rows, w))
+        target_p = float(max(5.0, 50.0 - (lp_strength * 40.0)))
+        flat_data = np.ascontiguousarray(sub_stack.reshape(n_frames, -1), dtype=np.float32)
+        chunk_result = None
+        if HAS_RUST:
+            try:
+                chunk_result = astroloom_rs.percentile_kernel(flat_data, target_p).reshape((actual_rows, w, c))
+            except Exception:
+                chunk_result = None
+
+        if chunk_result is None:
+            if HAS_NUMBA:
+                chunk_result = _percentile_kernel_numba(flat_data, target_p).reshape((actual_rows, w, c))
+            else:
+                for ch in range(c):
+                    channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
+                    res = np.percentile(channel_data, target_p, axis=0)
+                    chunk_result[:, :, ch] = res.reshape((actual_rows, w))
         del sub_stack
         return y_start, y_end, chunk_result
 
     if stack_method == "median":
-        if HAS_NUMBA:
-            flat_data = sub_stack.reshape(n_frames, -1)
-            chunk_result = _median_kernel_numba(flat_data).reshape((actual_rows, w, c))
-        else:
-            for ch in range(c):
-                channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
-                valid_mask = channel_data > -0.5
-                ch_masked = np.where(valid_mask, channel_data, np.nan)
-                chunk_result[:, :, ch] = np.nan_to_num(np.nanmedian(ch_masked, axis=0), nan=0.0).reshape((actual_rows, w))
+        flat_data = np.ascontiguousarray(sub_stack.reshape(n_frames, -1), dtype=np.float32)
+        chunk_result = None
+        if HAS_RUST:
+            try:
+                chunk_result = astroloom_rs.median_kernel(flat_data).reshape((actual_rows, w, c))
+            except Exception:
+                chunk_result = None
+
+        if chunk_result is None:
+            if HAS_NUMBA:
+                chunk_result = _median_kernel_numba(flat_data).reshape((actual_rows, w, c))
+            else:
+                for ch in range(c):
+                    channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
+                    valid_mask = channel_data > -0.5
+                    ch_masked = np.where(valid_mask, channel_data, np.nan)
+                    chunk_result[:, :, ch] = np.nan_to_num(np.nanmedian(ch_masked, axis=0), nan=0.0).reshape((actual_rows, w))
         del sub_stack
         return y_start, y_end, chunk_result
 
     if stack_method in ["min", "min_stack", "anti_traffic"]:
         target_p = 10.0
+        flat_data = np.ascontiguousarray(sub_stack.reshape(n_frames, -1), dtype=np.float32)
+        chunk_result = None
+        if HAS_RUST:
+            try:
+                chunk_result = astroloom_rs.percentile_kernel(flat_data, target_p).reshape((actual_rows, w, c))
+            except Exception:
+                chunk_result = None
+
+        if chunk_result is None:
+            if HAS_NUMBA:
+                chunk_result = _percentile_kernel_numba(flat_data, target_p).reshape((actual_rows, w, c))
+            else:
+                for ch in range(c):
+                    channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
+                    valid_mask = channel_data > -0.5
+                    ch_masked = np.where(valid_mask, channel_data, np.nan)
+                    chunk_result[:, :, ch] = np.nan_to_num(np.nanpercentile(ch_masked, target_p, axis=0), nan=0.0).reshape((actual_rows, w))
+        del sub_stack
+        return y_start, y_end, chunk_result
+
+    # Rechazo estricto en CPU (Kappa-Sigma Ponderado)
+    flat_data = np.ascontiguousarray(sub_stack.reshape(n_frames, -1), dtype=np.float32)
+    weights_arr = np.ascontiguousarray(weights, dtype=np.float32)
+    chunk_result = None
+    if HAS_RUST:
+        try:
+            chunk_result = astroloom_rs.kappa_sigma_kernel(flat_data, float(kappa), weights_arr).reshape((actual_rows, w, c))
+        except Exception:
+            chunk_result = None
+
+    if chunk_result is None:
         if HAS_NUMBA:
-            flat_data = sub_stack.reshape(n_frames, -1)
-            chunk_result = _percentile_kernel_numba(flat_data, target_p).reshape((actual_rows, w, c))
+            chunk_result = _kappa_sigma_kernel_numba(flat_data, kappa, weights).reshape((actual_rows, w, c))
         else:
             for ch in range(c):
                 channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
                 valid_mask = channel_data > -0.5
                 ch_masked = np.where(valid_mask, channel_data, np.nan)
-                chunk_result[:, :, ch] = np.nan_to_num(np.nanpercentile(ch_masked, target_p, axis=0), nan=0.0).reshape((actual_rows, w))
-        del sub_stack
-        return y_start, y_end, chunk_result
+                
+                med = np.nanmedian(ch_masked, axis=0)
+                abs_diff = np.abs(ch_masked - med)
+                mad = np.nanmedian(abs_diff, axis=0)
+                sigma = 1.4826 * mad + 1e-6
 
-    # Rechazo estricto en CPU (Kappa-Sigma Ponderado)
-    if HAS_NUMBA:
-        flat_data = sub_stack.reshape(n_frames, -1)
-        chunk_result = _kappa_sigma_kernel_numba(flat_data, kappa, weights).reshape((actual_rows, w, c))
-    else:
-        for ch in range(c):
-            channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
-            valid_mask = channel_data > -0.5
-            ch_masked = np.where(valid_mask, channel_data, np.nan)
-            
-            med = np.nanmedian(ch_masked, axis=0)
-            abs_diff = np.abs(ch_masked - med)
-            mad = np.nanmedian(abs_diff, axis=0)
-            sigma = 1.4826 * mad + 1e-6
+                low = med - kappa * sigma
+                high = med + kappa * sigma
 
-            low = med - kappa * sigma
-            high = med + kappa * sigma
+                in_range = valid_mask & (channel_data >= low) & (channel_data <= high)
+                w_mat = weights.reshape((n_frames, 1))
+                weighted_vals = np.where(in_range, channel_data * w_mat, 0.0)
+                sums = np.sum(weighted_vals, axis=0)
+                w_sums = np.sum(np.where(in_range, w_mat, 0.0), axis=0)
 
-            in_range = valid_mask & (channel_data >= low) & (channel_data <= high)
-            w_mat = weights.reshape((n_frames, 1))
-            weighted_vals = np.where(in_range, channel_data * w_mat, 0.0)
-            sums = np.sum(weighted_vals, axis=0)
-            w_sums = np.sum(np.where(in_range, w_mat, 0.0), axis=0)
+                fallback = w_sums == 0
+                w_sums[fallback] = 1.0
+                res = sums / w_sums
+                
+                med_fallback = np.nan_to_num(med, nan=0.0)
+                res[fallback] = med_fallback[fallback]
 
-
-            fallback = w_sums == 0
-            w_sums[fallback] = 1.0
-            res = sums / w_sums
-            
-            med_fallback = np.nan_to_num(med, nan=0.0)
-            res[fallback] = med_fallback[fallback]
-
-            chunk_result[:, :, ch] = res.reshape((actual_rows, w))
+                chunk_result[:, :, ch] = res.reshape((actual_rows, w))
 
     del sub_stack
     return y_start, y_end, chunk_result
@@ -1306,6 +1377,16 @@ def compose_sky_ground_with_anti_ghosting(
     dist_to_gnd = cv2.distanceTransform(bin_mask, cv2.DIST_L2, 5)
     dist_to_sky = cv2.distanceTransform(1 - bin_mask, cv2.DIST_L2, 5)
     sdf = dist_to_gnd - dist_to_sky  # >0 en cielo, <0 en suelo
+
+    if HAS_RUST:
+        return astroloom_rs.compose_sky_ground_sdf_rs(
+            np.ascontiguousarray(sky_stacked, dtype=np.float32),
+            np.ascontiguousarray(ground_layer, dtype=np.float32),
+            np.ascontiguousarray(sdf, dtype=np.float32),
+            np.ascontiguousarray(raw_mask, dtype=np.float32),
+            float(boundary_radius),
+            float(tree_sensitivity)
+        )
 
     # 1. Transición óptica natural (radio de 2.5 px, ancho total 5 px sin translúcidos anchos)
     optical_feather = 2.5

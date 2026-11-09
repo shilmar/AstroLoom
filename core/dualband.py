@@ -13,6 +13,12 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
 
 def extract_ha_oiii(
     img_rgb: np.ndarray,
@@ -57,6 +63,14 @@ def apply_dualband_palette(
     """
     if palette.upper() in ("NONE", "OFF", "RGB"):
         return img_rgb
+
+    if HAS_RUST:
+        return astroloom_rs.apply_dualband_palette_rs(
+            np.ascontiguousarray(img_rgb, dtype=np.float32),
+            palette,
+            float(boost_oiii),
+            bool(desat_cores)
+        )
 
     ha, oiii, bg = extract_ha_oiii(img_rgb)
     oiii_scaled = oiii * max(0.1, boost_oiii)
@@ -136,6 +150,9 @@ def unclip_stars(
     Preserves total luminance while replacing flat white clipped discs with true star color.
     """
     img = np.ascontiguousarray(img_rgb, dtype=np.float32)
+    if HAS_RUST and inner_r is None and outer_r is None:
+        return astroloom_rs.unclip_stars_rs(img, float(sat_threshold), int(ring_width))
+
     sat_mask = np.any(img >= sat_threshold, axis=-1).astype(np.uint8)
     if not np.any(sat_mask):
         return img
@@ -193,6 +210,13 @@ def unpurple(
     if amount <= 0.0:
         return img_rgb
 
+    if HAS_RUST:
+        return astroloom_rs.unpurple_rs(
+            np.ascontiguousarray(img_rgb, dtype=np.float32),
+            float(amount),
+            bool(protect_ha)
+        )
+
     img = np.ascontiguousarray(img_rgb, dtype=np.float32)
     r = img[..., 0]
     g = img[..., 1]
@@ -215,3 +239,32 @@ def unpurple(
 
     out = np.stack([corr_r, g, corr_b], axis=-1)
     return np.ascontiguousarray(out, dtype=np.float32)
+
+
+def apply_dualband_pipeline_fused(
+    img_rgb: np.ndarray,
+    palette: str = "HOO",
+    boost_oiii: float = 1.0,
+    desat_cores: bool = True,
+    unclip_amount: float = 0.0,
+    unpurple_amount: float = 0.0,
+    sky_mask: np.ndarray | None = None
+) -> np.ndarray:
+    """Fused dual-band pipeline: palette mapping + star unclip + magenta suppression in a single native pass."""
+    if HAS_RUST:
+        return astroloom_rs.apply_dualband_pipeline_fused(
+            np.ascontiguousarray(img_rgb, dtype=np.float32),
+            palette,
+            float(boost_oiii),
+            bool(desat_cores),
+            float(unclip_amount),
+            float(unpurple_amount),
+            np.ascontiguousarray(sky_mask, dtype=np.float32) if sky_mask is not None else None
+        )
+    out = apply_dualband_palette(img_rgb, palette=palette, boost_oiii=boost_oiii, desat_cores=desat_cores)
+    if unclip_amount > 1e-4:
+        out = unclip_stars(out)
+    if unpurple_amount > 1e-4:
+        out = unpurple(out, amount=unpurple_amount)
+    return out
+

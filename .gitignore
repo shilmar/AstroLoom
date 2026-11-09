@@ -17,6 +17,27 @@ __pycache__/
 .vscode/
 venv/
 env/
+
+# Entorno de desarrollo e IDEs
+.vscode/
+INDEX.md
+.archify/
+graphify-out/
+
+# PyInstaller y compilación de Python
+build/
+dist/
+*-crash-report.xml
+# ¡NOTA IMPORTANTE! No ignores *.spec porque AstroLoom.spec debe subirse a Git.
+# Si quieres ignorar specs temporales, usa algo específico, pero lo ideal es trackear el principal.
+
+# Rust y Maturin (Crucial para no subir los binarios compilados de desarrollo)
+astroloom_rs/target/
+*.pyd
+*.so
+*.dll
+
+# Directorios de datos de usuario, pruebas y resultados locales
 sesiones/*
 !sesiones/.gitkeep
 !sesiones/mascaras/
@@ -54,8 +75,12 @@ scripts/
 # Build artifacts
 build/
 dist/
-*.spec
 *-crash-report.xml
 
 tests/*
 
+# Rust y Maturin (Crucial para no subir los binarios compilados ni temporales)
+astroloom_rs/target/
+*.pyd
+*.so
+*.dll

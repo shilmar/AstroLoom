@@ -21,6 +21,13 @@ import cv2
 import numpy as np
 from core.stacking import load_image_as_float32
 
+# Aceleración nativa en Rust vía PyO3 / Rayon
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
 
 def compute_comet_weights(
     n_frames: int,
@@ -383,6 +390,26 @@ def enhance_star_trails_color(
     """
     if saturation_boost <= 1.0 and core_recovery <= 0.0:
         return img_rgb
+
+    if HAS_RUST and hasattr(astroloom_rs, "recover_star_trail_colors_rs"):
+        m2d = None
+        if sky_mask is not None:
+            sm = sky_mask.astype(np.float32)
+            if sm.max() > 1.05:
+                sm /= 255.0
+            if sm.ndim == 3:
+                sm = sm[..., 0]
+            if sm.shape[:2] != img_rgb.shape[:2]:
+                sm = cv2.resize(sm, (img_rgb.shape[1], img_rgb.shape[0]), interpolation=cv2.INTER_LINEAR)
+            m2d = np.ascontiguousarray(sm, dtype=np.float32)
+
+        return astroloom_rs.recover_star_trail_colors_rs(
+            np.ascontiguousarray(np.clip(img_rgb, 0.0, 1.0), dtype=np.float32),
+            saturation_boost=float(saturation_boost),
+            core_recovery=float(core_recovery),
+            sky_mask=m2d,
+            bg_protect=bool(bg_protect)
+        )
 
     img_f32 = np.clip(img_rgb, 0.0, 1.0).astype(np.float32)
     h, w = img_f32.shape[:2]
@@ -760,6 +787,27 @@ def generate_startrail(
 
                 if sky_acc is None:
                     sky_acc = frame_sky.copy()
+                elif HAS_RUST and hasattr(astroloom_rs, "accumulate_startrail_step_rs"):
+                    curr_dilated_stars = None
+                    if fill_gaps:
+                        curr_dilated_stars = extract_dilated_stars(
+                            cleaned_img,
+                            radius=gap_fill_radius,
+                            threshold_factor=gap_fill_threshold_factor,
+                            sky_mask_bool=sky_mask_bool,
+                            kernel=gap_kernel
+                        )
+                    w_bridge = (0.5 * (prev_weight + curr_weight)) if (mode == "comet" and comet_weights is not None) else 1.0
+                    astroloom_rs.accumulate_startrail_step_rs(
+                        sky_acc,
+                        np.ascontiguousarray(cleaned_img, dtype=np.float32),
+                        weight=float(curr_weight),
+                        prev_dilated=prev_dilated_stars,
+                        curr_dilated=curr_dilated_stars,
+                        w_bridge=float(w_bridge)
+                    )
+                    if fill_gaps:
+                        prev_dilated_stars = curr_dilated_stars
                 else:
                     if fill_gaps:
                         curr_dilated_stars = extract_dilated_stars(
@@ -850,6 +898,27 @@ def generate_startrail(
 
                     if sky_acc is None:
                         sky_acc = frame_sky.copy()
+                    elif HAS_RUST and hasattr(astroloom_rs, "accumulate_startrail_step_rs"):
+                        curr_dilated_stars = None
+                        if fill_gaps:
+                            curr_dilated_stars = extract_dilated_stars(
+                                img,
+                                radius=gap_fill_radius,
+                                threshold_factor=gap_fill_threshold_factor,
+                                sky_mask_bool=sky_mask_bool,
+                                kernel=gap_kernel
+                            )
+                        w_bridge = (0.5 * (prev_weight + curr_weight)) if (mode == "comet" and comet_weights is not None) else 1.0
+                        astroloom_rs.accumulate_startrail_step_rs(
+                            sky_acc,
+                            np.ascontiguousarray(img, dtype=np.float32),
+                            weight=float(curr_weight),
+                            prev_dilated=prev_dilated_stars,
+                            curr_dilated=curr_dilated_stars,
+                            w_bridge=float(w_bridge)
+                        )
+                        if fill_gaps:
+                            prev_dilated_stars = curr_dilated_stars
                     else:
                         if fill_gaps:
                             curr_dilated_stars = extract_dilated_stars(

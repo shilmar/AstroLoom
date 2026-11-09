@@ -18,6 +18,12 @@ from typing import Optional, Tuple
 import numpy as np
 import cv2
 
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
 
 def apply_star_diffusion(
     img_rgb: np.ndarray,
@@ -159,6 +165,26 @@ def apply_star_diffusion(
 
     # Factor de escala energético para halo visible y proporcionado
     halo = halo * 3.8
+
+    if HAS_RUST and hasattr(astroloom_rs, "blend_orton_and_diffusion_rs"):
+        try:
+            m_c = None
+            if sky_mask is not None:
+                m = np.squeeze(sky_mask).astype(np.float32)
+                if m.shape != (h, w):
+                    m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
+                m_c = np.ascontiguousarray(m, dtype=np.float32)
+
+            return astroloom_rs.blend_orton_and_diffusion_rs(
+                np.ascontiguousarray(img_rgb, dtype=np.float32),
+                np.ascontiguousarray(halo, dtype=np.float32),
+                tint=None,
+                sky_mask=m_c,
+                blend_mode=str(halo_mode),
+                strength=float(strength)
+            )
+        except Exception:
+            pass
 
     # Re-aplicar máscara de cielo al halo resultante para que no desborde hacia el suelo
     if sky_mask is not None:

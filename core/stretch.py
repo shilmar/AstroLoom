@@ -2,6 +2,12 @@
 import numpy as np
 import cv2
 
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
 from core.ghs import compute_ghs_lut, apply_ghs_stretch, estimate_ghs_params
 from core.light_pollution import (
     compute_light_pollution_dome,
@@ -672,6 +678,27 @@ def auto_stretch_adaptive_starless(
         is_sky = np.ones((h, w), dtype=bool)
 
     is_color = (img.ndim == 3 and img.shape[2] >= 3)
+    if HAS_RUST and is_color:
+        img_c = np.ascontiguousarray(img[..., :3], dtype=np.float32)
+        mask_c = None
+        if sky_mask is not None:
+            mask_c = sky_mask[..., 0] if sky_mask.ndim == 3 else sky_mask
+            if mask_c.shape[:2] != (h, w):
+                mask_c = cv2.resize(mask_c.astype(np.float32), (w, h), interpolation=cv2.INTER_NEAREST)
+            if feather_radius > 0:
+                k = int(feather_radius) * 2 + 1
+                mask_c = cv2.GaussianBlur(mask_c.astype(np.float32), (k, k), 0)
+            mask_c = np.ascontiguousarray(mask_c, dtype=np.float32)
+
+        return astroloom_rs.auto_stretch_adaptive_starless_rs(
+            img_c,
+            mask_c,
+            target_bg=float(target_bg),
+            shadow_clip_sigma=float(shadow_clip_sigma),
+            saturation_boost=float(saturation_boost),
+            unlinked=bool(unlinked)
+        )
+
     channels = [img[..., c] for c in range(3)] if is_color else [img if img.ndim == 2 else img[..., 0]]
     out_channels = []
 

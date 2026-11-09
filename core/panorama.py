@@ -28,7 +28,20 @@ import cv2
 import numpy as np
 import tifffile
 from PIL import Image, ExifTags
-from scipy.spatial import cKDTree
+
+# Aceleración nativa en Rust vía PyO3 / Rayon (máxima prioridad)
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
+try:
+    from scipy.spatial import cKDTree
+    HAS_SCIPY_TREE = True
+except ImportError:
+    HAS_SCIPY_TREE = False
+    cKDTree = None
 
 from core.stacking import load_image_as_float32, get_image_dimensions
 
@@ -228,6 +241,10 @@ def find_maximum_inscribed_rectangle(mask: np.ndarray) -> Tuple[int, int, int, i
     Garantiza un auto-recorte perfecto eliminando al 100% los bordes negros irregulares.
     Retorna (x, y, ancho, alto).
     """
+    if HAS_RUST and hasattr(astroloom_rs, "find_max_inscribed_rect_rs"):
+        mask_u8 = np.ascontiguousarray(mask if mask.dtype == np.uint8 else (mask > 0).astype(np.uint8) * 255)
+        return astroloom_rs.find_max_inscribed_rect_rs(mask_u8)
+
     h, w = mask.shape[:2]
     # Reducción de escala para cálculo ultra-rápido si la máscara es gigantesca
     scale = 1.0
@@ -425,6 +442,15 @@ def build_star_asterisms(
     if len(pts) < 4:
         return np.empty((0, 4), dtype=np.float32), []
 
+    # 1. Motor Rust nativo sin dependencias de SciPy (máxima prioridad)
+    if HAS_RUST and hasattr(astroloom_rs, "build_star_asterisms_rs"):
+        pts_c = np.ascontiguousarray(pts, dtype=np.float32)
+        feats, quads_arr = astroloom_rs.build_star_asterisms_rs(pts_c, k_neighbors)
+        return feats, [tuple(q) for q in quads_arr]
+
+    if not HAS_SCIPY_TREE or cKDTree is None:
+        return np.empty((0, 4), dtype=np.float32), []
+
     tree = cKDTree(pts)
     _, idxs = tree.query(pts, k=min(k_neighbors + 1, len(pts)))
 
@@ -510,6 +536,28 @@ def match_star_asterisms(
     if len(feats1) == 0 or len(feats2) == 0:
         return np.empty((0, 2), dtype=np.float32), np.empty((0, 2), dtype=np.float32), 0
 
+    # 1. Emparejamiento por árbol k-d nativo en Rust (máxima prioridad)
+    if HAS_RUST and hasattr(astroloom_rs, "match_star_asterisms_rs"):
+        quads1_arr = np.ascontiguousarray(quads1, dtype=np.int32)
+        quads2_arr = np.ascontiguousarray(quads2, dtype=np.int32)
+        feats1_c = np.ascontiguousarray(feats1, dtype=np.float32)
+        feats2_c = np.ascontiguousarray(feats2, dtype=np.float32)
+        m1, m2 = astroloom_rs.match_star_asterisms_rs(
+            feats1_c, quads1_arr, feats2_c, quads2_arr, float(tolerance), int(min_votes)
+        )
+        if len(m1) < 4:
+            return np.empty((0, 2), dtype=np.float32), np.empty((0, 2), dtype=np.float32), 0
+        pts1_m = pts1[m1]
+        pts2_m = pts2[m2]
+        M, inliers = cv2.estimateAffinePartial2D(pts2_m, pts1_m, method=cv2.RANSAC, ransacReprojThreshold=5.0)
+        if inliers is None or np.sum(inliers) < 4:
+            return np.empty((0, 2), dtype=np.float32), np.empty((0, 2), dtype=np.float32), 0
+        inl_mask = inliers.ravel() > 0
+        return pts1_m[inl_mask], pts2_m[inl_mask], int(np.sum(inl_mask))
+
+    if not HAS_SCIPY_TREE or cKDTree is None:
+        return np.empty((0, 2), dtype=np.float32), np.empty((0, 2), dtype=np.float32), 0
+
     tree2 = cKDTree(feats2)
     votes = {}
     for i1, feat in enumerate(feats1):
@@ -538,6 +586,37 @@ def match_star_asterisms(
 
     inl_mask = inliers.ravel() > 0
     return pts1_m[inl_mask], pts2_m[inl_mask], int(np.sum(inl_mask))
+
+
+def match_star_triangles(
+    pts1: np.ndarray,
+    pts2: np.ndarray,
+    tolerance: float = 0.025,
+    max_ransac_iters: int = 5000,
+    inlier_thresh: float = 5.0
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Emparejamiento astronómico de teselas mediante triángulos invariantes y RANSAC en Rust.
+    Retorna (H_matrix (3, 3), inliers_mask (N2,)).
+    """
+    if HAS_RUST and hasattr(astroloom_rs, "match_star_triangles_ransac_rs"):
+        p1 = np.ascontiguousarray(pts1[:, :2], dtype=np.float32)
+        p2 = np.ascontiguousarray(pts2[:, :2], dtype=np.float32)
+        return astroloom_rs.match_star_triangles_ransac_rs(
+            p1, p2, float(tolerance), int(max_ransac_iters), float(inlier_thresh)
+        )
+    if len(pts1) < 4 or len(pts2) < 4:
+        return np.eye(3, dtype=np.float64), np.zeros(len(pts2), dtype=bool)
+    feats1, quads1 = build_star_asterisms(pts1)
+    feats2, quads2 = build_star_asterisms(pts2)
+    p1_m, p2_m, n_inl = match_star_asterisms(feats1, quads1, pts1, feats2, quads2, pts2, tolerance=tolerance)
+    if n_inl < 4:
+        return np.eye(3, dtype=np.float64), np.zeros(len(pts2), dtype=bool)
+    H, inliers = cv2.findHomography(p2_m, p1_m, cv2.RANSAC, inlier_thresh)
+    mask = np.zeros(len(pts2), dtype=bool)
+    if H is not None and inliers is not None:
+        return H, inliers.ravel() > 0
+    return np.eye(3, dtype=np.float64), mask
 
 
 def estimate_camera_rotation_from_stars(

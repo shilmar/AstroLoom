@@ -10,7 +10,12 @@ de alta frecuencia del gradiente astronómico suave mediante filtrado paso bajo 
 
 from typing import Optional, Union
 import numpy as np
-import scipy.ndimage
+
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
 
 
 def _suppress_1d_banding_axis(
@@ -95,6 +100,7 @@ def _suppress_1d_banding_axis(
 
     # 5. Separación de frecuencias: gradiente suave natural (baja frec) vs banding (alta frec)
     smooth_sigma_eff = max(3.0, float(smooth_sigma))
+    import scipy.ndimage
     smooth_profile = scipy.ndimage.gaussian_filter1d(
         row_medians,
         sigma=smooth_sigma_eff,
@@ -141,6 +147,17 @@ def suppress_cmos_banding(
     is_2d = (img_f32.ndim == 2)
     dir_lower = direction.lower()
     mask_2d = (sky_mask[..., 0] if sky_mask.ndim == 3 else sky_mask) if sky_mask is not None else None
+
+    if HAS_RUST:
+        m2d = np.ascontiguousarray(mask_2d, dtype=np.float32) if mask_2d is not None else None
+        return astroloom_rs.suppress_cmos_banding_rs(
+            np.ascontiguousarray(img_f32, dtype=np.float32),
+            direction,
+            float(amount),
+            float(protect_sigma),
+            float(smooth_sigma),
+            m2d
+        )
 
     if is_2d:
         out = img_f32.copy()

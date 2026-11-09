@@ -11,6 +11,13 @@ import numpy as np
 import rawpy
 from PIL import ImageCms
 
+# Aceleración nativa en Rust vía PyO3 / Rayon
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
 ICC_PROFILES_DIR = os.path.join(os.path.dirname(__file__), "icc_profiles")
 
 PROFILE_MAP = {
@@ -266,6 +273,24 @@ def convert_colorspace(
     to_lin_fn, mat, from_lin_fn = COLOR_TRANSFORMS[pair]
 
     orig_dtype = img_data.dtype
+
+    if HAS_RUST and hasattr(astroloom_rs, "convert_colorspace_bradford_rs"):
+        if orig_dtype == np.uint16 and hasattr(astroloom_rs, "convert_colorspace_u16_bradford_rs"):
+            return astroloom_rs.convert_colorspace_u16_bradford_rs(
+                np.ascontiguousarray(img_data, dtype=np.uint16),
+                src_space=src_k,
+                dst_space=dst_k,
+                matrix=np.ascontiguousarray(mat, dtype=np.float32)
+            )
+        elif np.issubdtype(orig_dtype, np.floating):
+            res_conv = astroloom_rs.convert_colorspace_bradford_rs(
+                np.ascontiguousarray(img_data, dtype=np.float32),
+                src_space=src_k,
+                dst_space=dst_k,
+                matrix=np.ascontiguousarray(mat, dtype=np.float32)
+            )
+            return res_conv.astype(orig_dtype) if orig_dtype != np.float32 else res_conv
+
     has_alpha = (img_data.ndim == 3 and img_data.shape[2] == 4)
     rgb_part = img_data[..., :3] if has_alpha else img_data
 

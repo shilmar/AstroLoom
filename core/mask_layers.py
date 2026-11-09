@@ -19,6 +19,12 @@ from core.masking import (
 from core.stretch import apply_white_balance, adjust_contrast
 
 try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
+try:
     from numba import njit, prange
     HAS_NUMBA = True
 except ImportError:
@@ -428,6 +434,42 @@ def apply_local_adjustments_to_image(
     if np.max(weight) <= 1e-4:
         return image_rgb
 
+    if HAS_RUST:
+        orig_c = np.ascontiguousarray(np.clip(image_rgb, 0.0, 1.0), dtype=np.float32)
+        has_curve = not layer.is_curve_identity()
+        has_contrast = abs(layer.contrast) > 1e-3
+        if has_curve or has_contrast:
+            if has_curve:
+                if layer.curve_lut is None:
+                    layer.curve_lut = compute_curve_lut_from_points(layer.curve_points)
+                lut = layer.curve_lut.copy()
+            else:
+                lut = np.linspace(0.0, 1.0, 256, dtype=np.float32)
+
+            if has_contrast:
+                lut = adjust_contrast(lut, layer.contrast, fast_draft=False)
+            lut_c = np.ascontiguousarray(np.clip(lut, 0.0, 1.0), dtype=np.float32)
+        else:
+            lut_c = None
+
+        mask_2d = effective_mask[..., 0] if effective_mask.ndim == 3 else effective_mask
+        mask_c = np.ascontiguousarray(mask_2d, dtype=np.float32)
+
+        return astroloom_rs.apply_layer_adjustments_fused(
+            orig_c,
+            mask_c,
+            lut_c,
+            opacity=float(layer.opacity),
+            exposure=float(layer.exposure),
+            contrast=0.0,
+            highlights=float(layer.highlights),
+            shadows=float(layer.shadows),
+            saturation=float(layer.saturation),
+            vibrance=0.0,
+            temp=float(layer.temp),
+            tint=float(layer.tint)
+        )
+
     if HAS_NUMBA:
         orig_c = np.ascontiguousarray(np.clip(image_rgb, 0.0, 1.0), dtype=np.float32)
         has_sat = abs(layer.saturation - 1.0) > 1e-3
@@ -697,7 +739,10 @@ def apply_all_mask_layers(
 
                 # Mezcla Screen (Trama estilo Photoshop): 1 - (1 - canvas) * (1 - st * opacity)
                 # Garantiza que las estrellas no quemen núcleos y se fundan de forma natural
-                if HAS_NUMBA:
+                if HAS_RUST:
+                    st_c = np.ascontiguousarray(st, dtype=np.float32)
+                    canvas = astroloom_rs.screen_blend(canvas, st_c, float(layer.opacity))
+                elif HAS_NUMBA:
                     st_c = np.ascontiguousarray(st, dtype=np.float32)
                     canvas = _numba_screen_blend(canvas, st_c, float(layer.opacity))
                 else:

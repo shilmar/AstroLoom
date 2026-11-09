@@ -26,6 +26,12 @@ import tifffile
 from PIL import Image, ExifTags
 
 try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
+try:
     from numba import njit
     HAS_NUMBA = True
 except ImportError:
@@ -178,7 +184,13 @@ def _numpy_positive_diff_and_stats(arr_curr: np.ndarray, arr_bg: np.ndarray) -> 
 
 
 def compute_positive_diff_stats(arr_curr: np.ndarray, arr_bg: np.ndarray) -> Tuple[np.ndarray, float, float]:
-    """Despachador acelerado con Numba (nogil) o NumPy según disponibilidad."""
+    """Despachador acelerado con Rust, Numba (nogil) o NumPy según disponibilidad."""
+    if HAS_RUST and hasattr(astroloom_rs, "meteor_positive_diff_and_stats_rs") and arr_curr.ndim == 2 and arr_bg.ndim == 2:
+        diff, mean_val, std_val, _, _ = astroloom_rs.meteor_positive_diff_and_stats_rs(
+            np.ascontiguousarray(arr_curr, dtype=np.float32),
+            np.ascontiguousarray(arr_bg, dtype=np.float32)
+        )
+        return diff, mean_val, std_val
     if HAS_NUMBA:
         return _numba_positive_diff_and_stats(arr_curr, arr_bg)
     return _numpy_positive_diff_and_stats(arr_curr, arr_bg)
@@ -379,12 +391,20 @@ def detect_streaks_in_frame(
         gray_bg = cv2.resize(gray_bg, (gray_curr.shape[1], gray_curr.shape[0]), interpolation=cv2.INTER_LINEAR)
 
     # 2. Estimación robusta del ruido del cielo (inmune a estrellas desplazadas por rotación terrestre)
-    raw_diff = gray_curr - gray_bg
-    sample = raw_diff[::4, ::4]
-    med = float(np.median(sample))
-    mad = float(np.median(np.abs(sample - med)))
-    sigma_robust = float(1.4826 * mad)
-    thresh_val = med + (sensitivity_sigma * 0.72) * max(sigma_robust, 0.0025)
+    if HAS_RUST and hasattr(astroloom_rs, "meteor_positive_diff_and_stats_rs"):
+        c_contig = np.ascontiguousarray(gray_curr, dtype=np.float32)
+        b_contig = np.ascontiguousarray(gray_bg, dtype=np.float32)
+        diff, _, _, med, mad = astroloom_rs.meteor_positive_diff_and_stats_rs(c_contig, b_contig)
+        sigma_robust = float(1.4826 * mad)
+        thresh_val = med + (sensitivity_sigma * 0.72) * max(sigma_robust, 0.0025)
+    else:
+        raw_diff = gray_curr - gray_bg
+        sample = raw_diff[::4, ::4]
+        med = float(np.median(sample))
+        mad = float(np.median(np.abs(sample - med)))
+        sigma_robust = float(1.4826 * mad)
+        thresh_val = med + (sensitivity_sigma * 0.72) * max(sigma_robust, 0.0025)
+        diff = np.maximum(0.0, raw_diff)
 
     # 3. Procesar máscara de exclusión de suelo / horizonte
     sky_mask_u8 = None
@@ -406,7 +426,6 @@ def detect_streaks_in_frame(
         k_safe = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
         sky_mask_u8 = cv2.erode(sky_mask_u8, k_safe, borderType=cv2.BORDER_REPLICATE)
 
-    diff = np.maximum(0.0, raw_diff)
     if sky_mask_u8 is not None:
         diff *= sky_mask_u8
 
@@ -660,6 +679,23 @@ def detect_streaks_in_frame(
 # 5. REPROYECCIÓN ASTRONÓMICA Y ESTIMACIÓN DEL RADIANTE
 # =============================================================================
 
+def is_valid_homography_matrix(H: Optional[np.ndarray]) -> bool:
+    """Verifica que la homografía astronómica sea matemáticamente sana, invertible y no degenerada."""
+    if H is None or not isinstance(H, np.ndarray) or H.shape != (3, 3):
+        return False
+    if not np.all(np.isfinite(H)):
+        return False
+    if abs(H[2, 2]) < 1e-5:
+        return False
+    try:
+        det = float(np.linalg.det(H / H[2, 2]))
+        # En rotación estelar celeste real, el determinante está próximo a 1.0.
+        # Descartamos planos colapsados a líneas (det ≈ 0) o escalados espurios (det > 10).
+        return (0.10 <= abs(det) <= 10.0) and not np.isnan(det)
+    except Exception:
+        return False
+
+
 def compute_frame_homography_to_ref(
     img_target: np.ndarray,
     img_ref: Optional[np.ndarray] = None,
@@ -693,12 +729,13 @@ def compute_frame_homography_to_ref(
             )
             if inliers >= 4:
                 H_down, _ = cv2.findHomography(m_tgt, m_ref, cv2.RANSAC, 4.0)
-                if H_down is not None:
+                if is_valid_homography_matrix(H_down):
                     if abs(scale_factor - 1.0) > 1e-4:
                         S = np.diag([scale_factor, scale_factor, 1.0])
                         S_inv = np.diag([1.0 / scale_factor, 1.0 / scale_factor, 1.0])
                         H_full = S @ H_down @ S_inv
-                        return (H_full / H_full[2, 2]).astype(np.float32)
+                        if is_valid_homography_matrix(H_full):
+                            return (H_full / H_full[2, 2]).astype(np.float32)
                     return H_down.astype(np.float32)
 
         # Fallback a detector ORB si asterismos no alcanzaron inliers suficientes
@@ -717,12 +754,13 @@ def compute_frame_homography_to_ref(
                     src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
                     dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
                     H_down, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 4.0)
-                    if H_down is not None:
+                    if is_valid_homography_matrix(H_down):
                         if abs(scale_factor - 1.0) > 1e-4:
                             S = np.diag([scale_factor, scale_factor, 1.0])
                             S_inv = np.diag([1.0 / scale_factor, 1.0 / scale_factor, 1.0])
                             H_full = S @ H_down @ S_inv
-                            return (H_full / H_full[2, 2]).astype(np.float32)
+                            if is_valid_homography_matrix(H_full):
+                                return (H_full / H_full[2, 2]).astype(np.float32)
                         return H_down.astype(np.float32)
     except Exception:
         pass
@@ -1011,19 +1049,35 @@ def compose_meteor_shower_image(
 
             # 1. Crear máscara de cápsula vectorial ajustada a la traza del meteoro
             thick = max(6, int(round(c.thickness_px * 1.5)) + 4)
-            mask_capsule = np.zeros((patch.shape[0], patch.shape[1]), dtype=np.uint8)
-            cv2.line(mask_capsule, p_start, p_end, 255, thick)
-            cv2.circle(mask_capsule, p_start, thick // 2, 255, -1)
-            cv2.circle(mask_capsule, p_end, thick // 2, 255, -1)
+            if HAS_RUST and hasattr(astroloom_rs, "compute_meteor_capsule_mask_rs"):
+                mask_capsule_f = astroloom_rs.compute_meteor_capsule_mask_rs(
+                    patch.shape[0], patch.shape[1],
+                    (float(p_start[0]), float(p_start[1])),
+                    (float(p_end[0]), float(p_end[1])),
+                    float(thick),
+                    float(feather_px)
+                )
+                mask_capsule = (mask_capsule_f > 0.5).astype(np.uint8)
+            else:
+                mask_capsule = np.zeros((patch.shape[0], patch.shape[1]), dtype=np.uint8)
+                cv2.line(mask_capsule, p_start, p_end, 255, thick)
+                cv2.circle(mask_capsule, p_start, thick // 2, 255, -1)
+                cv2.circle(mask_capsule, p_end, thick // 2, 255, -1)
 
-            k_blur_cap = max(3, (thick // 2) * 2 + 1)
-            mask_capsule_f = cv2.GaussianBlur(
-                mask_capsule.astype(np.float32) / 255.0, (k_blur_cap, k_blur_cap), thick / 3.0
-            )
+                k_blur_cap = max(3, (thick // 2) * 2 + 1)
+                mask_capsule_f = cv2.GaussianBlur(
+                    mask_capsule.astype(np.float32) / 255.0, (k_blur_cap, k_blur_cap), thick / 3.0
+                )
 
             # 2. Estimar fondo local en el parche y en la imagen base por canal RGB (percentil 30)
             is_sky = (mask_capsule == 0)
-            if np.sum(is_sky) > 25:
+            if HAS_RUST and hasattr(astroloom_rs, "estimate_channel_percentile_rs") and patch.ndim == 3:
+                bg_src = np.array(astroloom_rs.estimate_channel_percentile_rs(
+                    np.ascontiguousarray(patch, dtype=np.float32),
+                    np.ascontiguousarray(mask_capsule, dtype=np.uint8),
+                    30.0
+                ), dtype=np.float32)
+            elif np.sum(is_sky) > 25:
                 sky_pixels = patch[is_sky]
                 bg_src = np.percentile(sky_pixels, 30, axis=0)
             else:
@@ -1069,7 +1123,7 @@ def compose_meteor_shower_image(
             # 4. Calibración fotométrica con realce de flujo
             patch_calibrated = bg_base + delta * boost_flux
 
-            # 5. Proyectar al sistema de coordenadas de la imagen de referencia
+            # 5. Proyectar y fundir al sistema de coordenadas de la imagen de referencia
             H = homographies_map.get(c.frame_index)
             if H is not None:
                 T = np.eye(3, dtype=np.float32)
@@ -1077,30 +1131,49 @@ def compose_meteor_shower_image(
                 T[1, 2] = y1_p
                 H_combined = H @ T
 
-                warped_patch = cv2.warpPerspective(
-                    patch_calibrated, H_combined, (w_out, h_out),
-                    flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_CONSTANT, borderValue=0.0
-                )
-                warped_mask = cv2.warpPerspective(
-                    mask_final, H_combined, (w_out, h_out),
-                    flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0.0
-                )
+                if HAS_RUST and hasattr(astroloom_rs, "blend_meteor_capsule_lighten_rs") and out_img.ndim == 3:
+                    astroloom_rs.blend_meteor_capsule_lighten_rs(
+                        out_img,
+                        np.ascontiguousarray(patch_calibrated, dtype=np.float32),
+                        np.ascontiguousarray(mask_final, dtype=np.float32),
+                        np.ascontiguousarray(H_combined, dtype=np.float32),
+                        int(x1_p),
+                        int(y1_p)
+                    )
+                else:
+                    warped_patch = cv2.warpPerspective(
+                        patch_calibrated, H_combined, (w_out, h_out),
+                        flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_CONSTANT, borderValue=0.0
+                    )
+                    warped_mask = cv2.warpPerspective(
+                        mask_final, H_combined, (w_out, h_out),
+                        flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0.0
+                    )
+                    warped_mask_3d = warped_mask[..., None] if warped_mask.ndim == 2 and out_img.ndim == 3 else warped_mask
+                    excess = np.maximum(0.0, warped_patch - out_img)
+                    out_img += warped_mask_3d * excess
+                    del warped_patch, warped_mask
             else:
-                warped_patch = np.zeros_like(out_img)
-                warped_patch[y1_p:y2_p, x1_p:x2_p] = patch_calibrated
-                warped_mask = np.zeros((h_out, w_out), dtype=np.float32)
-                warped_mask[y1_p:y2_p, x1_p:x2_p] = mask_final
+                if HAS_RUST and hasattr(astroloom_rs, "blend_meteor_capsule_lighten_rs") and out_img.ndim == 3:
+                    astroloom_rs.blend_meteor_capsule_lighten_rs(
+                        out_img,
+                        np.ascontiguousarray(patch_calibrated, dtype=np.float32),
+                        np.ascontiguousarray(mask_final, dtype=np.float32),
+                        None,
+                        int(x1_p),
+                        int(y1_p)
+                    )
+                else:
+                    warped_patch = np.zeros_like(out_img)
+                    warped_patch[y1_p:y2_p, x1_p:x2_p] = patch_calibrated
+                    warped_mask = np.zeros((h_out, w_out), dtype=np.float32)
+                    warped_mask[y1_p:y2_p, x1_p:x2_p] = mask_final
+                    warped_mask_3d = warped_mask[..., None] if warped_mask.ndim == 2 and out_img.ndim == 3 else warped_mask
+                    excess = np.maximum(0.0, warped_patch - out_img)
+                    out_img += warped_mask_3d * excess
+                    del warped_patch, warped_mask
 
-            # 6. Fusión en modo Aclarar (Lighten) ponderada por la máscara adaptativa
-            if warped_mask.ndim == 2 and out_img.ndim == 3:
-                warped_mask_3d = warped_mask[..., None]
-            else:
-                warped_mask_3d = warped_mask
-
-            excess = np.maximum(0.0, warped_patch - out_img)
-            out_img += warped_mask_3d * excess
-
-            del src_img, patch, warped_patch, warped_mask
+            del src_img, patch
         except Exception:
             continue
 

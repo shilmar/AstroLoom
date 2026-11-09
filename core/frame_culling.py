@@ -15,6 +15,12 @@ from typing import List, Optional, Tuple, Dict, Any, Callable, Union
 import cv2
 import numpy as np
 
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
 
 @dataclass
 class FrameQualityResult:
@@ -128,6 +134,10 @@ def compute_3x3_optical_diagnosis(
     star_profiles: Lista de tuplas (cx, cy, fwhm, ecc).
     h, w: Dimensiones de la imagen analizada.
     """
+    if HAS_RUST and hasattr(astroloom_rs, "compute_3x3_optical_diagnosis_rs") and len(star_profiles) > 0:
+        arr = np.ascontiguousarray(star_profiles, dtype=np.float32)
+        return astroloom_rs.compute_3x3_optical_diagnosis_rs(arr, int(h), int(w))
+
     fwhm_grid_vals: List[List[List[float]]] = [[[] for _ in range(3)] for _ in range(3)]
     ecc_grid_vals: List[List[List[float]]] = [[[] for _ in range(3)] for _ in range(3)]
 
@@ -346,47 +356,21 @@ def extract_star_metrics(
     all_eccs = []
     star_profiles = []
     patch_radius = 6
+    opt_diag = None
 
-    for cx, cy, _, _, r_norm in sample_stars:
-        ix, iy = int(round(cx)), int(round(cy))
-        patch = gray_img[iy - patch_radius : iy + patch_radius + 1, ix - patch_radius : ix + patch_radius + 1]
-        if patch.shape != (2 * patch_radius + 1, 2 * patch_radius + 1):
-            continue
-
-        # Restar nivel de fondo local para calcular momentos puros de la estrella
-        patch_clean = np.clip(patch - bg_median, 0.0, None)
-        m00 = np.sum(patch_clean)
-        if m00 <= 1e-4:
-            continue
-
-        # Coordenadas relativas al centro del patch
-        y_grid, x_grid = np.mgrid[-patch_radius : patch_radius + 1, -patch_radius : patch_radius + 1]
-        
-        # Momentos de primer orden (subpíxel centroid)
-        m10 = np.sum(x_grid * patch_clean)
-        m01 = np.sum(y_grid * patch_clean)
-        cx_sub = m10 / m00
-        cy_sub = m01 / m00
-
-        # Momentos centrales de segundo orden
-        mu20 = np.sum(((x_grid - cx_sub) ** 2) * patch_clean) / m00
-        mu02 = np.sum(((y_grid - cy_sub) ** 2) * patch_clean) / m00
-        mu11 = np.sum(((x_grid - cx_sub) * (y_grid - cy_sub)) * patch_clean) / m00
-
-        # Autovalores del tensor de inercia
-        delta = math.sqrt(max(0.0, (mu20 - mu02) ** 2 + 4.0 * (mu11 ** 2)))
-        lambda1 = max(1e-4, ((mu20 + mu02) + delta) / 2.0)
-        lambda2 = max(1e-4, ((mu20 + mu02) - delta) / 2.0)
-
-        # Excentricidad geométrica: e = sqrt(1 - lambda2 / lambda1)
-        ratio = min(1.0, max(0.0, lambda2 / lambda1))
-        ecc = math.sqrt(1.0 - ratio)
-
-        # FWHM = 2.355 * sigma_medio
-        sigma_mean = math.sqrt((lambda1 + lambda2) / 2.0)
-        fwhm = 2.35482 * sigma_mean
-
-        if 0.5 <= fwhm <= 25.0:
+    # Aceleración nativa en Rust: cálculo de momentos estelares y diagnóstico 3x3 multihilo
+    if HAS_RUST and hasattr(astroloom_rs, "analyze_frame_quality_3x3_rs") and len(sample_stars) > 0:
+        cents = np.ascontiguousarray([[s[0], s[1]] for s in sample_stars], dtype=np.float32)
+        gray_f32 = np.ascontiguousarray(gray_img, dtype=np.float32)
+        profiles_arr, opt_diag = astroloom_rs.analyze_frame_quality_3x3_rs(
+            gray_f32, cents, float(bg_median), int(h), int(w), int(patch_radius)
+        )
+        for i in range(len(profiles_arr)):
+            cx = float(profiles_arr[i, 0])
+            cy = float(profiles_arr[i, 1])
+            fwhm = float(profiles_arr[i, 2])
+            ecc = float(profiles_arr[i, 3])
+            r_norm = math.hypot(cx - cx_center, cy - cy_center) / r_max
             all_fwhms.append(fwhm)
             all_eccs.append(ecc)
             star_profiles.append((cx, cy, fwhm, ecc))
@@ -395,6 +379,55 @@ def extract_star_metrics(
                 center_eccs.append(ecc)
             else:
                 corner_eccs.append(ecc)
+    else:
+        for cx, cy, _, _, r_norm in sample_stars:
+            ix, iy = int(round(cx)), int(round(cy))
+            patch = gray_img[iy - patch_radius : iy + patch_radius + 1, ix - patch_radius : ix + patch_radius + 1]
+            if patch.shape != (2 * patch_radius + 1, 2 * patch_radius + 1):
+                continue
+
+            # Restar nivel de fondo local para calcular momentos puros de la estrella
+            patch_clean = np.clip(patch - bg_median, 0.0, None)
+            m00 = np.sum(patch_clean)
+            if m00 <= 1e-4:
+                continue
+
+            # Coordenadas relativas al centro del patch
+            y_grid, x_grid = np.mgrid[-patch_radius : patch_radius + 1, -patch_radius : patch_radius + 1]
+            
+            # Momentos de primer orden (subpíxel centroid)
+            m10 = np.sum(x_grid * patch_clean)
+            m01 = np.sum(y_grid * patch_clean)
+            cx_sub = m10 / m00
+            cy_sub = m01 / m00
+
+            # Momentos centrales de segundo orden
+            mu20 = np.sum(((x_grid - cx_sub) ** 2) * patch_clean) / m00
+            mu02 = np.sum(((y_grid - cy_sub) ** 2) * patch_clean) / m00
+            mu11 = np.sum(((x_grid - cx_sub) * (y_grid - cy_sub)) * patch_clean) / m00
+
+            # Autovalores del tensor de inercia
+            delta = math.sqrt(max(0.0, (mu20 - mu02) ** 2 + 4.0 * (mu11 ** 2)))
+            lambda1 = max(1e-4, ((mu20 + mu02) + delta) / 2.0)
+            lambda2 = max(1e-4, ((mu20 + mu02) - delta) / 2.0)
+
+            # Excentricidad geométrica: e = sqrt(1 - lambda2 / lambda1)
+            ratio = min(1.0, max(0.0, lambda2 / lambda1))
+            ecc = math.sqrt(1.0 - ratio)
+
+            # FWHM = 2.355 * sigma_medio
+            sigma_mean = math.sqrt((lambda1 + lambda2) / 2.0)
+            fwhm = 2.35482 * sigma_mean
+
+            if 0.5 <= fwhm <= 25.0:
+                all_fwhms.append(fwhm)
+                all_eccs.append(ecc)
+                star_profiles.append((cx, cy, fwhm, ecc))
+                if r_norm < 0.60:
+                    center_fwhms.append(fwhm)
+                    center_eccs.append(ecc)
+                else:
+                    corner_eccs.append(ecc)
 
     if not all_fwhms:
         if return_optical_grid:
@@ -415,7 +448,8 @@ def extract_star_metrics(
         effective_ecc = (0.70 * median_center_ecc) + (0.30 * median_corner_ecc)
 
     if return_optical_grid:
-        opt_diag = compute_3x3_optical_diagnosis(star_profiles, h, w)
+        if opt_diag is None:
+            opt_diag = compute_3x3_optical_diagnosis(star_profiles, h, w)
         return median_fwhm, effective_ecc, total_stars, bg_sigma, median_center_ecc, median_corner_ecc, opt_diag
 
     return median_fwhm, effective_ecc, total_stars, bg_sigma, median_center_ecc, median_corner_ecc

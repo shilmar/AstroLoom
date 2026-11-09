@@ -130,6 +130,7 @@ class DeveloperTab(QWidget):
         self.raw_linear_starless = None # Copia lineal previa al Auto-Stretch
         self.starless_is_stretched = False # Indicador de estirado no lineal sobre starless
         self.image_stars = None       # Capa de solo estrellas (float32)
+        self.developer_state: DeveloperState = DeveloperState()
 
         # Buffers proxy para previsualización interactiva a 60 fps
         self.preview_proxy = None     
@@ -5445,18 +5446,32 @@ class DeveloperTab(QWidget):
         )
         self.canvas.set_dust_spots(spots)
         self.panel_dust.update_spot_count(len(spots))
-        self.developer_state.dust_spots = spots
-        self.developer_state.dust_sensitivity = sensitivity
-        self.developer_state.dust_mode = self.panel_dust.mode
+        if hasattr(self, 'developer_state') and self.developer_state is not None:
+            self.developer_state.dust_spots = spots
+            self.developer_state.dust_sensitivity = sensitivity
+            self.developer_state.dust_mode = self.panel_dust.mode
         self.log_message(f"Detección de polvo: {len(spots)} manchas encontradas y curadas.")
+        self._invalidate_pipeline_caches()
         self.update_stretch_preview()
         self._commit_action()
 
     def _on_visualize_dust_toggled(self, active: bool, threshold: int):
         """Activa o desactiva la previsualización de diagnóstico de paso alto (Visualize Spots)."""
-        self.developer_state.dust_visualize = active
-        self.developer_state.dust_visualize_threshold = threshold
-        self.update_stretch_preview()
+        if hasattr(self, 'developer_state') and self.developer_state is not None:
+            self.developer_state.dust_visualize = active
+            self.developer_state.dust_visualize_threshold = threshold
+        if hasattr(self, 'panel_dust') and self.panel_dust is not None:
+            if self.panel_dust.chk_visualize.isChecked() != active:
+                self.panel_dust.chk_visualize.blockSignals(True)
+                self.panel_dust.chk_visualize.setChecked(active)
+                self.panel_dust._visualize = active
+                self.panel_dust.chk_visualize.blockSignals(False)
+            if self.panel_dust.slider_thresh.value() != threshold:
+                self.panel_dust.slider_thresh.blockSignals(True)
+                self.panel_dust.slider_thresh.setValue(threshold)
+                self.panel_dust._vis_threshold = threshold
+                self.panel_dust.slider_thresh.blockSignals(False)
+        self.update_stretch_preview(immediate=True)
 
     def _on_dust_spot_mode_toggled(self, enabled: bool):
         """Activa o desactiva la colocación manual de manchas en el lienzo."""
@@ -5465,27 +5480,33 @@ class DeveloperTab(QWidget):
     def _on_clear_dust_spots(self):
         """Elimina todas las manchas registradas y re-renderiza el revelador."""
         self.canvas.clear_dust_spots()
-        self.developer_state.dust_spots = []
+        if hasattr(self, 'developer_state') and self.developer_state is not None:
+            self.developer_state.dust_spots = []
         self.panel_dust.update_spot_count(0)
         self.log_message("Manchas de polvo eliminadas.")
+        self._invalidate_pipeline_caches()
         self.update_stretch_preview()
         self._commit_action()
 
     def _on_dust_parameter_changed(self):
         """Sincroniza los parámetros del panel de polvo con DeveloperState."""
         if hasattr(self, 'panel_dust'):
-            self.developer_state.dust_sensitivity = self.panel_dust.sensitivity
-            self.developer_state.dust_mode = self.panel_dust.mode
-            self.developer_state.dust_visualize = self.panel_dust.visualize
-            self.developer_state.dust_visualize_threshold = self.panel_dust.visualize_threshold
+            if hasattr(self, 'developer_state') and self.developer_state is not None:
+                self.developer_state.dust_sensitivity = self.panel_dust.sensitivity
+                self.developer_state.dust_mode = self.panel_dust.mode
+                self.developer_state.dust_visualize = self.panel_dust.visualize
+                self.developer_state.dust_visualize_threshold = self.panel_dust.visualize_threshold
+        self._invalidate_pipeline_caches()
         self.update_stretch_preview()
 
     def _on_canvas_dust_spots_changed(self):
         """Responde a la adición, arrastre o borrado de manchas de polvo sobre el lienzo."""
         spots = self.canvas.get_dust_spots()
-        self.developer_state.dust_spots = spots
+        if hasattr(self, 'developer_state') and self.developer_state is not None:
+            self.developer_state.dust_spots = spots
         if hasattr(self, 'panel_dust'):
             self.panel_dust.update_spot_count(len(spots))
+        self._invalidate_pipeline_caches()
         self.update_stretch_preview()
         self._commit_action()
 
@@ -6906,6 +6927,8 @@ class DeveloperTab(QWidget):
             state["dust_spots"] = self.canvas.get_dust_spots() if hasattr(self, 'canvas') else []
             state["dust_sensitivity"] = self.panel_dust.sensitivity
             state["dust_mode"] = self.panel_dust.mode
+            state["dust_visualize"] = self.panel_dust.visualize
+            state["dust_visualize_threshold"] = self.panel_dust.visualize_threshold
         state["curves"] = self.curve_widget.get_state() if hasattr(self, 'curve_widget') else None
         state["mask_layers"] = self.mask_layers_widget.get_state() if hasattr(self, 'mask_layers_widget') else None
         state["starless_is_stretched"] = getattr(self, "starless_is_stretched", False)
@@ -6916,6 +6939,8 @@ class DeveloperTab(QWidget):
         if s1 is None or s2 is None:
             return True
         for k, v1 in s1.items():
+            if k in ("dust_visualize", "dust_visualize_threshold"):
+                continue
             v2 = s2.get(k)
             if k in ("curves", "mask_layers", "dust_spots"):
                 if v1 != v2:
@@ -7270,9 +7295,20 @@ class DeveloperTab(QWidget):
             spots = state.get("dust_spots", [])
             self.canvas.set_dust_spots(spots)
             self.panel_dust.update_spot_count(len(spots))
-            self.developer_state.dust_spots = spots
+            if hasattr(self, 'developer_state') and self.developer_state is not None:
+                self.developer_state.dust_spots = spots
             if "dust_sensitivity" in state:
-                self.panel_dust.slider_sens.setValue(int(state["dust_sensitivity"]))
+                sens = int(state["dust_sensitivity"])
+                self.panel_dust.slider_sens.setValue(sens)
+                if hasattr(self, 'developer_state') and self.developer_state is not None:
+                    self.developer_state.dust_sensitivity = sens
+            if "dust_mode" in state:
+                mode = state["dust_mode"]
+                modes = ["heal", "inpaint", "clone"]
+                if mode in modes:
+                    self.panel_dust.combo_mode.setCurrentIndex(modes.index(mode))
+                if hasattr(self, 'developer_state') and self.developer_state is not None:
+                    self.developer_state.dust_mode = mode
         if "starless_is_stretched" in state:
             self.starless_is_stretched = state["starless_is_stretched"]
             self.gnd_ev_val = self.panel_ground_sky.slider_gnd_ev.value() / 100.0

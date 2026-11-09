@@ -10,6 +10,12 @@ protección analítica (HP/LP) y preservando la fidelidad cromática en espacio 
 from typing import Optional, Dict
 import numpy as np
 
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
 
 def compute_ghs_lut(
     sp: float,
@@ -37,6 +43,16 @@ def compute_ghs_lut(
     Retorna:
     - np.ndarray de float32 de forma (lut_size,) con valores estrictamente acotados en [0.0, 1.0].
     """
+    if HAS_RUST and hasattr(astroloom_rs, "compute_ghs_lut_rs"):
+        try:
+            return astroloom_rs.compute_ghs_lut_rs(
+                float(sp), float(d), float(b),
+                float(hp), float(lp), float(bp),
+                int(lut_size)
+            )
+        except Exception:
+            pass
+
     x = np.linspace(0.0, 1.0, lut_size, dtype=np.float32)
 
     # 1. Ajuste preliminar de Punto Negro (BP)
@@ -137,6 +153,14 @@ def apply_ghs_stretch(
         lut = precomputed_lut
     else:
         lut = compute_ghs_lut(sp=sp, d=d, b=b, hp=hp, lp=lp, bp=bp, lut_size=lut_size)
+
+    if HAS_RUST and hasattr(astroloom_rs, "apply_ghs_stretch_rs"):
+        try:
+            img_c = np.ascontiguousarray(img, dtype=np.float32)
+            lut_c = np.ascontiguousarray(lut, dtype=np.float32)
+            return astroloom_rs.apply_ghs_stretch_rs(img_c, lut_c, str(color_mode))
+        except Exception:
+            pass
 
     max_idx = len(lut) - 1
 

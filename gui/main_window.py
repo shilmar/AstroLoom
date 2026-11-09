@@ -22,7 +22,7 @@ from gui.tab_settings import SettingsTab
 class MainWindow(QMainWindow):
     """Ventana principal de la interfaz gráfica de AstroLoom."""
 
-    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.13.1)"
+    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.14.0)"
 
 
     def __init__(self):
@@ -50,7 +50,7 @@ class MainWindow(QMainWindow):
         status_bar.addWidget(self.lbl_status, 1)
 
         # Píldora del Motor AstroLoom
-        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.13.1")
+        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.14.0")
         self.lbl_engine_badge.setStyleSheet(STYLE_STATUS_PILL)
         status_bar.addPermanentWidget(self.lbl_engine_badge)
 
@@ -125,7 +125,7 @@ class MainWindow(QMainWindow):
         """Actualiza todos los textos estáticos principales al cambiar de idioma."""
         self.setWindowTitle(tr("app.title", self.BASE_TITLE))
         self.lbl_status.setText(tr("app.ready", "Listo para procesar"))
-        self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.13.1"))
+        self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.14.0"))
 
         if hasattr(self, 'tab_widget'):
             self.tab_widget.setTabText(0, tr("app.tabs.stacker", "1. Apilador (Stacker)"))

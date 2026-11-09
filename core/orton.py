@@ -16,6 +16,12 @@ from typing import Optional, Tuple, Dict
 import numpy as np
 import cv2
 
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
 ORTON_PRESET_TINTS: Dict[str, Tuple[float, float, float]] = {
     "warm_gold": (1.0, 0.85, 0.55),   # Núcleo galáctico (Sagitario/Escorpio) y polvo molecular (Rho Ophiuchi)
     "neutral":   (1.0, 1.0, 1.0),     # Luminancia neutra monocromática sin desviación de balance
@@ -86,12 +92,27 @@ def apply_astronomical_orton(
     # El fondo oscuro del cielo profundo queda resguardado mediante curva suave Hermite (smoothstep).
     thr = max(0.0, float(threshold))
     knee = max(0.04, float(thr * 0.5))
-    t = np.clip((diffuse_luma - thr) / knee, 0.0, 1.0)
-    emission = t * t * (3.0 - 2.0 * t)
-    if abs(exponent - 1.0) > 1e-3:
-        emission = np.power(emission, max(0.2, float(exponent)))
 
-    glow_source = glow_base * emission[..., np.newaxis]
+    if HAS_RUST and hasattr(astroloom_rs, "compute_orton_glow_source_rs"):
+        try:
+            glow_source = astroloom_rs.compute_orton_glow_source_rs(
+                np.ascontiguousarray(glow_base, dtype=np.float32),
+                np.ascontiguousarray(diffuse_luma, dtype=np.float32),
+                float(thr),
+                float(exponent)
+            )
+        except Exception:
+            t = np.clip((diffuse_luma - thr) / knee, 0.0, 1.0)
+            emission = t * t * (3.0 - 2.0 * t)
+            if abs(exponent - 1.0) > 1e-3:
+                emission = np.power(emission, max(0.2, float(exponent)))
+            glow_source = glow_base * emission[..., np.newaxis]
+    else:
+        t = np.clip((diffuse_luma - thr) / knee, 0.0, 1.0)
+        emission = t * t * (3.0 - 2.0 * t)
+        if abs(exponent - 1.0) > 1e-3:
+            emission = np.power(emission, max(0.2, float(exponent)))
+        glow_source = glow_base * emission[..., np.newaxis]
 
     # 4. Difusión multi-escala (Celestial Bloom)
     # Combinamos dos componentes gaussianos: uno medio (sigma=radius) y otro amplio (sigma=2.5*radius)
@@ -124,6 +145,28 @@ def apply_astronomical_orton(
 
     c_eff = (1.0 - tint_strength) * np.ones(3, dtype=np.float32) + tint_strength * t_norm
     c_eff = c_eff / max(1e-4, float(np.max(c_eff)))
+
+    # Fusión acelerada en Rust sin reservas intermedias
+    if HAS_RUST and hasattr(astroloom_rs, "blend_orton_and_diffusion_rs"):
+        try:
+            m_c = None
+            if sky_mask is not None:
+                m = np.squeeze(sky_mask).astype(np.float32)
+                if m.shape != (h, w):
+                    m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
+                m_c = np.ascontiguousarray(m, dtype=np.float32)
+
+            return astroloom_rs.blend_orton_and_diffusion_rs(
+                np.ascontiguousarray(img_rgb, dtype=np.float32),
+                np.ascontiguousarray(bloom, dtype=np.float32),
+                tint=np.ascontiguousarray(c_eff, dtype=np.float32),
+                sky_mask=m_c,
+                blend_mode=str(blend_mode),
+                strength=float(strength)
+            )
+        except Exception:
+            pass
+
     bloom = bloom * c_eff[np.newaxis, np.newaxis, :]
 
     # 6. Protección del paisaje terrestre con sky_mask

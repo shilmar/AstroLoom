@@ -28,6 +28,12 @@ from typing import Tuple, List, Dict, Optional, Any
 from PIL import Image, ExifTags
 from scipy.optimize import minimize
 
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
 from core.stacking import load_image_as_float32
 
 
@@ -988,6 +994,22 @@ def apply_nrgf(
     4. Compuerta radial suave que desvanece la modulación a 0.0 hacia radius_max_factor,
        manteniendo el cielo exterior negro aterciopelado y limpio al 100%.
     """
+    if HAS_RUST and hasattr(astroloom_rs, "apply_nrgf_continuous_rs") and hasattr(astroloom_rs, "compute_nrgf_profiles_and_detail_rs"):
+        img_c = np.ascontiguousarray(image, dtype=np.float32)
+        if img_c.ndim == 3:
+            lum = 0.2126 * img_c[..., 0] + 0.7152 * img_c[..., 1] + 0.0722 * img_c[..., 2]
+        else:
+            lum = img_c
+        lum_c = np.ascontiguousarray(lum, dtype=np.float32)
+        raw_detail, sigma_prof, sky_noise = astroloom_rs.compute_nrgf_profiles_and_detail_rs(
+            lum_c, float(center_x), float(center_y), float(radius_min), float(radius_max_factor), bool(robust)
+        )
+        clean_detail = cv2.bilateralFilter(raw_detail, d=7, sigmaColor=0.35, sigmaSpace=4.0)
+        return np.asarray(astroloom_rs.apply_nrgf_continuous_rs(
+            img_c, clean_detail, sigma_prof, float(sky_noise),
+            float(center_x), float(center_y), float(radius_min), float(radius_max_factor), float(blend_ratio)
+        ), dtype=np.float32)
+
     img = np.asarray(image, dtype=np.float32)
     h, w = img.shape[:2]
 
@@ -1122,6 +1144,68 @@ def apply_mgn(
     haciendo visibles filamentos radiales finos, bucles magnéticos cerrados y la corona exterior tenue,
     eliminando el grano de ruido coloreado del fondo sin deslavar detalles de emisión H-alfa.
     """
+    if HAS_RUST and hasattr(astroloom_rs, "combine_mgn_scales_rs") and hasattr(astroloom_rs, "compute_mgn_diff_sq_rs"):
+        img = np.clip(np.asarray(image, dtype=np.float32), 0.0, 1.0)
+        img_c = np.ascontiguousarray(img, dtype=np.float32)
+        if img.ndim == 3:
+            lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
+        else:
+            lum = img.copy()
+        lum_c = np.ascontiguousarray(lum, dtype=np.float32)
+        h, w = lum_c.shape[:2]
+
+        if lunar_mask_params is not None:
+            mcx, mcy, mr = lunar_mask_params
+            m_bool = astroloom_rs.create_lunar_mask_rs(h, w, float(mcx), float(mcy), float(mr - 2.5))
+        else:
+            m_bool = np.ones((h, w), dtype=bool)
+
+        m_f32 = m_bool.astype(np.float32)
+        masked_lum = np.where(m_bool, lum_c, 0.0).astype(np.float32)
+        acc = np.zeros((h, w), dtype=np.float32)
+        total_w = 0.0
+
+        for s in sigmas:
+            s_val = float(s)
+            num = cv2.GaussianBlur(masked_lum, (0, 0), s_val)
+            den = cv2.GaussianBlur(m_f32, (0, 0), s_val)
+            d_sq = astroloom_rs.compute_mgn_diff_sq_rs(lum_c, m_bool, num, den)
+            num_v = cv2.GaussianBlur(d_sq, (0, 0), s_val)
+            astroloom_rs.combine_mgn_scales_rs(acc, lum_c, num, den, num_v, m_bool, float(k), float(noise_floor))
+            total_w += 1.0
+
+        mgn_lum = np.asarray(astroloom_rs.finalize_mgn_lum_rs(
+            acc, float(total_w), lum_c, float(gamma), float(blend_ratio),
+            m_bool if lunar_mask_params is not None else None
+        ), dtype=np.float32)
+
+        if img.ndim == 3:
+            scaled_rgb, chroma = astroloom_rs.compute_mgn_scaled_and_chroma_rs(
+                img_c, mgn_lum, lum_c, float(noise_floor)
+            )
+            if chroma_denoise_sigma > 0.5:
+                chroma_smooth = cv2.GaussianBlur(chroma, (0, 0), float(chroma_denoise_sigma))
+                denoised_rgb = np.clip(chroma_smooth * mgn_lum[..., None], 0.0, 1.0)
+                if lunar_mask_params is not None:
+                    mcx, mcy, mr = lunar_mask_params
+                    prom_mask = astroloom_rs.compute_mgn_prominence_mask_rs(
+                        scaled_rgb, float(mcx), float(mcy), float(mr * 1.35)
+                    )
+                    prom_w = cv2.GaussianBlur(prom_mask, (0, 0), 2.0)
+                    result = astroloom_rs.blend_mgn_prominences_and_mask_rs(
+                        scaled_rgb, denoised_rgb, prom_w, m_bool
+                    )
+                else:
+                    result = denoised_rgb
+            else:
+                result = scaled_rgb
+                if lunar_mask_params is not None:
+                    result = np.where(m_bool[..., None], result, 0.0)
+        else:
+            result = mgn_lum
+
+        return np.asarray(result, dtype=np.float32)
+
     img = np.clip(np.asarray(image, dtype=np.float32), 0.0, 1.0)
     if img.ndim == 3:
         lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]

@@ -21,6 +21,12 @@ import numpy as np
 from typing import Optional, List, Dict, Any, Tuple, Callable
 from core.gpu_backend import is_gpu_enabled, is_opencl_available
 
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
 
 def generate_moffat_psf(
     fwhm: float = 3.0,
@@ -39,6 +45,15 @@ def generate_moffat_psf(
     :param kernel_size: Tamaño impar de la matriz (si es None, se calcula automáticamente).
     :return: Matriz float32 normalizada a suma = 1.0.
     """
+    if HAS_RUST and hasattr(astroloom_rs, "generate_moffat_psf_rs"):
+        try:
+            return astroloom_rs.generate_moffat_psf_rs(
+                float(fwhm), float(beta), float(aspect_ratio), float(angle_deg),
+                int(kernel_size) if kernel_size is not None else None
+            )
+        except Exception:
+            pass
+
     fwhm = max(1.0, float(fwhm))
     beta = max(1.1, float(beta))
     aspect_ratio = max(1.0, min(float(aspect_ratio), 3.0))
@@ -89,6 +104,15 @@ def generate_gaussian_psf(
     """
     Genera un kernel de PSF bidimensional gaussiano.
     """
+    if HAS_RUST and hasattr(astroloom_rs, "generate_gaussian_psf_rs"):
+        try:
+            return astroloom_rs.generate_gaussian_psf_rs(
+                float(fwhm), float(aspect_ratio), float(angle_deg),
+                int(kernel_size) if kernel_size is not None else None
+            )
+        except Exception:
+            pass
+
     fwhm = max(1.0, float(fwhm))
     sigma = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))  # ~ FWHM / 2.35482
     aspect_ratio = max(1.0, min(float(aspect_ratio), 3.0))
@@ -343,54 +367,93 @@ def richardson_lucy_deconvolve(
     # 4. Bucle iterativo Richardson-Lucy
     est = work_channel.copy()
 
-    for it in range(iterations):
-        if abort_flag and abort_flag():
-            raise InterruptedError("Deconvolución cancelada por el usuario.")
+    # Si no usamos GPU/OpenCL y el crate Rust está disponible, ejecutamos el solver nativo (Rayon)
+    use_rust_engine = (not use_opencl) and HAS_RUST and hasattr(astroloom_rs, "richardson_lucy_deconv_rs")
+    if use_rust_engine:
+        try:
+            work_c = np.ascontiguousarray(work_channel, dtype=np.float32)
+            psf_c = np.ascontiguousarray(psf_kernel, dtype=np.float32)
+            sm_c = np.ascontiguousarray(bright_star_mask, dtype=np.float32) if bright_star_mask is not None else None
+            df_c = np.ascontiguousarray(deringing_floor, dtype=np.float32) if deringing_floor is not None else None
 
-        if progress_callback and (it % 2 == 0 or it == iterations - 1):
-            pct = int(((it + 1) / float(iterations)) * 100.0)
-            progress_callback(pct, f"Deconvolución Richardson-Lucy: iteración {it + 1}/{iterations}")
+            # Si hay callbacks o posibilidad de abortar, procesamos en bloques de 2 iteraciones
+            step = 2 if (progress_callback or abort_flag) else iterations
+            done_it = 0
+            curr_est = None
 
-        # Convolución y corrección persistente en VRAM (OpenCL UMat con fallback automático a CPU)
-        if use_opencl:
-            try:
-                u_conv = cv2.filter2D(u_est, -1, psf_umat, borderType=cv2.BORDER_REFLECT)
-                u_ratio = cv2.divide(u_work, cv2.add(u_conv, eps_umat))
-                u_bproj = cv2.filter2D(u_ratio, -1, psf_flip_umat, borderType=cv2.BORDER_REFLECT)
+            while done_it < iterations:
+                if abort_flag and abort_flag():
+                    raise InterruptedError("Deconvolución cancelada por el usuario.")
+                chunk_it = min(step, iterations - done_it)
+                curr_est = astroloom_rs.richardson_lucy_deconv_rs(
+                    work_c,
+                    psf_c,
+                    iterations=chunk_it,
+                    noise_threshold_sq=float(noise_threshold_sq),
+                    bright_star_mask=sm_c,
+                    deringing_floor=df_c,
+                    est_initial=curr_est
+                )
+                done_it += chunk_it
+                if progress_callback and (done_it % 2 == 0 or done_it == iterations):
+                    pct = int((done_it / float(iterations)) * 100.0)
+                    progress_callback(pct, f"Deconvolución Richardson-Lucy (Rust): iteración {done_it}/{iterations}")
+
+            est = curr_est
+        except InterruptedError:
+            raise
+        except Exception:
+            use_rust_engine = False
+
+    if not use_rust_engine:
+        for it in range(iterations):
+            if abort_flag and abort_flag():
+                raise InterruptedError("Deconvolución cancelada por el usuario.")
+
+            if progress_callback and (it % 2 == 0 or it == iterations - 1):
+                pct = int(((it + 1) / float(iterations)) * 100.0)
+                progress_callback(pct, f"Deconvolución Richardson-Lucy: iteración {it + 1}/{iterations}")
+
+            # Convolución y corrección persistente en VRAM (OpenCL UMat con fallback automático a CPU)
+            if use_opencl:
+                try:
+                    u_conv = cv2.filter2D(u_est, -1, psf_umat, borderType=cv2.BORDER_REFLECT)
+                    u_ratio = cv2.divide(u_work, cv2.add(u_conv, eps_umat))
+                    u_bproj = cv2.filter2D(u_ratio, -1, psf_flip_umat, borderType=cv2.BORDER_REFLECT)
+                    if noise_threshold_sq > 0.0:
+                        u_delta = cv2.subtract(u_bproj, ones_umat)
+                        u_delta_sq = cv2.multiply(u_delta, u_delta)
+                        u_denom = cv2.add(u_delta_sq, damp_const_umat)
+                        u_damp_w = cv2.divide(u_delta_sq, u_denom)
+                        u_update = cv2.add(ones_umat, cv2.multiply(u_delta, u_damp_w))
+                    else:
+                        u_update = u_bproj
+                    u_est = cv2.multiply(u_est, u_update)
+                    u_est = cv2.min(cv2.max(u_est, 0.0), 1.0)
+                    if u_star_mask is not None and u_deringing_floor is not None:
+                        u_clamped = cv2.max(u_est, u_deringing_floor)
+                        u_est = cv2.add(cv2.multiply(u_clamped, u_star_mask), cv2.multiply(u_est, u_inv_star_mask))
+                except Exception:
+                    use_opencl = False
+                    est = u_est.get() if u_est is not None else work_channel.copy()
+
+            if not use_opencl:
+                conv = cv2.filter2D(est, -1, psf_kernel, borderType=cv2.BORDER_REFLECT)
+                ratio = work_channel / (conv + 1e-6)
+                b_proj = cv2.filter2D(ratio, -1, psf_flipped, borderType=cv2.BORDER_REFLECT)
+                delta = b_proj - 1.0
                 if noise_threshold_sq > 0.0:
-                    u_delta = cv2.subtract(u_bproj, ones_umat)
-                    u_delta_sq = cv2.multiply(u_delta, u_delta)
-                    u_denom = cv2.add(u_delta_sq, damp_const_umat)
-                    u_damp_w = cv2.divide(u_delta_sq, u_denom)
-                    u_update = cv2.add(ones_umat, cv2.multiply(u_delta, u_damp_w))
+                    delta_sq = delta ** 2
+                    damp_weight = delta_sq / (delta_sq + noise_threshold_sq + 1e-7)
+                    update_factor = 1.0 + delta * damp_weight
                 else:
-                    u_update = u_bproj
-                u_est = cv2.multiply(u_est, u_update)
-                u_est = cv2.min(cv2.max(u_est, 0.0), 1.0)
-                if u_star_mask is not None and u_deringing_floor is not None:
-                    u_clamped = cv2.max(u_est, u_deringing_floor)
-                    u_est = cv2.add(cv2.multiply(u_clamped, u_star_mask), cv2.multiply(u_est, u_inv_star_mask))
-            except Exception:
-                use_opencl = False
-                est = u_est.get() if u_est is not None else work_channel.copy()
+                    update_factor = b_proj
+                est = np.clip(est * update_factor, 0.0, 1.0)
+                if bright_star_mask is not None and deringing_floor is not None:
+                    est = np.where(bright_star_mask > 0.1, np.maximum(est, deringing_floor), est)
 
-        if not use_opencl:
-            conv = cv2.filter2D(est, -1, psf_kernel, borderType=cv2.BORDER_REFLECT)
-            ratio = work_channel / (conv + 1e-6)
-            b_proj = cv2.filter2D(ratio, -1, psf_flipped, borderType=cv2.BORDER_REFLECT)
-            delta = b_proj - 1.0
-            if noise_threshold_sq > 0.0:
-                delta_sq = delta ** 2
-                damp_weight = delta_sq / (delta_sq + noise_threshold_sq + 1e-7)
-                update_factor = 1.0 + delta * damp_weight
-            else:
-                update_factor = b_proj
-            est = np.clip(est * update_factor, 0.0, 1.0)
-            if bright_star_mask is not None and deringing_floor is not None:
-                est = np.where(bright_star_mask > 0.1, np.maximum(est, deringing_floor), est)
-
-    if use_opencl:
-        est = u_est.get()
+        if use_opencl:
+            est = u_est.get()
 
     # 5. Filtrado por ámbito (Solo estrellas / Solo nebulosa) si corresponde
     if target_scope in ["stars_only", "background_only"] and star_mask is not None:
@@ -404,6 +467,25 @@ def richardson_lucy_deconvolve(
 
     # 6. Reconstrucción final con preservación estricta de color
     if is_color and luminance_only:
+        if HAS_RUST and hasattr(astroloom_rs, "reconstruct_deconv_color_rs"):
+            try:
+                sm_c = None
+                if target_scope in ["stars_only", "background_only"] and star_mask is not None:
+                    sm = star_mask if star_mask.shape[:2] == (h_img, w_img) else cv2.resize(star_mask, (w_img, h_img))
+                    if sm.ndim == 3:
+                        sm = sm[:, :, 0]
+                    sm_c = np.ascontiguousarray(sm, dtype=np.float32)
+
+                return astroloom_rs.reconstruct_deconv_color_rs(
+                    np.ascontiguousarray(image_rgb, dtype=np.float32),
+                    np.ascontiguousarray(est, dtype=np.float32),
+                    np.ascontiguousarray(work_channel, dtype=np.float32),
+                    star_mask=sm_c,
+                    target_scope=str(target_scope)
+                )
+            except Exception:
+                pass
+
         ratio_rgb = est / (work_channel + 1e-6)
         out_rgb = image_rgb * ratio_rgb[..., np.newaxis]
         return np.clip(out_rgb, 0.0, 1.0).astype(np.float32)

@@ -7,6 +7,12 @@ from typing import Optional
 import cv2
 import numpy as np
 
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
 
 def refine_mask_guided(
     image_rgb: np.ndarray, 
@@ -179,13 +185,6 @@ def suppress_horizon_halos(
     strength: float = 0.8,
     suppress_dark_halos: bool = False
 ) -> np.ndarray:
-    """
-    Detecta la banda de frontera entre cielo y suelo y aplica clamping de luminancia
-    (equivalente al Filtro Mínimo en modo Oscurecer en Photoshop) para eliminar
-    halos y rebordes claros en siluetas terrestres oscuras sin degradar texturas interiores.
-    
-    Optimizado con delimitación de caja (bounding box) para máxima velocidad interactiva.
-    """
     if strength <= 1e-4 or sky_mask is None or radius < 1:
         return image_rgb
 
@@ -193,6 +192,15 @@ def suppress_horizon_halos(
     m_2d = sky_mask[..., 0] if sky_mask.ndim == 3 else sky_mask
     if m_2d.shape[:2] != (h, w):
         m_2d = cv2.resize(m_2d.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
+
+    if HAS_RUST:
+        return astroloom_rs.suppress_horizon_halos_rs(
+            np.ascontiguousarray(image_rgb, dtype=np.float32),
+            np.ascontiguousarray(m_2d, dtype=np.float32),
+            int(radius),
+            float(strength),
+            bool(suppress_dark_halos)
+        )
 
     m_bin = (m_2d > 0.5).astype(np.uint8)
     if not np.any(m_bin == 0) or not np.any(m_bin == 1):

@@ -8,51 +8,72 @@ mediante indexación paralela en CPU sobre matrices uint16, manteniendo intactos
 
 from typing import Optional
 import numpy as np
-import numba as nb
+
+try:
+    import numba as nb
+    HAS_NUMBA = True
+except ImportError:
+    HAS_NUMBA = False
 
 from core.stretch import manual_stretch
 from core.ghs import compute_ghs_lut
 
 
-@nb.njit(parallel=True, fastmath=True)
-def apply_display_lut16_numba(img_u16: np.ndarray, lut_u8: np.ndarray, out_u8: np.ndarray) -> None:
-    """
-    Aplica una Look-Up Table (LUT) 1D de 65.536 valores uint8 sobre una imagen RGB en uint16.
-    Acelerado con Numba multihilo OpenMP. Se ejecuta en ~0.2 ms para 1.5 Megapíxeles.
-    """
-    h, w, c = img_u16.shape
-    for i in nb.prange(h):
-        for j in range(w):
-            for k in range(c):
-                out_u8[i, j, k] = lut_u8[img_u16[i, j, k]]
+if HAS_NUMBA:
+    @nb.njit(parallel=True, fastmath=True)
+    def apply_display_lut16_numba(img_u16: np.ndarray, lut_u8: np.ndarray, out_u8: np.ndarray) -> None:
+        """
+        Aplica una Look-Up Table (LUT) 1D de 65.536 valores uint8 sobre una imagen RGB en uint16.
+        Acelerado con Numba multihilo OpenMP. Se ejecuta en ~0.2 ms para 1.5 Megapíxeles.
+        """
+        h, w, c = img_u16.shape
+        for i in nb.prange(h):
+            for j in range(w):
+                for k in range(c):
+                    out_u8[i, j, k] = lut_u8[img_u16[i, j, k]]
 
 
-@nb.njit(parallel=True, fastmath=True)
-def apply_display_lut16_dual_numba(
-    sl_u16: np.ndarray,
-    st_u16: np.ndarray,
-    lut_sl: np.ndarray,
-    lut_st: np.ndarray,
-    star_intensity: float,
-    out_u8: np.ndarray
-) -> None:
-    """
-    Aplica y fusiona en una sola pasada de memoria las capas Starless y Stars indexadas por LUT.
-    out = clip(lut_sl[sl] + lut_st[st] * star_intensity, 0, 255).
-    Se ejecuta en ~1.5 - 2.0 ms para 1.5 Megapíxeles.
-    """
-    h, w, c = sl_u16.shape
-    for i in nb.prange(h):
-        for j in range(w):
-            for k in range(c):
-                v_sl = float(lut_sl[sl_u16[i, j, k]])
-                v_st = float(lut_st[st_u16[i, j, k]]) * star_intensity
-                tot = v_sl + v_st
-                if tot > 255.0:
-                    tot = 255.0
-                elif tot < 0.0:
-                    tot = 0.0
-                out_u8[i, j, k] = np.uint8(tot)
+    @nb.njit(parallel=True, fastmath=True)
+    def apply_display_lut16_dual_numba(
+        sl_u16: np.ndarray,
+        st_u16: np.ndarray,
+        lut_sl: np.ndarray,
+        lut_st: np.ndarray,
+        star_intensity: float,
+        out_u8: np.ndarray
+    ) -> None:
+        """
+        Aplica y fusiona en una sola pasada de memoria las capas Starless y Stars indexadas por LUT.
+        out = clip(lut_sl[sl] + lut_st[st] * star_intensity, 0, 255).
+        Se ejecuta en ~1.5 - 2.0 ms para 1.5 Megapíxeles.
+        """
+        h, w, c = sl_u16.shape
+        for i in nb.prange(h):
+            for j in range(w):
+                for k in range(c):
+                    v_sl = float(lut_sl[sl_u16[i, j, k]])
+                    v_st = float(lut_st[st_u16[i, j, k]]) * star_intensity
+                    tot = v_sl + v_st
+                    if tot > 255.0:
+                        tot = 255.0
+                    elif tot < 0.0:
+                        tot = 0.0
+                    out_u8[i, j, k] = np.uint8(tot)
+else:
+    def apply_display_lut16_numba(img_u16: np.ndarray, lut_u8: np.ndarray, out_u8: np.ndarray) -> None:
+        np.take(lut_u8, img_u16, out=out_u8)
+
+    def apply_display_lut16_dual_numba(
+        sl_u16: np.ndarray,
+        st_u16: np.ndarray,
+        lut_sl: np.ndarray,
+        lut_st: np.ndarray,
+        star_intensity: float,
+        out_u8: np.ndarray
+    ) -> None:
+        v_sl = lut_sl[sl_u16].astype(np.float32)
+        v_st = lut_st[st_u16].astype(np.float32) * float(star_intensity)
+        out_u8[:] = np.clip(v_sl + v_st, 0, 255).astype(np.uint8)
 
 
 def compute_combined_stf_lut(
