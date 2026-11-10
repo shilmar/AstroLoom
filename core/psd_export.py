@@ -8,6 +8,9 @@ Permite exportar composiciones astrofotográficas con separación nativa no dest
 - 02 - Fondo Starless / Nebuloso (estirado y contrastado con máscara de cielo nativa)
 - 01 - Imagen Base Revelada (fondo de seguridad con revelado completo)
 - Capas de ajuste locales con sus respectivas máscaras de pincel como Máscaras de Capa vinculadas
+
+Acelerado por Rust (astroloom_rs) con procesamiento SIMD multihilo Rayon.
+Elimina por completo la dependencia externa de `pytoshop`.
 """
 import os
 from typing import Optional, List, Any, Callable, Tuple
@@ -15,16 +18,18 @@ import cv2
 import numpy as np
 
 try:
-    import pytoshop
-    from pytoshop import layers as psd_layers, enums as psd_enums, tagged_block, image_resources as psd_resources
-    HAS_PYTOSHOP = True
-except ImportError:
-    HAS_PYTOSHOP = False
+    import astroloom_rs
+    HAS_PSD_ENGINE = hasattr(astroloom_rs, "write_psd_file")
+except Exception:
+    HAS_PSD_ENGINE = False
+
+# Compatibilidad con el resto del código que verificaba HAS_PYTOSHOP
+HAS_PYTOSHOP = HAS_PSD_ENGINE
 
 
 def is_psd_export_available() -> bool:
-    """Indica si la librería pytoshop está disponible en el entorno."""
-    return HAS_PYTOSHOP
+    """Indica si el motor de exportación PSD está disponible en el entorno."""
+    return HAS_PSD_ENGINE
 
 
 def export_developer_psd(
@@ -60,8 +65,8 @@ def export_developer_psd(
         if log_fn:
             log_fn(msg)
 
-    if not HAS_PYTOSHOP:
-        err = "La librería 'pytoshop' no está instalada en el entorno. No se puede exportar en formato PSD."
+    if not HAS_PSD_ENGINE:
+        err = "El motor nativo de exportación PSD no está disponible."
         _log(f"[ERROR PSD] {err}")
         return False, err, 0
 
@@ -72,102 +77,7 @@ def export_developer_psd(
     if depth not in (8, 16):
         depth = 16
 
-    dtype = np.uint16 if depth == 16 else np.uint8
-    max_val = 65535.0 if depth == 16 else 255.0
-
-    _log(f"[PSD] Creando estructura PSD multicapa ({w}x{h} px, {depth}-bit)...")
-
-    psd = pytoshop.core.PsdFile(num_channels=3, height=h, width=w, depth=depth)
-
-    # 1. Incrustar perfil de color ICC si se proporciona
-    if icc_profile_bytes:
-        try:
-            icc_block = psd_resources.GenericImageResourceBlock(name="", resource_id=1039, data=icc_profile_bytes)
-            psd.image_resources.blocks.append(icc_block)
-            _log("[PSD] Perfil de color ICC incrustado en el archivo PSD.")
-        except Exception as e:
-            _log(f"[PSD AVISO] No se pudo incrustar el perfil ICC: {e}")
-
-    # 2. Guardar imagen compuesta en psd.image_data para compatibilidad con visores externos y Lightroom
-    try:
-        comp_clamped = np.clip(composite_image, 0.0, 1.0)
-        ch0 = (comp_clamped[..., 0] * max_val).astype(dtype)
-        ch1 = (comp_clamped[..., 1] * max_val).astype(dtype)
-        ch2 = (comp_clamped[..., 2] * max_val).astype(dtype)
-        psd.image_data = pytoshop.image_data.ImageData(channels=np.stack([ch0, ch1, ch2], axis=0))
-    except Exception as e:
-        _log(f"[PSD AVISO] Fallo menor al generar ImageData compuesto: {e}")
-
-    def _build_layer_record(
-        name: str,
-        rgb: np.ndarray,
-        layer_mask: Optional[np.ndarray] = None,
-        alpha: Optional[np.ndarray] = None,
-        blend: Any = psd_enums.BlendMode.normal,
-        opacity: int = 255,
-        visible: bool = True
-    ) -> psd_layers.LayerRecord:
-        """Crea un LayerRecord con canales R, G, B y opcionalmente máscara de capa (user_layer_mask) y/o alfa."""
-        if rgb.ndim == 2:
-            rgb = np.repeat(rgb[..., np.newaxis], 3, axis=2)
-        if rgb.shape[:2] != (h, w):
-            rgb = cv2.resize(rgb, (w, h), interpolation=cv2.INTER_LINEAR)
-
-        rgb_clamped = np.clip(rgb, 0.0, 1.0)
-        ch_r = (rgb_clamped[..., 0] * max_val).astype(dtype)
-        ch_g = (rgb_clamped[..., 1] * max_val).astype(dtype)
-        ch_b = (rgb_clamped[..., 2] * max_val).astype(dtype)
-
-        channels = {
-            0: psd_layers.ChannelImageData(image=ch_r, compression=psd_enums.Compression.raw),
-            1: psd_layers.ChannelImageData(image=ch_g, compression=psd_enums.Compression.raw),
-            2: psd_layers.ChannelImageData(image=ch_b, compression=psd_enums.Compression.raw),
-        }
-
-        if alpha is not None:
-            if alpha.ndim == 3:
-                alpha = alpha[..., 0]
-            if alpha.shape[:2] != (h, w):
-                alpha = cv2.resize(alpha, (w, h), interpolation=cv2.INTER_LINEAR)
-            ch_a = (np.clip(alpha, 0.0, 1.0) * max_val).astype(dtype)
-            channels[-1] = psd_layers.ChannelImageData(image=ch_a, compression=psd_enums.Compression.raw)
-
-        psd_mask = None
-        if layer_mask is not None:
-            if layer_mask.ndim == 3:
-                layer_mask = layer_mask[..., 0]
-            if layer_mask.shape[:2] != (h, w):
-                layer_mask = cv2.resize(layer_mask, (w, h), interpolation=cv2.INTER_LINEAR)
-            ch_mask = (np.clip(layer_mask, 0.0, 1.0) * max_val).astype(dtype)
-            channels[-2] = psd_layers.ChannelImageData(image=ch_mask, compression=psd_enums.Compression.raw)
-            psd_mask = psd_layers.LayerMask(
-                top=0,
-                left=0,
-                bottom=h,
-                right=w,
-                default_color=False,
-                layer_mask_disabled=False
-            )
-
-        blocks = [tagged_block.UnicodeLayerName(name=name)]
-
-        rec = psd_layers.LayerRecord(
-            top=0,
-            left=0,
-            bottom=h,
-            right=w,
-            name=name,
-            opacity=opacity,
-            visible=visible,
-            blend_mode=blend,
-            blocks=blocks
-        )
-        if psd_mask is not None:
-            rec.mask = psd_mask
-        rec.channels = channels
-        return rec
-
-    layer_records = []
+    _log(f"[PSD] Creando estructura PSD multicapa ({w}x{h} px, {depth}-bit) con motor Rust...")
 
     # Preparar máscara de horizonte limpia si existe
     clean_mask = None
@@ -180,47 +90,74 @@ def export_developer_psd(
             clean_mask = cv2.resize(clean_mask, (w, h), interpolation=cv2.INTER_LINEAR)
         clean_mask = np.clip(clean_mask, 0.0, 1.0)
 
+    def _format_rgb(arr: np.ndarray) -> np.ndarray:
+        if arr.ndim == 2:
+            arr = np.repeat(arr[..., np.newaxis], 3, axis=2)
+        if arr.shape[:2] != (h, w):
+            arr = cv2.resize(arr, (w, h), interpolation=cv2.INTER_LINEAR)
+        return np.ascontiguousarray(np.clip(arr, 0.0, 1.0), dtype=np.float32)
+
+    def _format_mask(m: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        if m is None:
+            return None
+        if m.ndim > 2:
+            m = m[..., 0]
+        if m.shape[:2] != (h, w):
+            m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
+        return np.ascontiguousarray(np.clip(m, 0.0, 1.0), dtype=np.float32)
+
+    layer_records = []
+
     # 1. Capa Base / Fondo Revelado (Fondo de la pila en Photoshop)
     source_base = base_image if base_image is not None else composite_image
     base_name = "01 - Imagen Base Revelada" if (starless_image is not None or clean_mask is not None) else "01 - Imagen Revelada"
-    layer_records.append(_build_layer_record(
-        name=base_name,
-        rgb=source_base,
-        visible=True
-    ))
+    layer_records.append({
+        "name": base_name,
+        "top": 0, "left": 0, "bottom": h, "right": w,
+        "blend_mode": "norm",
+        "opacity": 255,
+        "visible": True,
+        "rgb": _format_rgb(source_base)
+    })
 
     # 2. Capa Fondo Nebular (Starless AI) si está disponible (con máscara de cielo nativa vinculada si existe)
     if starless_image is not None:
-        layer_records.append(_build_layer_record(
-            name="02 - Fondo Starless",
-            rgb=starless_image,
-            layer_mask=clean_mask,
-            blend=psd_enums.BlendMode.normal,
-            visible=True
-        ))
+        layer_records.append({
+            "name": "02 - Fondo Starless",
+            "top": 0, "left": 0, "bottom": h, "right": w,
+            "blend_mode": "norm",
+            "opacity": 255,
+            "visible": True,
+            "rgb": _format_rgb(starless_image),
+            "mask": _format_mask(clean_mask)
+        })
 
     # 3. Capa de Estrellas (Stars) con modo Trama (Screen) y máscara de cielo nativa vinculada
     if stars_image is not None:
-        layer_records.append(_build_layer_record(
-            name="03 - Estrellas (Trama / Screen)",
-            rgb=stars_image,
-            layer_mask=clean_mask,
-            blend=psd_enums.BlendMode.screen,
-            visible=True
-        ))
+        layer_records.append({
+            "name": "03 - Estrellas (Trama / Screen)",
+            "top": 0, "left": 0, "bottom": h, "right": w,
+            "blend_mode": "scrn",
+            "opacity": 255,
+            "visible": True,
+            "rgb": _format_rgb(stars_image),
+            "mask": _format_mask(clean_mask)
+        })
 
     # 4. Capa Suelo / Terreno con Máscara de Capa nativa vinculada (Suelo=Blanco, Cielo=Negro)
     if clean_mask is not None:
         ground_source = ground_image if ground_image is not None else source_base
         gnd_layer_name = "04 - Suelo / Paisaje" if starless_image is not None else "02 - Suelo / Paisaje"
         ground_mask = np.clip(1.0 - clean_mask, 0.0, 1.0)
-        layer_records.append(_build_layer_record(
-            name=gnd_layer_name,
-            rgb=ground_source,
-            layer_mask=ground_mask,
-            blend=psd_enums.BlendMode.normal,
-            visible=True
-        ))
+        layer_records.append({
+            "name": gnd_layer_name,
+            "top": 0, "left": 0, "bottom": h, "right": w,
+            "blend_mode": "norm",
+            "opacity": 255,
+            "visible": True,
+            "rgb": _format_rgb(ground_source),
+            "mask": _format_mask(ground_mask)
+        })
 
     # 5. Capas de ajuste locales o máscaras de usuario adicionales
     if adjustment_layers:
@@ -241,38 +178,43 @@ def export_developer_psd(
                 except Exception:
                     adj_rgb = composite_image
 
-                layer_records.append(_build_layer_record(
-                    name=adj_name,
-                    rgb=adj_rgb,
-                    layer_mask=bmask,
-                    blend=psd_enums.BlendMode.normal,
-                    opacity=int(np.clip(getattr(adj, 'opacity', 1.0), 0.0, 1.0) * 255),
-                    visible=getattr(adj, 'enabled', True)
-                ))
+                layer_records.append({
+                    "name": adj_name,
+                    "top": 0, "left": 0, "bottom": h, "right": w,
+                    "blend_mode": "norm",
+                    "opacity": int(np.clip(getattr(adj, 'opacity', 1.0), 0.0, 1.0) * 255),
+                    "visible": getattr(adj, 'enabled', True),
+                    "rgb": _format_rgb(adj_rgb),
+                    "mask": _format_mask(bmask)
+                })
 
     # 6. Capa Cúspide de Referencia: Resultado Revelado Final AstroLoom (Compuesto)
-    # Por defecto 'visible=False' (ojo apagado) para que el usuario acceda de inmediato a las
-    # capas independientes y pueda activar el ojo cuando desee contrastar con el original de AstroLoom.
-    layer_records.append(_build_layer_record(
-        name="00 - Revelado Final (Referencia AstroLoom)",
-        rgb=composite_image,
-        blend=psd_enums.BlendMode.normal,
-        visible=False
-    ))
-
-    # Asignar capas al objeto PSD
-    for rec in layer_records:
-        psd.layer_and_mask_info.layer_info.layer_records.append(rec)
+    # Por defecto 'visible=False' para no alterar el revelado interactivo en Photoshop
+    layer_records.append({
+        "name": "00 - Revelado Final (Referencia AstroLoom)",
+        "top": 0, "left": 0, "bottom": h, "right": w,
+        "blend_mode": "norm",
+        "opacity": 255,
+        "visible": False,
+        "rgb": _format_rgb(composite_image)
+    })
 
     total_layers = len(layer_records)
     _log(f"[PSD] Escribiendo archivo en disco ({total_layers} capas generadas con máscaras nativas)...")
 
-    # Escritura segura y atómica
     dir_name = os.path.dirname(os.path.abspath(filepath))
     os.makedirs(dir_name, exist_ok=True)
 
-    with open(filepath, "wb") as fd:
-        psd.write(fd)
+    comp_contiguous = _format_rgb(composite_image)
+    astroloom_rs.write_psd_file(
+        filepath,
+        w,
+        h,
+        depth,
+        comp_contiguous,
+        layer_records,
+        icc_profile_bytes
+    )
 
     file_size_mb = os.path.getsize(filepath) / (1024.0 * 1024.0)
     desc = f"PSD multicapa ({total_layers} capas, {depth}-bit, {file_size_mb:.1f} MB)"

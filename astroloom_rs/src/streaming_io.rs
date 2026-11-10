@@ -1,9 +1,12 @@
+use std::fs::File;
+use std::io::Read;
 use numpy::ndarray::{Array3, ArrayD, IxDyn};
 use numpy::{
     IntoPyArray, PyArray3, PyArrayDyn, PyReadonlyArray2, PyReadonlyArray3, PyReadonlyArrayDyn,
     PyReadwriteArray2, PyReadwriteArray3,
 };
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use rayon::prelude::*;
 
 // ============================================================================
@@ -26,7 +29,7 @@ pub fn calibrate_raw_cfa_inplace_rs(
     black_level: f32,
     dark_pedestal: f32,
 ) -> PyResult<()> {
-    let (h, w) = raw_cfa_u16.as_array().dim();
+    let (_h, w) = raw_cfa_u16.as_array().dim();
     let cfa_slice = raw_cfa_u16.as_slice_mut().map_err(|e| {
         pyo3::exceptions::PyValueError::new_err(format!("raw_cfa_u16 must be C-contiguous: {:?}", e))
     })?;
@@ -731,4 +734,736 @@ pub fn convert_colorspace_u16_bradford_rs<'py>(
         out.assign(&arr);
         Ok(out.into_pyarray(py))
     }
+}
+
+// ============================================================================
+// FASE 17: INGESTA CONCURRENTE DE RAWS Y METADATOS (Rayon Batch Scanner)
+// (core/stacking.py y core/startrails.py)
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub struct RawFileMetadata {
+    pub filepath: String,
+    pub is_valid: bool,
+    pub is_raw: bool,
+    pub width: usize,
+    pub height: usize,
+    pub raw_width: usize,
+    pub raw_height: usize,
+    pub black_level: f64,
+    pub white_balance: [f64; 3],
+    pub color_temp: u32,
+    pub make: String,
+    pub model: String,
+    pub iso: Option<u32>,
+    pub exposure_time: Option<f64>,
+    pub orientation: u16,
+    pub error: Option<String>,
+}
+
+fn is_raw_extension(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with(".nef")
+        || lower.ends_with(".cr2")
+        || lower.ends_with(".cr3")
+        || lower.ends_with(".arw")
+        || lower.ends_with(".dng")
+        || lower.ends_with(".raw")
+        || lower.ends_with(".rw2")
+        || lower.ends_with(".pef")
+        || lower.ends_with(".orf")
+        || lower.ends_with(".raf")
+        || lower.ends_with(".kdc")
+        || lower.ends_with(".mrw")
+        || lower.ends_with(".sr2")
+}
+
+struct TiffReader<'a> {
+    data: &'a [u8],
+    is_le: bool,
+}
+
+impl<'a> TiffReader<'a> {
+    #[inline(always)]
+    fn new(data: &'a [u8], is_le: bool) -> Self {
+        Self { data, is_le }
+    }
+
+    #[inline(always)]
+    fn u16(&self, off: usize) -> Option<u16> {
+        if off + 2 > self.data.len() {
+            return None;
+        }
+        if self.is_le {
+            Some(u16::from_le_bytes([self.data[off], self.data[off + 1]]))
+        } else {
+            Some(u16::from_be_bytes([self.data[off], self.data[off + 1]]))
+        }
+    }
+
+    #[inline(always)]
+    fn u32(&self, off: usize) -> Option<u32> {
+        if off + 4 > self.data.len() {
+            return None;
+        }
+        if self.is_le {
+            Some(u32::from_le_bytes([
+                self.data[off],
+                self.data[off + 1],
+                self.data[off + 2],
+                self.data[off + 3],
+            ]))
+        } else {
+            Some(u32::from_be_bytes([
+                self.data[off],
+                self.data[off + 1],
+                self.data[off + 2],
+                self.data[off + 3],
+            ]))
+        }
+    }
+
+    #[inline(always)]
+    fn rational(&self, off: usize) -> Option<f64> {
+        let num = self.u32(off)?;
+        let den = self.u32(off + 4)?;
+        if den == 0 {
+            return None;
+        }
+        Some(num as f64 / den as f64)
+    }
+
+    fn ascii(&self, off: usize, count: usize) -> String {
+        if off >= self.data.len() {
+            return String::new();
+        }
+        let max_len = count.min(self.data.len() - off);
+        let slice = &self.data[off..off + max_len];
+        let end = slice.iter().position(|&b| b == 0).unwrap_or(slice.len());
+        String::from_utf8_lossy(&slice[..end]).trim().to_string()
+    }
+}
+
+fn parse_tiff_metadata(buf: &[u8], is_raw_ext: bool) -> Option<RawFileMetadata> {
+    if buf.len() < 16 {
+        return None;
+    }
+    let is_le = match &buf[0..2] {
+        b"II" => true,
+        b"MM" => false,
+        _ => {
+            if &buf[0..4] == b"IIRO" {
+                true
+            } else if &buf[0..4] == b"MMOR" {
+                false
+            } else {
+                return None;
+            }
+        }
+    };
+
+    let reader = TiffReader::new(buf, is_le);
+    let version = reader.u16(2).unwrap_or(0);
+    if version != 42 && version != 0x55 && version != 0x4F52 && &buf[0..4] != b"IIRO" && &buf[0..4] != b"MMOR" {
+        return None;
+    }
+
+    let ifd0_off = reader.u32(4)? as usize;
+    if ifd0_off + 2 > buf.len() {
+        return None;
+    }
+
+    let n_entries = reader.u16(ifd0_off)? as usize;
+    let mut w0 = 0usize;
+    let mut h0 = 0usize;
+    let mut make = String::new();
+    let mut model = String::new();
+    let mut orientation = 1u16;
+    let mut subifd_offsets = Vec::new();
+    let mut exif_offset: Option<usize> = None;
+    let mut dng_black_level: Option<f64> = None;
+    let mut dng_wb: Option<[f64; 3]> = None;
+
+    for i in 0..n_entries {
+        let entry_off = ifd0_off + 2 + i * 12;
+        if entry_off + 12 > buf.len() {
+            break;
+        }
+        let tag = reader.u16(entry_off).unwrap_or(0);
+        let typ = reader.u16(entry_off + 2).unwrap_or(0);
+        let cnt = reader.u32(entry_off + 4).unwrap_or(0) as usize;
+        let val_or_off = reader.u32(entry_off + 8).unwrap_or(0);
+
+        match tag {
+            0x0100 => {
+                w0 = if typ == 3 {
+                    reader.u16(entry_off + 8).unwrap_or(0) as usize
+                } else {
+                    val_or_off as usize
+                };
+            }
+            0x0101 => {
+                h0 = if typ == 3 {
+                    reader.u16(entry_off + 8).unwrap_or(0) as usize
+                } else {
+                    val_or_off as usize
+                };
+            }
+            0x010F => {
+                make = reader.ascii(val_or_off as usize, cnt);
+            }
+            0x0110 => {
+                model = reader.ascii(val_or_off as usize, cnt);
+            }
+            0x0112 => {
+                orientation = reader.u16(entry_off + 8).unwrap_or(1);
+            }
+            0x014A => {
+                if cnt == 1 {
+                    subifd_offsets.push(val_or_off as usize);
+                } else if cnt > 1 {
+                    let sub_base = val_or_off as usize;
+                    for k in 0..cnt {
+                        if let Some(off) = reader.u32(sub_base + k * 4) {
+                            subifd_offsets.push(off as usize);
+                        }
+                    }
+                }
+            }
+            0x8769 => {
+                exif_offset = Some(val_or_off as usize);
+            }
+            0xC61A => {
+                if typ == 3 {
+                    dng_black_level = Some(reader.u16(entry_off + 8).unwrap_or(0) as f64);
+                } else if typ == 4 {
+                    dng_black_level = Some(val_or_off as f64);
+                } else if typ == 5 {
+                    dng_black_level = reader.rational(val_or_off as usize);
+                }
+            }
+            0xC628 => {
+                if cnt >= 3 {
+                    let off_wb = val_or_off as usize;
+                    if let (Some(r), Some(g), Some(b)) = (
+                        reader.rational(off_wb),
+                        reader.rational(off_wb + 8),
+                        reader.rational(off_wb + 16),
+                    ) {
+                        if r > 1e-6 && g > 1e-6 && b > 1e-6 {
+                            let r_gain = (1.0 / r) / (1.0 / g);
+                            let b_gain = (1.0 / b) / (1.0 / g);
+                            dng_wb = Some([r_gain, 1.0, b_gain]);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut raw_w = w0;
+    let mut raw_h = h0;
+
+    // Check Canon CR2 RAW IFD pointer at offset 12
+    if buf.len() >= 16 && &buf[8..12] == b"CR\x02\x00" {
+        if let Some(cr2_raw_off) = reader.u32(12) {
+            let cr2_off = cr2_raw_off as usize;
+            if cr2_off + 2 <= buf.len() {
+                if let Some(n_cr2) = reader.u16(cr2_off) {
+                    for i in 0..(n_cr2 as usize) {
+                        let off = cr2_off + 2 + i * 12;
+                        if off + 12 > buf.len() {
+                            break;
+                        }
+                        let tag = reader.u16(off).unwrap_or(0);
+                        let typ = reader.u16(off + 2).unwrap_or(0);
+                        let val_or_off = reader.u32(off + 8).unwrap_or(0);
+                        if tag == 0x0100 {
+                            raw_w = if typ == 3 {
+                                reader.u16(off + 8).unwrap_or(0) as usize
+                            } else {
+                                val_or_off as usize
+                            };
+                        } else if tag == 0x0101 {
+                            raw_h = if typ == 3 {
+                                reader.u16(off + 8).unwrap_or(0) as usize
+                            } else {
+                                val_or_off as usize
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Check SubIFDs for full sensor dimensions (Nikon NEF, Sony ARW, DNG)
+    for sub_off in subifd_offsets.iter() {
+        let off_val = *sub_off;
+        if off_val + 2 > buf.len() {
+            continue;
+        }
+        if let Some(n_sub) = reader.u16(off_val) {
+            let mut sw = 0usize;
+            let mut sh = 0usize;
+            for i in 0..(n_sub as usize) {
+                let off = off_val + 2 + i * 12;
+                if off + 12 > buf.len() {
+                    break;
+                }
+                let tag = reader.u16(off).unwrap_or(0);
+                let typ = reader.u16(off + 2).unwrap_or(0);
+                let val_or_off = reader.u32(off + 8).unwrap_or(0);
+                if tag == 0x0100 {
+                    sw = if typ == 3 {
+                        reader.u16(off + 8).unwrap_or(0) as usize
+                    } else {
+                        val_or_off as usize
+                    };
+                } else if tag == 0x0101 {
+                    sh = if typ == 3 {
+                        reader.u16(off + 8).unwrap_or(0) as usize
+                    } else {
+                        val_or_off as usize
+                    };
+                } else if tag == 0xC61A && dng_black_level.is_none() {
+                    if typ == 3 {
+                        dng_black_level = Some(reader.u16(off + 8).unwrap_or(0) as f64);
+                    } else if typ == 4 {
+                        dng_black_level = Some(val_or_off as f64);
+                    } else if typ == 5 {
+                        dng_black_level = reader.rational(val_or_off as usize);
+                    }
+                }
+            }
+            if sw * sh > raw_w * raw_h {
+                raw_w = sw;
+                raw_h = sh;
+            }
+        }
+    }
+
+    // Exif tags: ISO, ExposureTime, MakerNote
+    let mut iso: Option<u32> = None;
+    let mut exposure_time: Option<f64> = None;
+    let mut wb = dng_wb.unwrap_or([2.0, 1.0, 1.5]);
+
+    if let Some(exif_off) = exif_offset {
+        if exif_off + 2 <= buf.len() {
+            if let Some(n_exif) = reader.u16(exif_off) {
+                let mut mkn_offset: Option<usize> = None;
+                for i in 0..(n_exif as usize) {
+                    let off = exif_off + 2 + i * 12;
+                    if off + 12 > buf.len() {
+                        break;
+                    }
+                    let tag = reader.u16(off).unwrap_or(0);
+                    let val_or_off = reader.u32(off + 8).unwrap_or(0);
+                    match tag {
+                        0x829A => {
+                            exposure_time = reader.rational(val_or_off as usize);
+                        }
+                        0x8827 => {
+                            iso = Some(reader.u16(off + 8).unwrap_or(val_or_off as u16) as u32);
+                        }
+                        0x927C => {
+                            mkn_offset = Some(val_or_off as usize);
+                        }
+                        _ => {}
+                    }
+                }
+
+                if let Some(mkn_off) = mkn_offset {
+                    if mkn_off + 20 <= buf.len() && &buf[mkn_off..mkn_off + 6] == b"Nikon\0" {
+                        let mkn_base = mkn_off + 10;
+                        if mkn_base + 10 <= buf.len() {
+                            let n_mkn = reader.u16(mkn_base + 8).unwrap_or(0) as usize;
+                            for i in 0..n_mkn {
+                                let off = mkn_base + 10 + i * 12;
+                                if off + 12 > buf.len() {
+                                    break;
+                                }
+                                let tag = reader.u16(off).unwrap_or(0);
+                                let val_or_off = reader.u32(off + 8).unwrap_or(0);
+                                if tag == 0x000C {
+                                    let wb_off = mkn_base + val_or_off as usize;
+                                    if wb_off + 32 <= buf.len() {
+                                        if let (Some(r), Some(b), Some(g)) = (
+                                            reader.rational(wb_off),
+                                            reader.rational(wb_off + 8),
+                                            reader.rational(wb_off + 16),
+                                        ) {
+                                            if g > 1e-6 {
+                                                wb = [r / g, 1.0, b / g];
+                                            }
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let make_upper = make.to_uppercase();
+    let black_level = if let Some(bl) = dng_black_level {
+        bl
+    } else if make_upper.contains("NIKON") {
+        if model.contains('Z') || model.contains("D850") || model.contains("D750") {
+            1008.0
+        } else if model.contains("D7000") || model.contains("D5100") {
+            600.0
+        } else {
+            1008.0
+        }
+    } else if make_upper.contains("CANON") {
+        1024.0
+    } else if make_upper.contains("SONY") {
+        512.0
+    } else {
+        0.0
+    };
+
+    let r_gain = wb[0].max(0.1);
+    let b_gain = wb[2].max(0.1);
+    let ratio = (r_gain / b_gain) / 1.44;
+    let color_temp = (5500.0 * ratio.powf(0.85)).round().clamp(2000.0, 15000.0) as u32;
+
+    let (width, height) = if matches!(orientation, 5 | 6 | 7 | 8) {
+        (raw_h, raw_w)
+    } else {
+        (raw_w, raw_h)
+    };
+
+    let is_raw = is_raw_ext
+        || !subifd_offsets.is_empty()
+        || make_upper.contains("NIKON")
+        || make_upper.contains("CANON")
+        || make_upper.contains("SONY");
+
+    Some(RawFileMetadata {
+        filepath: String::new(),
+        is_valid: raw_w > 0 && raw_h > 0,
+        is_raw,
+        width,
+        height,
+        raw_width: raw_w,
+        raw_height: raw_h,
+        black_level,
+        white_balance: wb,
+        color_temp,
+        make,
+        model,
+        iso,
+        exposure_time,
+        orientation,
+        error: None,
+    })
+}
+
+fn parse_fits_metadata(buf: &[u8]) -> Option<RawFileMetadata> {
+    if buf.len() < 80 {
+        return None;
+    }
+    let header_str = String::from_utf8_lossy(buf);
+    if !header_str.starts_with("SIMPLE  ") && !header_str.starts_with("XTENSION") {
+        return None;
+    }
+
+    let mut w = 0usize;
+    let mut h = 0usize;
+    let mut exp_time: Option<f64> = None;
+    let mut instr = String::new();
+    let mut tele = String::new();
+
+    for chunk in buf.chunks_exact(80) {
+        let card = String::from_utf8_lossy(chunk);
+        if card.starts_with("END ") {
+            break;
+        }
+        if card.starts_with("NAXIS1  =") {
+            if let Some(val_str) = card.split('=').nth(1) {
+                let clean = val_str.split('/').next().unwrap_or("").trim();
+                w = clean.parse().unwrap_or(0);
+            }
+        } else if card.starts_with("NAXIS2  =") {
+            if let Some(val_str) = card.split('=').nth(1) {
+                let clean = val_str.split('/').next().unwrap_or("").trim();
+                h = clean.parse().unwrap_or(0);
+            }
+        } else if card.starts_with("EXPTIME =") {
+            if let Some(val_str) = card.split('=').nth(1) {
+                let clean = val_str.split('/').next().unwrap_or("").trim();
+                exp_time = clean.parse().ok();
+            }
+        } else if card.starts_with("INSTRUME=") {
+            if let Some(val_str) = card.split('=').nth(1) {
+                instr = val_str.replace('\'', "").trim().to_string();
+            }
+        } else if card.starts_with("TELESCOP=") {
+            if let Some(val_str) = card.split('=').nth(1) {
+                tele = val_str.replace('\'', "").trim().to_string();
+            }
+        }
+    }
+
+    if w == 0 || h == 0 {
+        return None;
+    }
+
+    Some(RawFileMetadata {
+        filepath: String::new(),
+        is_valid: true,
+        is_raw: false,
+        width: w,
+        height: h,
+        raw_width: w,
+        raw_height: h,
+        black_level: 0.0,
+        white_balance: [1.0, 1.0, 1.0],
+        color_temp: 5500,
+        make: tele,
+        model: instr,
+        iso: None,
+        exposure_time: exp_time,
+        orientation: 1,
+        error: None,
+    })
+}
+
+fn parse_png_metadata(buf: &[u8]) -> Option<RawFileMetadata> {
+    if buf.len() < 24 || &buf[0..8] != b"\x89PNG\r\n\x1a\n" {
+        return None;
+    }
+    if &buf[12..16] != b"IHDR" {
+        return None;
+    }
+    let w = u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]) as usize;
+    let h = u32::from_be_bytes([buf[20], buf[21], buf[22], buf[23]]) as usize;
+
+    Some(RawFileMetadata {
+        filepath: String::new(),
+        is_valid: w > 0 && h > 0,
+        is_raw: false,
+        width: w,
+        height: h,
+        raw_width: w,
+        raw_height: h,
+        black_level: 0.0,
+        white_balance: [1.0, 1.0, 1.0],
+        color_temp: 5500,
+        make: String::new(),
+        model: String::new(),
+        iso: None,
+        exposure_time: None,
+        orientation: 1,
+        error: None,
+    })
+}
+
+fn parse_jpeg_metadata(buf: &[u8]) -> Option<RawFileMetadata> {
+    if buf.len() < 4 || buf[0] != 0xFF || buf[1] != 0xD8 {
+        return None;
+    }
+    let mut off = 2usize;
+    let mut w = 0usize;
+    let mut h = 0usize;
+
+    while off + 4 < buf.len() {
+        if buf[off] != 0xFF {
+            off += 1;
+            continue;
+        }
+        let marker = buf[off + 1];
+        if marker == 0xC0 || marker == 0xC2 {
+            if off + 9 <= buf.len() {
+                h = u16::from_be_bytes([buf[off + 5], buf[off + 6]]) as usize;
+                w = u16::from_be_bytes([buf[off + 7], buf[off + 8]]) as usize;
+                break;
+            }
+        }
+        if marker == 0xD9 || marker == 0xDA {
+            break;
+        }
+        let len = u16::from_be_bytes([buf[off + 2], buf[off + 3]]) as usize;
+        off += 2 + len;
+    }
+
+    if w == 0 || h == 0 {
+        return None;
+    }
+
+    Some(RawFileMetadata {
+        filepath: String::new(),
+        is_valid: true,
+        is_raw: false,
+        width: w,
+        height: h,
+        raw_width: w,
+        raw_height: h,
+        black_level: 0.0,
+        white_balance: [1.0, 1.0, 1.0],
+        color_temp: 5500,
+        make: String::new(),
+        model: String::new(),
+        iso: None,
+        exposure_time: None,
+        orientation: 1,
+        error: None,
+    })
+}
+
+pub fn parse_file_metadata(path_str: &str) -> RawFileMetadata {
+    let is_raw_ext = is_raw_extension(path_str);
+    let mut file = match File::open(path_str) {
+        Ok(f) => f,
+        Err(e) => {
+            return RawFileMetadata {
+                filepath: path_str.to_string(),
+                is_valid: false,
+                is_raw: is_raw_ext,
+                width: 0,
+                height: 0,
+                raw_width: 0,
+                raw_height: 0,
+                black_level: 0.0,
+                white_balance: [1.0, 1.0, 1.0],
+                color_temp: 5500,
+                make: String::new(),
+                model: String::new(),
+                iso: None,
+                exposure_time: None,
+                orientation: 1,
+                error: Some(format!("No se pudo abrir el archivo: {}", e)),
+            };
+        }
+    };
+
+    let mut buf = vec![0u8; 262144];
+    let n = match file.read(&mut buf) {
+        Ok(n) => n,
+        Err(e) => {
+            return RawFileMetadata {
+                filepath: path_str.to_string(),
+                is_valid: false,
+                is_raw: is_raw_ext,
+                width: 0,
+                height: 0,
+                raw_width: 0,
+                raw_height: 0,
+                black_level: 0.0,
+                white_balance: [1.0, 1.0, 1.0],
+                color_temp: 5500,
+                make: String::new(),
+                model: String::new(),
+                iso: None,
+                exposure_time: None,
+                orientation: 1,
+                error: Some(format!("Error leyendo cabecera: {}", e)),
+            };
+        }
+    };
+    buf.truncate(n);
+
+    let mut meta = parse_tiff_metadata(&buf, is_raw_ext)
+        .or_else(|| parse_fits_metadata(&buf))
+        .or_else(|| parse_png_metadata(&buf))
+        .or_else(|| parse_jpeg_metadata(&buf))
+        .unwrap_or_else(|| RawFileMetadata {
+            filepath: path_str.to_string(),
+            is_valid: is_raw_ext,
+            is_raw: is_raw_ext,
+            width: 0,
+            height: 0,
+            raw_width: 0,
+            raw_height: 0,
+            black_level: 0.0,
+            white_balance: [1.0, 1.0, 1.0],
+            color_temp: 5500,
+            make: String::new(),
+            model: String::new(),
+            iso: None,
+            exposure_time: None,
+            orientation: 1,
+            error: if is_raw_ext {
+                None
+            } else {
+                Some("Formato de archivo no soportado o desconocido".to_string())
+            },
+        });
+
+    meta.filepath = path_str.to_string();
+    meta
+}
+
+#[pyfunction]
+#[pyo3(signature = (file_paths))]
+pub fn scan_raw_batch_metadata_rs(
+    py: Python<'_>,
+    file_paths: Vec<String>,
+) -> PyResult<PyObject> {
+    let results: Vec<(String, RawFileMetadata)> = py.allow_threads(|| {
+        file_paths
+            .par_iter()
+            .map(|p| {
+                let meta = parse_file_metadata(p);
+                (p.clone(), meta)
+            })
+            .collect()
+    });
+
+    let py_dict = PyDict::new(py);
+    for (path, meta) in results {
+        let item = PyDict::new(py);
+        item.set_item("filepath", &meta.filepath)?;
+        item.set_item("is_valid", meta.is_valid)?;
+        item.set_item("is_raw", meta.is_raw)?;
+        item.set_item("width", meta.width)?;
+        item.set_item("height", meta.height)?;
+        item.set_item("raw_width", meta.raw_width)?;
+        item.set_item("raw_height", meta.raw_height)?;
+        item.set_item("black_level", meta.black_level)?;
+        item.set_item("white_balance", meta.white_balance.to_vec())?;
+        item.set_item("color_temp", meta.color_temp)?;
+        item.set_item("make", &meta.make)?;
+        item.set_item("model", &meta.model)?;
+        item.set_item("iso", meta.iso)?;
+        item.set_item("exposure_time", meta.exposure_time)?;
+        item.set_item("orientation", meta.orientation)?;
+        item.set_item("error", meta.error)?;
+        py_dict.set_item(path, item)?;
+    }
+
+    Ok(py_dict.into())
+}
+
+#[pyfunction]
+#[pyo3(signature = (file_path))]
+pub fn scan_raw_metadata_rs(
+    py: Python<'_>,
+    file_path: String,
+) -> PyResult<PyObject> {
+    let meta = py.allow_threads(|| parse_file_metadata(&file_path));
+    let item = PyDict::new(py);
+    item.set_item("filepath", &meta.filepath)?;
+    item.set_item("is_valid", meta.is_valid)?;
+    item.set_item("is_raw", meta.is_raw)?;
+    item.set_item("width", meta.width)?;
+    item.set_item("height", meta.height)?;
+    item.set_item("raw_width", meta.raw_width)?;
+    item.set_item("raw_height", meta.raw_height)?;
+    item.set_item("black_level", meta.black_level)?;
+    item.set_item("white_balance", meta.white_balance.to_vec())?;
+    item.set_item("color_temp", meta.color_temp)?;
+    item.set_item("make", &meta.make)?;
+    item.set_item("model", &meta.model)?;
+    item.set_item("iso", meta.iso)?;
+    item.set_item("exposure_time", meta.exposure_time)?;
+    item.set_item("orientation", meta.orientation)?;
+    item.set_item("error", meta.error)?;
+    Ok(item.into())
 }

@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QSplitter, QFrame, QSizePolicy, QProgressDialog
 )
 
-from core.stacking import load_image_as_float32
+from core.stacking import load_image_as_float32, scan_raw_batch_metadata
 from core.startrails import generate_startrail, enhance_star_trails_color
 from core.icc_manager import save_tiff_with_icc
 from gui.canvas import MaskCanvas
@@ -731,6 +731,20 @@ class StartrailsTab(QWidget):
         new_files = [f for f in files if f not in self.files_list]
         if not new_files:
             return
+
+        # Ingesta concurrente multihilo de cabeceras en Rust (Fase 17)
+        import time
+        t0 = time.perf_counter()
+        meta_batch = scan_raw_batch_metadata(new_files)
+        elapsed = time.perf_counter() - t0
+        if meta_batch:
+            first_meta = next(iter(meta_batch.values()), {})
+            if first_meta.get("is_valid"):
+                cam = f"{first_meta.get('make', '')} {first_meta.get('model', '')}".strip()
+                res_str = f"{first_meta.get('raw_width', 0)}x{first_meta.get('raw_height', 0)}"
+                cam_info = f" [{cam}, {res_str}]" if cam or res_str != "0x0" else ""
+                self.log(f"✓ [INGESTA] {len(new_files)} tomas analizadas en {elapsed:.3f}s{cam_info}")
+
         was_empty = (len(self.files_list) == 0)
         self.files_list.extend(new_files)
         self.files_list.sort()

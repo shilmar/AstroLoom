@@ -7,18 +7,11 @@ opencv-python>=4.8.0
 scipy>=1.10.0
 numba>=0.58.0
 
-# Lectura de archivos RAW, FITS y TIFF
+# Lectura de archivos RAW y TIFF
 rawpy>=0.20.0
 tifffile>=2023.7.0
 imagecodecs>=2024.1.1
-astropy>=6.0.0
 Pillow>=10.0.0
-
-# Gestión de memoria y recursos
-psutil>=5.9.0
-
-# Exportación PSD nativo por capas
-pytoshop>=1.2.1
 
 # Inferencia de IA (Detección de horizonte y Reducción de Ruido NAFNet acelerada por GPU)
 onnxruntime-directml>=1.16.0

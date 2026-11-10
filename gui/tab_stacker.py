@@ -16,7 +16,7 @@ from PySide6.QtGui import QTextCursor, QCursor
 
 from core.project_manager import ProjectManager
 from core.masking import refine_mask_guided, apply_direct_brush_to_mask
-from core.stacking import load_image_as_float32
+from core.stacking import load_image_as_float32, scan_raw_batch_metadata
 from gui.canvas import MaskCanvas
 from gui.widgets.drop_widgets import DropListWidget
 from gui.worker import StackingWorker, SubstackingWorker, QualityCullingWorker, AIHorizonWorker, ModelDownloadWorker
@@ -1031,6 +1031,19 @@ class StackerTab(QWidget):
         """Añade tomas a la pestaña indicada, deduplicando y actualizando vista previa si procede."""
         if not paths:
             return
+
+        # Verificación concurrente multihilo de cabeceras en Rust (Fase 17)
+        import time
+        t0 = time.perf_counter()
+        meta_batch = scan_raw_batch_metadata(paths)
+        elapsed = time.perf_counter() - t0
+        if meta_batch:
+            first_meta = next(iter(meta_batch.values()), {})
+            if first_meta.get("is_valid"):
+                cam = f"{first_meta.get('make', '')} {first_meta.get('model', '')}".strip()
+                res_str = f"{first_meta.get('raw_width', 0)}x{first_meta.get('raw_height', 0)}"
+                cam_info = f" [{cam}, {res_str}]" if cam or res_str != "0x0" else ""
+                self.log_message(f"✓ [INGESTA] {len(paths)} tomas verificadas en {elapsed:.3f}s{cam_info}")
 
         if tab_name == "Lights":
             first_add = len(self.lights_list) == 0

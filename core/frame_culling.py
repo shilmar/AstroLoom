@@ -81,22 +81,21 @@ def load_fast_frame_preview(filepath: str, max_dim: int = 1600) -> Optional[np.n
 
         if ext in {".fits", ".fit", ".fts"}:
             try:
-                from astropy.io import fits
-                with fits.open(filepath, memmap=True) as hdul:
-                    for hdu in hdul:
-                        if hdu.data is not None and hdu.data.ndim in (2, 3):
-                            data = hdu.data.astype(np.float32)
-                            if data.ndim == 3:
-                                data = np.mean(data[:3], axis=0)
-                            p_hi = float(np.percentile(data, 99.8))
-                            p_lo = float(np.percentile(data, 1.0))
-                            rng = max(1e-5, p_hi - p_lo)
-                            norm = np.clip((data - p_lo) / rng, 0.0, 1.0)
-                            h, w = norm.shape[:2]
-                            if max(h, w) > max_dim:
-                                scale = max_dim / max(h, w)
-                                norm = cv2.resize(norm, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-                            return norm
+                from core.fits_io import read_fits
+                data = read_fits(filepath)
+                if data is not None and data.ndim in (2, 3):
+                    data = data.astype(np.float32)
+                    if data.ndim == 3:
+                        data = np.mean(data[:3], axis=0)
+                    p_hi = float(np.percentile(data, 99.8))
+                    p_lo = float(np.percentile(data, 1.0))
+                    rng = max(1e-5, p_hi - p_lo)
+                    norm = np.clip((data - p_lo) / rng, 0.0, 1.0)
+                    h, w = norm.shape[:2]
+                    if max(h, w) > max_dim:
+                        scale = max_dim / max(h, w)
+                        norm = cv2.resize(norm, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+                    return norm
             except Exception:
                 pass
 

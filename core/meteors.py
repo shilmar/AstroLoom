@@ -45,9 +45,8 @@ from core.stacking import load_image_as_float32, get_image_dimensions
 from core.panorama import extract_bright_stars, build_star_asterisms, match_star_asterisms
 
 try:
-    import pytoshop
-    from pytoshop import layers as psd_layers, enums as psd_enums
-    HAS_PYTOSHOP = True
+    import astroloom_rs
+    HAS_PYTOSHOP = hasattr(astroloom_rs, "write_psd_file")
 except Exception:
     HAS_PYTOSHOP = False
 
@@ -1229,22 +1228,17 @@ def export_meteor_layered_psd(
 
     try:
         h, w = base_image.shape[:2]
-        psd = pytoshop.core.PsdFile(num_channels=3, height=h, width=w, depth=16)
+        comp_contiguous = np.ascontiguousarray(np.clip(base_image, 0.0, 1.0), dtype=np.float32)
 
         # 1. Capa Fondo
-        bg_16 = (np.clip(base_image, 0.0, 1.0) * 65535.0).astype(np.uint16)
-
-        bg_layer = psd_layers.LayerRecord(
-            name="Cielo y Suelo Base",
-            top=0, left=0, bottom=h, right=w,
-            blend_mode=psd_enums.BlendMode.normal,
-            channels={
-                0: psd_layers.ChannelImageData(image=bg_16[..., 0], compression=psd_enums.Compression.raw),
-                1: psd_layers.ChannelImageData(image=bg_16[..., 1], compression=psd_enums.Compression.raw),
-                2: psd_layers.ChannelImageData(image=bg_16[..., 2], compression=psd_enums.Compression.raw),
-            }
-        )
-        psd.layer_and_mask_info.layer_info.layer_records.append(bg_layer)
+        layers = [{
+            "name": "Cielo y Suelo Base",
+            "top": 0, "left": 0, "bottom": h, "right": w,
+            "blend_mode": "norm",
+            "opacity": 255,
+            "visible": True,
+            "rgb": comp_contiguous
+        }]
 
         # 2. Capas individuales por cada meteoro
         active = [c for c in candidates if c.is_meteor and (include_sporadics or not c.is_sporadic)]
@@ -1346,31 +1340,26 @@ def export_meteor_layered_psd(
                 right = min(w, int(np.max(xs)) + pad_layer + 1)
 
                 cropped_layer = warped[top:bottom, left:right]
-                m_16 = (np.clip(cropped_layer, 0.0, 1.0) * 65535.0).astype(np.uint16)
-
-                m_layer = psd_layers.LayerRecord(
-                    name=f"Meteoro #{c.id:02d} ({c.filename})",
-                    top=top, left=left, bottom=bottom, right=right,
-                    blend_mode=psd_enums.BlendMode.lighten,
-                    channels={
-                        0: psd_layers.ChannelImageData(image=m_16[..., 0], compression=psd_enums.Compression.raw),
-                        1: psd_layers.ChannelImageData(image=m_16[..., 1], compression=psd_enums.Compression.raw),
-                        2: psd_layers.ChannelImageData(image=m_16[..., 2], compression=psd_enums.Compression.raw),
-                    }
-                )
-                psd.layer_and_mask_info.layer_info.layer_records.append(m_layer)
+                m_layer = {
+                    "name": f"Meteoro #{c.id:02d} ({c.filename})",
+                    "top": top, "left": left, "bottom": bottom, "right": right,
+                    "blend_mode": "lite",
+                    "opacity": 255,
+                    "visible": True,
+                    "rgb": np.ascontiguousarray(np.clip(cropped_layer, 0.0, 1.0), dtype=np.float32)
+                }
+                layers.append(m_layer)
             except Exception:
                 continue
 
-        # Vista compuesta base para miniaturas rápidas
-        from pytoshop import image_data as psd_image_data
-        psd.image_data = psd_image_data.ImageData(
-            channels=np.transpose(bg_16, (2, 0, 1)),
-            compression=psd_enums.Compression.raw
+        astroloom_rs.write_psd_file(
+            output_path,
+            w,
+            h,
+            16,
+            comp_contiguous,
+            layers
         )
-
-        with open(output_path, "wb") as f:
-            psd.write(f)
         return True
     except Exception as e:
         import traceback

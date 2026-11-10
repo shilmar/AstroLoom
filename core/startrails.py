@@ -19,7 +19,7 @@ from typing import Optional, Callable, Dict, Any, List, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
-from core.stacking import load_image_as_float32
+from core.stacking import load_image_as_float32, scan_raw_batch_metadata
 
 # Aceleración nativa en Rust vía PyO3 / Rayon
 try:
@@ -548,6 +548,14 @@ def generate_startrail(
     """
     if not files:
         raise ValueError("No se han proporcionado archivos para generar trazas.")
+
+    # Validación concurrente multihilo de cabeceras de lote en Rust (Fase 17)
+    meta_batch = scan_raw_batch_metadata(files)
+    invalid = [f for f in files if meta_batch.get(f) and not meta_batch[f].get("is_valid", True)]
+    if invalid:
+        files = [f for f in files if f not in invalid]
+        if not files:
+            raise ValueError(f"Ninguno de los archivos proporcionados es válido o legible (fallaron {len(invalid)} tomas).")
 
     n_files = len(files)
     ref_idx = max(0, min(n_files - 1, int(ref_idx)))

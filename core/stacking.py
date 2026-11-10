@@ -13,7 +13,6 @@ import tempfile
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import Optional, List, Tuple
-from astropy.io import fits
 from core.banding import suppress_cmos_banding
 
 # Aceleración nativa en Rust vía PyO3 / Rayon (máxima prioridad)
@@ -192,8 +191,106 @@ def _is_raw_file(filepath: str) -> bool:
     return ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw']
 
 
+def scan_raw_batch_metadata(file_paths: list[str]) -> dict[str, dict]:
+    """
+    Escaneo concurrente multihilo de metadatos de archivos RAW e imágenes en Rust (Fase 17).
+    Lee exclusivamente las cabeceras binarias (dimensiones de sensor, nivel de negro, temperatura, WB).
+    """
+    if not file_paths:
+        return {}
+    if HAS_RUST and hasattr(astroloom_rs, "scan_raw_batch_metadata_rs"):
+        try:
+            return astroloom_rs.scan_raw_batch_metadata_rs([str(p) for p in file_paths])
+        except Exception:
+            pass
+
+    results = {}
+    for p in file_paths:
+        p_str = str(p)
+        try:
+            ext = os.path.splitext(p_str)[1].lower()
+            if ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw']:
+                with rawpy.imread(p_str) as raw:
+                    raw_h, raw_w = raw.sizes.raw_height, raw.sizes.raw_width
+                    h, w = raw.sizes.height, raw.sizes.width
+                    if getattr(raw.sizes, 'flip', 0) in [5, 6, 7, 8]:
+                        w, h = h, w
+                    bl = float(raw.black_level_per_channel[0]) if hasattr(raw, 'black_level_per_channel') else 512.0
+                    wb = [float(x) for x in raw.camera_whitebalance[:3]] if hasattr(raw, 'camera_whitebalance') else [2.0, 1.0, 1.5]
+                    results[p_str] = {
+                        "filepath": p_str,
+                        "is_valid": True,
+                        "is_raw": True,
+                        "width": w,
+                        "height": h,
+                        "raw_width": raw_w,
+                        "raw_height": raw_h,
+                        "black_level": bl,
+                        "white_balance": wb,
+                        "color_temp": 5500,
+                        "make": "",
+                        "model": "",
+                        "iso": None,
+                        "exposure_time": None,
+                        "orientation": getattr(raw.sizes, 'flip', 1),
+                        "error": None,
+                    }
+            else:
+                h, w = get_image_dimensions(p_str)
+                results[p_str] = {
+                    "filepath": p_str,
+                    "is_valid": h > 0 and w > 0,
+                    "is_raw": False,
+                    "width": w,
+                    "height": h,
+                    "raw_width": w,
+                    "raw_height": h,
+                    "black_level": 0.0,
+                    "white_balance": [1.0, 1.0, 1.0],
+                    "color_temp": 5500,
+                    "make": "",
+                    "model": "",
+                    "iso": None,
+                    "exposure_time": None,
+                    "orientation": 1,
+                    "error": None,
+                }
+        except Exception as e:
+            results[p_str] = {
+                "filepath": p_str,
+                "is_valid": False,
+                "is_raw": _is_raw_file(p_str),
+                "width": 0,
+                "height": 0,
+                "raw_width": 0,
+                "raw_height": 0,
+                "black_level": 0.0,
+                "white_balance": [1.0, 1.0, 1.0],
+                "color_temp": 5500,
+                "make": "",
+                "model": "",
+                "iso": None,
+                "exposure_time": None,
+                "orientation": 1,
+                "error": str(e),
+            }
+    return results
+
+
 def get_raw_cfa_dimensions(filepath: str) -> tuple[int, int]:
     """Obtiene (alto, ancho) de la matriz pura del sensor (CFA) sin rotación ni interpolación."""
+    if HAS_RUST and hasattr(astroloom_rs, "scan_raw_batch_metadata_rs"):
+        try:
+            meta = astroloom_rs.scan_raw_batch_metadata_rs([filepath])
+            if filepath in meta:
+                info = meta[filepath]
+                if info.get("is_valid") and info.get("raw_height", 0) > 0 and info.get("raw_width", 0) > 0:
+                    return int(info["raw_height"]), int(info["raw_width"])
+        except Exception:
+            pass
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Archivo no encontrado: {filepath}")
+
     ext = os.path.splitext(filepath)[1].lower()
     if ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw']:
         with rawpy.imread(filepath) as raw:
@@ -215,6 +312,9 @@ def load_image_as_float32(
     if color_space is None:
         from core.config_manager import get_config_val
         color_space = get_config_val("icc_profile", "srgb")
+
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Archivo no encontrado: {filepath}")
 
     ext = os.path.splitext(filepath)[1].lower()
 
@@ -287,17 +387,17 @@ def load_image_as_float32(
             return img_f32
 
     elif ext in ['.fits', '.fit', '.fts']:
-        with fits.open(filepath) as hdul:
-            data = hdul[0].data.astype(np.float32)
-            if data.ndim == 2:
-                data = np.stack([data] * 3, axis=-1)
-            elif data.ndim == 3 and data.shape[0] in [3, 4]:
-                data = np.transpose(data[:3], (1, 2, 0))
-            d_min, d_max = float(data.min()), float(data.max())
-            denom = d_max - d_min + 1e-8
-            data -= d_min
-            data /= denom
-            res = data
+        from core.fits_io import read_fits
+        data = read_fits(filepath)
+        if data.ndim == 2:
+            data = np.stack([data] * 3, axis=-1)
+        elif data.ndim == 3 and data.shape[0] in [3, 4]:
+            data = np.transpose(data[:3], (1, 2, 0))
+        d_min, d_max = float(data.min()), float(data.max())
+        denom = d_max - d_min + 1e-8
+        data -= d_min
+        data /= denom
+        res = data
 
     elif ext in ['.tif', '.tiff']:
         data = tifffile.imread(filepath).astype(np.float32)
@@ -344,6 +444,18 @@ def load_image_as_float32(
 
 def get_image_dimensions(filepath: str) -> tuple[int, int]:
     """Obtiene (alto, ancho) de forma rápida sin procesar la matriz completa."""
+    if HAS_RUST and hasattr(astroloom_rs, "scan_raw_batch_metadata_rs"):
+        try:
+            meta = astroloom_rs.scan_raw_batch_metadata_rs([filepath])
+            if filepath in meta:
+                info = meta[filepath]
+                if info.get("is_valid") and info.get("height", 0) > 0 and info.get("width", 0) > 0:
+                    return int(info["height"]), int(info["width"])
+        except Exception:
+            pass
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Archivo no encontrado: {filepath}")
+
     ext = os.path.splitext(filepath)[1].lower()
     if ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw']:
         with rawpy.imread(filepath) as raw:
@@ -351,6 +463,12 @@ def get_image_dimensions(filepath: str) -> tuple[int, int]:
             if raw.sizes.flip in [5, 6, 7, 8]:
                 return w, h
             return h, w
+    elif ext in ['.fits', '.fit', '.fts']:
+        try:
+            from core.fits_io import get_fits_dimensions
+            return get_fits_dimensions(filepath)
+        except Exception:
+            pass
     else:
         info = cv2.imread(filepath, cv2.IMREAD_UNCHANGED)
         if info is not None:
@@ -831,8 +949,9 @@ def evaluate_storage_mode(strategy: str, num_frames: int, h: int, w: int, c: int
     est_gb = estimated_total_bytes / (1024 ** 3)
 
     try:
-        import psutil
-        free_bytes = psutil.virtual_memory().available
+        from core.system_info import get_system_memory
+        mem = get_system_memory()
+        free_bytes = mem.available
         free_gb = free_bytes / (1024 ** 3)
     except Exception:
         free_bytes = None
@@ -854,7 +973,7 @@ def evaluate_storage_mode(strategy: str, num_frames: int, h: int, w: int, c: int
         else:
             return StorageModeDecision(False, f"Caché en Disco SSD Automático ({est_gb:.1f} GB requeridos superan 70% de {free_gb:.1f} GB libres)")
 
-    return StorageModeDecision(False, "Caché en Disco SSD (psutil no disponible para medir RAM libre)")
+    return StorageModeDecision(False, "Caché en Disco SSD (No se pudo medir RAM libre)")
 
 
 def compute_tps_remap_grid(

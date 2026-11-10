@@ -1,14 +1,20 @@
+pub mod ai_preprocessing;
 pub mod astrometry;
 pub mod background;
 pub mod deconv;
 pub mod developer;
 pub mod eclipse;
+pub mod fits_io;
 pub mod meteors;
 pub mod panorama;
 pub mod photometry;
+pub mod project_codec;
+pub mod psd_writer;
+pub mod renderer;
 pub mod spatial_filters;
 pub mod stacking;
 pub mod streaming_io;
+pub mod system_info;
 
 use pyo3::prelude::*;
 
@@ -88,6 +94,33 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(streaming_io::recover_star_trail_colors_rs, m)?)?;
     m.add_function(wrap_pyfunction!(streaming_io::convert_colorspace_bradford_rs, m)?)?;
     m.add_function(wrap_pyfunction!(streaming_io::convert_colorspace_u16_bradford_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(streaming_io::scan_raw_batch_metadata_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(streaming_io::scan_raw_metadata_rs, m)?)?;
+
+    // 13. Poda de Librerías: FITS I/O, Escritor PSD Multicapa y Monitor de RAM - Prioridad 11
+    m.add_function(wrap_pyfunction!(system_info::get_system_memory, m)?)?;
+    m.add_function(wrap_pyfunction!(fits_io::read_fits_f32, m)?)?;
+    m.add_function(wrap_pyfunction!(fits_io::get_fits_dimensions_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(psd_writer::write_psd_file, m)?)?;
+
+    // 14. Puente de Renderizado Directo a Qt - Prioridad 12 (gui/canvas.py)
+    m.add_function(wrap_pyfunction!(renderer::render_canvas_frame_rs, m)?)?;
+
+    // 15. Tiling ONNX y Filtro Guiado - Prioridad 13 / Fase 16 (core/starnet_onnx.py, core/ai_horizon.py, core/ai_denoise.py)
+    m.add_function(wrap_pyfunction!(ai_preprocessing::fast_guided_filter_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(ai_preprocessing::compute_hann_2d_window_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(ai_preprocessing::get_tile_coords_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(ai_preprocessing::accumulate_tile_hann_inplace_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(ai_preprocessing::reconstruct_hann_tiling_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(ai_preprocessing::recompose_hann_tiles_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(ai_preprocessing::place_tile_cropped_inplace_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(ai_preprocessing::recompose_cropped_tiles_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(ai_preprocessing::prepare_starnet_tiles_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(ai_preprocessing::assemble_starnet_tiles_rs, m)?)?;
+
+    // 16. Serialización Paralela de Proyectos .devloom - Prioridad 14 (core/project_io.py)
+    m.add_function(wrap_pyfunction!(project_codec::write_devloom_project_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(project_codec::read_devloom_project_rs, m)?)?;
 
     Ok(())
 }

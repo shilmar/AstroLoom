@@ -6,6 +6,7 @@ subpíxel mediante Filtro Guiado (Guided Filter) de luminancia y fallback algor�
 """
 from typing import Optional, Tuple
 import os
+import sys
 import time
 import cv2
 import numpy as np
@@ -15,6 +16,12 @@ try:
     HAS_ONNX = True
 except ImportError:
     HAS_ONNX = False
+
+try:
+    import astroloom_rs
+    HAS_RUST_AI = hasattr(astroloom_rs, "fast_guided_filter_rs")
+except ImportError:
+    HAS_RUST_AI = False
 
 from core.config_manager import get_config_val
 
@@ -30,7 +37,11 @@ def get_model_path() -> Optional[str]:
     if custom and os.path.isfile(custom):
         return os.path.abspath(custom)
 
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    root = (
+        os.path.dirname(sys.executable)
+        if getattr(sys, "frozen", False)
+        else os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    )
     candidates = [
         os.path.join(root, "models", "skyseg.onnx"),
         os.path.join(root, "models", "u2netp.onnx"),
@@ -38,6 +49,9 @@ def get_model_path() -> Optional[str]:
         os.path.join(root, "assets", "models", "u2netp.onnx"),
         os.path.join(root, "skyseg.onnx")
     ]
+    if getattr(sys, "frozen", False):
+        dev_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        candidates.append(os.path.join(dev_root, "models", "skyseg.onnx"))
     for c in candidates:
         if os.path.isfile(c):
             return os.path.abspath(c)
@@ -76,7 +90,11 @@ def download_ai_model(
     import urllib.request
 
     if not target_path:
-        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        root = (
+            os.path.dirname(sys.executable)
+            if getattr(sys, "frozen", False)
+            else os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        )
         models_dir = os.path.join(root, "models")
         os.makedirs(models_dir, exist_ok=True)
         target_path = os.path.join(models_dir, DEFAULT_MODEL_FILENAME)
@@ -130,9 +148,10 @@ def fast_guided_filter(
     eps: float = 1e-3
 ) -> np.ndarray:
     """
-    Filtro Guiado ultrarrápido (He et al., ECCV 2010) en NumPy/OpenCV.
+    Filtro Guiado ultrarrápido (He et al., ECCV 2010).
     Alinea los bordes de la probabilidad de máscara con las aristas reales
     de árboles, rocas y montañas de la imagen guía con precisión subpíxel.
+    Acelerado en tiempo constante O(1) con Imágenes Integrales y Rayon vía astroloom_rs.
     
     Parámetros:
         guide_gray: Imagen 2D float32 [0.0, 1.0] (luminancia de alta resolución).
@@ -144,8 +163,17 @@ def fast_guided_filter(
         Máscara 2D float32 [0.0, 1.0] refinada respetando los bordes.
     """
     r = max(1, int(radius))
-    ksize = (r, r)
-    
+    eps_f = float(eps)
+
+    if HAS_RUST_AI:
+        try:
+            g = np.ascontiguousarray(guide_gray, dtype=np.float32)
+            m = np.ascontiguousarray(src_mask, dtype=np.float32)
+            return astroloom_rs.fast_guided_filter_rs(g, m, radius=r, eps=eps_f)
+        except Exception:
+            pass
+
+    ksize = (2 * r + 1, 2 * r + 1)
     mean_I = cv2.boxFilter(guide_gray, -1, ksize)
     mean_p = cv2.boxFilter(src_mask, -1, ksize)
     mean_Ip = cv2.boxFilter(guide_gray * src_mask, -1, ksize)
@@ -154,7 +182,7 @@ def fast_guided_filter(
     mean_II = cv2.boxFilter(guide_gray * guide_gray, -1, ksize)
     var_I = mean_II - mean_I * mean_I
 
-    a = cov_Ip / (var_I + eps)
+    a = cov_Ip / (var_I + eps_f)
     b = mean_p - a * mean_I
 
     mean_a = cv2.boxFilter(a, -1, ksize)

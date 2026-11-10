@@ -9,6 +9,7 @@ para garantizar continuidad fotométrica sin costuras.
 
 from typing import Optional, Callable, List, Tuple
 import os
+import sys
 import logging
 import cv2
 import numpy as np
@@ -18,6 +19,12 @@ try:
     HAS_ONNX = True
 except ImportError:
     HAS_ONNX = False
+
+try:
+    import astroloom_rs
+    HAS_RUST_AI = hasattr(astroloom_rs, 'accumulate_tile_hann_inplace_rs')
+except ImportError:
+    HAS_RUST_AI = False
 
 from core.config_manager import get_config_val
 
@@ -39,7 +46,11 @@ def get_nafnet_model_path() -> Optional[str]:
     if custom and os.path.isfile(custom):
         return os.path.abspath(custom)
 
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    root = (
+        os.path.dirname(sys.executable)
+        if getattr(sys, "frozen", False)
+        else os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    )
     candidates = [
         os.path.join(root, "models", DEFAULT_NAFNET_FILENAME),
         os.path.join(root, "models", "nafnet-sidd-w32.onnx"),
@@ -48,6 +59,9 @@ def get_nafnet_model_path() -> Optional[str]:
         os.path.join(root, "assets", "models", "nafnet-sidd-w32.onnx"),
         os.path.join(root, DEFAULT_NAFNET_FILENAME)
     ]
+    if getattr(sys, "frozen", False):
+        dev_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        candidates.append(os.path.join(dev_root, "models", DEFAULT_NAFNET_FILENAME))
     for c in candidates:
         if os.path.isfile(c):
             return os.path.abspath(c)
@@ -74,7 +88,11 @@ def download_nafnet_model(
     import urllib.request
 
     if not target_path:
-        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        root = (
+            os.path.dirname(sys.executable)
+            if getattr(sys, "frozen", False)
+            else os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        )
         models_dir = os.path.join(root, "models")
         os.makedirs(models_dir, exist_ok=True)
         target_path = os.path.join(models_dir, DEFAULT_NAFNET_FILENAME)
@@ -155,6 +173,11 @@ def compute_hann_2d_window(height: int, width: int) -> np.ndarray:
     w(y, x) = sin²(pi * (y+0.5) / H) * sin²(pi * (x+0.5) / W)
     Garantiza continuidad analítica en el solapamiento sin divisiones por cero.
     """
+    if HAS_RUST_AI and hasattr(astroloom_rs, 'compute_hann_2d_window_rs'):
+        try:
+            return astroloom_rs.compute_hann_2d_window_rs(height, width)
+        except Exception:
+            pass
     y_w = np.sin(np.pi * (np.arange(height, dtype=np.float32) + 0.5) / height) ** 2
     x_w = np.sin(np.pi * (np.arange(width, dtype=np.float32) + 0.5) / width) ** 2
     return np.outer(y_w, x_w).astype(np.float32)[..., np.newaxis]
@@ -162,6 +185,12 @@ def compute_hann_2d_window(height: int, width: int) -> np.ndarray:
 
 def _get_tile_coords(length: int, tile_size: int, overlap: int) -> List[int]:
     """Genera las coordenadas de inicio de los bloques cubriendo la longitud completa."""
+    stride = tile_size - overlap
+    if HAS_RUST_AI and hasattr(astroloom_rs, 'get_tile_coords_rs'):
+        try:
+            return astroloom_rs.get_tile_coords_rs(length, tile_size, stride)
+        except Exception:
+            pass
     if length <= tile_size:
         return [0]
     step = tile_size - overlap
@@ -282,21 +311,29 @@ def run_nafnet_tiled_inference(
             out_tile = np.transpose(out_tile, (1, 2, 0))  # (H, W, 3)
 
             # Ponderación con ventana 2D de Hann
-            accumulator_img[y:y + tile_size, x:x + tile_size] += out_tile * hann_win
-            accumulator_weights[y:y + tile_size, x:x + tile_size] += hann_win
+            if HAS_RUST_AI and hasattr(astroloom_rs, 'accumulate_tile_hann_inplace_rs'):
+                astroloom_rs.accumulate_tile_hann_inplace_rs(
+                    accumulator_img, accumulator_weights, np.ascontiguousarray(out_tile, dtype=np.float32), hann_win, y, x
+                )
+            else:
+                accumulator_img[y:y + tile_size, x:x + tile_size] += out_tile * hann_win
+                accumulator_weights[y:y + tile_size, x:x + tile_size] += hann_win
 
             current_tile += 1
             if progress_callback:
                 progress_callback(current_tile, total_tiles)
 
     # Reconstrucción normalizada sin división por cero
-    clean_padded = np.divide(
-        accumulator_img,
-        accumulator_weights,
-        out=np.zeros_like(accumulator_img),
-        where=accumulator_weights > 1e-12
-    )
-
-    # Recortar si se rellenó
-    clean_out = clean_padded[:orig_h, :orig_w]
+    if HAS_RUST_AI and hasattr(astroloom_rs, 'reconstruct_hann_tiling_rs'):
+        clean_out = astroloom_rs.reconstruct_hann_tiling_rs(
+            accumulator_img, accumulator_weights, orig_h, orig_w
+        )
+    else:
+        clean_padded = np.divide(
+            accumulator_img,
+            accumulator_weights,
+            out=np.zeros_like(accumulator_img),
+            where=accumulator_weights > 1e-12
+        )
+        clean_out = clean_padded[:orig_h, :orig_w]
     return np.clip(clean_out, 0.0, 1.0).astype(np.float32)
