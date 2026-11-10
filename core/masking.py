@@ -470,23 +470,33 @@ def refine_mask_guided_cross(
     else:
         r = max(1, int(radius))
 
-    # 4. Filtro guiado con cv2.boxFilter O(1)
-    ksize = (2 * r + 1, 2 * r + 1)
-    mean_I = cv2.boxFilter(guide_log, -1, ksize)
-    mean_p = cv2.boxFilter(m_f, -1, ksize)
-    mean_Ip = cv2.boxFilter(guide_log * m_f, -1, ksize)
-    cov_Ip = mean_Ip - mean_I * mean_p
+    # 4. Filtro guiado con aceleración Rust O(1) vía SAT (o cv2.boxFilter como fallback)
+    q = None
+    if HAS_RUST and hasattr(astroloom_rs, 'fast_guided_filter_rs'):
+        try:
+            g = np.ascontiguousarray(guide_log, dtype=np.float32)
+            m = np.ascontiguousarray(m_f, dtype=np.float32)
+            q = astroloom_rs.fast_guided_filter_rs(g, m, radius=r, eps=float(eps))
+        except Exception:
+            q = None
 
-    mean_II = cv2.boxFilter(guide_log * guide_log, -1, ksize)
-    var_I = mean_II - mean_I * mean_I
+    if q is None:
+        ksize = (2 * r + 1, 2 * r + 1)
+        mean_I = cv2.boxFilter(guide_log, -1, ksize)
+        mean_p = cv2.boxFilter(m_f, -1, ksize)
+        mean_Ip = cv2.boxFilter(guide_log * m_f, -1, ksize)
+        cov_Ip = mean_Ip - mean_I * mean_p
 
-    a = cov_Ip / (var_I + eps)
-    b = mean_p - a * mean_I
+        mean_II = cv2.boxFilter(guide_log * guide_log, -1, ksize)
+        var_I = mean_II - mean_I * mean_I
 
-    mean_a = cv2.boxFilter(a, -1, ksize)
-    mean_b = cv2.boxFilter(b, -1, ksize)
+        a = cov_Ip / (var_I + eps)
+        b = mean_p - a * mean_I
 
-    q = mean_a * guide_log + mean_b
+        mean_a = cv2.boxFilter(a, -1, ksize)
+        mean_b = cv2.boxFilter(b, -1, ksize)
+
+        q = mean_a * guide_log + mean_b
     q = np.clip(q, 0.0, 1.0)
 
     # 5. Ponderación no lineal con raíz cuadrada de la intensidad

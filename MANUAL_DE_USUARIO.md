@@ -42,10 +42,13 @@ Para iniciar AstroLoom en Windows de la manera más cómoda y sin ventanas negra
 * Si no hay entorno virtual, recurre automáticamente a la instalación de Python del sistema.
 * En entornos Linux/macOS o desde la terminal, puedes iniciar la suite ejecutando directamente `python run_app.py`.
 
-### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.14.0)
-A partir de la versión **v0.14.0**, AstroLoom incorpora un motor de cálculo numérico de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy` y `rayon`), totalmente integrado entre bastidores con la interfaz gráfica:
-* **Fluidez Total a 60 FPS:** Las operaciones pesadas liberan el hilo de eventos de Python (GIL) y se ejecutan en todos los núcleos lógicos de la CPU con vectorización SIMD (`AVX2`/`FMA`), permitiendo mover deslizadores en el Revelador sin congelar la pantalla.
-* **Ahorro Masivo de Memoria RAM:** La calibración de tomas RAW (Darks, Bias, Flats) opera *in-place* sobre la matriz nativa de fotodiodos sin crear copias en coma flotante (0 bytes de RAM adicional), y la extracción de gradientes RBF ahorra más de 1.3 GB de memoria en imágenes de 24 a 60 MP.
+### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.14.1)
+A partir de las versiones **v0.14.0** y **v0.14.1**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
+* **Fluidez Total a 60-160+ FPS:** El renderizado del lienzo (`MaskCanvas`) vuelca directamente a búferes de memoria continua `BGRA8888` compatibles de forma nativa con `QImage(Format_RGB32)`. Las alertas de clipping (`J`) y el comparador Antes/Después con cortina (`Y`) se procesan en microsegundos sin crear copias intermedias en NumPy ni capas secundarias de `QPixmap`.
+* **Ahorro Masivo de Memoria RAM:** La calibración de tomas RAW (Darks, Bias, Flats) opera *in-place* sobre la matriz nativa de fotodiodos sin copias en coma flotante (0 bytes de RAM adicional), y la extracción de gradientes RBF ahorra más de 1.3 GB de memoria en imágenes de 24 a 60 MP.
+* **Poda Integral de Dependencias Externas:** Eliminadas las dependencias pesadas de `pytoshop`, `astropy` y `psutil`. AstroLoom ahora incluye lectores/escritores nativos en Rust para FITS (`fits_io`), PSD multicapa de 16 bits (`psd_writer`) y monitoreo de memoria del sistema operativo (`system_info`).
+* **Ingesta Concurrente de Lotes:** Escaneo multihilo en paralelo de metadatos EXIF, dimensiones y niveles negros de cientos de archivos RAW en décimas de segundo al arrastrar carpetas al Apilador o Startrails.
+* **Tiling ONNX y Filtro Guiado O(1):** Pre y post-procesado acelerado para StarNet++ v2 y NAFNet con ventanas 2D de Hann continuas, y refinado de bordes de horizonte con imágenes integrales (SAT) en ~21 ms.
 * **Resiliencia Automática (*Drop-in Fallback*):** Si en algún entorno el módulo binario no estuviera presente, AstroLoom conmuta de forma transparente y automática a su motor de reserva en Python/NumPy/Numba sin que el usuario experimente errores.
 
 ---

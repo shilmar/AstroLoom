@@ -1,18 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all, collect_data_files
 
-datas = [('models', 'models')]
+datas = [('locales', 'locales')]
 binaries = []
 hiddenimports = []
-
-try:
-    tmp_ret = collect_data_files('astropy')
-    datas += tmp_ret
-except Exception:
-    pass
-
-tmp_ret = collect_all('numba')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 tmp_ret = collect_all('onnxruntime')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
@@ -39,12 +30,39 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
-    excludedimports=[
-        'astropy.visualization.wcsaxes',
+    excludes=[
+        'numba',
+        'llvmlite',
+        'tkinter',
+        'test',
         'matplotlib',
-        'pytest'
-    ],  # <--- Esto le prohíbe explícitamente a PyInstaller buscar wcsaxes y sus tests
+        'pytest',
+        'PySide6.QtNetwork',
+        'PySide6.QtQml',
+        'PySide6.QtQuick',
+        'PySide6.QtQuickWidgets',
+        'PySide6.Qt3DCore',
+        'PySide6.Qt3DRender',
+        'PySide6.QtSql',
+        'PySide6.QtTest',
+        'PySide6.QtPdf',
+        'PySide6.QtPdfWidgets',
+        'PySide6.QtMultimedia',
+        'PySide6.QtMultimediaWidgets',
+        'PySide6.QtBluetooth',
+        'PySide6.QtPositioning',
+        'PySide6.QtSensors',
+        'PySide6.QtSerialPort',
+        'PySide6.QtWebChannel',
+        'PySide6.QtWebEngineWidgets',
+        'PySide6.QtWebEngineCore',
+    ],
+    excludedimports=[
+        'matplotlib',
+        'pytest',
+        'numba',
+        'llvmlite',
+    ],
     noarchive=False,
     optimize=0,
 )

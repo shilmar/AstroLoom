@@ -28,10 +28,9 @@ import cv2
 import numpy as np
 
 try:
-    import pytoshop
-    from pytoshop import layers as psd_layers, enums as psd_enums
-    HAS_PYTOSHOP = True
-except ImportError:
+    import astroloom_rs
+    HAS_PYTOSHOP = hasattr(astroloom_rs, "write_psd_file")
+except Exception:
     HAS_PYTOSHOP = False
 
 from core.eclipse import extract_exposure_info, detect_eclipse_disk
@@ -398,6 +397,9 @@ def analyze_eclipse_frame(
     En fast_mode (True), los archivos RAW se descodifican en binning 2x2 (half_size=True),
     acelerando el análisis de 2.5x a 4x con idéntica precisión subpíxel tras reescalar.
     """
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Archivo no encontrado: {filepath}")
+
     info = extract_exposure_info(filepath)
     filename = os.path.basename(filepath)
     timestamp = float(info.get("timestamp") or 0.0)
@@ -940,6 +942,12 @@ def _extract_single_tile_item(item):
     eff_radius = int(target_disk_radius * scale_mod)
     m_factor = crop_margin_factor
 
+    if not os.path.exists(f.filepath):
+        dim = int(eff_radius * m_factor * 2)
+        blank = np.zeros((dim, dim, 3), dtype=np.float32)
+        alpha = np.zeros((dim, dim), dtype=np.float32)
+        return idx, (f, blank, alpha, scale_mod), cache_key
+
     ext = os.path.splitext(f.filepath)[1].lower()
     if fast_preview and ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw']:
         try:
@@ -1227,6 +1235,8 @@ def render_flat_collage(
         lum = 0.299 * bg_color[0] + 0.587 * bg_color[1] + 0.114 * bg_color[2]
         cap_color = (0.15, 0.15, 0.15) if lum > 0.55 else (0.85, 0.85, 0.85)
 
+        text_mask = np.zeros((canvas_h, canvas_w), dtype=np.uint8)
+
         if is_single_row:
             # En composiciones horizontales (panorámica y romboidal), todas las marcas alinean a la misma base
             baseline_y = min(canvas_h - 15, max(p.top + p.height for p in placements) + 22)
@@ -1236,7 +1246,7 @@ def render_flat_collage(
                 tx = int(p.left + (p.width - tw) // 2)
                 ty = int(baseline_y)
                 if 0 <= tx < canvas_w and 0 <= ty < canvas_h:
-                    cv2.putText(canvas, text, (tx, ty), font, font_scale, cap_color, thickness, cv2.LINE_AA)
+                    cv2.putText(text_mask, text, (tx, ty), font, font_scale, 255, thickness, cv2.LINE_AA)
         else:
             # En arco o cuadrícula, alinear en relación a cada fase
             for p in placements:
@@ -1245,7 +1255,11 @@ def render_flat_collage(
                 tx = int(p.left + (p.width - tw) // 2)
                 ty = int(min(canvas_h - 15, p.top + p.height + 20))
                 if 0 <= tx < canvas_w and 0 <= ty < canvas_h:
-                    cv2.putText(canvas, text, (tx, ty), font, font_scale, cap_color, thickness, cv2.LINE_AA)
+                    cv2.putText(text_mask, text, (tx, ty), font, font_scale, 255, thickness, cv2.LINE_AA)
+
+        if np.any(text_mask):
+            alpha = (text_mask.astype(np.float32) / 255.0)[..., np.newaxis]
+            canvas = canvas * (1.0 - alpha) + np.array(cap_color, dtype=np.float32) * alpha
 
     return np.clip(canvas, 0.0, 1.0).astype(np.float32)
 
@@ -1267,25 +1281,7 @@ def export_layered_psd(
     if not HAS_PYTOSHOP:
         return False
 
-    psd = pytoshop.core.PsdFile(num_channels=3, height=canvas_h, width=canvas_w, depth=depth)
-
-    # 1. Capa de Fondo
-    bg_layer = psd_layers.LayerRecord(
-        top=0,
-        bottom=canvas_h,
-        left=0,
-        right=canvas_w,
-        name="Fondo Lienzo",
-        opacity=255,
-        blend_mode=psd_enums.BlendMode.normal
-    )
-
-    if depth == 16:
-        max_v = 65535
-        dtype = np.uint16
-    else:
-        max_v = 255
-        dtype = np.uint8
+    layers = []
 
     # Canal sólido de fondo (admite valores float [0.0, 1.0] o int [0, 255])
     def _to_norm(c: float) -> float:
@@ -1294,17 +1290,20 @@ def export_layered_psd(
     norm_g = _to_norm(bg_color[1])
     norm_b = _to_norm(bg_color[2])
 
-    bg_r = np.full((canvas_h, canvas_w), int(norm_r * max_v), dtype=dtype)
-    bg_g = np.full((canvas_h, canvas_w), int(norm_g * max_v), dtype=dtype)
-    bg_b = np.full((canvas_h, canvas_w), int(norm_b * max_v), dtype=dtype)
+    bg_rgb = np.zeros((canvas_h, canvas_w, 3), dtype=np.float32)
+    bg_rgb[..., 0] = norm_r
+    bg_rgb[..., 1] = norm_g
+    bg_rgb[..., 2] = norm_b
 
-    bg_layer.channels = {
-        0: psd_layers.ChannelImageData(image=bg_r, compression=psd_enums.Compression.raw),
-        1: psd_layers.ChannelImageData(image=bg_g, compression=psd_enums.Compression.raw),
-        2: psd_layers.ChannelImageData(image=bg_b, compression=psd_enums.Compression.raw)
-    }
-
-    psd.layer_and_mask_info.layer_info.layer_records.append(bg_layer)
+    # 1. Capa de Fondo
+    layers.append({
+        "name": "Fondo Lienzo",
+        "top": 0, "left": 0, "bottom": canvas_h, "right": canvas_w,
+        "blend_mode": "norm",
+        "opacity": 255,
+        "visible": True,
+        "rgb": bg_rgb
+    })
 
     # 2. Capas de cada fase del eclipse
     for idx, p in enumerate(placements):
@@ -1330,45 +1329,28 @@ def export_layered_psd(
         tile_alpha = np.clip(p.alpha_tile[src_t:src_b, src_l:src_r], 0.0, 1.0)
 
         # Multiplicar canales RGB por la máscara alfa suave para garantizar que el fondo exterior
-        # sea matemáticamente 0 (negro puro), eliminando el ruido del sensor y evitando el desbordamiento uint16
+        # sea matemáticamente 0 (negro puro), eliminando el ruido del sensor
         tile_rgb_masked = tile_rgb * tile_alpha[..., np.newaxis]
 
         if p.frame_meta.obscuration_pct < 95.0:
             # En fases parciales, suprimir ruido térmico residual del cielo negro
             tile_rgb_masked[tile_rgb_masked < 0.008] = 0.0
 
-        ch_r = (np.clip(tile_rgb_masked[..., 0], 0.0, 1.0) * max_v).astype(dtype)
-        ch_g = (np.clip(tile_rgb_masked[..., 1], 0.0, 1.0) * max_v).astype(dtype)
-        ch_b = (np.clip(tile_rgb_masked[..., 2], 0.0, 1.0) * max_v).astype(dtype)
-        ch_a = (tile_alpha * max_v).astype(dtype)
+        blend = "scrn" if p.frame_meta.obscuration_pct >= 95.0 else "norm"
 
-        # Si es la totalidad, poner en modo Trama (Screen) para fundir la corona suavemente
-        blend = psd_enums.BlendMode.screen if p.frame_meta.obscuration_pct >= 95.0 else psd_enums.BlendMode.normal
-
-        rec = psd_layers.LayerRecord(
-            top=top,
-            bottom=bottom,
-            left=left,
-            right=right,
-            name=layer_name,
-            opacity=255,
-            blend_mode=blend
-        )
-        rec.channels = {
-            0: psd_layers.ChannelImageData(image=ch_r, compression=psd_enums.Compression.raw),
-            1: psd_layers.ChannelImageData(image=ch_g, compression=psd_enums.Compression.raw),
-            2: psd_layers.ChannelImageData(image=ch_b, compression=psd_enums.Compression.raw),
-            -1: psd_layers.ChannelImageData(image=ch_a, compression=psd_enums.Compression.raw)
-        }
-        psd.layer_and_mask_info.layer_info.layer_records.append(rec)
+        layers.append({
+            "name": layer_name,
+            "top": top, "left": left, "bottom": bottom, "right": right,
+            "blend_mode": blend,
+            "opacity": 255,
+            "visible": True,
+            "rgb": np.ascontiguousarray(tile_rgb_masked, dtype=np.float32),
+            "alpha": np.ascontiguousarray(tile_alpha, dtype=np.float32)
+        })
 
     # 3. Capa de marcas horarias EXIF (opcional)
     if include_captions:
-        cap_r = np.zeros((canvas_h, canvas_w), dtype=dtype)
-        cap_g = np.zeros((canvas_h, canvas_w), dtype=dtype)
-        cap_b = np.zeros((canvas_h, canvas_w), dtype=dtype)
-        cap_a = np.zeros((canvas_h, canvas_w), dtype=dtype)
-
+        cap_rgb = np.zeros((canvas_h, canvas_w, 3), dtype=np.float32)
         text_mask = np.zeros((canvas_h, canvas_w), dtype=np.uint8)
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = max(0.40, min(1.20, (canvas_w / 3840.0) * 0.70))
@@ -1398,31 +1380,28 @@ def export_layered_psd(
                     cv2.putText(text_mask, text, (tx, ty), font, font_scale, 255, thickness, cv2.LINE_AA)
 
         rendered = text_mask > 0
-        text_val = int(0.85 * max_v)
-        cap_r[rendered] = text_val
-        cap_g[rendered] = text_val
-        cap_b[rendered] = text_val
-        cap_a[rendered] = (text_mask[rendered].astype(np.float32) / 255.0 * max_v).astype(dtype)
+        cap_rgb[rendered] = 0.85
+        cap_alpha = np.zeros((canvas_h, canvas_w), dtype=np.float32)
+        cap_alpha[rendered] = text_mask[rendered].astype(np.float32) / 255.0
 
-        cap_layer = psd_layers.LayerRecord(
-            top=0,
-            bottom=canvas_h,
-            left=0,
-            right=canvas_w,
-            name="Marcas Horarias EXIF",
-            opacity=255,
-            blend_mode=psd_enums.BlendMode.normal
-        )
-        cap_layer.channels = {
-            0: psd_layers.ChannelImageData(image=cap_r, compression=psd_enums.Compression.raw),
-            1: psd_layers.ChannelImageData(image=cap_g, compression=psd_enums.Compression.raw),
-            2: psd_layers.ChannelImageData(image=cap_b, compression=psd_enums.Compression.raw),
-            -1: psd_layers.ChannelImageData(image=cap_a, compression=psd_enums.Compression.raw)
-        }
-        psd.layer_and_mask_info.layer_info.layer_records.append(cap_layer)
+        layers.append({
+            "name": "Marcas Horarias EXIF",
+            "top": 0, "left": 0, "bottom": canvas_h, "right": canvas_w,
+            "blend_mode": "norm",
+            "opacity": 255,
+            "visible": True,
+            "rgb": cap_rgb,
+            "alpha": cap_alpha
+        })
 
-    with open(filepath, "wb") as f:
-        psd.write(f)
+    astroloom_rs.write_psd_file(
+        filepath,
+        canvas_w,
+        canvas_h,
+        depth,
+        bg_rgb,
+        layers
+    )
 
     return True
 
@@ -1497,13 +1476,27 @@ def load_eclipse_collage_session(filepath: str) -> Tuple[List[EclipseFrameMetada
         # 1) ruta absoluta original
         # 2) ruta relativa al archivo de sesión
         # 3) nombre del archivo en la misma carpeta que el archivo de sesión
+        # 4) candidatos en carpetas habituales del proyecto (fotos_prueba, fotos_prueba_Astroloom)
         actual_path = fd.get("filepath", "")
         if not os.path.exists(actual_path):
             rel_p = fd.get("rel_filepath", "")
+            fn = fd.get("filename", "")
             if rel_p and os.path.exists(os.path.join(session_dir, rel_p)):
                 actual_path = os.path.normpath(os.path.join(session_dir, rel_p))
-            elif os.path.exists(os.path.join(session_dir, fd.get("filename", ""))):
-                actual_path = os.path.join(session_dir, fd.get("filename", ""))
+            elif fn and os.path.exists(os.path.join(session_dir, fn)):
+                actual_path = os.path.join(session_dir, fn)
+            elif fn:
+                parent_dir = os.path.dirname(session_dir)
+                candidates = [
+                    os.path.join(parent_dir, "fotos_prueba", "collage", fn),
+                    os.path.join(parent_dir, "fotos_prueba_Astroloom", "collage", fn),
+                    os.path.join(os.path.dirname(parent_dir), "fotos_prueba_Astroloom", "collage", fn),
+                    os.path.join(parent_dir, "fotos_prueba", fn),
+                ]
+                for cand in candidates:
+                    if os.path.exists(cand):
+                        actual_path = os.path.normpath(cand)
+                        break
 
         fd["filepath"] = actual_path
         meta = EclipseFrameMetadata.from_dict(fd)

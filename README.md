@@ -263,13 +263,20 @@ astroloom/
   - `opencv-python` (visión por computador y transformaciones geométricas)
   - `rawpy` (decodificación de archivos RAW de cámara)
   - `tifffile` (lectura y escritura de imágenes TIFF de alta profundidad)
-  - `astropy` (gestión de archivos FITS astronómicos)
   - `Pillow` (gestión de perfiles de color ICC y metadatos)
   - `imagecodecs` (códecs extendidos de compresión de imagen)
-  - `psutil` (monitorización de recursos de memoria y CPU)
+  - `onnxruntime-directml` (inferencia local acelerada de IA: horizonte U²-Net, StarNet++ v2 y NAFNet)
   - *(Opcional)* `cupy` (aceleración por GPU NVIDIA CUDA)
+- **Motores Nativos en Rust (`astroloom_rs`):**
+  - FITS I/O nativo (sustituye a `astropy` con lectura SIMD < 15 ms en 60 MP).
+  - Escritor PSD multicapa nativo (sustituye a `pytoshop` con exportación 8x–15x más rápida).
+  - Monitor de memoria nativo del SO (sustituye a `psutil`).
+  - Renderizado Qt BGRA8888 directo a memoria continua (>160 FPS).
+  - Ingesta y escaneo concurrente de metadatos RAW multihilo.
+  - Tiling de redes neuronales IA con ventana Hann 2D y Filtro Guiado O(1).
+  - Compresión y descompresión paralela de proyectos `.devloom`.
 - **Binarios Externos:**
-  - *(Opcional)* Ejecutable de StarNet++ CLI configurado en el entorno para separación neuronal de estrellas.
+  - *(Opcional)* Ejecutable de StarNet++ CLI si se prefiere sobre la inferencia ONNX integrada.
 ---
 
 
@@ -286,7 +293,7 @@ pip install -r requirements.txt
 
 O instalando manualmente los paquetes requeridos:
 ```cmd
-pip install numpy scipy opencv-python PySide6 tifffile rawpy matplotlib astropy imagecodecs psutil numba pytoshop
+pip install numpy scipy opencv-python PySide6 tifffile rawpy Pillow imagecodecs numba onnxruntime-directml
 ```
 
 ### 3. Compilar el Motor Nativo Rust (Recomendado para Máximo Rendimiento)

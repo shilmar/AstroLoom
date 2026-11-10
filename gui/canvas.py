@@ -12,6 +12,12 @@ from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QImage, QPainter, QPai
 from PySide6.QtWidgets import QSizePolicy, QWidget
 from gui.widgets.drop_widgets import collect_image_files_from_mime
 
+try:
+    import astroloom_rs
+    HAS_RUST_RENDERER = hasattr(astroloom_rs, "render_canvas_frame_rs")
+except ImportError:
+    HAS_RUST_RENDERER = False
+
 
 class MaskCanvas(QWidget):
     """
@@ -94,6 +100,8 @@ class MaskCanvas(QWidget):
         self.show_clipping_highlights: bool = False
         self.clipping_overlay: Optional[QPixmap] = None
         self._cached_display_u8: Optional[np.ndarray] = None
+        self._render_buf: Optional[bytearray] = None
+        self._before_render_buf: Optional[bytearray] = None
 
         # Modo Comparador "Antes / Después" con Cortina Divisoria (Split View)
         self.split_view_enabled: bool = False
@@ -261,6 +269,8 @@ class MaskCanvas(QWidget):
         """Limpia la imagen del lienzo, liberando pixmaps y overlays asociados."""
         self.orig_rgb = None
         self._cached_display_u8 = None
+        self._render_buf = None
+        self._before_render_buf = None
         self.base_pixmap = None
         self.before_pixmap = None
         self.clipping_overlay = None
@@ -294,21 +304,41 @@ class MaskCanvas(QWidget):
             p_hi = float(np.percentile(fast_sample, 99.5)) if np.max(fast_sample) > 0 else 1.0
             norm = np.clip(self.orig_rgb / max(p_hi, 1e-4), 0.0, 1.0)
             display = cv2.convertScaleAbs(np.power(norm, 0.4), alpha=255.0)
+            self._cached_display_u8 = np.ascontiguousarray(display, dtype=np.uint8)
+            render_input = self._cached_display_u8
         else:
             if display_stretched.dtype == np.uint8:
                 display = display_stretched
+                self._cached_display_u8 = np.ascontiguousarray(display, dtype=np.uint8)
+                render_input = self._cached_display_u8
             else:
                 display = cv2.convertScaleAbs(np.clip(display_stretched, 0.0, 1.0), alpha=255.0)
+                self._cached_display_u8 = np.ascontiguousarray(display, dtype=np.uint8)
+                render_input = self._cached_display_u8
 
-        self._cached_display_u8 = np.ascontiguousarray(display, dtype=np.uint8)
-        qimg = QImage(self._cached_display_u8.data, w, h, 3 * w, QImage.Format_RGB888)
-        self.base_pixmap = QPixmap.fromImage(qimg)
+        total_bytes = w * h * 4
+        if self._render_buf is None or len(self._render_buf) != total_bytes:
+            self._render_buf = bytearray(total_bytes)
 
-        # Si los indicadores de recorte están activos, actualizar su capa inmediatamente
-        if self.show_clipping_shadows or self.show_clipping_highlights:
-            self._update_clipping_overlay()
-        else:
+        if HAS_RUST_RENDERER:
+            buf = astroloom_rs.render_canvas_frame_rs(
+                render_input,
+                show_shadows=self.show_clipping_shadows,
+                show_highlights=self.show_clipping_highlights,
+                out=self._render_buf,
+            )
+            qimg = QImage(buf, w, h, 4 * w, QImage.Format_RGB32)
+            self.base_pixmap = QPixmap.fromImage(qimg)
             self.clipping_overlay = None
+        else:
+            qimg = QImage(self._cached_display_u8.data, w, h, 3 * w, QImage.Format_RGB888)
+            self.base_pixmap = QPixmap.fromImage(qimg)
+
+            # Si los indicadores de recorte están activos, actualizar su capa inmediatamente
+            if self.show_clipping_shadows or self.show_clipping_highlights:
+                self._update_clipping_overlay()
+            else:
+                self.clipping_overlay = None
 
         # Ajustar dimensiones de capas auxiliares si la resolución ha cambiado
         if self.enable_masking:
@@ -336,16 +366,40 @@ class MaskCanvas(QWidget):
         """
         h, w = display_u8.shape[:2]
         self._cached_display_u8 = np.ascontiguousarray(display_u8, dtype=np.uint8)
-        qimg = QImage(self._cached_display_u8.data, w, h, 3 * w, QImage.Format_RGB888)
-        self.base_pixmap = QPixmap.fromImage(qimg)
 
-        if before_u8 is not None and self.split_view_enabled:
-            b_u8 = np.ascontiguousarray(before_u8, dtype=np.uint8)
-            qimg_b = QImage(b_u8.data, w, h, 3 * w, QImage.Format_RGB888)
-            self.before_pixmap = QPixmap.fromImage(qimg_b)
+        total_bytes = w * h * 4
+        if self._render_buf is None or len(self._render_buf) != total_bytes:
+            self._render_buf = bytearray(total_bytes)
 
-        if self.show_clipping_shadows or self.show_clipping_highlights:
-            self._update_clipping_overlay()
+        if HAS_RUST_RENDERER:
+            buf = astroloom_rs.render_canvas_frame_rs(
+                self._cached_display_u8,
+                show_shadows=self.show_clipping_shadows,
+                show_highlights=self.show_clipping_highlights,
+                out=self._render_buf,
+            )
+            qimg = QImage(buf, w, h, 4 * w, QImage.Format_RGB32)
+            self.base_pixmap = QPixmap.fromImage(qimg)
+            self.clipping_overlay = None
+
+            if before_u8 is not None and self.split_view_enabled:
+                b_u8 = np.ascontiguousarray(before_u8, dtype=np.uint8)
+                if self._before_render_buf is None or len(self._before_render_buf) != total_bytes:
+                    self._before_render_buf = bytearray(total_bytes)
+                buf_b = astroloom_rs.render_canvas_frame_rs(b_u8, show_clipping=False, out=self._before_render_buf)
+                qimg_b = QImage(buf_b, w, h, 4 * w, QImage.Format_RGB32)
+                self.before_pixmap = QPixmap.fromImage(qimg_b)
+        else:
+            qimg = QImage(self._cached_display_u8.data, w, h, 3 * w, QImage.Format_RGB888)
+            self.base_pixmap = QPixmap.fromImage(qimg)
+
+            if before_u8 is not None and self.split_view_enabled:
+                b_u8 = np.ascontiguousarray(before_u8, dtype=np.uint8)
+                qimg_b = QImage(b_u8.data, w, h, 3 * w, QImage.Format_RGB888)
+                self.before_pixmap = QPixmap.fromImage(qimg_b)
+
+            if self.show_clipping_shadows or self.show_clipping_highlights:
+                self._update_clipping_overlay()
 
         self.update()
 
@@ -355,19 +409,35 @@ class MaskCanvas(QWidget):
         Azul vibrante [0, 112, 255] para sombras empastadas (negro absoluto = 0).
         Rojo vibrante [255, 23, 68] para luces quemadas (blanco absoluto = 255).
         """
-        if not self.show_clipping_shadows and not self.show_clipping_highlights:
-            self.clipping_overlay = None
-            self.update()
-            return
-
         if self._cached_display_u8 is None or self._cached_display_u8.size == 0:
             self.clipping_overlay = None
             self.update()
             return
 
-        disp = self._cached_display_u8
-        h, w = disp.shape[:2]
+        h, w = self._cached_display_u8.shape[:2]
 
+        if HAS_RUST_RENDERER:
+            total_bytes = w * h * 4
+            if self._render_buf is None or len(self._render_buf) != total_bytes:
+                self._render_buf = bytearray(total_bytes)
+            buf = astroloom_rs.render_canvas_frame_rs(
+                self._cached_display_u8,
+                show_shadows=self.show_clipping_shadows,
+                show_highlights=self.show_clipping_highlights,
+                out=self._render_buf,
+            )
+            qimg = QImage(buf, w, h, 4 * w, QImage.Format_RGB32)
+            self.base_pixmap = QPixmap.fromImage(qimg)
+            self.clipping_overlay = None
+            self.update()
+            return
+
+        if not self.show_clipping_shadows and not self.show_clipping_highlights:
+            self.clipping_overlay = None
+            self.update()
+            return
+
+        disp = self._cached_display_u8
         rgba = np.zeros((h, w, 4), dtype=np.uint8)
         has_overlay = False
 
@@ -413,6 +483,38 @@ class MaskCanvas(QWidget):
     def set_before_pixmap(self, pixmap: Optional[QPixmap]) -> None:
         """Establece la imagen de referencia previa ('Antes') para el comparador."""
         self.before_pixmap = pixmap
+        if self.split_view_enabled:
+            self.update()
+
+    def set_before_image(self, img: Optional[np.ndarray]) -> None:
+        """
+        Establece la imagen previa ('Antes') para el comparador Split-View
+        a partir de un array NumPy (float32 o uint8) renderizado de forma nativa a 60+ FPS.
+        """
+        if img is None:
+            self.before_pixmap = None
+        else:
+            h, w = img.shape[:2]
+            if HAS_RUST_RENDERER:
+                total_bytes = w * h * 4
+                if self._before_render_buf is None or len(self._before_render_buf) != total_bytes:
+                    self._before_render_buf = bytearray(total_bytes)
+                buf = astroloom_rs.render_canvas_frame_rs(
+                    np.ascontiguousarray(img),
+                    show_clipping=False,
+                    out=self._before_render_buf,
+                )
+                qimg = QImage(buf, w, h, 4 * w, QImage.Format_RGB32)
+                self.before_pixmap = QPixmap.fromImage(qimg)
+            else:
+                if img.dtype != np.uint8:
+                    disp = cv2.convertScaleAbs(np.clip(img, 0.0, 1.0), alpha=255.0)
+                else:
+                    disp = img
+                disp_c = np.ascontiguousarray(disp, dtype=np.uint8)
+                qimg = QImage(disp_c.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+                self.before_pixmap = QPixmap.fromImage(qimg)
+
         if self.split_view_enabled:
             self.update()
 
@@ -1490,7 +1592,7 @@ class MaskCanvas(QWidget):
             painter.drawPixmap(target_rect, self.base_pixmap, source_rect)
             if self.clipping_overlay and not self.clipping_overlay.isNull():
                 painter.drawPixmap(target_rect, self.clipping_overlay, source_rect)
-            if self.show_mask_overlay and self.refined_overlay and not self.refined_overlay.isNull():
+            if self.show_mask_overlay and self.refined_overlay and not self.refined_overlay.isNull() and self.refined_overlay.size() == self.base_pixmap.size():
                 painter.drawPixmap(target_rect, self.refined_overlay, source_rect)
             if self.enable_masking and self.show_scribbles and self.scribble_pixmap and not self.scribble_pixmap.isNull():
                 painter.drawPixmap(target_rect, self.scribble_pixmap, source_rect)
@@ -1615,7 +1717,7 @@ class MaskCanvas(QWidget):
 
             # Overlay de máscara refinada
             if self.show_mask_overlay:
-                if self.refined_overlay and not self.refined_overlay.isNull():
+                if self.refined_overlay and not self.refined_overlay.isNull() and self.refined_overlay.size() == self.base_pixmap.size():
                     painter.drawPixmap(target_rect, self.refined_overlay, source_rect)
                 
             if self.enable_masking and self.show_scribbles and self.scribble_pixmap and not self.scribble_pixmap.isNull():
@@ -2129,7 +2231,7 @@ class MaskCanvas(QWidget):
         h, w = mask_f.shape
 
         # Si el visor opera en modo Zoom 100% externo, recortar la ventana correspondiente
-        if self.external_crop_rect is not None and self.external_full_shape is not None:
+        if self.is_zoomed and self.external_crop_rect is not None and self.external_full_shape is not None:
             x1, y1, x2, y2 = self.external_crop_rect
             fh, fw = self.external_full_shape
             if fh > 0 and fw > 0:
@@ -2392,7 +2494,12 @@ class MaskCanvas(QWidget):
 
         self.crop_rect_norm = QRectF(new_x, new_y, new_w, new_h)
 
-    def restore_base_pixmap(self, pixmap: QPixmap, orig_rgb: Optional[np.ndarray] = None) -> None:
+    def restore_base_pixmap(
+        self, 
+        pixmap: QPixmap, 
+        orig_rgb: Optional[np.ndarray] = None,
+        mask_overlay: Optional[QPixmap] = None
+    ) -> None:
         """Restaura instantáneamente el QPixmap base previo sin recalcular (coste 0 ms)."""
         self.base_pixmap = pixmap
         if orig_rgb is not None:
@@ -2402,9 +2509,21 @@ class MaskCanvas(QWidget):
         self._zoom_background_pixmap = None
         self._pan_visual_offset = QPoint(0, 0)
         self.external_crop_rect = None
+        self.external_full_shape = None
         self.external_sensor_center = None
         self.is_panning = False
         self.setCursor(Qt.ArrowCursor)
+
+        if mask_overlay is not None and not mask_overlay.isNull() and mask_overlay.size() == pixmap.size():
+            self.refined_overlay = mask_overlay
+        elif self.last_mask_array is not None and self.show_mask_overlay:
+            self.set_refined_mask(self.last_mask_array, mode=getattr(self, '_mask_overlay_mode', 'bicolor'))
+        elif self.refined_overlay and self.refined_overlay.size() != self.base_pixmap.size():
+            self.refined_overlay = None
+
+        if self.show_clipping_shadows or self.show_clipping_highlights:
+            self._update_clipping_overlay()
+
         self.update()
 
     def add_pan_visual_offset(self, dx: int, dy: int) -> None:

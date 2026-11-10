@@ -3255,11 +3255,7 @@ class DeveloperTab(QWidget):
                 )
             else:
                 stretched_init = manual_stretch(base_to_render, black_point=bp, midtone=mtf)
-            disp = (np.clip(stretched_init, 0.0, 1.0) * 255.0).astype(np.uint8)
-            h, w = disp.shape[:2]
-            disp_c = np.ascontiguousarray(disp, dtype=np.uint8)
-            qimg = QImage(disp_c.data, w, h, 3 * w, QImage.Format_RGB888).copy()
-            self.canvas.set_before_pixmap(QPixmap.fromImage(qimg))
+            self.canvas.set_before_image(stretched_init)
 
     def _update_canvas_info_label(self) -> None:
         """Actualiza la etiqueta informativa de resolución, herramienta activa y zoom en el pie del lienzo."""
@@ -3500,6 +3496,9 @@ class DeveloperTab(QWidget):
         self._cached_sky_mask = None
         self._cached_rendered_image = None
         self._last_rendered_preview = None
+        self._fit_view_pixmap = None
+        self._fit_view_orig_rgb = None
+        self._fit_view_mask_overlay = None
 
     def _generate_preview_proxy(self):
         self._invalidate_pipeline_caches()
@@ -4492,11 +4491,7 @@ class DeveloperTab(QWidget):
                         )
                     else:
                         stretched_before = manual_stretch(base_to_render, black_point=self.initial_bp, midtone=self.initial_mtf)
-                    disp_b = cv2.convertScaleAbs(np.clip(stretched_before, 0.0, 1.0), alpha=255.0)
-                    h_b, w_b = disp_b.shape[:2]
-                    disp_bc = np.ascontiguousarray(disp_b, dtype=np.uint8)
-                    qimg_b = QImage(disp_bc.data, w_b, h_b, 3 * w_b, QImage.Format_RGB888)
-                    self.canvas.set_before_pixmap(QPixmap.fromImage(qimg_b))
+                    self.canvas.set_before_image(stretched_before)
 
                 # Actualización fluida y controlada del histograma en vivo
                 if not self.is_zoomed_100 and hasattr(self, '_hist_throttle_timer'):
@@ -5744,9 +5739,15 @@ class DeveloperTab(QWidget):
 
             # Restauración 100% instantánea (0 ms) del mapa general si no se tocaron sliders durante el zoom
             if not getattr(self, '_slider_changed_during_zoom', False) and getattr(self, '_fit_view_pixmap', None) is not None:
-                self.canvas.restore_base_pixmap(self._fit_view_pixmap, orig_rgb=getattr(self, '_fit_view_orig_rgb', None))
+                mask_overlay = getattr(self, '_fit_view_mask_overlay', None)
+                self.canvas.restore_base_pixmap(
+                    self._fit_view_pixmap, 
+                    orig_rgb=getattr(self, '_fit_view_orig_rgb', None),
+                    mask_overlay=mask_overlay
+                )
                 self._fit_view_pixmap = None
                 self._fit_view_orig_rgb = None
+                self._fit_view_mask_overlay = None
                 self._update_canvas_info_label()
                 return
 
@@ -5756,8 +5757,11 @@ class DeveloperTab(QWidget):
                 self.canvas._zoom_background_pixmap = None
             if hasattr(self.canvas, 'reset_pan_visual_offset'):
                 self.canvas.reset_pan_visual_offset()
+            self._fit_view_pixmap = None
+            self._fit_view_orig_rgb = None
+            self._fit_view_mask_overlay = None
             self._generate_before_reference()
-            self.update_stretch_preview()
+            self.update_stretch_preview(immediate=True)
             self._update_canvas_info_label()
             return
 
@@ -5765,6 +5769,7 @@ class DeveloperTab(QWidget):
         if self.canvas.base_pixmap and not self.canvas.base_pixmap.isNull():
             self._fit_view_pixmap = self.canvas.base_pixmap.copy()
             self._fit_view_orig_rgb = self.canvas.orig_rgb
+            self._fit_view_mask_overlay = self.canvas.refined_overlay.copy() if (self.canvas.refined_overlay and not self.canvas.refined_overlay.isNull()) else None
             if getattr(self.canvas, '_zoom_background_pixmap', None) is None:
                 self.canvas._zoom_background_pixmap = self.canvas.base_pixmap.copy()
         self._slider_changed_during_zoom = False
