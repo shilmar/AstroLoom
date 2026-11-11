@@ -245,6 +245,8 @@ fn parse_blend_mode(mode: &str) -> [u8; 4] {
         "mul " | "multiply" => *b"mul ",
         "over" | "overlay" => *b"over",
         "add " | "linear_dodge" => *b"lddg",
+        "lum " | "luminosity" => *b"lum ",
+        "sftl" | "soft_light" | "softlight" => *b"sftL",
         _ => *b"norm",
     }
 }

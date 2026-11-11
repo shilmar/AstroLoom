@@ -26,10 +26,12 @@ from PySide6.QtWidgets import (
     QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
     QProgressBar, QMessageBox, QGroupBox, QRadioButton, QSlider,
     QDoubleSpinBox, QSpinBox, QSplitter, QTextEdit, QScrollArea, QCheckBox,
-    QSizePolicy, QAbstractItemView, QApplication, QButtonGroup, QComboBox
+    QSizePolicy, QAbstractItemView, QApplication, QButtonGroup, QComboBox, QDialog
 )
 from PySide6.QtCore import Qt, Signal, QThread, QPoint, QPointF, QRectF
 from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QImage, QCursor, QFont, QTextCursor, QBrush
+
+from gui.dialog_coronal_stack import CoronalStackDialog
 
 from core.eclipse import (
     extract_exposure_info,
@@ -730,6 +732,68 @@ class EclipseWorker(QThread):
                 self.progress.emit(100, f"PSD exportado: {desc}")
                 self.finished.emit((filepath, desc), "export_coronal_psd")
 
+            elif self.task_type == "compute_coronal_stack":
+                base_img = self.params["base_image"]
+                cx = self.params["cx"]
+                cy = self.params["cy"]
+                r = self.params["radius"]
+                selected_configs = self.params["selected_configs"]
+                out_base_path = self.params["out_base_path"]
+
+                # 1. Guardar la imagen base como TIFF 32-bit float con ICC
+                self.progress.emit(10, "Guardando imagen base HDR en 32-bit...")
+                photometric = 'minisblack' if base_img.ndim == 2 else 'rgb'
+                out_img = np.ascontiguousarray(np.clip(base_img, 0.0, 1.0), dtype=np.float32)
+                save_tiff_with_icc(out_base_path, out_img, compression='zlib', photometric=photometric)
+
+                base_rgb = out_img
+                if base_rgb.ndim == 2:
+                    base_rgb = np.repeat(base_rgb[..., None], 3, axis=2)
+
+                computed_layers = []
+                total = len(selected_configs)
+                for i, cfg in enumerate(selected_configs):
+                    flt_id = cfg["id"]
+                    name = cfg["name"]
+                    pct = 15 + int(((i + 1) / max(1, total)) * 80)
+                    self.progress.emit(pct, f"Calculando {name}...")
+
+                    filtered = None
+                    if flt_id == "mgn":
+                        lunar_mask = (cx, cy, r) if r > 5 else None
+                        filtered = apply_mgn(
+                            base_rgb,
+                            sigmas=(1.5, 3.0, 6.0, 12.0, 24.0, 48.0),
+                            k=0.70,
+                            gamma=2.8,
+                            blend_ratio=0.50,
+                            chroma_denoise_sigma=16.0,
+                            lunar_mask_params=lunar_mask
+                        )
+                    elif flt_id == "wow":
+                        filtered = apply_wow_edge_aware(base_rgb, cx, cy, radius_min=r, blend_ratio=0.50)
+                    elif flt_id == "nafe":
+                        filtered = apply_nafe(base_rgb, cx, cy, radius_min=r, blend_ratio=0.79)
+                    elif flt_id == "nrgf":
+                        filtered = apply_nrgf(base_rgb, cx, cy, radius_min=r, blend_ratio=0.55)
+                    elif flt_id == "steerable_g2":
+                        filtered = apply_steerable_g2(base_rgb, cx, cy, radius_min=r, blend_ratio=0.50)
+                    elif flt_id == "larson_sekanina":
+                        filtered = apply_larson_sekanina(base_rgb, cx, cy, radius_min=r, blend_ratio=0.20)
+                    elif flt_id == "swap":
+                        filtered = apply_swap_filter(base_rgb, cx, cy, radius_min=r, blend_ratio=1.0)
+
+                    if filtered is not None:
+                        computed_layers.append({
+                            "name": name,
+                            "image_data": filtered,
+                            "blend_mode": cfg["blend_mode"],
+                            "opacity": cfg["opacity"]
+                        })
+
+                self.progress.emit(100, f"Multicapa coronal calculada ({len(computed_layers)} capas).")
+                self.finished.emit((out_base_path, computed_layers), "compute_coronal_stack")
+
         except Exception as e:
             self.error.emit(f"Error durante el procesado: {str(e)}")
 
@@ -737,6 +801,7 @@ class EclipseWorker(QThread):
 class EclipseTab(QWidget):
     """Pestaña interactiva de Eclipses (Solar y Lunar)."""
     export_to_developer = Signal(str)
+    export_coronal_stack_to_developer = Signal(str, list)
     open_collage_requested = Signal(list, str)
 
     def __init__(self, parent=None):
@@ -1437,6 +1502,21 @@ class EclipseTab(QWidget):
         self.btn_export_psd.setToolTip("Exporta archivo PSD 16-bit de Photoshop con todas las capas científicas de corona (NRGF, WOW, MGN, NAFE, Steerable G2, Larson-Sekanina, SWAP).")
         self.btn_export_psd.clicked.connect(self._on_export_psd_clicked)
         export_layout.addWidget(self.btn_export_psd)
+
+        self.btn_send_coronal_stack_to_dev = QPushButton("Enviar Multicapa Coronal al Revelador...")
+        self.btn_send_coronal_stack_to_dev.setIcon(get_icon("layers", color="#ffe082"))
+        self.btn_send_coronal_stack_to_dev.setFixedHeight(38)
+        self.btn_send_coronal_stack_to_dev.setCursor(Qt.PointingHandCursor)
+        self.btn_send_coronal_stack_to_dev.setStyleSheet(
+            "font-weight: bold; background: #2e2414; color: #ffe082; "
+            "border: 1px solid #ffa000; padding: 6px; border-radius: 4px;"
+        )
+        self.btn_send_coronal_stack_to_dev.setToolTip(
+            "Transfiere la imagen base HDR junto con los filtros coronales seleccionados "
+            "(MGN, WOW, NAFE, NRGF, etc.) como capas ráster independientes con modos de fusión al Revelador."
+        )
+        self.btn_send_coronal_stack_to_dev.clicked.connect(self._on_send_coronal_stack_clicked)
+        export_layout.addWidget(self.btn_send_coronal_stack_to_dev)
 
         self.btn_send_to_dev = QPushButton("Enviar al Revelador / Editor")
         self.btn_send_to_dev.setIcon(get_icon("arrow_right", color="#ffffff"))
@@ -2204,11 +2284,21 @@ class EclipseTab(QWidget):
                 f"Archivo PSD multicapa guardado con éxito:\n{filepath}\n\n{desc}"
             )
 
+        elif task_type == "compute_coronal_stack":
+            base_path, computed_layers = result
+            self.log(f"✓ Multicapa coronal procesada: transfiriendo {len(computed_layers)} capas al Revelador...")
+            self.export_coronal_stack_to_developer.emit(base_path, computed_layers)
+
+        if hasattr(self, 'btn_send_coronal_stack_to_dev'):
+            self.btn_send_coronal_stack_to_dev.setEnabled(True)
+
     def _on_worker_error(self, err_msg: str):
         self.progress_bar.setVisible(False)
         self.btn_detect_all.setEnabled(True)
         self.btn_fuse_hdr.setEnabled(True)
         self.btn_apply_filters.setEnabled(True)
+        if hasattr(self, 'btn_send_coronal_stack_to_dev'):
+            self.btn_send_coronal_stack_to_dev.setEnabled(True)
         QMessageBox.critical(self, "Error de Procesado", err_msg)
         self.log(f"ERROR: {err_msg}")
 
@@ -2277,6 +2367,63 @@ class EclipseTab(QWidget):
             self.export_to_developer.emit(temp_path)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error transfiriendo al Revelador: {e}")
+
+    def _on_send_coronal_stack_clicked(self):
+        base_img = self.fused_hdr_img if self.fused_hdr_img is not None else self.current_preview_img
+        if base_img is None:
+            QMessageBox.warning(self, "Atención", "No hay imagen cargada o fusionada para transferir.")
+            return
+
+        ref_f = self.bracketing_files[self.ref_file_idx] if self.bracketing_files else None
+        if ref_f and ref_f.get("cx") is not None:
+            cx, cy, r = ref_f["cx"], ref_f["cy"], ref_f["radius"]
+        else:
+            cx = self.spin_cx.value()
+            cy = self.spin_cy.value()
+            r = self.spin_radius.value()
+
+        if r <= 5:
+            QMessageBox.warning(self, "Atención", "Define o auto-detecta el centro y radio del limbo antes de generar la multicapa coronal.")
+            return
+
+        dlg = CoronalStackDialog(self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        selected_configs = dlg.get_selected_layers()
+        if not selected_configs:
+            # Si no seleccionó ninguna capa ráster adicional, transferir sólo la base
+            self._on_send_to_developer_clicked()
+            return
+
+        out_dir = os.path.join(os.getcwd(), "exportaciones")
+        os.makedirs(out_dir, exist_ok=True)
+        out_base_path = os.path.join(out_dir, "eclipse_hdr_base_32bit.tif")
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(5)
+        self.btn_detect_all.setEnabled(False)
+        self.btn_fuse_hdr.setEnabled(False)
+        self.btn_apply_filters.setEnabled(False)
+        if hasattr(self, 'btn_send_coronal_stack_to_dev'):
+            self.btn_send_coronal_stack_to_dev.setEnabled(False)
+
+        self.log(f"Iniciando cálculo de {len(selected_configs)} capas coronales para el Revelador...")
+
+        params = {
+            "base_image": base_img,
+            "cx": cx,
+            "cy": cy,
+            "radius": r,
+            "selected_configs": selected_configs,
+            "out_base_path": out_base_path,
+        }
+
+        self.worker = EclipseWorker("compute_coronal_stack", params)
+        self.worker.progress.connect(self._on_worker_progress)
+        self.worker.finished.connect(self._on_worker_finished)
+        self.worker.error.connect(self._on_worker_error)
+        self.worker.start()
 
     @property
     def mode(self) -> str:

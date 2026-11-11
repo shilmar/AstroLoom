@@ -61,9 +61,11 @@ def save_devloom_project(
         if hasattr(layer, "to_dict"):
             layer_dict = layer.to_dict()
             brush_arr = getattr(layer, "brush_mask", None)
+            raster_arr = getattr(layer, "image_data", None)
         else:
             layer_dict = dict(layer)
             brush_arr = layer_dict.pop("brush_mask", None)
+            raster_arr = layer_dict.pop("image_data", None)
 
         layer_dict.pop("brush_mask_b64", None)
 
@@ -71,6 +73,11 @@ def save_devloom_project(
             brush_file = f"masks/brush_{idx}.png"
             layer_images_to_encode.append((brush_file, brush_arr))
             layer_dict["mask_file"] = brush_file
+
+        if raster_arr is not None and isinstance(raster_arr, np.ndarray):
+            raster_file = f"rasters/raster_{idx}.png"
+            layer_images_to_encode.append((raster_file, raster_arr))
+            layer_dict["raster_file"] = raster_file
 
         serialized_layers.append(layer_dict)
 
@@ -227,6 +234,9 @@ def load_devloom_project(
                 mask_file = layer.get("mask_file")
                 if mask_file and mask_file in images_dict:
                     layer["brush_mask"] = images_dict[mask_file]
+                raster_file = layer.get("raster_file")
+                if raster_file and raster_file in images_dict:
+                    layer["image_data"] = images_dict[raster_file]
 
             starnet_out = {
                 "image_starless": images_dict.get("starnet/starless.png"),
@@ -283,6 +293,17 @@ def load_devloom_project(
                 if dec is not None:
                     div = 65535.0 if dec.dtype == np.uint16 else 255.0
                     layer["brush_mask"] = dec.astype(np.float32) / div
+
+            raster_file = layer.get("raster_file")
+            if raster_file and raster_file in namelist:
+                raw_b = zf.read(raster_file)
+                arr = np.frombuffer(raw_b, np.uint8)
+                dec = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+                if dec is not None:
+                    if dec.ndim == 3:
+                        dec = cv2.cvtColor(dec, cv2.COLOR_BGR2RGB)
+                    div = 65535.0 if dec.dtype == np.uint16 else 255.0
+                    layer["image_data"] = dec.astype(np.float32) / div
 
         starnet_out = {
             "image_starless": None,

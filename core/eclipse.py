@@ -1899,8 +1899,10 @@ def apply_swap_filter(
     max_r = int(np.hypot(max(center_x, w - center_x), max(center_y, h - center_y))) + 2
     n_theta = 1440
 
-    # 1. Mapeo a coordenadas polares (r, theta)
-    polar = cv2.warpPolar(lum, (n_theta, max_r), (center_x, center_y), max_r, cv2.WARP_POLAR_LINEAR)
+    # 1. Mapeo a coordenadas polares (r, theta) con buffer pre-inicializado (evita basura de memoria/NaN en OpenCV 5.0)
+    dst_polar = np.zeros((max_r, n_theta), dtype=np.float32)
+    polar = cv2.warpPolar(lum, (n_theta, max_r), (center_x, center_y), max_r, cv2.WARP_POLAR_LINEAR, dst=dst_polar)
+    polar = np.nan_to_num(polar, copy=False)
 
     # 2. Mediana móvil a lo largo de theta (ventana angular +- window_deg)
     win = int(round(2.0 * window_deg / 360.0 * n_theta))
@@ -1916,7 +1918,9 @@ def apply_swap_filter(
         f_polar = median_filter(polar, size=(1, win), mode="wrap")
 
     # 3. Remapeo inverso a coordenadas cartesianas y suavizado cartesiano (sigma = 4.0 px)
-    cart_f = cv2.warpPolar(f_polar, (w, h), (center_x, center_y), max_r, cv2.WARP_POLAR_LINEAR + cv2.WARP_INVERSE_MAP)
+    dst_cart = np.zeros((h, w), dtype=np.float32)
+    cart_f = cv2.warpPolar(f_polar, (w, h), (center_x, center_y), max_r, cv2.WARP_POLAR_LINEAR + cv2.WARP_INVERSE_MAP, dst=dst_cart)
+    cart_f = np.nan_to_num(cart_f, copy=False)
     f_bg = cv2.GaussianBlur(cart_f, (0, 0), 4.0)
 
     # 4. Potencia reducida I / (F + t0)^c0

@@ -4,6 +4,6 @@ build-backend = "maturin"
 
 [project]
 name = "astroloom_rs"
-version = "0.14.2"
+version = "0.14.3"
 description = "Motor nativo en Rust (SIMD + Rayon) para AstroLoom"
 requires-python = ">=3.10"

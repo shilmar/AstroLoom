@@ -22,7 +22,7 @@ from gui.tab_settings import SettingsTab
 class MainWindow(QMainWindow):
     """Ventana principal de la interfaz gráfica de AstroLoom."""
 
-    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.14.2)"
+    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.14.3)"
 
 
     def __init__(self):
@@ -50,7 +50,7 @@ class MainWindow(QMainWindow):
         status_bar.addWidget(self.lbl_status, 1)
 
         # Píldora del Motor AstroLoom
-        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.14.2")
+        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.14.3")
         self.lbl_engine_badge.setStyleSheet(STYLE_STATUS_PILL)
         status_bar.addPermanentWidget(self.lbl_engine_badge)
 
@@ -125,7 +125,7 @@ class MainWindow(QMainWindow):
         """Actualiza todos los textos estáticos principales al cambiar de idioma."""
         self.setWindowTitle(tr("app.title", self.BASE_TITLE))
         self.lbl_status.setText(tr("app.ready", "Listo para procesar"))
-        self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.14.2"))
+        self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.14.3"))
 
         if hasattr(self, 'tab_widget'):
             self.tab_widget.setTabText(0, tr("app.tabs.stacker", "1. Apilador (Stacker)"))
@@ -208,6 +208,7 @@ class MainWindow(QMainWindow):
 
         # 4. Transferencia de imagen desde el módulo de Eclipses (HDR) al Revelador
         self.tab_eclipse.export_to_developer.connect(self._on_eclipse_exported)
+        self.tab_eclipse.export_coronal_stack_to_developer.connect(self._on_eclipse_coronal_stack_exported)
 
         # 5. Transferencia de serie desde Eclipses (HDR) al Diseñador de Collage
         self.tab_eclipse.open_collage_requested.connect(self._on_open_collage_requested)
@@ -254,6 +255,14 @@ class MainWindow(QMainWindow):
         al Revelador / Editor y conmuta automáticamente a la pestaña 2.
         """
         self.tab_developer.load_image_direct(output_path, mask=None)
+        self.tab_widget.setCurrentIndex(1)
+
+    def _on_eclipse_coronal_stack_exported(self, base_path: str, raster_layers: list) -> None:
+        """
+        Transfiere la composición multicapa coronal desde el módulo de Eclipses directamente
+        al Revelador con sus capas ráster y modos de fusión preconfigurados.
+        """
+        self.tab_developer.load_coronal_stack(base_path, raster_layers)
         self.tab_widget.setCurrentIndex(1)
 
     def _on_open_collage_requested(self, filepaths: list, mode: str) -> None:

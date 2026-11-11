@@ -42,10 +42,11 @@ Para iniciar AstroLoom en Windows de la manera más cómoda y sin ventanas negra
 * Si no hay entorno virtual, recurre automáticamente a la instalación de Python del sistema.
 * En entornos Linux/macOS o desde la terminal, puedes iniciar la suite ejecutando directamente `python run_app.py`.
 
-### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.14.2)
-A partir de las versiones **v0.14.0**, **v0.14.1** y **v0.14.2**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
+### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.14.3)
+A partir de las versiones **v0.14.0** a **v0.14.3**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
 * **Fluidez Total a 60-160+ FPS:** El renderizado del lienzo (`MaskCanvas`) vuelca directamente a búferes de memoria continua `BGRA8888` compatibles de forma nativa con `QImage(Format_RGB32)`. Las alertas de clipping (`J`) y el comparador Antes/Después con cortina (`Y`) se procesan en microsegundos sin crear copias intermedias en NumPy ni capas secundarias de `QPixmap`.
-* **Filtrado Coronal Multihilo Científico (Eclipses):** Nuevos kernels dedicados en Rust con Rayon para segundas derivadas orientables por tensor de estructura (`steerable_g2_rs`), convolución rotacional de Keys ($a = -0.5$, `compute_larson_sekanina_rs`), mediana circular polar (`polar_circular_median_filter_rs`), pasos à-trous B3 guiados (`paired_b3_step_rs`), máscaras de protuberancias (`compute_red_excess_mask_rs`) y mapeo anular concéntrico (`display_detail_rings_rs`).
+* **Kernels de Modos de Fusión SIMD con Rayon (v0.14.3):** Fusión de capas ráster en paralelo multihilo (`apply_blend_mode_rs`) para modos Normal, Screen, Luminosidad (ponderación CIE Rec.709 y corrección cromática), Soft Light, Overlay y Multiply con soporte de máscaras espaciales de pincel a más de 60 FPS sin asignaciones intermedias en el heap.
+* **Filtrado Coronal Multihilo Científico (Eclipses):** Kernels dedicados en Rust con Rayon para segundas derivadas orientables por tensor de estructura (`steerable_g2_rs`), convolución rotacional de Keys ($a = -0.5$, `compute_larson_sekanina_rs`), mediana circular polar (`polar_circular_median_filter_rs`), pasos à-trous B3 guiados (`paired_b3_step_rs`), máscaras de protuberancias (`compute_red_excess_mask_rs`) y mapeo anular concéntrico (`display_detail_rings_rs`).
 * **Ahorro Masivo de Memoria RAM:** La calibración de tomas RAW (Darks, Bias, Flats) opera *in-place* sobre la matriz nativa de fotodiodos sin copias en coma flotante (0 bytes de RAM adicional), y la extracción de gradientes RBF ahorra más de 1.3 GB de memoria en imágenes de 24 a 60 MP.
 * **Poda Integral de Dependencias Externas:** Eliminadas las dependencias pesadas de `pytoshop`, `astropy` y `psutil`. AstroLoom ahora incluye lectores/escritores nativos en Rust para FITS (`fits_io`), PSD multicapa de 16 bits (`psd_writer`) y monitoreo de memoria del sistema operativo (`system_info`).
 * **Ingesta Concurrente de Lotes:** Escaneo multihilo en paralelo de metadatos EXIF, dimensiones y niveles negros de cientos de archivos RAW en décimas de segundo al arrastrar carpetas al Apilador o Startrails.
@@ -431,6 +432,10 @@ El compositor multicapa de AstroLoom funciona de manera análoga a Adobe Photosh
   - **🌌 Fondo Nebular:** Ajusta selectivamente el polvo de la Vía Láctea e integra los controles de Estirado Adaptativo RGB, Claridad, Dehaze, Ondículas y Reducción de Ruido multietapa.
   - **⭐ Estrellas:** Ajusta el brillo, nitidez o saturación de las estrellas y los efectos de difusión estelar.
   - **🏞️ Suelo:** Ajusta el paisaje terrestre (exposición, balance de blancos, contraste y curvas tonales locales).
+  - **🎨 Capa Ráster / Filtros Coronales (Novedad v0.14.3):** Aloja imágenes y filtros astronómicos procesados de forma independiente (como la pila multicapa de eclipses solares). Destacadas con temática ámbar (`#ff9800`) en la lista de capas.
+    - **Selector de Modo de Fusión (Blend Mode):** Permite elegir entre `Normal`, `Trama (Screen)`, `Luminosidad (Luminosity)`, `Luz Suave (Soft Light)`, `Superponer (Overlay)` y `Multiplicar (Multiply)`, acelerados en paralelo con Rust Rayon.
+    - **Máscara de Pincel Espacial Integrada:** Puedes pintar o borrar sobre la capa ráster con el pincel interactivo (`[ / ]` para tamaño, `Shift` para borrar) para aplicar el filtro coronal exclusivamente en las regiones de interés (por ejemplo, protegiendo las protuberancias o aislando los streamers exteriores).
+    - **Ajustes y Curvas Dedicadas:** Cada capa ráster cuenta con sus propios controles tonales (EV, contraste, sombras, luces, balance) y su propia curva spline LUT independiente.
 * **Capas de Ajuste Personalizadas:** Crea capas locales para iluminar un árbol, apagar una farola o dar volumen a una nube.
 * **Exportación Profesional:**
   - **TIFF 16-bit:** Para impresión o archivo maestro de máxima calidad.
@@ -442,7 +447,7 @@ El compositor multicapa de AstroLoom funciona de manera análoga a Adobe Photosh
 AstroLoom permite congelar y reanudar todo tu flujo de trabajo en cualquier momento sin perder precisión ni calidad fotométrica.
 
 * **¿Qué es un archivo `.devloom`?**
-  * Es un contenedor comprimido (ZIP estándar) autocontenido que almacena el archivo `project.json` con todos los parámetros de revelado (deslizadores de exposición, contraste, GHS, balances, MTF, curvas tonales splines) y las máscaras espaciales de ajuste local en formato **PNG de 16 bits sin pérdida** (`uint16`).
+  * Es un contenedor comprimido (ZIP estándar) autocontenido que almacena el archivo `project.json` con todos los parámetros de revelado (deslizadores de exposición, contraste, GHS, balances, MTF, curvas tonales splines), las máscaras espaciales de ajuste local y las capas ráster de filtros coronales en formato **PNG de 16 bits sin pérdida** (`uint16`) dentro de la carpeta `rasters/`.
 * **Empaquetado de Capas StarNet:**
   * Si desacoplaste las estrellas con StarNet++, AstroLoom guarda dentro del `.devloom` las capas de *Fondo Nebular* y *Estrellas* en formato **TIFF comprimido de 16 bits** (`uint16`). Al reabrir el proyecto, tus capas separadas estarán listas inmediatamente sin necesidad de volver a ejecutar la red neuronal.
 * **Flujo de Trabajo y Atajos:**
@@ -500,10 +505,17 @@ Durante un eclipse total de sol o de luna, el rango dinámico de la corona y el 
    * Pulsa el botón **"Exportar PSD Multicapa"** para generar automáticamente un proyecto `.psd` de 16 bits por canal listo para Photoshop, GIMP o PixInsight.
    * Incluye todas las capas maestras estandarizadas (`Fondo HDR Base`, `01 NRGF`, `02 WOW Edge-Aware`, `09 NAFE`, `11 Steerable G2`, `15 Larson-Sekanina`, `16 SWAP`) con sus modos de mezcla nativos (`Normal`, `Overlay`), permitiendo ajustar la opacidad de cada filtro de forma no destructiva.
 
-5. **Calibración Espectral y Flujo de Trabajo:**
+5. **Transferencia Directa de la Pila Coronal al Revelador (Novedad v0.14.3):**
+   * Pulsa el botón **«Transferir Pila Coronal al Revelador»** en la barra de acciones de la pestaña de Eclipses.
+   * Se abrirá el diálogo interactivo de **Configuración de Pila Coronal Multicapa**, permitiéndote seleccionar qué filtros astronómicos computar (NRGF, SWAP, Larson-Sekanina, Steerable G2, NAFE, WOW Bilateral Guiado y MGN Multiescala).
+   * Cada filtro viene preconfigurado con su modo de fusión óptimo (`Luminosidad`, `Trama`, `Luz Suave`, `Normal`) y su opacidad recomendada por defecto para un revelado físico equilibrado.
+   * Un proceso en segundo plano asíncrono (`QThread`) calculará secuencialmente los filtros seleccionados sin bloquear la interfaz y conmutará automáticamente a la pestaña **2. Revelador / Editor**, montando toda la composición multicapa en el lienzo.
+   * En el Revelador dispondrás de control total no destructivo: graduar opacidades, conmutar visibilidad con un clic, cambiar modos de fusión, retocar con el pincel de máscara o aplicar curvas tonales específicas a cada filtro.
+
+6. **Calibración Espectral y Flujo de Trabajo:**
    * **Balance de Blancos Coronal Automático:** Muestrea fotométricamente el anillo coronal intermedio ($1.2 - 1.8 R_\odot$) para neutralizar dominantes de dispersión atmosférica manteniendo intacta la crominancia roja de las protuberancias solares ($H\alpha$).
    * **Reducción de Ruido Cromático Local:** Suavizado selectivo en los canales de color ($A, B$) guiado por la señal coronal con máscara protectora del limbo para suprimir grano térmico sin emborronar estructuras.
-   * **Exportación y Envío:** Guarda directamente en formato **TIFF de 16 bits** de máxima calidad o pulsa **Enviar al Revelador** para aplicar estirado hiperbólico (GHS), curvas de contraste o composición por capas.
+   * **Exportación y Envío:** Guarda directamente en formato **TIFF de 16 bits** de máxima calidad o pulsa **Enviar al Revelador** para transferir una imagen aplanada rápida o la pila completa multicapa.
 
 ### Módulo 4: Eclipses (Collage)
 * Selecciona las fotos clave de las distintas fases (inicio parcial, totalidad, final parcial).

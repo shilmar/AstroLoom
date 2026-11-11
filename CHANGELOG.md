@@ -5,6 +5,31 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-11-11
+
+### Añadido
+* **Compositor de Pila Multicapa Coronal en el Revelador (`gui/tab_eclipse.py`, `gui/dialog_coronal_stack.py`, `gui/tab_developer.py`):**
+  - **Transferencia Directa de Filtros Eclipses $\to$ Revelador:** Nuevo flujo y botón `«Transferir Pila Coronal al Revelador»` en la pestaña de Eclipses, permitiendo enviar la composición completa de filtros astronómicos (NRGF, SWAP, Larson-Sekanina, Steerable G2, NAFE, WOW Bilateral y MGN Multiescala) como capas ráster independientes al Revelador de AstroLoom sin requerir exportaciones intermedias ni software externo.
+  - **Diálogo Interactivo de Selección de Pila (`CoronalStackDialog`):** Ventana de configuración previa que permite seleccionar qué filtros computar, asignando automáticamente modos de fusión y opacidades iniciales óptimas en orden físico de apilado (NRGF en Trama al 15%, SWAP en Normal al 25%, Larson-Sekanina en Luz Suave al 20%, Steerable G2 en Luz Suave al 20%, NAFE en Luz Suave al 20%, WOW en Luminosidad al 25% y MGN en Luminosidad al 40%).
+  - **Cálculo Asíncrono no Bloqueante (`EclipseCoronalStackWorker`):** Generación secuencial de todos los filtros seleccionados en un hilo `QThread` en segundo plano con barra de progreso y cancelación segura sin congelar la interfaz.
+
+* **Motor de Capas Ráster Genéricas y Modos de Fusión (`core/mask_layers.py`, `gui/widgets/mask_layers_widget.py`, `gui/developer/pipeline.py`):**
+  - **Nuevo Tipo de Capa Ráster (`MASK_TYPE_IMAGE_RASTER`):** Extensión del motor de capas del Revelador para alojar arrays de imagen ráster arbitrarios (`image_data` en Float32), permitiendo componer múltiples imágenes y filtros sobre el lienzo base.
+  - **Arsenal Profesional de Modos de Fusión (Blend Modes):** Soporte no destructivo para `Normal`, `Trama (Screen)`, `Luminosidad (Luminosity)`, `Luz Suave (Soft Light)`, `Superponer (Overlay)` y `Multiplicar (Multiply)`.
+  - **Integración de Máscaras y Ajustes por Capa:** Las capas ráster incorporan soporte completo de máscara espacial de pincel (`brush_mask`, pintar y borrar para dosificar el filtro coronal localmente o excluir el limbo lunar), control de opacidad (0–100%), deslizadores de ajuste tonal (exposición, contraste, sombras, luces, balance de blancos) y curva tonal interactiva spline LUT dedicada.
+  - **Interfaz Ergonómica en el Gestor de Capas:** Identidad visual diferenciada con distintivo y bordes en tono ámbar/dorado (`#ff9800`) para capas ráster, selector desplegable de modo de fusión reactivo y generación automática de miniaturas fotorrealistas.
+
+* **Aceleración en Rust Rayon SIMD de Modos de Fusión (`astroloom_rs/src/blend.rs`, `astroloom_rs/src/lib.rs`):**
+  - Kernels nativos multihilo con Rayon (`apply_blend_mode_rs`) que computan en paralelo las ecuaciones de fusión de píxeles (Normal, Screen, Luminosity con ponderación CIE Rec.709 y corrección de saturación, Soft Light de Pegtop, Overlay y Multiply) con modulación por opacidad y máscara espacial.
+  - Rendimiento superior a 60 FPS en composiciones multicapa 4K y 60 MP, con respaldo (*fallback*) transparente y robusto en NumPy/OpenCV en entornos sin módulo compilado.
+
+* **Persistencia Completa de Capas Ráster en Proyectos `.devloom` (`core/project_io.py`):**
+  - Empaquetado multihilo de datos de imagen ráster en formato PNG de 16 bits sin pérdida (`rasters/raster_{idx}.png`) dentro del archivo ZIP del proyecto, garantizando la preservación íntegra de la composición coronal al guardar (`Ctrl+S`) y reabrir proyectos.
+
+### Corregido
+* **Estabilidad y Resiliencia en Filtro SWAP Polar (`core/eclipse.py`):**
+  - Pre-inicialización de búferes continuos de destino (`dst_polar` y `dst_cart`) con saneamiento de memoria `np.nan_to_num(..., copy=False)` en `cv2.warpPolar`, erradicando lecturas de basura de memoria, valores `NaN` y posibles cuelgues en versiones recientes de OpenCV (5.0+).
+
 ## [0.14.2] - 2026-11-11
 
 ### Añadido
@@ -42,6 +67,8 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 ### Pruebas
 * **Suite de Validación Científica Automatizada (`tests/test_ael_phase1.py`, `tests/test_ael_phase2.py`, `tests/test_ael_phase3.py`):**
   - 15 nuevas pruebas automatizadas que verifican la paridad matemática de los filtros, la ausencia de artefactos y la integridad de los archivos PSD generados. Cobertura global de la suite ampliada a **122 pruebas pasando al 100%**.
+
+## [0.14.1] - 2026-11-10
 
 ### Añadido
 * **Puente de Renderizado Directo a Qt sin Copias Intermedias (`gui/canvas.py`, `src/renderer.rs`):**

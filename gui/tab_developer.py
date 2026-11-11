@@ -78,7 +78,7 @@ from core.mask_layers import (
     MaskLayer, apply_all_mask_layers,
     MASK_TYPE_IMAGE_BASE, MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_STARS,
     MASK_TYPE_IMAGE_GROUND, MASK_TYPE_BRUSH, MASK_TYPE_LUMA, MASK_TYPE_COLOR,
-    MASK_TYPE_GROUND, MASK_TYPE_SKY,
+    MASK_TYPE_GROUND, MASK_TYPE_SKY, MASK_TYPE_IMAGE_RASTER,
     apply_pre_curve_adjustments, get_canvas_below_layer, compute_effective_layer_mask,
     apply_local_adjustments_to_image
 )
@@ -2530,7 +2530,7 @@ class DeveloperTab(QWidget):
     def _on_layer_brush_stroke_finished(self, stroke_mask: np.ndarray) -> None:
         """Manejador ejecutado al soltar el clic izquierdo tras pintar con el pincel de capa."""
         layer = self.mask_layers_widget.get_selected_layer()
-        if layer and layer.mask_type == "brush":
+        if layer and (layer.mask_type == "brush" or layer.mask_type == MASK_TYPE_IMAGE_RASTER):
             layer.brush_mask = stroke_mask.copy()
             if hasattr(self, 'mask_layers_widget'):
                 self.mask_layers_widget.invalidate_layer_thumbnail(layer.id)
@@ -2685,7 +2685,20 @@ class DeveloperTab(QWidget):
                 img = apply_pre_curve_adjustments(img, layer)
             return img, None, False
 
-        # 5. Capas de ajuste local estándar
+        # 5. Capa Ráster de Imagen / Filtros Coronales
+        if m_type == MASK_TYPE_IMAGE_RASTER:
+            raw_img = getattr(layer, 'image_data', None)
+            if raw_img is not None:
+                if raw_img.ndim == 2:
+                    raw_img = np.repeat(raw_img[..., np.newaxis], 3, axis=-1)
+                elif raw_img.ndim == 3 and raw_img.shape[2] == 1:
+                    raw_img = np.repeat(raw_img, 3, axis=-1)
+                img = apply_pre_curve_adjustments(raw_img, layer)
+                m = getattr(layer, 'brush_mask', None)
+                return img, m, False
+            return None, None, False
+
+        # 6. Capas de ajuste local estándar
         base_canvas = getattr(self, '_cached_base_stretched', None)
         if base_canvas is None:
             base_canvas = getattr(self, '_last_rendered_preview', None)
@@ -3703,6 +3716,36 @@ class DeveloperTab(QWidget):
         except Exception as e:
             self.log_message(f"[ERROR] No se pudo cargar: {e}")
             QMessageBox.critical(self, "Error", f"Fallo al abrir archivo:\n{e}")
+
+    def load_coronal_stack(self, filepath: str, raster_layers: list) -> None:
+        """
+        Carga la imagen base HDR de eclipse y apila los filtros coronales calculados
+        como capas ráster de imagen independientes con modos de fusión y opacidades.
+        """
+        self.load_image_direct(filepath, mask=None)
+
+        if hasattr(self, 'mask_layers_widget') and raster_layers:
+            # Las capas raster_layers vienen ordenadas de base a cima:
+            # [NRGF, SWAP, Larson, Steerable, NAFE, WOW, MGN]
+            # Al insertarlas secuencialmente en position=0, la última (MGN) quedará en el TOP absoluto
+            for layer_dict in raster_layers:
+                name = layer_dict.get("name", "Filtro Coronal")
+                img_data = layer_dict.get("image_data")
+                blend_mode = layer_dict.get("blend_mode", "normal")
+                opacity = float(layer_dict.get("opacity", 1.0))
+                if img_data is not None:
+                    self.mask_layers_widget.add_raster_layer(
+                        name=name,
+                        image_data=img_data,
+                        blend_mode=blend_mode,
+                        opacity=opacity,
+                        position=0
+                    )
+
+            self.update_stretch_preview(immediate=True)
+            self._last_committed_state = self._capture_state()
+            self._update_undo_redo_buttons()
+            self.log_message(f"Multicapa coronal transferida con éxito ({len(raster_layers)} capas ráster activas).")
 
     def open_image_file(self):
         if not self._check_unsaved_changes():
@@ -7369,7 +7412,7 @@ class DeveloperTab(QWidget):
                 self.mask_layers_widget.select_layer_by_id(current_id)
 
             sel_layer = self.mask_layers_widget.get_selected_layer()
-            if sel_layer and sel_layer.mask_type == "brush" and sel_layer.enabled:
+            if sel_layer and (sel_layer.mask_type == "brush" or sel_layer.mask_type == MASK_TYPE_IMAGE_RASTER) and sel_layer.enabled:
                 show_overlay = self.mask_layers_widget.btn_preview_mask.isChecked()
                 self.canvas.set_active_layer_mask(sel_layer.brush_mask, show_overlay=show_overlay)
             elif not self.mask_layers_widget.btn_preview_mask.isChecked():

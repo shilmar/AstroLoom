@@ -22,6 +22,7 @@ from core.mask_layers import (
     MASK_TYPE_BRUSH, MASK_TYPE_GROUND, MASK_TYPE_SKY, MASK_TYPE_LUMA, MASK_TYPE_COLOR, MASK_TYPE_CUSTOM,
     LAYER_KIND_ADJUSTMENT, LAYER_KIND_IMAGE,
     MASK_TYPE_IMAGE_BASE, MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_STARS, MASK_TYPE_IMAGE_GROUND,
+    MASK_TYPE_IMAGE_RASTER, BLEND_MODE_NORMAL,
     SCOPE_TARGET_ALL, SCOPE_TARGET_GROUND, SCOPE_TARGET_STARLESS, SCOPE_TARGET_STARS
 )
 
@@ -417,6 +418,27 @@ class MaskLayersWidget(QWidget):
         row_name_flags.addWidget(self.chk_layer_invert)
 
         props_layout.addLayout(row_name_flags)
+
+        # Fila B: Modo de fusión (para capas de imagen ráster / filtros coronales)
+        self.container_blend_mode = QWidget()
+        row_blend = QHBoxLayout(self.container_blend_mode)
+        row_blend.setContentsMargins(0, 0, 0, 0)
+        row_blend.setSpacing(6)
+
+        lbl_blend = QLabel("Modo de Fusión:")
+        lbl_blend.setStyleSheet("color: #b0bec5; font-size: 11px; font-weight: 600;")
+        row_blend.addWidget(lbl_blend)
+
+        self.combo_blend_mode = QComboBox()
+        self.combo_blend_mode.addItem("Normal (Opacidad Ponderada)", "normal")
+        self.combo_blend_mode.addItem("Luminosidad (MGN / WOW / NAFE)", "luminosity")
+        self.combo_blend_mode.addItem("Trama / Screen (Protuberancias)", "screen")
+        self.combo_blend_mode.addItem("Luz Suave / Soft Light (Contraste)", "soft_light")
+        self.combo_blend_mode.addItem("Superponer / Overlay (Estructuras)", "overlay")
+        self.combo_blend_mode.addItem("Multiplicar / Multiply (Densidad)", "multiply")
+        self.combo_blend_mode.currentIndexChanged.connect(self._on_blend_mode_changed)
+        row_blend.addWidget(self.combo_blend_mode, stretch=1)
+        props_layout.addWidget(self.container_blend_mode)
 
 
         # Fila C: Opacidad de la capa
@@ -1621,12 +1643,51 @@ class MaskLayersWidget(QWidget):
         elif mask_type == MASK_TYPE_SKY:
             name = f"Cielo {count}"
             layer = MaskLayer(name=name, mask_type=mask_type)
+        elif mask_type == MASK_TYPE_IMAGE_RASTER:
+            name = f"Ráster {count}"
+            layer = MaskLayer(
+                name=name,
+                layer_kind=LAYER_KIND_IMAGE,
+                mask_type=mask_type,
+                blend_mode=BLEND_MODE_NORMAL,
+                brush_radius=self._last_brush_radius,
+                brush_hardness=self._last_brush_hardness,
+                brush_flow=self._last_brush_flow,
+                brush_mode=self._last_brush_mode
+            )
         else:
             name = f"Máscara {count}"
             layer = MaskLayer(name=name, mask_type=mask_type)
 
         # En Photoshop las capas nuevas se insertan arriba del todo
         self.layers.insert(0, layer)
+        self._rebuild_list_items(select_layer_id=layer.id)
+        self.layers_changed.emit()
+        return layer
+
+    def add_raster_layer(
+        self,
+        name: str,
+        image_data: np.ndarray,
+        blend_mode: str = BLEND_MODE_NORMAL,
+        opacity: float = 1.0,
+        position: int = 0
+    ) -> MaskLayer:
+        """Añade una capa de imagen ráster (filtro coronal, composición, etc.) a la pila."""
+        layer = MaskLayer(
+            name=name,
+            layer_kind=LAYER_KIND_IMAGE,
+            mask_type=MASK_TYPE_IMAGE_RASTER,
+            image_data=image_data,
+            blend_mode=blend_mode,
+            opacity=opacity,
+            brush_radius=self._last_brush_radius,
+            brush_hardness=self._last_brush_hardness,
+            brush_flow=self._last_brush_flow,
+            brush_mode=self._last_brush_mode
+        )
+        pos = max(0, min(position, len(self.layers)))
+        self.layers.insert(pos, layer)
         self._rebuild_list_items(select_layer_id=layer.id)
         self.layers_changed.emit()
         return layer
@@ -1658,6 +1719,8 @@ class MaskLayersWidget(QWidget):
             new_layer.id = str(uuid.uuid4())[:8]
             if layer.brush_mask is not None:
                 new_layer.brush_mask = layer.brush_mask.copy()
+            if getattr(layer, "image_data", None) is not None:
+                new_layer.image_data = layer.image_data.copy()
             new_layer.name = f"{layer.name} (Copia)"
             idx = self.layers.index(layer)
             self.layers.insert(idx + 1, new_layer)
@@ -1819,7 +1882,9 @@ class MaskLayersWidget(QWidget):
                     raw_img = None
 
             if raw_img is None:
-                if layer.mask_type == MASK_TYPE_IMAGE_STARS:
+                if layer.mask_type == MASK_TYPE_IMAGE_RASTER and getattr(layer, 'image_data', None) is not None:
+                    raw_img = layer.image_data
+                elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
                     raw_img = self._stars_getter() if self._stars_getter else None
                 elif layer.mask_type == MASK_TYPE_IMAGE_STARLESS:
                     raw_img = self._starless_getter() if self._starless_getter else None
@@ -1829,6 +1894,10 @@ class MaskLayersWidget(QWidget):
                     raw_img = self._image_reference_getter() if self._image_reference_getter else None
 
             if raw_img is not None:
+                if raw_img.ndim == 2:
+                    raw_img = np.repeat(raw_img[..., np.newaxis], 3, axis=-1)
+                elif raw_img.ndim == 3 and raw_img.shape[2] == 1:
+                    raw_img = np.repeat(raw_img, 3, axis=-1)
                 try:
                     # En la capa de suelo, aislar el terreno usando la máscara para evitar que el cielo sature la miniatura
                     if mask_img is not None and layer.mask_type == MASK_TYPE_IMAGE_GROUND:
@@ -1944,6 +2013,20 @@ class MaskLayersWidget(QWidget):
                 icon_name = "mountain"
                 type_tag = "Paisaje Suelo"
                 fg_col = "#a5d6a7" if layer.enabled else "#607d8b"
+            elif layer.mask_type == MASK_TYPE_IMAGE_RASTER:
+                icon_name = "sun"
+                b_labels = {
+                    "normal": "Normal",
+                    "luminosity": "Luminosidad",
+                    "screen": "Trama",
+                    "soft_light": "Luz Suave",
+                    "overlay": "Superponer",
+                    "multiply": "Multiplicar",
+                }
+                b_mode = getattr(layer, 'blend_mode', 'normal').lower()
+                b_str = b_labels.get(b_mode, b_mode.capitalize())
+                type_tag = f"Ráster ({b_str})"
+                fg_col = "#ffb74d" if layer.enabled else "#607d8b"
             else:
                 type_tag = {
                     MASK_TYPE_BRUSH: "Pincel",
@@ -2079,12 +2162,12 @@ class MaskLayersWidget(QWidget):
             self.invalidate_layer_thumbnail(layer.id)
 
             if not new_state:
-                if layer.mask_type == MASK_TYPE_BRUSH:
+                if getattr(layer, 'supports_brush', False):
                     self.brush_tool_toggled.emit(False, None)
                 self.set_preview_active(False)
                 self.preview_mask_requested.emit(None)
             else:
-                if layer.mask_type == MASK_TYPE_BRUSH:
+                if getattr(layer, 'supports_brush', False):
                     self.brush_tool_toggled.emit(True, layer)
                 elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
                     self.starnet_visibility_changed.emit(True)
@@ -2114,8 +2197,11 @@ class MaskLayersWidget(QWidget):
         is_ground = (layer is not None and layer.mask_type in (MASK_TYPE_IMAGE_GROUND, MASK_TYPE_GROUND))
         is_stars = (layer is not None and layer.mask_type == MASK_TYPE_IMAGE_STARS)
         is_starless = (layer is not None and layer.mask_type == MASK_TYPE_IMAGE_STARLESS)
+        is_raster = (layer is not None and getattr(layer, 'is_raster_image', False))
 
         self.container_layer_props.setVisible(has_sel)
+        if hasattr(self, 'container_blend_mode'):
+            self.container_blend_mode.setVisible(is_raster)
         if hasattr(self, 'resize_handle'):
             self.resize_handle.setVisible(len(self.layers) > 0)
         self.btn_move_up.setEnabled(has_sel)
@@ -2157,6 +2243,12 @@ class MaskLayersWidget(QWidget):
             self.slider_refine_strength.setValue(refine_k if refine_k > 0 else 100)
             self.lbl_refine_val.setText(f"{self.slider_refine_strength.value()}%")
 
+            # Fila B: Modo de fusión (para capas ráster)
+            if is_raster and hasattr(self, 'combo_blend_mode'):
+                b_idx = self.combo_blend_mode.findData(getattr(layer, 'blend_mode', 'normal'))
+                if b_idx >= 0:
+                    self.combo_blend_mode.setCurrentIndex(b_idx)
+
             # Fila C: Opacidad
             op_pct = int(round(layer.opacity * 100))
             self.slider_opacity.setValue(op_pct)
@@ -2167,7 +2259,7 @@ class MaskLayersWidget(QWidget):
 
             if not is_sys:
                 # Sub-paneles de tipo de máscara
-                self.panel_brush.setVisible(layer.mask_type == MASK_TYPE_BRUSH)
+                self.panel_brush.setVisible(getattr(layer, 'supports_brush', False))
                 self.panel_luma.setVisible(layer.mask_type == MASK_TYPE_LUMA)
                 self.panel_color.setVisible(layer.mask_type == MASK_TYPE_COLOR)
                 self.panel_ground.setVisible(layer.mask_type in (MASK_TYPE_GROUND, MASK_TYPE_SKY))
@@ -2177,7 +2269,7 @@ class MaskLayersWidget(QWidget):
                 self.panel_color.setVisible(False)
                 self.panel_ground.setVisible(False)
 
-            if layer.mask_type == MASK_TYPE_BRUSH:
+            if getattr(layer, 'supports_brush', False):
                 self.slider_b_radius.setValue(layer.brush_radius)
                 self.lbl_b_radius.setText(f"{layer.brush_radius} px")
                 self.slider_b_hardness.setValue(int(round(layer.brush_hardness * 100)))
@@ -2249,7 +2341,7 @@ class MaskLayersWidget(QWidget):
         if not layer.enabled or is_sys:
             self.brush_tool_toggled.emit(False, None)
             self.preview_mask_requested.emit(None)
-        elif layer.mask_type == MASK_TYPE_BRUSH:
+        elif getattr(layer, 'supports_brush', False):
             self.brush_tool_toggled.emit(True, layer)
             self.brush_params_changed.emit(
                 layer.brush_radius, layer.brush_hardness, layer.brush_flow, layer.brush_mode
@@ -2349,6 +2441,12 @@ class MaskLayersWidget(QWidget):
             bg_c = "#1f1c14"
             adj_title = "Ajustes de Imagen Base"
             mask_def_title = "Definición de Máscara"
+        elif mtype == MASK_TYPE_IMAGE_RASTER:
+            border_c = "#ff9800"
+            title_c = "#ffb74d"
+            bg_c = "#241914"
+            adj_title = "Ajustes de Capa Ráster / Filtro Coronal"
+            mask_def_title = "Máscara Espacial de Capa (Pincel)"
         else:
             border_c = "#2b3044"
             title_c = "#00e5ff"
@@ -2411,13 +2509,13 @@ class MaskLayersWidget(QWidget):
             self.invalidate_layer_thumbnail(layer.id)
             if not checked:
                 # Al desactivar la capa, apagar de inmediato el pincel y limpiar previsualización en lienzo
-                if layer.mask_type == MASK_TYPE_BRUSH:
+                if getattr(layer, 'supports_brush', False):
                     self.brush_tool_toggled.emit(False, None)
                 self.set_preview_active(False)
                 self.preview_mask_requested.emit(None)
             self._rebuild_list_items(select_layer_id=layer.id)
             if checked:
-                if layer.mask_type == MASK_TYPE_BRUSH:
+                if getattr(layer, 'supports_brush', False):
                     self.brush_tool_toggled.emit(True, layer)
                 elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
                     self.starnet_visibility_changed.emit(True)
@@ -2462,12 +2560,23 @@ class MaskLayersWidget(QWidget):
                 self._emit_mask_preview()
             self.layers_changed.emit()
 
+    def _on_blend_mode_changed(self, index: int) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if layer and getattr(layer, 'is_raster_image', False):
+            mode_data = self.combo_blend_mode.currentData()
+            if mode_data:
+                layer.blend_mode = mode_data
+                self.invalidate_layer_thumbnail(layer.id)
+                self._rebuild_list_items(select_layer_id=layer.id)
+                self.layers_changed.emit()
+
     def _on_opacity_changed(self, val: int) -> None:
         if self._updating_ui: return
         layer = self.get_selected_layer()
         if layer:
             layer.opacity = val / 100.0
-            if layer.mask_type == MASK_TYPE_BRUSH:
+            if getattr(layer, 'supports_brush', False):
                 self._last_brush_opacity = layer.opacity
             elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
                 self.starnet_opacity_changed.emit(layer.opacity)
@@ -2478,7 +2587,7 @@ class MaskLayersWidget(QWidget):
     def _on_brush_param_changed(self) -> None:
         if self._updating_ui: return
         layer = self.get_selected_layer()
-        if layer and layer.mask_type == MASK_TYPE_BRUSH:
+        if layer and getattr(layer, 'supports_brush', False):
             layer.brush_radius = self.slider_b_radius.value()
             layer.brush_hardness = self.slider_b_hardness.value() / 100.0
             layer.brush_flow = self.slider_b_flow.value() / 100.0
@@ -2495,7 +2604,7 @@ class MaskLayersWidget(QWidget):
     def _set_brush_mode(self, mode: str) -> None:
         if self._updating_ui: return
         layer = self.get_selected_layer()
-        if layer and layer.mask_type == MASK_TYPE_BRUSH:
+        if layer and getattr(layer, 'supports_brush', False):
             layer.brush_mode = mode
             self._last_brush_mode = mode
             self.btn_b_paint.setChecked(mode == "paint")
@@ -2506,7 +2615,7 @@ class MaskLayersWidget(QWidget):
 
     def _clear_brush_mask(self) -> None:
         layer = self.get_selected_layer()
-        if layer and layer.mask_type == MASK_TYPE_BRUSH:
+        if layer and getattr(layer, 'supports_brush', False):
             layer.brush_mask = None
             self.invalidate_layer_thumbnail(layer.id)
             self.brush_tool_toggled.emit(True, layer)
@@ -2518,7 +2627,7 @@ class MaskLayersWidget(QWidget):
         """Actualiza el control deslizante de radio cuando se redimensiona con la rueda del ratón."""
         self._last_brush_radius = radius
         layer = self.get_selected_layer()
-        if layer and layer.mask_type == MASK_TYPE_BRUSH:
+        if layer and getattr(layer, 'supports_brush', False):
             layer.brush_radius = radius
             self._updating_ui = True
             self.slider_b_radius.setValue(radius)
@@ -2750,6 +2859,10 @@ class MaskLayersWidget(QWidget):
             img = self._stars_getter()
         elif layer.mask_type == MASK_TYPE_IMAGE_STARLESS and self._starless_getter:
             img = self._starless_getter()
+        elif layer.mask_type == MASK_TYPE_IMAGE_RASTER and getattr(layer, 'image_data', None) is not None:
+            img = layer.image_data
+            if img is not None and img.ndim == 2:
+                img = np.repeat(img[..., np.newaxis], 3, axis=-1)
         elif self._image_reference_getter:
             img = self._image_reference_getter()
 

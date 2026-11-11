@@ -23,7 +23,17 @@ from core.deconvolution import (
 )
 from core.orton import apply_astronomical_orton
 from core.star_diffusion import apply_star_diffusion
-from core.mask_layers import apply_all_mask_layers
+from core.mask_layers import (
+    apply_all_mask_layers,
+    MASK_TYPE_IMAGE_RASTER,
+    BLEND_MODE_NORMAL,
+    BLEND_MODE_SCREEN,
+    BLEND_MODE_LUMINOSITY,
+    BLEND_MODE_SOFT_LIGHT,
+    BLEND_MODE_OVERLAY,
+    BLEND_MODE_MULTIPLY,
+    ALL_BLEND_MODES,
+)
 from core.dualband import apply_dualband_palette, unclip_stars, unpurple
 from core.pcc import apply_pcc_gains
 from gui.developer.developer_state import DeveloperState

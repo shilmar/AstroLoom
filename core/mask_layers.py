@@ -7,7 +7,7 @@ locales paramétricos independientes y conciencia de capas StarNet (Compuesta, S
 import uuid
 import base64
 from dataclasses import dataclass, field, asdict
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Union
 import cv2
 import numpy as np
 from core.masking import (
@@ -115,7 +115,24 @@ SCOPE_TARGET_STARS = "stars"        # Solo Capa de Estrellas
 
 # Naturaleza de la Capa (Layer Kind)
 LAYER_KIND_ADJUSTMENT = "adjustment"  # Capa de ajuste paramétrico con máscara
-LAYER_KIND_IMAGE = "image"            # Capa portadora de imagen (Fondo Starless, Estrellas, Suelo)
+LAYER_KIND_IMAGE = "image"            # Capa portadora de imagen (Fondo Starless, Estrellas, Suelo, Ráster)
+
+# Modos de Fusión para Capas Ráster (Blend Modes)
+BLEND_MODE_NORMAL = "normal"          # Sustitución ponderada por opacidad
+BLEND_MODE_SCREEN = "screen"          # Trama (1 - (1 - A) * (1 - B))
+BLEND_MODE_LUMINOSITY = "luminosity"  # Inyección de luminancia del filtro preservando crominancia base
+BLEND_MODE_SOFT_LIGHT = "soft_light"  # Realce sutil de contraste tonal
+BLEND_MODE_OVERLAY = "overlay"        # Superposición de microestructuras
+BLEND_MODE_MULTIPLY = "multiply"      # Atenuación de resplandores / máscaras de densidad
+
+ALL_BLEND_MODES = [
+    BLEND_MODE_NORMAL,
+    BLEND_MODE_SCREEN,
+    BLEND_MODE_LUMINOSITY,
+    BLEND_MODE_SOFT_LIGHT,
+    BLEND_MODE_OVERLAY,
+    BLEND_MODE_MULTIPLY,
+]
 
 # Tipos de Máscara de Ajuste
 MASK_TYPE_BRUSH = "brush"           # Pincel interactivo con dureza y opacidad de trazo
@@ -125,11 +142,12 @@ MASK_TYPE_LUMA = "luminance"        # Rango de Luminancia (Sombras/Medios/Luces)
 MASK_TYPE_COLOR = "color"           # Rango de Color (HSV)
 MASK_TYPE_CUSTOM = "custom"         # Trazos libres / raster personalizado
 
-# Tipos Especiales de Capas de Imagen (StarNet / Pipeline)
+# Tipos Especiales de Capas de Imagen (StarNet / Pipeline / Eclipses)
 MASK_TYPE_IMAGE_BASE = "image_base"          # 🖼️ Fondo (Imagen Base inicial)
 MASK_TYPE_IMAGE_STARLESS = "image_starless"  # 🌌 Fondo Nebular (Starless AI)
 MASK_TYPE_IMAGE_STARS = "image_stars"        # ⭐ Capa de Estrellas (StarNet AI)
 MASK_TYPE_IMAGE_GROUND = "image_ground"      # 🏞️ Capa de Suelo / Terreno (Paisaje)
+MASK_TYPE_IMAGE_RASTER = "image_raster"      # 🎨 Capa Ráster de Imagen (Filtros Eclipses / Composición)
 
 
 @dataclass
@@ -144,6 +162,10 @@ class MaskLayer:
     inverted: bool = False
     opacity: float = 1.0  # 0.0 a 1.0
     is_system_layer: bool = False  # Si es True, no se puede eliminar con el botón de borrar
+
+    # Propiedades para capas de imagen ráster (layer_kind == "image")
+    image_data: Optional[np.ndarray] = None     # Array Float32 RGB [0.0, 1.0] o 2D Mono
+    blend_mode: str = BLEND_MODE_NORMAL         # Modo de fusión ("normal", "screen", "luminosity", etc.)
 
     # Parámetros para máscara de Pincel interactivo
     brush_radius: int = 35          # Radio en píxeles (5 a 250 px)
@@ -198,10 +220,21 @@ class MaskLayer:
     # Máscara rasterizada en memoria float32 [0.0, 1.0] (no serializable a JSON)
     custom_mask: Optional[np.ndarray] = None
 
+    @property
+    def supports_brush(self) -> bool:
+        """Determina si la capa admite trazos de pincel interactivo para definir su máscara espacial."""
+        return self.mask_type in (MASK_TYPE_BRUSH, MASK_TYPE_IMAGE_RASTER)
+
+    @property
+    def is_raster_image(self) -> bool:
+        """Indica si la capa transporta una imagen ráster externa (p. ej. filtro coronal o composición)."""
+        return self.mask_type == MASK_TYPE_IMAGE_RASTER
+
     def to_dict(self) -> Dict[str, Any]:
         """Serializa la capa a un diccionario JSON preservando la máscara de pincel y curva."""
         d = asdict(self)
         d.pop("custom_mask", None)
+        d.pop("image_data", None)
         d.pop("brush_mask", None)
         d.pop("curve_lut", None)
         if self.brush_mask is not None:
@@ -275,6 +308,12 @@ def compute_layer_mask(
             m = _slice_or_resize_mask(layer.brush_mask)
         else:
             m = np.zeros((h, w), dtype=np.float32)
+
+    elif layer.mask_type == MASK_TYPE_IMAGE_RASTER:
+        if layer.brush_mask is not None:
+            m = _slice_or_resize_mask(layer.brush_mask)
+        else:
+            m = np.ones((h, w), dtype=np.float32)
 
     elif layer.mask_type == MASK_TYPE_GROUND:
         if master_sky_mask is not None:
@@ -608,6 +647,185 @@ def compute_effective_layer_mask(
     return m_base
 
 
+# =========================================================================
+# OPERACIONES DE FUSIÓN DE CAPAS RÁSTER (BLEND MODES)
+# =========================================================================
+
+def apply_normal_blend(canvas: np.ndarray, top: np.ndarray, weight: Union[float, np.ndarray]) -> np.ndarray:
+    """Mezcla Normal (Sustitución lineal ponderada por opacidad/máscara)."""
+    if isinstance(weight, (int, float)):
+        if abs(weight - 1.0) < 1e-5:
+            return np.clip(top, 0.0, 1.0).astype(np.float32)
+        w = float(weight)
+    else:
+        w = weight[..., np.newaxis] if weight.ndim == 2 else weight
+    return np.clip((1.0 - w) * canvas + w * top, 0.0, 1.0).astype(np.float32)
+
+
+def apply_screen_blend(canvas: np.ndarray, top: np.ndarray, weight: Union[float, np.ndarray]) -> np.ndarray:
+    """Mezcla Trama (Screen: 1 - (1 - A)(1 - B * w)). Ideal para estrellas y protuberancias."""
+    if isinstance(weight, (int, float)):
+        if HAS_RUST:
+            c_c = np.ascontiguousarray(canvas, dtype=np.float32)
+            t_c = np.ascontiguousarray(top, dtype=np.float32)
+            return np.asarray(astroloom_rs.screen_blend(c_c, t_c, float(weight)), dtype=np.float32)
+        w = float(weight)
+    else:
+        w = weight[..., np.newaxis] if weight.ndim == 2 else weight
+
+    top_w = np.clip(top * w, 0.0, 1.0)
+    return np.clip(1.0 - (1.0 - canvas) * (1.0 - top_w), 0.0, 1.0).astype(np.float32)
+
+
+def apply_luminosity_blend(canvas: np.ndarray, top: np.ndarray, weight: Union[float, np.ndarray]) -> np.ndarray:
+    """
+    Mezcla de Luminosidad (Photoshop / W3C Compositing):
+    Preserva el tono y saturación de la base (canvas) e inyecta la luminancia del filtro (top).
+    Aplica el algoritmo estándar ClipColor para preservar el gamut sin viraje cromático.
+    """
+    if HAS_RUST and hasattr(astroloom_rs, "luminosity_blend_rs") and canvas.ndim == 3 and top.ndim == 3 and canvas.shape == top.shape:
+        c_c = np.ascontiguousarray(canvas, dtype=np.float32)
+        t_c = np.ascontiguousarray(top, dtype=np.float32)
+        if isinstance(weight, (int, float)):
+            return np.asarray(astroloom_rs.luminosity_blend_rs(c_c, t_c, float(weight), None), dtype=np.float32)
+        elif isinstance(weight, np.ndarray) and weight.ndim == 2 and weight.shape == canvas.shape[:2]:
+            m_c = np.ascontiguousarray(weight, dtype=np.float32)
+            return np.asarray(astroloom_rs.luminosity_blend_rs(c_c, t_c, 1.0, m_c), dtype=np.float32)
+
+    l_base = 0.2126 * canvas[..., 0] + 0.7152 * canvas[..., 1] + 0.0722 * canvas[..., 2]
+    if top.ndim == 2:
+        l_top = top
+    elif top.ndim == 3 and top.shape[2] == 1:
+        l_top = top[..., 0]
+    else:
+        l_top = 0.2126 * top[..., 0] + 0.7152 * top[..., 1] + 0.0722 * top[..., 2]
+
+    # Diferencia de luminancia
+    d = (l_top - l_base)[..., np.newaxis]
+    c = canvas + d
+
+    # ClipColor W3C / Photoshop standard
+    l = l_top[..., np.newaxis]
+    n = np.min(c, axis=-1, keepdims=True)
+    x = np.max(c, axis=-1, keepdims=True)
+
+    mask_n = (n < 0.0) & (l != n)
+    c = np.where(mask_n, l + ((c - l) * l) / np.maximum(l - n, 1e-6), c)
+
+    mask_x = (x > 1.0) & (x != l)
+    c = np.where(mask_x, l + ((c - l) * (1.0 - l)) / np.maximum(x - l, 1e-6), c)
+
+    blended = np.clip(c, 0.0, 1.0)
+
+    if isinstance(weight, (int, float)):
+        if abs(weight - 1.0) < 1e-5:
+            return blended.astype(np.float32)
+        w = float(weight)
+    else:
+        w = weight[..., np.newaxis] if weight.ndim == 2 else weight
+
+    return np.clip((1.0 - w) * canvas + w * blended, 0.0, 1.0).astype(np.float32)
+
+
+def apply_soft_light_blend(canvas: np.ndarray, top: np.ndarray, weight: Union[float, np.ndarray]) -> np.ndarray:
+    """
+    Mezcla de Luz Suave (Soft Light - W3C / Photoshop):
+    Realza el microcontraste y gradientes coronales sin quemar luces ni empastar sombras.
+    """
+    if HAS_RUST and hasattr(astroloom_rs, "soft_light_blend_rs") and canvas.ndim == 3 and top.ndim == 3 and canvas.shape == top.shape:
+        c_c = np.ascontiguousarray(canvas, dtype=np.float32)
+        t_c = np.ascontiguousarray(top, dtype=np.float32)
+        if isinstance(weight, (int, float)):
+            return np.asarray(astroloom_rs.soft_light_blend_rs(c_c, t_c, float(weight), None), dtype=np.float32)
+        elif isinstance(weight, np.ndarray) and weight.ndim == 2 and weight.shape == canvas.shape[:2]:
+            m_c = np.ascontiguousarray(weight, dtype=np.float32)
+            return np.asarray(astroloom_rs.soft_light_blend_rs(c_c, t_c, 1.0, m_c), dtype=np.float32)
+
+    cond = (top <= 0.5)
+    c_low = canvas - (1.0 - 2.0 * top) * canvas * (1.0 - canvas)
+    sqrt_b = np.sqrt(np.maximum(canvas, 0.0))
+    c_high = canvas + (2.0 * top - 1.0) * (sqrt_b - canvas)
+    blended = np.clip(np.where(cond, c_low, c_high), 0.0, 1.0)
+
+    if isinstance(weight, (int, float)):
+        if abs(weight - 1.0) < 1e-5:
+            return blended.astype(np.float32)
+        w = float(weight)
+    else:
+        w = weight[..., np.newaxis] if weight.ndim == 2 else weight
+
+    return np.clip((1.0 - w) * canvas + w * blended, 0.0, 1.0).astype(np.float32)
+
+
+def apply_overlay_blend(canvas: np.ndarray, top: np.ndarray, weight: Union[float, np.ndarray]) -> np.ndarray:
+    """
+    Mezcla de Superposición (Overlay):
+    Combina Multiplicar y Trama según la luminancia de la base para realce de microestructuras.
+    """
+    cond = (canvas <= 0.5)
+    c_low = 2.0 * canvas * top
+    c_high = 1.0 - 2.0 * (1.0 - canvas) * (1.0 - top)
+    blended = np.clip(np.where(cond, c_low, c_high), 0.0, 1.0)
+
+    if isinstance(weight, (int, float)):
+        if abs(weight - 1.0) < 1e-5:
+            return blended.astype(np.float32)
+        w = float(weight)
+    else:
+        w = weight[..., np.newaxis] if weight.ndim == 2 else weight
+
+    return np.clip((1.0 - w) * canvas + w * blended, 0.0, 1.0).astype(np.float32)
+
+
+def apply_multiply_blend(canvas: np.ndarray, top: np.ndarray, weight: Union[float, np.ndarray]) -> np.ndarray:
+    """
+    Mezcla de Multiplicación (Multiply):
+    Atenúa altas luces y aplica máscaras de densidad o gradientes de atenuación.
+    """
+    blended = canvas * top
+    if isinstance(weight, (int, float)):
+        if abs(weight - 1.0) < 1e-5:
+            return np.clip(blended, 0.0, 1.0).astype(np.float32)
+        w = float(weight)
+    else:
+        w = weight[..., np.newaxis] if weight.ndim == 2 else weight
+
+    return np.clip((1.0 - w) * canvas + w * blended, 0.0, 1.0).astype(np.float32)
+
+
+def apply_blend_mode(
+    canvas: np.ndarray,
+    top: np.ndarray,
+    blend_mode: str,
+    weight: Union[float, np.ndarray] = 1.0
+) -> np.ndarray:
+    """Despacha la operación de fusión seleccionada sobre el lienzo base."""
+    mode = (blend_mode or BLEND_MODE_NORMAL).lower()
+
+    # Aceleración nativa Rayon en Rust (Fase B)
+    if HAS_RUST and hasattr(astroloom_rs, "apply_blend_mode_rs") and canvas.ndim == 3 and top.ndim == 3 and canvas.shape == top.shape:
+        c_c = np.ascontiguousarray(canvas, dtype=np.float32)
+        t_c = np.ascontiguousarray(top, dtype=np.float32)
+        if isinstance(weight, (int, float)):
+            return np.asarray(astroloom_rs.apply_blend_mode_rs(c_c, t_c, mode, float(weight), None), dtype=np.float32)
+        elif isinstance(weight, np.ndarray) and weight.ndim == 2 and weight.shape == canvas.shape[:2]:
+            m_c = np.ascontiguousarray(weight, dtype=np.float32)
+            return np.asarray(astroloom_rs.apply_blend_mode_rs(c_c, t_c, mode, 1.0, m_c), dtype=np.float32)
+
+    if mode == BLEND_MODE_SCREEN:
+        return apply_screen_blend(canvas, top, weight)
+    elif mode == BLEND_MODE_LUMINOSITY:
+        return apply_luminosity_blend(canvas, top, weight)
+    elif mode == BLEND_MODE_SOFT_LIGHT:
+        return apply_soft_light_blend(canvas, top, weight)
+    elif mode == BLEND_MODE_OVERLAY:
+        return apply_overlay_blend(canvas, top, weight)
+    elif mode == BLEND_MODE_MULTIPLY:
+        return apply_multiply_blend(canvas, top, weight)
+    else:
+        return apply_normal_blend(canvas, top, weight)
+
+
 def apply_all_mask_layers(
     composite_image: np.ndarray,
     mask_layers: List[MaskLayer],
@@ -748,6 +966,85 @@ def apply_all_mask_layers(
                 else:
                     st_weighted = np.clip(st * layer.opacity, 0.0, 1.0)
                     canvas = 1.0 - (1.0 - canvas) * (1.0 - st_weighted)
+
+        elif layer.mask_type == MASK_TYPE_IMAGE_RASTER:
+            # Capa 🎨 Imagen Ráster Genérica (Filtros Eclipses, Composición Externa)
+            if layer.image_data is not None and layer.opacity > 1e-4:
+                flt_img = layer.image_data
+                if flt_img.dtype != np.float32:
+                    if flt_img.dtype == np.uint8:
+                        flt_img = flt_img.astype(np.float32) / 255.0
+                    elif flt_img.dtype == np.uint16:
+                        flt_img = flt_img.astype(np.float32) / 65535.0
+                    else:
+                        flt_img = flt_img.astype(np.float32)
+
+                if flt_img.ndim == 2:
+                    flt_img = np.repeat(flt_img[..., np.newaxis], 3, axis=-1)
+                elif flt_img.ndim == 3 and flt_img.shape[2] == 1:
+                    flt_img = np.repeat(flt_img, 3, axis=-1)
+
+                if np.isnan(flt_img).any() or np.isinf(flt_img).any():
+                    flt_img = np.nan_to_num(flt_img, nan=0.0, posinf=1.0, neginf=0.0)
+
+                # Escala o recorte según zoom / pirámide de resolución
+                if flt_img.shape[:2] != (img_h, img_w):
+                    if crop_rect is not None and full_image_shape is not None:
+                        x1, y1, x2, y2 = crop_rect
+                        h_f, w_f = full_image_shape
+                        h_r, w_r = flt_img.shape[:2]
+                        sx = w_r / float(w_f)
+                        sy = h_r / float(h_f)
+                        rx1 = max(0, min(w_r, int(round(x1 * sx))))
+                        ry1 = max(0, min(h_r, int(round(y1 * sy))))
+                        rx2 = max(0, min(w_r, int(round(x2 * sx))))
+                        ry2 = max(0, min(h_r, int(round(y2 * sy))))
+                        flt_sub = flt_img[ry1:ry2, rx1:rx2]
+                        if flt_sub.shape[:2] != (img_h, img_w):
+                            flt_img = cv2.resize(flt_sub, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
+                        else:
+                            flt_img = flt_sub
+                    else:
+                        # shortcut: cache transient resized draft for 60 FPS slider scrubbing, clear on source change
+                        cache_key = (id(layer.image_data), img_h, img_w)
+                        cached = getattr(layer, "_cached_resized", None)
+                        if cached is not None and cached[0] == cache_key:
+                            flt_img = cached[1]
+                        else:
+                            flt_img = cv2.resize(flt_img, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
+                            layer._cached_resized = (cache_key, flt_img)
+
+                # Ajustes locales tonales de la capa ráster si existen
+                has_adj = (abs(layer.temp) > 1e-4 or abs(layer.tint) > 1e-4 or 
+                           abs(layer.exposure) > 1e-3 or abs(layer.contrast) > 1e-3 or 
+                           abs(layer.saturation - 1.0) > 1e-3 or abs(layer.shadows) > 1e-3 or 
+                           abs(layer.highlights) > 1e-3 or layer.has_curve())
+                if has_adj:
+                    flt_img = apply_pre_curve_adjustments(flt_img, layer, fast_draft=fast_draft)
+                    if not layer.is_curve_identity():
+                        if layer.curve_lut is None:
+                            layer.curve_lut = compute_curve_lut_from_points(layer.curve_points)
+                        u8 = (np.clip(flt_img, 0.0, 1.0) * 255.0).astype(np.uint8)
+                        lut_u8 = (np.clip(layer.curve_lut, 0.0, 1.0) * 255.0).astype(np.uint8)
+                        flt_img = (cv2.LUT(u8, lut_u8).astype(np.float32) / 255.0)
+
+                # Ponderación por máscara si está presente o invertida
+                has_mask = (layer.brush_mask is not None or layer.inverted or layer.custom_mask is not None)
+                if has_mask:
+                    m_eff = compute_effective_layer_mask(
+                        layer, canvas,
+                        master_sky_mask=master_sky_mask,
+                        starless_image=starless_image,
+                        stars_image=stars_image,
+                        crop_rect=crop_rect,
+                        full_image_shape=full_image_shape
+                    )
+                    weight = np.clip(m_eff * layer.opacity, 0.0, 1.0).astype(np.float32)
+                else:
+                    weight = float(layer.opacity)
+
+                # Fusión con el lienzo subyacente según blend_mode
+                canvas = apply_blend_mode(canvas, flt_img, getattr(layer, "blend_mode", BLEND_MODE_NORMAL), weight)
 
         else:
             # Capas de ajuste estándar (Pincel, Luminancia, Color, etc.)

@@ -226,7 +226,12 @@ class CurveWidget(QWidget):
         if sample.dtype != np.float32:
             sample = sample.astype(np.float32)
 
-        gray = cv2.cvtColor(np.clip(sample, 0.0, 1.0), cv2.COLOR_RGB2GRAY)
+        if sample.ndim == 2:
+            gray = np.clip(sample, 0.0, 1.0)
+        elif sample.ndim == 3 and sample.shape[2] == 1:
+            gray = np.clip(sample[..., 0], 0.0, 1.0)
+        else:
+            gray = cv2.cvtColor(np.clip(sample, 0.0, 1.0), cv2.COLOR_RGB2GRAY)
         u8 = (gray * 255.0).astype(np.uint8)
 
         calc_mask = None

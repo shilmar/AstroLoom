@@ -1,414 +1,153 @@
-# AstroLoom
+# 🌌 AstroLoom
 
-**AstroLoom** (anteriormente *Apilator*) es una suite y estación de trabajo especializada de posprocesado, apilado, mosaicos panorámicos y revelado para **astrofotografía de paisaje (nightscapes)**, **mosaicos gigapíxel**, **circumpolares / trazas de estrellas (startrails)** y **eclipses (solares y lunares)**. Impulsada por una arquitectura híbrida de alto rendimiento que combina una interfaz moderna en Python (`PySide6`) con un **motor de cómputo nativo en Rust (`astroloom_rs`)**, AstroLoom permite desacoplar el movimiento del cielo respecto al horizonte terrestre, aplicar integración estadística Kappa-Sigma en coma flotante de 32 bits a velocidad nativa SIMD, calibrar tomas RAW pre-debayer *in-place* sin sobrecoste de memoria RAM, componer panorámicas multifila con corte óptimo de siluetas terrestres (Dual-Zone), componer circumpolares con efectos cometa y supresión automática de satélites, procesar series de bracketing de eclipses con alineación subpíxel de limbo y filtro NRGF continuo multihilo, y editar la imagen final en tiempo real con asistencia de redes neuronales (StarNet++ v2 / NAFNet) y extracción analítica de gradientes de fondo RBF.
+<div align="center">
 
-> 📖 **¿Nuevo en AstroLoom? Consulta el [Manual de Usuario Completo (Guía Paso a Paso y Parámetros)](MANUAL_DE_USUARIO.md)** para una explicación sencilla y práctica de cada módulo y de todos los controles deslizantes del revelador.
+**Suite y Estación de Trabajo Integral para Astrofotografía de Paisaje, Cielo Profundo y Eventos Astronómicos**
 
----
+[![Version](https://img.shields.io/badge/version-v0.14.3-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
+[![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
 
-## Características Principales
+[**📖 Manual de Usuario**](MANUAL_DE_USUARIO.md) • [**📝 Registro de Cambios**](CHANGELOG.md) • [**🤝 Contribuir**](CONTRIBUTING.md) • [**🗺️ Hoja de Ruta**](ROADMAP.md)
 
-### 1. Calibración Astronómica Rigurosa
-- **Pipeline Completo de Calibración:** Pestañas dedicadas y soporte nativo para **Lights**, **Darks**, **Flats** y **Bias**.
-- **Sustracción de Pedestal Electrónico y Térmico:** Eliminación del ruido térmico y píxeles calientes mediante Master Dark, y del ruido de lectura/offset mediante Master Bias.
-- **Aplanado de Campo y Viñeteo (Master Flat):** Corrección lineal de sombras de motas de polvo y caída de luz periférica del tren óptico, con normalización independiente por canal para preservar el balance de color.
-- **Calibración Matemática en Espacio Puro CFA (Pre-Debayer In-Place en Rust):** Sustracción de exceso térmico de Darks y división de Flats directamente sobre la matriz pura de fotodiodos uint16 del archivo RAW mediante el módulo nativo `streaming_io.rs` en Rust, operando sin copias intermedias en RAM (0 bytes de memoria adicional) y acelerando la calibración un 4x antes de interpolar color, preservando el rango dinámico y evitando desbalances cromáticos.
-- **Persistencia de Proyecto (.mwstack):** Guardado y restauración completa del estado de la sesión (listas de archivos de calibración, parámetros de integración y máscaras calculadas).
-
-### 2. Apilado Diferencial Cielo / Suelo
-- **Alineación Estelar Robusta:** Detección de estrellas y emparejamiento homográfico/afín de precisión subpíxel sobre datos lineales de 32 bits.
-- **Alineación Elástica No Rígida por Thin Plate Splines (TPS en Rust):** Malla elástica subpíxel e interpolación de alta fidelidad `Lanczos4` calculada mediante el solver analítico nativo en Rust (`compute_tps_grid_rs` vía `nalgebra`) sin dependencias de SciPy, eliminando la distorsión geométrica periférica de estrellas en las esquinas por rotación de campo en gran angular.
-- **Diagnóstico Óptico 3x3 de Campo y Sesión (Acelerado en Rust):** Mapeo de FWHM y redondez en cuadrícula $3\times 3$ mediante el kernel nativo en Rust (`analyze_frame_quality_3x3_rs`), con clasificación analítica de curvatura de campo simétrica vs inclinación de sensor (*Sensor Tilt*) / flexión mecánica y recomendaciones de ajuste.
-- **Ergonomía de Ingesta:** Botones de carga rápida «Añadir Tomas...» y «Limpiar Pestaña» anclados en la cabecera superior de la sección de archivos, siempre accesibles sobre las pestañas.
-- **Cribado Inteligente de Tomas y Selección de Referencia:** Análisis multihilo de calidad óptica (FWHM, excentricidad y densidad estelar) con auto-selección algorítmica de la toma de referencia óptima (menor FWHM, mayor censo estelar y contraste).
-- **Normalización Fotométrica Previa (Linear Fit):** Ajuste analítico previo a la integración que homogeneiza el pedestal y la dispersión ($MAD$) de cada toma respecto a la referencia, neutralizando nubes pasajeras y variaciones de transparencia.
-- **Integración Kappa-Sigma Adaptativa Ponderada:** Motor JIT LLVM (Numba) con ponderación inversa al cuadrado de la FWHM ($1 / \text{FWHM}^2$), maximizando la agudeza estelar y la SNR en sesiones con viento o seeing fluctuante.
-- **Estrategias Avanzadas de Suelo Terrestre:** Selección entre toma de referencia fija, modo *Min-Stack* (fusión percentil para erradicar ramas batientes por viento, hierba o personas) y modo *Mediana* contra ruido térmico.
-- **Tratamiento Anti-Ghosting de Árboles en Horizonte (Min-Horizon):** Erradicación de árboles fantasma y estelas traslúcidas mediante proyección percentil inferior en una banda de seguridad perimetral dilatada sobre el contorno del horizonte.
-- **Integración Kappa-Sigma Pura:** Eliminación drástica y limpia de trazas de satélites, estelas de aviones y artefactos transitorios mediante rechazo por desviación absoluta respecto a la mediana (MAD) sin elevar el ruido de fondo.
-- **Conservación Íntegra del Sensor (Sin Auto-Crop):** Relleno periférico reflectivo (`BORDER_REFLECT`) que neutraliza los marcos y escalones oscuros provocados por la rotación del campo estelar, conservando el 100% de la resolución nativa original.
-- **Motor Optimizado por Bloques:** Procesamiento segmentado en franjas (200 filas) que previene desbordamientos de memoria RAM (`MemoryError`) y cuellos de botella de transferencia GPU en lotes pesados.
-- **Motor Nativo en Rust (`astroloom_rs`):** Kernels vectorizados SIMD y multihilo en Rayon para integración Kappa-Sigma, percentiles y mediana con asignación en pila L1 y selección Quickselect $O(N)$, logrando un rendimiento $2.77\times$ superior a Numba LLVM JIT y erradicando millones de reservas en memoria RAM (con fallback automático a Numba/NumPy si fuera necesario).
-
-- **Antipolución Lumínica:** Algoritmos selectivos de atenuación de gradientes de fondo (Sustracción de Domo, Rechazo Asimétrico Min-Sigma y Normalización Local).
-
-### 3. Segmentación y Máscaras Interactivas
-- **Detección Automática de Suelo con IA Ligera (1-Click Sky/Ground):** Segmentación semántica de horizonte instantánea mediante red neuronal convolucional profunda U²-Net en ONNX Runtime con refinado subpíxel por Filtro Guiado (Guided Filter), asistente interactivo de descarga y fallback matemático continuo.
-- **GrabCut Guiado Multiescala:** Delineación asistida del horizonte y perfiles complejos (árboles, relieve montañoso, estructuras).
-- **Edición Continua no Destructiva:** Permite refinar la máscara, seguir corrigiendo con trazos de pincel en tiempo real y recalcular sin reiniciar el trabajo.
-- **Control Paramétrico Fino:** Ajuste del radio de difusión/suavizado gaussiano del borde (feathering) e iteraciones del modelo.
-- **Zoom 1:1 Nativo con Clic Derecho:** Inspección píxel a píxel del sensor original para retoque milimétrico de bordes.
-
-### 4. Revelador Astrofotográfico Avanzado
-- **Arquitectura de 3 Columnas Pro (Estilo Lightroom Classic / DaVinci):**
-  - *Columna Izquierda:* Navegador miniatura con zoom contextual, Gestor de Presets Astronómicos con catálogo oficial e Historial interactivo de pasos Deshacer/Rehacer.
-  - *Columna Central:* Lienzo de trabajo ultra-amplio centrado, barra de herramientas superior, modo comparador "Antes / Después" con cortina divisible (Split-View horizontal y vertical), avisos vectoriales de recorte (Clipping `J`), pipeta de balance de blancos (`W`) y lupa flotante (`Z`).
-  - *Columna Derecha:* Acordeón colapsable con histograma RGB en vivo interactivo en cabecera, controles paramétricos de procesado y Gestor de Capas y Máscaras.
-  - *Divisores de Recorrido Amplio (Center-Reach):* Separadores interactivos que permiten desplazar los paneles laterales hasta el centro del área de trabajo sin restricciones artificiales ni desbordamientos.
-- **Canal Lineal Puro y Compositor Fused Nativo en Rust:** Pipeline optimizado en coma flotante (float32), preservando la linealidad fotométrica hasta la compresión tonal final. Las transformaciones tonales por capa (HSV, EV, balance, curvas LUT y mezcla) se computan de forma unificada en Rust mediante `apply_layer_adjustments_fused` sin reservas intermedias en el heap, permitiendo interactividad total a 60 FPS.
-- **Gestor de Capas con Miniaturas Dinámicas y Altura Adaptativa:**
-  - Miniaturas fotorrealistas en vivo para cada capa (estrellas sobre fondo oscuro, nebulosa a color, terreno y máscaras monocromáticas).
-  - Selector de tamaños **S**, **M** y **L (XL)** con adaptación automática a la relación de aspecto real de la fotografía (horizontal o retrato/vertical).
-  - Redimensionador ergonómico con tirador de arrastre libre (`LayerListResizeHandle`) y cálculo dinámico de altura que muestra todas las capas sin barras de scroll internas ni colapso de espacio.
-- **Curvas Tonales Dedicadas por Capa:** Curva spline interactiva de 32 bits integrada de forma independiente en cada capa (Estrellas, Starless, Suelo, Base), con histograma de fondo armonizado al rango tonal post-estirado y filtrado por máscara espacial.
-- **Deconvolución Óptica Regularizada (Richardson-Lucy en Rust):** Modelado analítico nativo de PSF (Moffat 2D y Gaussiano), estimador empírico automático subpíxel desde estrellas no saturadas, deringing perimetral y amortiguación Bayesiana de ruido de fondo ejecutados en un bucle iterativo multihilo en Rust sin recolección de basura (*GC*).
-- **Separación de Estrellas con StarNet++ (Motor Nativo ONNX DirectML) y Capas Desacopladas:** Inferencia nativa en GPU mediante DirectML y descarga automática asistida de pesos (`starnet2.onnx`), eliminando la necesidad de binarios CLI externos y archivos temporales en disco. Extracción de capas Starless y Stars-only en espacio lineal con ventana Hann 2D y ciclo MTF por canal. Bloqueo selectivo de controles globales redundantes (Balance de Blancos, Saturación y Estirado) al desacoplar capas para prevenir recálculos y desincronizaciones de color, manteniendo la reducción de contaminación lumínica 100% libre e interactiva con aceleración por caché pre-LP (<20 ms en Zoom 1:1).
-- **Preservación Espectral Estelar (Física B-V):** Protección del color espectral intrínseco de las estrellas mediante bypass de temperatura y tinte en la Capa de Estrellas, omitiendo conversiones de espacio de color y acelerando drásticamente el compositor multicapa.
-- **Calibración Fotométrica del Color (PCC Real contra Gaia DR3 en Rust):** Fotometría de apertura circular en estrellas no saturadas con sustracción de anillo de fondo y ajuste de regresión robusta Theil-Sen $O(N^2)$ ejecutado en Rust en microsegundos, anclado al estándar solar espectral G2V ($(BP - RP) = 0.82$), restableciendo el color físico de estrellas sin tocar el pedestal del fondo ni lavar nebulosas.
-- **Paletas Dual-Band OSC y Desmezclado Ha / [OIII] (Pipeline Fused en Rust):** Extracción desacoplada de hidrógeno alfa y oxígeno ionizado para sensores de color (OSC) con soporte de paletas HOO Bicolor, SHO Hubble Sintético, Foraxx Dinámico y Cannistra Bicolor, junto con deslizador de ganancia Boost [OIII], evaluados en un único bucle paralelo en Rust.
-- **Corrección Estelar Avanzada (Unclip Stars & Unpurple en Rust):** Algoritmo de recuperación cromática de centros estelares saturados o quemados a blanco mediante difusión perimetral en Rust, y atenuación de aberraciones cromáticas violetas y halos magenta en estrellas brillantes sin alterar emisiones rojas $H\alpha$.
-- **Supresión de Ruido Banding CMOS de Sensor (In-Place en Rust):** Reducción selectiva de ruido estructurado por líneas y columnas (horizontal, vertical o ambos) mediante modelado estadístico del fondo en tiempo lineal $O(W)$ y filtrado paso bajo 1D en Rust.
-- **Filtro Difusor Digital y Realce de Constelaciones (Star Mist Filter):** Resplandor etéreo con recuperación de color espectral de estrellas prominentes y protección de estrellas débiles.
-- **Estirado Hiperbólico Generalizado (GHS en Rust):** Control con punto de simetría (SP), factor de estirado (D) y protección de altas luces (HP) para datos lineales, con precomputación analítica de LUT 1D de 16 bits en microsegundos y aplicación multihilo en Rayon con preservación fotométrica de luminancia Rec. 709 sin reservas en el heap.
-- **Efecto Orton Cósmico y Glow de Polvo Galáctico:** Resplandor suave enfocado en estructuras de gas y polvo interestelar.
-- **Reducción Paramétrica 2D de Contaminación Lumínica (Domo Asimétrico):** Sustracción de cúpulas lumínicas urbanas en el horizonte mediante modelo elíptico 2D con neutralización espectral selectiva (vapor de sodio, LED cálido/frío o muestra interactiva), recuadro visual de color (swatch) editable y modos de atenuación suave o sustracción física.
-- **Estructura Multiescala por Ondículas (À Trous / B-Spline):** Realce selectivo de filamentos de gas y bandas de absorción de la Vía Láctea, junto con atenuación de la capa residual de fondo.
-- **Extracción de Gradientes por Muestreo Interactivo (RBF 2D / DBE Nativo en Rust) y Superficies Polinómicas:** Interpolación multiescala 2D por muestras de cielo libre mediante el motor RBF nativo en Rust (`fit_and_eval_rbf_proxy`) y modelos analíticos de Grado 1/2. Modos de sustracción y división con neutralización fusionada cielo/suelo en una sola pasada de memoria ($15.2\times$ más rápido y $-1.37\text{ GB}$ de RAM), generación automática de malla inmune al terreno, edición interactiva de puntos en el visor (añadir, arrastrar, eliminar con clic derecho) e integración completa con el historial Deshacer/Rehacer.
-- **Corrección y Curación de Manchas de Polvo de Sensor (Sensor Dust Healing):** Detección automática no destructiva de manchas y donuts de polvo en cielo libre (`core/dust.py`), selección inteligente de parches donantes limpios sin colisión (`pick_donor_source`), curación continua por aproximación de Poisson / convolución normalizada, inpainting y clonación, herramientas de colocación y edición manual en lienzo, y modo de inspección de alto contraste ("Visualizar Manchas", atajo **`A`**).
-- **Refinamiento de Bordes de Máscaras por Filtro Guiado Cruzado (Guided Cross):** Algoritmo fotométrico en `core/masking.py` que imanta con precisión matemática los contornos de las máscaras de capa a las siluetas, aristas y microestructuras reales de la escena usando la luminancia logarítmica O(1).
-- **Protección de Driver GPU por Centinela de Fallos (Crash Sentinel):** Tolerancia total a cuelgues nativos de driver con detección mediante marcador persistente e inicio automático seguro en modo CPU sin bloquear el arranque de la aplicación.
-- **Motor de Histograma en Vivo 1-Pass Fusionado:** Procesamiento simultáneo de los 4 canales (R, G, B, Luma Rec.709) y clipping en una única pasada ultrarrápida compilada con Numba JIT LLVM a más de 60 FPS sin asignaciones intermedias.
-- **Previsualización Ultrarrápida por LUT 1D (Display Transfer Function / STF):** Arrastre continuo de deslizadores de estirado (exposición, contraste, sombras, altas luces y GHS) a más de 1.000 FPS en CPU mediante Look-Up Table de 65.536 niveles de cuantización sin tocar los píxeles float32 originales en memoria.
-- **Reducción de Ruido Adaptativa Multietapa (Astro Denoise):** Filtrado desacoplado de crominancia en espacio YCrCb para erradicar ruido de color de sensor y moteado térmico sin pérdida de detalle, combinado con reducción bilateral de luminancia guiada por doble máscara (máscara de luminancia invertida para sombras y máscara Sobel de gradientes para blindar estrellas y filamentos). Controles avanzados de croma y selectividad de bordes disponibles en el acordeón y en la pila de capas.
-- **Balance de Color Fino y Tonalidad:** Curvas interactivas con histograma integrado en tiempo real, balance de temperatura/tinte calibrado ($\pm0.250$), control de vibranza y saturación diferencial cielo/suelo.
-- **Curvas Selectivas de Color (Hue vs Sat / Luma vs Sat):** Modelado independiente de curvas para saturación selectiva según tonalidad cromática (espectro arcoíris continuo con sincronización circular de extremos rojos) y según luminancia (desaturación suave de sombras oscuras para erradicar ruido de crominancia en el fondo).
-- **Pipeta de Balance de Blancos (Eyedropper):** Calibración cromática interactiva con botón en barra superior y atajo **`W`**, cursor de mira telescópica, tarjeta flotante RGB y cálculo analítico de ganancia inversa sobre ventana de muestreo $5\times 5$ px.
-- **Lupa de Inspección Flotante (Floating Magnifier):** Lente circular flotante con botón en barra superior y atajo **`Z`**, zoom dinámico ajustable con la rueda del ratón ($1.5\times$ a $8.0\times$) y retícula central para inspeccionar núcleos estelares, bordes y ruido sin perder la vista general ni conmutar el zoom 1:1.
-- **Modo Comparador "Antes / Después" con Cortina Divisoria (Split-View):** Divisor deslizable interactivo en el lienzo para contrastar la toma original neutra con el revelado activo en tiempo real. Soporta orientación horizontal y vertical con atajos `Y` y `Shift + Y`, cursores dinámicos contextuales (`↔`, `↕`) y recentrado rápido al 50% con doble clic.
-- **Supresión de Halos en Horizonte y Desplazamiento Perimétrico (Edge Shift):** Clamping de luminancia guiado por caja delimitadora en la frontera tierra/cielo para erradicar rebordes claros y flecos artificiales sin tocar las texturas interiores, junto a control de desplazamiento subpíxel de la silueta.
-- **Zoom 1:1 Nativo y Navegación Píxel a Píxel:** Sincronización bidireccional mediante botón dedicado, atajo **`C`** y menú contextual/clic derecho a escala real 1.0 (píxel del sensor) con arrastre panorámico fluido (*pan*).
-- **Barra Superior de Herramientas del Canvas:** Acceso directo a funciones visuales críticas (aviso de Clipping `J`, divisor de vista `Y`, orientación de cortina, Pipeta WB `W` y Lupa flotante `Z`, junto con botones de Deshacer `↺` y Rehacer `↻`).
-- **Historial No Destructivo Deshacer / Rehacer (Undo / Redo):** Sistema paramétrico ligero de hasta 50 pasos con consumo mínimo de memoria (< 50 KB en total), atajos globales de teclado (`Ctrl+Z`, `Ctrl+Y`, `Ctrl+Shift+Z`), botones dedicados en la barra superior (`↺ Deshacer`, `↻ Rehacer`), desparasitado inteligente (*debounce* de 500 ms) para rueda de ratón y registro instantáneo de modificaciones sobre los 19 deslizadores, controles de recorte/MTF, capas y nodos de curvas tonales.
-- **Gestión Integral de Proyectos y Sesiones (.devloom):** Sistema completo de guardado y restauración no destructivo (`Ctrl+S`, `Ctrl+Shift+S`, `Ctrl+O`) que empaqueta en un único archivo comprimido ZIP todos los metadatos, parámetros de revelado, máscaras de ajuste en 16 bits (`uint16`) y capas desacopladas de StarNet (*Starless* y *Stars-only*). Incluye barra de progreso interactiva modal, control preventivo de cambios no guardados (`*`), re-vinculación asistida de imágenes base movidas y apertura instantánea arrastrando archivos `.devloom` sobre el lienzo.
-- **Reducción de Ruido con IA Ligera (NAFNet / ONNX Runtime):** Arquitectura de red neuronal convolucional sin activaciones no lineales (*Nonlinear Activation Free Network*) ejecutada localmente con ONNX Runtime multihilo. Desnoising de alto rendimiento para fondo nebular y terreno nocturno que preserva la morfología estelar y el micro-contraste fino sin emborronar filamentos.
-- **Soporte de Arrastrar y Soltar (Drag & Drop) Universal:** Ingesta inmediata de archivos y carpetas completas en todas las listas de Apilador, Startrails y Eclipses, así como carga directa arrastrando imágenes o proyectos `.devloom` sobre el lienzo del Revelador.
-
-### 5. Módulo Especializado de Eclipses (Solar / Lunar)
-- **Selector de Modo Solar / Lunar Ergonómico:** Conmutación rápida mediante sub-pestañas integradas (`EclipseModeToggle`) con iconografía visual temática diferenciada (Sol dorado y Luna cyan), facilitando el paso fluido entre el procesado de corona solar y eclipses lunares de alta latitud dinámica.
-- **Ingesta Automática de Bracketing y Metadatos:** Carga de series de exposición completa (RAW, TIFF, FITS) con extracción de tiempos de obturación reales, ISO y apertura, ordenando automáticamente las tomas.
-- **Detección Subpíxel de Limbo:**
-  - *Modo Solar:* Detección topológica de hueco interior de la Luna dentro del anillo coronal brillante.
-  - *Modo Lunar:* Transformada circular de Hough multiescala (`cv2.HoughCircles`) con guiado por pico de brillo y fallback adaptativo local (Otsu), inmune a nubes, halos difusos y cambios de fase.
-  - Refinamiento de centro y radio subpíxel milimétrico (< 0.1 px) con escáner radial y optimización de flujo circular mediano (`optimize_center_circular_flux`).
-- **Alineación de Lotes sin Costuras:** Detección en lote que ancla el radio astronómico real de la toma de referencia para toda la serie y ajusta los desplazamientos afines con interpolación Lanczos4 y replicación periférica (`BORDER_REPLICATE`) que erradica costuras y bordes negros.
-- **Fusión HDR Adaptativa con Traspaso Gradual (Solar y Lunar):**
-  - *Modo Solar:* Fusión fotométrica lineal de 32 bits ponderada por tiempo de exposición con estirado no lineal Asinh. Incorpora **traspaso gradual de exposición (Gradual Handover)** que modula suavemente los pesos de saturación proporcionalmente a la relación de tiempos $t_i / t_{i-1}$, erradicando la duplicación abrupta de grano y los falsos anillos concéntricos en isófotas críticas de bracketing.
-  - *Modo Lunar:* Fusión por Exposición Multiescala (Mertens-Kautz-Van Reeth) que equilibra el contraste extremo (> 12–14 EV) entre la zona iluminada directamente por el Sol y la umbra rojiza/terrestre, preservando los cráteres en las altas luces y la textura de la Luna de sangre en las sombras sin quemar ni empastar.
-- **Arsenal Completo de Filtros Coronales Científicos (Acelerados en Rust con Rayon):**
-  - **Steerable G2 (Freeman & Adelson 1991 / Weickert 1999):** Filtro de segunda derivada orientada mediante el tensor de estructura local de la corona. Modela con precisión arcos magnéticos cerrados y lazos curvados cerca del limbo con más del 50% de reducción de grano aleatorio respecto a filtros tangenciales.
-  - **Gradiente Rotacional de Larson–Sekanina con Protección Cromática:** Algoritmo rotacional de segundo orden evaluado con rotación cúbica de Keys ($a = -0.5$) y detección automática de protuberancias solares por ratio cromático $R/G > 1.12 \times \text{mediana}$ (`compute_red_excess_mask`), erradicando réplicas "fantasma" oscuras a $\pm\Delta\theta$.
-  - **Filtro SWAP / Misión PROBA2 de la ESA (Seaton et al. 2023):** Filtrado polar de mediana móvil ($\pm 15^\circ$), compresión radial suave $I / (F + t_0)^{0.75}$ y reescalado de raíz cuarta en $[0.5, 2.0]$. Produce una imagen solar continua lista para visualización sin necesidad de mezclas complejas.
-  - **WOW Bilateral Guiado Edge-Aware (AEL 1.3.5):** Descomposición à-trous con spline B3 normalizado, ponderación de rango simétrica y cálculo guiado de pesos, erradicando la inversión de signo en filamentos tenues y acelerado **819×** en Rust.
-  - **NAFE (Noise Adaptive Fuzzy Equalization - Miloslav Druckmüller 2013):** Ecualización difusa con vecindario de 129 px (12 componentes gaussianas), convoluciones FFT 2D y compuerta de ruido adaptativa en el eje de intensidad, con opción de previsualización directa o modo *Overlay*.
-  - **NRGF Continuo con Encadenamiento Angular:** Normalización radial con perfiles continuos $\mu(r), \sigma(r)$, compuerta radial suave (*Radial Gate*) y encadenamiento de anillos parciales (`partial_annuli='chain'`), evitando discontinuidades por cortes de sensor o Lunas descentradas.
-  - **Normalización Multiescala MGN Invariante (Morgan & Druckmüller 2014):** Descomposición en 6 frecuencias espaciales con compuerta de ruido relativa (`data_scale`), garantizando consistencia absoluta ante cualquier escala de coma flotante.
-  - **Mapeo de Detalle por Anillos Concéntricos (Anti-Burnout):** Normalización local anillo a anillo en pasos de 2 px radiales (mediana y $1.4826 \cdot \text{MAD}$) con suavizado radial continuo e interpolación sigmoidal $\tanh$, impidiendo el quemado a blanco o el empaste a negro en el limbo solar.
-- **Exportación Nativa a Photoshop PSD Multicapa de 16 Bits:** Exportación directa a proyectos PSD de 16 bits (`export_coronal_layers_psd`) con capas separadas estandarizadas (`Fondo HDR Base`, `01 NRGF`, `02 WOW Edge-Aware`, `09 NAFE`, `11 Steerable G2`, `15 Larson-Sekanina`, `16 SWAP`) y modos de mezcla `Normal` y `Overlay`, facilitando el ajuste fino de opacidades y revelado en Photoshop, GIMP o PixInsight.
-- **Exportación Dual 16-bit / 32-bit:** Exportación directa a TIFF de 16 bits optimizada (`uint16`, zlib, `photometric='rgb'`) compatible de forma nativa con Photoshop y Lightroom sin mapeos forzados de tono, y TIFF de 32 bits flotante para archivo maestro.
-
-### 6. Módulo Dedicado de Trazas de Estrellas (Startrails / Circumpolares)
-- **Streaming de Memoria $O(1)$ con Kernels SIMD en Rust:** Procesamiento secuencial mediante `accumulate_startrail_step_rs` sin cargar el lote completo en RAM, permitiendo componer cientos de tomas RAW o TIFF de ultra-alta resolución (24MP–60MP) a máxima velocidad de CPU sin consumo excesivo de memoria.
-- **Relleno Continuo de Saltos entre Tomas (*Gap Filling*):**
-  - Puenteo morfológico de luminancia calibrado (1 a 4 px, por defecto 2 px) que reconecta los trazos discontinuos o punteados originados por la pausa del intervalómetro o el ciclo de obturación.
-  - Preserva el grosor fino de las estrellas, la fidelidad cromática RGB y el fondo de cielo oscuro profundo, con exclusión del suelo y compatibilidad con el Modo Cometa.
-- **Cancelación Instantánea:** Botón dinámico `🛑 CANCELAR PROCESAMIENTO` que detiene el flujo de trabajo de forma inmediata (< 1s) sin bloquear la interfaz.
-- **Soporte de Tomas Dark:** Calibración térmica previa mediante Master Dark para eliminar píxeles calientes (*hot pixels*) antes de la integración.
-- **Algoritmo de Máximo Estándar (Lighten Clásico):** Fusión de luminancia máxima para trazas continuas.
-- **Algoritmo de Efecto Cometa / Estela Progresiva (Comet / Meteor Fade):**
-  - Ajuste porcentual de la longitud de la estela.
-  - Curvas de decaimiento matemático: lineal uniforme, cosenoidal suave y exponencial rápido.
-  - 3 modos de dirección temporal: hacia atrás (*backward*), hacia adelante (*forward*) y simétrico / ambos sentidos (*bidirectional*).
-  - Cota mínima de luminancia de fondo (*min_floor*) para conservar el cielo profundo.
-- **Fusión de Suelo Limpio (Separación Cielo / Suelo):**
-  - Eliminación del ruido térmico y sombras en el terreno integrando el suelo mediante promedio temporal o toma fija de referencia.
-  - Importación directa en un clic de la máscara de horizonte generada en el Apilador o carga de archivos de máscara externos (PNG, TIFF, FITS).
-  - Suavizado gaussiano de transición de bordes (*feathering*).
-- **Supresión Automática de Satélites y Aviones (Anti-Trazas Transitorias):**
-  - Detección temporal diferencial basada en el mínimo de dos referencias estadísticas simultáneas ($\min(I_A, I_B)$).
-  - Discriminación geométrica por elongación lineal (`cv2.minAreaRect`), reconectando destellos estroboscópicos de aviones y diferenciando satélites de estrellas en rotación.
-  - Exclusión automática del suelo mediante máscara de horizonte para ignorar vegetación o ramas que se muevan con el viento.
-  - Inpainting acelerado por caja envolvente local ($<0.15\text{ s}$ por toma) y sensibilidad ajustable (Baja, Media, Alta).
-- **Generador de Vídeo Time-Lapse (.mp4):** Exportación en streaming de vídeo de la circumpolar durante la acumulación mediante códec nativo `mp4v` (1080p, 4K y resolución original), cadencia configurable (24, 30, 60, 12 FPS), exportación opcional de fotogramas secuenciales JPG, estabilidad de suelo limpio anti-flicker y botón de reproducción directa.
-- **Realce y Preservación de Color Estelar (*Star Color Recovery & Boost* en Rust):** Algoritmo de recuperación espectral en núcleos quemados a blanco (mediante difusión cartesiana continua $(u, v)$ en Rust) y saturación selectiva de trazas con protección total del fondo nocturno, junto con botón de retoque interactivo ultrarrápido (~0.4s) sobre la imagen ya calculada sin volver a apilar las tomas.
-- **Exportación Dual 16-bit / 32-bit y Enlace Directo:** Guardado en TIFF 16-bit (compatible con Photoshop y Lightroom sin mapeos de tono), TIFF 32-bit float, o transferencia instantánea al Revelador / Editor.
-
-### 7. Módulo de Composición Panorámica y Mosaicos Nocturnos (Nightscape Stitcher)
-- **Ingesta Interactiva de Paneles con Drag & Drop:** Tabla responsiva con lectura de metadatos EXIF (distancia focal equivalente en 35mm, marcas temporales de captura, ISO y tiempo de exposición) en segundo plano para RAW, TIFF y JPG.
-- **Soporte Nativo Multifila (Multi-Row 2D):**
-  - *Modo Automático 2D:* Construcción de grafo 2D de conectividad y correspondencias que descubre de forma autónoma solapamientos tanto horizontales como verticales sin requerir intervención manual.
-  - *Asistente de Cuadrícula Regular $M \times N$:* Configuración paramétrica de filas y columnas para mosaicos y panorámicas guiadas tomadas con rótulas panorámicas o cabezales micrométricos.
-- **Alineación por Asterismos y Triángulos Estelares en Rust:** Extracción de asterismos de 4 estrellas (quads) invariantes y correspondencias en árbol k-d 4D nativo en Rust (`build_star_asterisms_rs` y `match_star_asterisms_rs`) en microsegundos ($49.6\times$ más rápido, $<2\text{ ms}$ por panel), junto con estimación robusta RANSAC de homografía directa en Rust.
-- **Detección y Rasgos Mejorados para Astrofotografía (Astro-Enhanced SIFT):**
-  - Pre-realce adaptativo con CLAHE y estirado suave sobre sombras profundas ejecutado en una copia en memoria, extrayendo miles de puntos clave fiables tanto en siluetas terrestres en penumbra como en asterismos y estrellas débiles.
-  - Estimación robusta de homografías mediante RANSAC con filtrado estricto de inliers e inversión analítica.
-- **Alineación Robusta del Eje de Trípode Normalizada:**
-  - Estimación global del vector normal promedio al plano de barrido rotacional de las cámaras para alinearlo con el eje vertical $Y$ del warper esférico/cilíndrico.
-  - Neutraliza por completo singularidades polares, deformaciones en arco y ondulaciones (*scalloping*) en barridos verticales (formato retrato / portrait) y centra automáticamente el panel medio en el meridiano cero.
-- **Proyecciones Cartográficas Avanzadas:**
-  - *Cilíndrica (Cylindrical):* Proyección estándar de alta fidelidad para barridos horizontales amplios de paisaje nocturno.
-  - *Esférica (Spherical):* Mapeo angular equi-rectangular para panoramas de gran cobertura angular y mosaicos 360°.
-  - *Plana (Rectilinear / Plane):* Perspectiva clásica rectilínea ideal para mosaicos estelares con teleobjetivo y campos reducidos.
-- **Fusión Híbrida Dual-Zone Tree-Aware Blending (Cielo Continuo + Suelo Óptimo DpSeamFinder):**
-  - Erradicación del 100% de árboles fantasma (*ghost trees*) y sombras residuales en el terreno causados por el paralaje inevitable entre elementos terrestres cercanos (20-50m) y estrellas en el infinito ($d=\infty$) en rótulas no nodales.
-  - El cielo se integra con un mapa continuo de distancia cuártica ($dist^4$) para transiciones continuas sin saltos de brillo ni bandas en estrellas y gradientes de airglow.
-  - La silueta del suelo (árboles, relieve y horizonte detectados morfológicamente por conectividad a la base) se cose mediante corte de costura óptima (`cv2.detail_DpSeamFinder` o proximidad al centro como fallback), conservando ramas y copas nítidas sin dobles siluetas ni promedios traslúcidos.
-  - Transición suave (*feathering*) entre ambas zonas con dilatación y desenfoque gaussiano.
-- **Fusión Multibanda Laplaciana (Laplacian Multi-Band Blending):**
-  - Fusión piramidal multiescala (2 a 7 niveles configurables) que separa las bajas frecuencias (degradados del cielo, luminosidad de fondo) de las altas frecuencias (estrellas puntuales nítidas y perfiles del terreno), eliminando saltos de brillo y costuras visibles.
-  - Compensación fotométrica automática de ganancia y viñeteo radial óptico cuadrático entre tomas adyacentes.
-  - Corrección de onda (*wave correction*) y nivelación horizontal de horizonte.
-- **Fusión en Streaming $O(1)$ con Warper 3D:**
-  - Procesamiento panel a panel de bajo consumo de memoria RAM ($O(1)$) con recolección periódica de basura (`gc.collect()`), posibilitando componer panorámicas gigapíxel de ultra-alta resolución sin agotar la memoria.
-- **Auto-Recorte de Bordes Irregulares Acelerado en Rust (Maximum Inscribed Rectangle):**
-  - Algoritmo nativo de programación dinámica sobre histogramas $O(H \times W)$ (`find_max_inscribed_rect_rs`) que calcula el rectángulo de área máxima completamente inscrito en menos de 2 ms, incluso para mosaicos gigapíxel de más de 100 MP.
-  - Margen de erosión morfológica perimetral que neutraliza peldaños y muescas de proyección esférica, garantizando un recorte 100% limpio y libre de bordes negros.
-  - Conmutador dinámico `[ ✂️ Ver Recorte ]` en la barra superior para alternar instantáneamente entre la vista completa y la vista recortada.
-- **Lienzo Acelerado de Ultra-Alta Resolución:** Visor interactivo con zoom suave mediante rueda de ratón centrado en el cursor, paneo por arrastre, botón 1:1, ajuste a ventana y reporte dinámico de resolución en megapíxeles.
-- **Exportación Dual 16/32-bit y Enlace Directo:** Guardado en TIFF de 16-bit / 32-bit float con perfiles de color ICC embebidos y botón para enviar la panorámica directamente al Revelador / Editor.
-- **Persistencia de Sesión (.panosess):** Guardado y carga de sesiones panorámicas completas con todas las teselas y configuraciones.
-
-### 8. Configuración, Rendimiento y Vitrina de Resultados
-- **Identidad Visual "AstroLoom Studio Pro":** Sistema de diseño oscuro unificado `Cosmic Pro Dark` (`#0b0d13`), iconografía vectorial SVG monocromática de alta precisión (`gui/icons.py`), tipografía moderna con contraste jerárquico y eliminación de elementos informales.
-- **Distribución en 3 Columnas y Paneles Elásticos:** Módulo de revelado con arquitectura ergonómica en 3 columnas (Navegación/Presets, Lienzo central y Ajustes/Capas) con separadores dinámicos que alcanzan el centro del área de trabajo.
-- **Vitrina de Resultados Integrada (Showcase):** Panel visual en la pestaña de Configuración con visor responsivo antialias que exhibe astrofotografía real de paisaje procesada de principio a fin con AstroLoom, acreditación de autoría (*Fotografía y Procesado: Shilmar*) e inspección a resolución nativa.
-- **Motor Híbrido Nativo Rust + Aceleración GPU:** Núcleo de cálculo de bajo nivel de alto rendimiento en Rust (`astroloom_rs` vía PyO3 + Rayon + SIMD) para apilado, RBF, capas, GHS, meteoros, eclipses y deconvolución, con soporte para NVIDIA CUDA (CuPy), compilación JIT Numba y fallback transparente a CPU estándar.
-- **Aceleración LibRaw Multihilo:** Desentrelazado Bayer paralelo con LibRaw/rawpy y paralelización de tomas maestras de calibración que acelera la integración entre un 20% y 25%.
-- **Estrategias de Memoria Configurables:** Modos automático (umbral del 70% de RAM disponible), memoria RAM intermedia de alta velocidad o volcado temporal a disco SSD para equipos con recursos limitados.
-- **Detección Automática de Binarios:** Localización y validación dinámica del ejecutable externo StarNet++ CLI con indicadores en tiempo real de disponibilidad.
-- **Indicadores de Recorte (Clipping) Estilo Lightroom:** Alertas visuales interactivas en las esquinas del histograma para sombras empastadas (azul) y luces quemadas (rojo), superposición vectorial acelerada en el lienzo (< 3 ms) y atajo global de teclado **`J`**.
-- **Auto-reparación de Directorios y Configuración Base:** Verificación automática en el arranque de rutas de trabajo con fallback seguro a directorios locales válidos (`config.default.json`), garantizando portabilidad y eliminando errores de carpetas inexistentes o unidades de disco no disponibles.
-
-### 9. Fidelidad Cromática y Perfiles de Color ICC
-- **Incrustación de Metadatos ICC en TIFF (Tag 34675):** Soporte nativo para incrustar perfiles de color en la cabecera `InterColorProfile` de los archivos TIFF exportados en todos los módulos (Apilador, Revelador, Startrails y Eclipses), garantizando que las imágenes conserven su gama tonal y saturación de forma idéntica en Adobe Photoshop, Adobe Lightroom, Capture One o navegadores web.
-- **Conversión Cromática Rigurosa y Acelerada en Rust:** Transformación matemática exacta entre los espacios sRGB, Adobe RGB y ProPhoto RGB mediante matrices de adaptación cromática Bradford CIE D65/D50 implementadas en `streaming_io.rs` en Rust, linearización y re-gamma en un único pase de memoria sin duplicar arrays en RAM, asegurando que el perfil incrustado coincida con la distribución espectral de los píxeles sin desaturación ni virados indeseados.
-- **Espacios de Color Estándar Suministrados:**
-  - **sRGB:** Perfil estándar universal para publicación en internet y pantallas convencionales.
-  - **Adobe RGB (1998):** Gama amplia recomendada para impresión fotográfica y pantallas de artes gráficas.
-  - **ProPhoto RGB (ROMM RGB):** Gamut ultra-amplio de alta fidelidad adaptado a la astrofotografía para preservar tonos extremos de nebulosas ($H\alpha$, $O\text{III}$) y estrellas saturadas sin recorte cromático.
-- **Selector Persistente en Ajustes:** Selección del perfil de salida en la pestaña de Ajustes con persistencia en `config.json`.
+</div>
 
 ---
 
-## Estructura del Proyecto
+## 🔭 ¿Qué es AstroLoom?
+
+**AstroLoom** es una suite de posprocesado astronómico no destructivo diseñada específicamente para fotógrafos nocturnos, astrofotógrafos de paisaje (*nightscapes*), cazadores de eclipses y amantes de las circumpolares y panorámicas de gran campo.
+
+Impulsada por una arquitectura híbrida que combina una interfaz gráfica reactiva en **Python (`PySide6`)** con un potente motor de cómputo nativo en **Rust (`astroloom_rs`)**, AstroLoom ofrece máxima fidelidad matemática en coma flotante de 32 bits con renderizado a más de 160 FPS y un consumo mínimo de memoria RAM.
+
+---
+
+## ✨ Características Principales
+
+### ⚡ Motor Híbrido Rust de Ultra-Alto Rendimiento (`astroloom_rs`)
+- **Renderizado Directo a Memoria Qt:** Volcado en búfer contiguo plano `BGRA8888` a >160 FPS (~6 ms en 4K), sin copias intermedias en Python ni recolección de basura (*GC*).
+- **Kernels Vectorizados SIMD & Rayon:** Apilado Kappa-Sigma ($2.77\times$ más rápido que Numba JIT), interpolación elástica TPS con `nalgebra`, y modos de fusión de capas a máxima velocidad de CPU.
+- **Calibración RAW In-Place:** Calibración matemática pura pre-debayer directamente sobre la matriz de fotodiodos del RAW (0 bytes de memoria RAM adicional).
+- **E/S y Códecs Nativos:** Lectores/escritores nativos en Rust para FITS (<15 ms en 60 MP), PSD multicapa de 16 bits (sin dependencias de `pytoshop`), e ingesta multihilo de cabeceras RAW.
+
+### 🧩 Módulos Especializados Integrados
+
+| Módulo | Descripción y Capacidades Clave |
+| :--- | :--- |
+| **1. Apilador (Stacker)** | Apilado dual cielo/suelo con alineación estelar subpíxel, corrección elástica TPS para gran angular, segmentación semántica de horizonte con IA (U²-Net) y rechazo Kappa-Sigma con relleno reflectivo `BORDER_REFLECT`. |
+| **2. Revelador / Editor** | Procesado no destructivo de 32 bits: Estirado Hiperbólico (GHS), separación de estrellas por IA (StarNet++ v2 DirectML), curvas tonales por capa, supresión de contaminación lumínica (RBF 2D y modelo elíptico), balance fotométrico Gaia (PCC) y paletas Dual-Band OSC. |
+| **3. Eclipses (HDR)** | Fusión HDR de series de bracketing solar/lunar con traspaso gradual anti-anillos. Arsenal coronal completo (Steerable G2, Larson-Sekanina, SWAP, WOW Bilateral, NAFE, NRGF, MGN) y exportación a PSD multicapa de 16 bits. |
+| **4. Eclipses (Collage)** | Montaje cronológico automatizado de fases sobre paisajes con trayectorias geométricas (diagonal, arco, romboide), espaciado regular y fusión transparente. |
+| **5. Startrails** | Circumpolares continuas o efecto cometa en streaming $O(1)$, supresión automática de satélites y aviones, relleno de pausas (*gap filling*), recuperación cromática de estrellas y exportación de vídeo 4K. |
+| **6. Lluvias de Meteoros** | Detección algorítmica de bólidos, cribado en galería interactiva, filtros anti-aviones/satélites y reproyección al radiante celeste con flujo neto. |
+| **7. Panorámicas (Mosaicos)** | Cosido 2D multifila de ultra-alta resolución, alineación por asterismos en Rust (<2 ms), fusión híbrida *Dual-Zone* (árboles nítidos sin efecto fantasma) y auto-recorte rectangular $O(H \times W)$. |
+
+---
+
+## 🎨 Compositor Multicapa y Modos de Fusión (Novedad v0.14.3)
+
+AstroLoom integra un sistema completo de composición no destructiva con capas de ajuste y capas ráster de imagen:
+* **Transferencia Directa Eclipses $\to$ Revelador:** Exporta pilas completas de filtros coronales procesados al Revelador con un solo clic.
+* **Modos de Fusión Profesionales:** *Normal*, *Trama (Screen)*, *Luminosidad (Luminosity)*, *Luz Suave (Soft Light)*, *Superponer (Overlay)* y *Multiplicar (Multiply)* acelerados en paralelo con Rust Rayon.
+* **Máscaras de Pincel Espaciales:** Dibuja o borra sobre cualquier capa para aplicar filtros y ajustes de forma localizada.
+* **Persistencia Completa (.devloom):** Almacenamiento seguro en ZIP con máscaras y capas ráster en PNG de 16 bits sin pérdida.
+
+---
+
+## 🚀 Instalación y Puesta en Marcha
+
+### Arranque Rápido en Windows
+Haz **doble clic en `astroloom.bat`** en la carpeta principal del proyecto. El script detectará tu entorno virtual Python o la instalación del sistema y lanzará la interfaz sin consolas secundarias.
+
+### Instalación Manual (Todas las Plataformas)
+
+1. **Clonar el Repositorio:**
+   ```bash
+   git clone https://github.com/shilmar/AstroLoom.git
+   cd AstroLoom
+   ```
+
+2. **Instalar Dependencias de Python:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Compilar el Motor Nativo Rust (Recomendado para Máximo Rendimiento):**
+   ```bash
+   pip install maturin
+   cd astroloom_rs
+   maturin develop --release
+   cd ..
+   ```
+   *(Si no se compila el módulo nativo, AstroLoom activará automáticamente su modo de reserva transparente en Python/NumPy sin interrumpir el funcionamiento).*
+
+4. **Aceleración por GPU (Opcional - NVIDIA CUDA):**
+   ```bash
+   # Para CUDA 12.x:
+   pip install cupy-cuda12x
+   ```
+
+5. **Iniciar la Aplicación:**
+   ```bash
+   python run_app.py
+   ```
+
+---
+
+## 🗺️ Flujo de Trabajo Recomendado
+
+```mermaid
+flowchart LR
+    A["1. Captura RAW"] --> B["2. Apilador (Cielo/Suelo)"]
+    B --> C["3. Revelador (GHS + StarNet AI)"]
+    C --> D["4. Capas y Curvas Tonales"]
+    D --> E["5. Exportar (TIFF 16/32-bit o PSD)"]
+```
+
+> 📖 **Para una guía detallada paso a paso de cada módulo, parámetros y atajos de teclado, consulta el [Manual de Usuario Oficial](MANUAL_DE_USUARIO.md).**
+
+---
+
+## 🏛️ Estructura del Código
 
 ```text
-astroloom/
-├── config.json              # Configuración persistente del usuario
-├── run_app.py               # Punto de entrada de la aplicación
-├── locales/                 # Ficheros de traducción multilingüe (i18n)
-│   ├── es.json              # Diccionario en español (nativo)
-│   └── en.json              # Diccionario en inglés
-├── astroloom_rs/            # Motor nativo de cómputo en Rust (PyO3 + Rayon + SIMD)
-│   ├── Cargo.toml           # Manifiesto de dependencias nativas (rayon, numpy, nalgebra)
-│   ├── pyproject.toml       # Especificación del paquete para Maturin
-│   └── src/                 # Fuentes nativas (stacking, background, developer, deconv...)
-├── core/
-│   ├── ai_horizon.py        # Detección semántica de horizonte con IA (U²-Net ONNX)
-│   ├── config_manager.py    # Carga y almacenamiento de ajustes JSON
-│   ├── deconvolution.py     # Deconvolución Richardson-Lucy, PSF Moffat 2D y deringing
-│   ├── developer_presets.py # Gestor y catálogo de presets astronómicos (.astropreset)
-│   ├── eclipse.py           # Detección de limbo, alineación subpíxel, fusión HDR y NRGF continuo
-│   ├── eclipse_collage.py   # Motor de composición geométrica y collage de eclipses
-│   ├── frame_culling.py     # Cribado previo inteligente de tomas (FWHM, excentricidad, densidad)
-│   ├── ghs.py               # Algoritmo de estirado hiperbólico generalizado (GHS)
-│   ├── gpu_backend.py       # Detección y gestión de aceleración NVIDIA CUDA / CuPy
-│   ├── i18n.py              # Motor reactivo de internacionalización multilingüe
-│   ├── icc_manager.py       # Gestión e incrustación de perfiles ICC en TIFF (Tag 34675)
-│   ├── icc_profiles/        # Perfiles de color ICC estándar embebibles
-│   │   ├── AdobeRGB1998.icc # Espacio amplio para monitores profesionales e impresión
-│   │   ├── ProPhotoRGB.icc  # Espacio de gamut extendido (ROMM RGB) para astrofotografía
-│   │   └── sRGB.icc         # Espacio estándar universal para web y visualización
-│   ├── light_pollution.py   # Modelo elíptico 2D para sustracción de domo de polución
-│   ├── mask_layers.py       # Modelo de capas y máscaras de ajuste local estilo Photoshop
-│   ├── masking.py           # Algoritmos de segmentación y refinado guiado de máscaras
-│   ├── orton.py             # Efecto Orton cósmico y resplandor de polvo estelar
-│   ├── panorama.py          # Motor de composición panorámica multifila y cosido 2D
-│   ├── project_manager.py   # Serialización y persistencia de proyectos (.mwstack)
-│   ├── psd_export.py        # Generación de archivos PSD de Photoshop multicapa
-│   ├── stacking.py          # Motor de calibración (Dark/Flat/Bias), alineación y apilado
-│   ├── star_diffusion.py    # Filtro difusor digital con recuperación cromática de estrellas
-│   ├── starnet_bridge.py    # Conector y parser CLI con StarNet++ v2
-│   ├── startrails.py        # Motor streaming de trazas, efectos cometa y supresión de satélites
-│   ├── stretch.py           # Algoritmos MTF, ondículas À Trous, balance y tono
-│   └── substacking.py       # Apilado de ventana deslizante para vídeo time-lapse
-└── gui/
-    ├── assets/              # Recursos gráficos y fotografía de demostración
-    │   └── showcase_milkyway.jpg
-    ├── canvas.py            # Visor interactivo QGraphicsView acelerado con zoom 1:1 y clipping
-    ├── dialog_presets.py    # Diálogos de administración y guardado de presets
-    ├── icons.py             # Catálogo y generador dinámico de iconos vectoriales SVG
-    ├── main_window.py       # Ventana principal, barra de estado y pestañas maestras
-    ├── tab_developer.py     # Pestaña de revelado profesional en 3 columnas
-    ├── tab_eclipse.py       # Pestaña de procesado integral de eclipses solares y lunares (HDR)
-    ├── tab_eclipse_collage.py # Pestaña dedicada de diseño de secuencias y collage de eclipses
-    ├── tab_panorama.py      # Pestaña de composición panorámica y mosaicos
-    ├── tab_settings.py      # Pestaña de configuración de rutas, selector ICC y parámetros
-    ├── tab_stacker.py       # Pestaña de apilado dual, calibración y máscaras
-    ├── tab_startrails.py    # Pestaña de generación de trazas de estrellas (Startrails)
-    ├── theme.py             # Sistema de diseño global "Cosmic Pro Dark" y paletas
-    ├── widgets/
-    │   ├── collapsible_section.py # Acordeón colapsable con animaciones y badges
-    │   ├── curve_widget.py  # Curvas tonales interactivas e histogramas
-    │   ├── drop_widgets.py  # Áreas reactivas de arrastrar y soltar archivos
-    │   ├── live_histogram.py # Histograma RGB dinámico en tiempo real
-    │   ├── mask_layers_widget.py # Pila de capas con miniaturas S/M/L y resizer interactivo
-    │   └── precision_slider.py # Deslizadores de alta precisión con entrada numérica directa
-    └── worker.py            # Orquestador de tareas en segundo plano multihilo (QThread)
+AstroLoom/
+├── astroloom_rs/            # Núcleo nativo de alto rendimiento en Rust (PyO3 + Rayon + SIMD)
+│   ├── src/                 # Kernels de apilado, RBF, blend modes, deconv, FITS, PSD...
+│   └── Cargo.toml           # Configuración del paquete nativo
+├── core/                    # Lógica astronómica en Python (calibración, AI, máscaras, PCC...)
+├── gui/                     # Interfaz gráfica moderna en PySide6 (Qt)
+│   ├── developer/           # Pipeline de renderizado y estado del revelador
+│   ├── widgets/             # Lienzo interactivo, gestor de capas, curvas, histograma...
+│   └── tab_*.py             # Pestañas de Apilador, Revelador, Eclipses, Startrails, Panos...
+├── locales/                 # Soporte multilingüe (español e inglés)
+├── MANUAL_DE_USUARIO.md     # Guía detallada y completa para usuarios
+├── CHANGELOG.md             # Historial de versiones y cambios
+└── run_app.py               # Punto de entrada de la aplicación
 ```
-
-## Requisitos del Sistema
-
-- **Python:** 3.10 o superior (compatible y validado con Python 3.13).
-- **Rust Toolchain (Recomendado para compilación de extensión nativa):** Rust 2021 Edition (`cargo`) y `maturin>=1.5`.
-- **Dependencias Principales:**
-  - `PySide6` (interfaz gráfica basada en Qt)
-  - `numpy`, `scipy` (cálculo numérico y splines)
-  - `numba` (compilación JIT LLVM multihilo para integración estadística ultra-rápida)
-  - `opencv-python` (visión por computador y transformaciones geométricas)
-  - `rawpy` (decodificación de archivos RAW de cámara)
-  - `tifffile` (lectura y escritura de imágenes TIFF de alta profundidad)
-  - `Pillow` (gestión de perfiles de color ICC y metadatos)
-  - `imagecodecs` (códecs extendidos de compresión de imagen)
-  - `onnxruntime-directml` (inferencia local acelerada de IA: horizonte U²-Net, StarNet++ v2 y NAFNet)
-  - *(Opcional)* `cupy` (aceleración por GPU NVIDIA CUDA)
-- **Motores Nativos en Rust (`astroloom_rs`):**
-  - FITS I/O nativo (sustituye a `astropy` con lectura SIMD < 15 ms en 60 MP).
-  - Escritor PSD multicapa nativo (sustituye a `pytoshop` con exportación 8x–15x más rápida).
-  - Monitor de memoria nativo del SO (sustituye a `psutil`).
-  - Renderizado Qt BGRA8888 directo a memoria continua (>160 FPS).
-  - Ingesta y escaneo concurrente de metadatos RAW multihilo.
-  - Tiling de redes neuronales IA con ventana Hann 2D y Filtro Guiado O(1).
-  - Compresión y descompresión paralela de proyectos `.devloom`.
-- **Binarios Externos:**
-  - *(Opcional)* Ejecutable de StarNet++ CLI si se prefiere sobre la inferencia ONNX integrada.
----
-
-
-### 1. Clonar el repositorio
-```cmd
-git clone https://github.com/shilmar/astroloom.git
-cd astroloom
-```
-
-### 2. Instalar dependencias
-```cmd
-pip install -r requirements.txt
-```
-
-O instalando manualmente los paquetes requeridos:
-```cmd
-pip install numpy scipy opencv-python PySide6 tifffile rawpy Pillow imagecodecs numba onnxruntime-directml
-```
-
-### 3. Compilar el Motor Nativo Rust (Recomendado para Máximo Rendimiento)
-Para habilitar la aceleración SIMD/Rayon de entre $2.5\times$ y $15\times$ y el ahorro de más de 1.3 GB de RAM por toma:
-```cmd
-pip install maturin
-cd astroloom_rs
-maturin develop --release
-cd ..
-```
-*(Si no se compila el módulo nativo, AstroLoom activará automáticamente su modo de fallback transparente en Python/NumPy/Numba sin interrumpir el funcionamiento).*
-
-### 4. Aceleracion GPU (Opcional - NVIDIA CUDA)
-Si dispones de una tarjeta grafica NVIDIA, puedes habilitar el procesamiento acelerado instalando la version de CuPy adecuada a tus controladores CUDA:
-* CUDA 12.x: pip install cupy-cuda12x
-* CUDA 11.x: pip install cupy-cuda11x
-
-(Si CuPy no esta presente, el motor utiliza automaticamente todos los nucleos logicos de la CPU).
 
 ---
 
-## Uso de la Aplicacion
+## 🤝 Contribución y Código de Conduct
 
-Inicia la herramienta ejecutando:
-python run_app.py
-
-## Flujo de Trabajo Recomendado
-### 1. Flujo de Calibración y Apilado
-* Abre la pestaña **1. Apilador (Stacker)**.
-* Carga tus tomas de luz en Lights y haz doble clic sobre la toma que servirá como base de encuadre.
-* (Opcional) Carga tomas en Darks, Flats y Bias para corrección de ruido térmico, viñeteo óptico y offset.
-* Dibuja los trazos guía sobre la vista previa: Verde para el cielo y Rojo para el suelo.
-* Haz clic en Refinar Automática para generar la máscara. Inspecciona los bordes manteniendo pulsado el botón derecho del ratón para ver la imagen al 100% de resolución nativa.
-* Selecciona el Modo de Captura (Trípode Fijo o Star Tracker), el tratamiento del suelo deseado y el Factor Kappa.
-* Pulsa INICIAR APILADO DUAL.
-
-### 2. Flujo de Revelado
-* Al concluir el apilado, la imagen lineal de 32 bits y su máscara calculada se cargarán automáticamente en la pestaña **2. Revelador / Editor**.
-* Neutraliza gradientes residuales con el modelo Polinómico (Cuadrático Grado 2 o Lineal Grado 1) con aislamiento estricto de la silueta de suelo.
-* Ejecuta StarNet++ para separar el fondo galáctico de las estrellas.
-* Aplica realce de gas y polvo molecular mediante los controles de Estructura Multiescala (Ondículas) sin deformar el perfil estelar.
-* Ajusta curvas, temperatura de color, tinte y saturación diferencial cielo/suelo.
-* Exporta el resultado final en formato TIFF 16-bit, TIFF 32-bit float o JPEG.
-
-### 3. Flujo de Fusión y Procesado de Eclipses (HDR)
-* Abre la pestaña **3. Eclipses (HDR)**.
-* Selecciona la modalidad deseada con el conmutador interactivo (**Solar** o **Lunar**).
-* Pulsa **Cargar Serie de Bracketing** para importar todas las exposiciones (RAW, TIFF o FITS). El sistema leerá automáticamente tiempos de obturación e ISO y ordenará las tomas de menor a mayor exposición.
-* Haz doble clic sobre una toma con buena definición del limbo para fijarla como referencia.
-* Pulsa **Detectar Limbo en Todo el Lote**: el sistema detectará el centro y radio físico en la referencia y optimizará el centro subpíxel (`< 0.1 px`) en cada fotograma del lote manteniendo el radio anclado.
-* Pulsa **Alinear y Fusionar Bracketing (HDR)** para generar el compuesto lineal de 32 bits con compresión Asinh.
-* Ajusta los parámetros del filtro **NRGF**: alcance de la corona (por defecto 3.5x), mezcla de filamentos (50%) y filtro tangencial para estirar y contrastar los filamentos coronales sin quemar las protuberancias.
-* Pulsa **Guardar TIFF 16-bit** para abrir directamente en Photoshop/Lightroom sin cuadros de diálogo de mapeo de tono, **Guardar TIFF 32-bit** para procesado HDR de alta fidelidad, o envíalo directamente al **Revelador / Editor**. También puedes pulsar **Ir a Pestaña 4: Collage de Eclipses ➡️** para transferir la serie de fotos.
-
-### 4. Flujo de Secuencia y Collage de Eclipses
-* Abre la pestaña **4. Eclipses (Collage)**.
-* Pulsa **📁 Cargar Fotos...** (o arrastra y suelta imágenes o carpetas) para importar la serie temporal del eclipse (C1 a C4).
-* Elige entre **⚡ Modo Rápido (Half-size RAW 4x)** para máxima velocidad de cribado o **🎯 Modo Precisión 1:1**, y pulsa **🔍 Analizar Calidad y % Ocultación en Lote**.
-* Selecciona el número deseado de fotogramas (ej. 9 fases) y pulsa **⚡ Auto-Seleccionar Mejores Tomas** para descartar automáticamente tomas movidas o trepidadas y elegir una progresión simétrica óptima.
-* Configura la **Modalidad de Maquetación**: *Cinta Horizontal*, *Escala Romboide (<>)*, *Arco Celeste* o *Cuadrícula*, ajustando el espaciado entre discos, la escala del centro/totalidad y el margen circular anti-recorte de corona.
-* Activa opcionalmente las marcas horarias EXIF y pulsa **🔄 Actualizar Composición / Collage** para previsualizar en tiempo real en el visor interactivo (con zoom dinámico de rueda y paneo).
-* Exporta el resultado en **PSD multicapa de 16 bits para Photoshop** (con capa independiente de textos EXIF), guarda en **TIFF/JPG**, guarda la sesión en **.ecollage**, o pulsa **➡️ Enviar Collage al Revelador / Editor**.
-
-### 5. Flujo de Creación de Trazas de Estrellas (Startrails)
-* Abre la pestaña **5. Trazas de Estrellas (Startrails)**.
-* Pulsa **📁 Cargar Serie...** y selecciona la secuencia temporal completa de tomas fijas (RAW, TIFF, FITS o JPG).
-* (Opcional) Pulsa **📌 Marcar REF** sobre la toma que servirá de encuadre o para el suelo de referencia.
-* (Opcional) Pulsa **Añadir Darks...** para sustraer el ruido térmico y píxeles calientes.
-* Selecciona el **Algoritmo de Trazas (Cielo)**:
-  - **⭐ Máximo Estándar (Lighten Clásico)** para circumpolares de trazo continuo.
-  - **☄️ Efecto Cometa / Estela Progresiva** ajustando longitud de estela (%), curva de decaimiento (lineal, cosenoidal suave o exponencial) y dirección temporal (hacia atrás, hacia adelante o simétrico/ambos sentidos).
-* Si tu serie contiene satélites artificiales o destellos de aviones, activa **🛸 Suprimir satélites y aviones automáticamente** y selecciona la sensibilidad deseada (Baja, Media o Alta).
-* Para corregir pequeñas pausas del intervalómetro o saltos de obturación y obtener trazas continuas sin aspecto de puntos discontinuos, activa **✨ Rellenar pausas entre tomas (Gap Filling)** y ajusta el radio del salto (1 a 4 px, por defecto 2 px).
-* Para eliminar por completo el ruido del terreno estático, activa **Activar Suelo Limpio (Eliminación de Ruido)** y pulsa **🖌️ Usar Máscara del Apilador** (o importa una máscara externa). Selecciona la integración del suelo (promedio temporal o toma de referencia) y el suavizado de borde (*feathering*).
-* Pulsa **⚡ Generar Trazas de Estrellas (Startrails)**.
-* Guarda el resultado en **TIFF 16-bit** (para edición directa en Photoshop/Lightroom) o **TIFF 32-bit**, o pulsa **➡️ Enviar al Revelador / Editor** para seguir procesando curvas, color y contraste.
-
-### 6. Flujo de Composición Panorámica y Mosaicos Nocturnos
-* Abre la pestaña **6. Panorámicas (Mosaicos)**.
-* Pulsa **➕ Añadir Tomas** (o arrastra y suelta imágenes o carpetas sobre la tabla o sobre el lienzo interactivo).
-* El sistema leerá automáticamente en segundo plano la focal equivalente en 35mm, las marcas horarias de captura y las dimensiones de cada tesela.
-* (Opcional) Pulsa **🕒 Ordenar por Hora** para alinear el orden cronológico del barrido fotográfico.
-* Selecciona el **Modo de Disposición**:
-  - **Auto 2D (Grafo de Conectividad - Recomendado):** Detección automática tanto de secuencias de 1 fila como de cuadrículas multifila complejas.
-  - **Matriz Regular M x N:** Asistente guiado para fijar el número exacto de filas y columnas si realizaste la sesión con rótula panorámica graduada.
-* Selecciona la **Proyección Cartográfica**: *Cilíndrica* (para panorámicas terrestres amplias), *Esférica* (para 360° y gran angular) o *Plana* (para mosaicos con teleobjetivo).
-* Ajusta los parámetros astronómicos:
-  - Mantén activo **Pre-realce Astro** para maximizar la correlación de estrellas y textura del suelo oscuro.
-  - Ajusta el umbral de coincidencias y los niveles de pirámide laplaciana (por defecto 5 niveles).
-  - Activa **Compensación de Viñeteo** y **Corrección de Onda / Nivelación de Horizonte**.
-  - Mantén marcado **✂️ Auto-Recorte de Bordes** para obtener un encuadre rectangular perfecto sin marcos negros.
-* Pulsa **🧩 Coser Panorámica**. El hilo de fondo calculará el grafo, proyectará el lienzo, ecualizará el viñeteo y fusionará las bandas.
-* En el lienzo interactivo, inspecciona a fondo con zoom de rueda centrado en el cursor y botón 100%, o pulsa **✂️ Ver Recorte** para conmutar entre el lienzo irregular completo y el recorte limpio.
-* Pulsa **💾 Guardar Panorámica (TIFF 16/32-bit)** para archivar, o pulsa **➡️ Enviar Panorámica al Revelador / Editor** para aplicar curvas tonales, reducción de ruido o realce de gas y nebulosas.
-
-## Hoja de Ruta
-* [ ] Reducción de Distorsión Óptica Periférica de Estrellas en Grandes Angulares (Reduce Star Distortion).
-* [ ] Anti-parpadeo (Deflicker) y morphing temporal entre fotogramas en Startrails / Time-Lapse.
-* [ ] Estimación de tiempo restante (ETA) y progreso fluido en barras de ejecución.
----
-
-## Agradecimientos y Referencias
-
-AstroLoom integra e implementa algoritmos inspirados en trabajos pioneros y herramientas de código abierto de la comunidad astrofotográfica y científica:
-
-* **[Agentic-Eclipse-Library](https://github.com/PeterWar/Agentic-Eclipse-Library)** por **Pere Guerra (PeterWar)**: Investigaciones y metodologías de procesado de eclipses solares totales, heurísticas de fusión HDR, balance coronal neutro, preservación cromática de protuberancias y diagnóstico de artefactos de isófotas.
-* **[StarNet++](https://www.starnetastro.com/)** por **Nikita Misiura (nekitpass)**: Red neuronal convolucional pionera para el desacoplo y eliminación de estrellas (*star removal*), fundamental en el flujo de revelado y procesado de cielo profundo y astrofotografía de paisaje.
-* **Miloslav Druckmüller** (Brno University of Technology): Fundamentos matemáticos pioneros en la normalización de gradientes adaptativos y filtrado multiescala (MGN) para física solar y análisis coronal.
+Las contribuciones son bienvenidas. Si deseas colaborar:
+1. Revisa nuestra [Guía de Contribución](CONTRIBUTING.md).
+2. Cumple con el [Código de Conducta](CODE_OF_CONDUCT.md).
+3. Asegúrate de que las pruebas automatizadas pasen (`pytest`).
 
 ---
 
-## Licencia
+## 📜 Reconocimientos
 
-Este proyecto esta bajo la Licencia MIT.
+AstroLoom integra ideas y algoritmos inspirados en investigaciones pioneras de la comunidad astrofotográfica y científica:
+- **[Agentic-Eclipse-Library](https://github.com/PeterWar/Agentic-Eclipse-Library)** por Pere Guerra (PeterWar): Algoritmos de fusión coronal HDR, normalización y filtrado de eclipses solares.
+- **[StarNet++](https://www.starnetastro.com/)** por Nikita Misiura: Red neuronal pionera para el desacoplo de estrellas.
+- **Miloslav Druckmüller**: Fundamentos matemáticos de filtrado multiescala (MGN) y ecualización adaptativa difusa (NAFE).
+
+---
+
+## 📄 Licencia
+
+Este proyecto está bajo la Licencia **MIT**. Consulta el archivo [LICENSE](LICENSE) para más detalles.
