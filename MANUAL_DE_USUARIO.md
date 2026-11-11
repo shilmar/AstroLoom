@@ -42,9 +42,10 @@ Para iniciar AstroLoom en Windows de la manera más cómoda y sin ventanas negra
 * Si no hay entorno virtual, recurre automáticamente a la instalación de Python del sistema.
 * En entornos Linux/macOS o desde la terminal, puedes iniciar la suite ejecutando directamente `python run_app.py`.
 
-### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.14.1)
-A partir de las versiones **v0.14.0** y **v0.14.1**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
+### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.14.2)
+A partir de las versiones **v0.14.0**, **v0.14.1** y **v0.14.2**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
 * **Fluidez Total a 60-160+ FPS:** El renderizado del lienzo (`MaskCanvas`) vuelca directamente a búferes de memoria continua `BGRA8888` compatibles de forma nativa con `QImage(Format_RGB32)`. Las alertas de clipping (`J`) y el comparador Antes/Después con cortina (`Y`) se procesan en microsegundos sin crear copias intermedias en NumPy ni capas secundarias de `QPixmap`.
+* **Filtrado Coronal Multihilo Científico (Eclipses):** Nuevos kernels dedicados en Rust con Rayon para segundas derivadas orientables por tensor de estructura (`steerable_g2_rs`), convolución rotacional de Keys ($a = -0.5$, `compute_larson_sekanina_rs`), mediana circular polar (`polar_circular_median_filter_rs`), pasos à-trous B3 guiados (`paired_b3_step_rs`), máscaras de protuberancias (`compute_red_excess_mask_rs`) y mapeo anular concéntrico (`display_detail_rings_rs`).
 * **Ahorro Masivo de Memoria RAM:** La calibración de tomas RAW (Darks, Bias, Flats) opera *in-place* sobre la matriz nativa de fotodiodos sin copias en coma flotante (0 bytes de RAM adicional), y la extracción de gradientes RBF ahorra más de 1.3 GB de memoria en imágenes de 24 a 60 MP.
 * **Poda Integral de Dependencias Externas:** Eliminadas las dependencias pesadas de `pytoshop`, `astropy` y `psutil`. AstroLoom ahora incluye lectores/escritores nativos en Rust para FITS (`fits_io`), PSD multicapa de 16 bits (`psd_writer`) y monitoreo de memoria del sistema operativo (`system_info`).
 * **Ingesta Concurrente de Lotes:** Escaneo multihilo en paralelo de metadatos EXIF, dimensiones y niveles negros de cientos de archivos RAW en décimas de segundo al arrastrar carpetas al Apilador o Startrails.
@@ -471,23 +472,38 @@ Durante un eclipse total de sol o de luna, el rango dinámico de la corona y el 
    * Carga la serie de exposiciones (desde tomas ultracortas de $1/4000\text{ s}$ para las protuberancias cromosféricas hasta $2\text{ s}$ o más para los tenues filamentos de la corona lejana).
    * El algoritmo detecta automáticamente el centro y el radio del limbo mediante detección circular y delimita dinámicamente una **Región de Interés (ROI)** optimizada, acelerando el filtrado multiescala ~3x y reduciendo drásticamente el consumo de memoria RAM.
 
-2. **Fusión HDR Adaptativa:**
-   * Fusión de exposiciones en coma flotante de 32 bits con transiciones progresivas en la rampa de saturación y luminancia para evitar costuras poligonales o cortes bruscos a lo largo de las isofotas de los chorros coronales (*streamers*).
+2. **Fusión HDR Adaptativa con Traspaso Gradual (Gradual Handover):**
+   * Fusión de exposiciones en coma flotante de 32 bits con estirado no lineal Asinh (Solar) o ponderación multiescala Mertens (Lunar).
+   * **Casilla "Traspaso gradual de exposición (anti-anillos de grano)":** En fusiones HDR convencionales, el corte brusco de tomas largas en el límite de saturación provoca un salto repentino en la varianza del grano local. Esta opción modula la ponderación suavemente mediante la relación de tiempos $t_i / t_{i-1}$, erradicando por completo los falsos anillos o halos anulares en las isófotas de bracketing al aplicar filtros de microcontraste posteriores.
 
-3. **Modos de Visualización y Realce Coronal:**
-   * **HDR Natural (Suave):** Revelado fotorrealista que comprime el rango dinámico sin realces agresivos de gradiente, ideal para una apariencia clásica y equilibrada.
-   * **NRGF (Normalizing Radial Gradient Filter Nativo en Rust):** Aplica la normalización radial de Morgan et al. para compensar la caída de brillo cuadrática con la distancia ($1/r^2$). Evaluado en paralelo mediante `apply_nrgf_continuous_rs` en Rust ($9.4\times$ más rápido, apenas 0.21 s en tomas de 24 MP), equilibrando visualmente la corona interna con la corona exterior con interpolación continua subpíxel y compuerta radial suave.
-   * **MGN (Multi-Scale Gaussian Normalization Acelerado en Rust):** Motor de filtrado multiescala según la formulación científica de Morgan & Druckmüller (2014) implementado en Rust (`combine_mgn_scales_rs`, `finalize_mgn_lum_rs`). Descompone la corona en 6 frecuencias espaciales acumuladas *in-place* ($2.5\times$ más rápido, ahorrando 1.5 GB de RAM) con preservación estricta de protuberancias solares H-Alfa ($R/G > 1.15$):
-     - *Contraste de Bordes ($k$):* Modula la ganancia de los detalles finos y la nitidez de las estructuras filamentosas.
-     - *Peso MGN ($h$):* Dosifica el porcentaje de textura normalizada integrada sobre la imagen fusionada base.
-     - *Exponente Gamma ($\gamma$):* Controla la curva de respuesta tonal de la corona procesada.
+3. **Arsenal de Filtros Coronales Avanzados (Acelerados en Rust con Rayon):**
+   * **Steerable G2 (Freeman & Adelson 1991 / Weickert 1999) [Recomendado 2026]:** Calcula el tensor de estructura local de la corona para orientar analíticamente la respuesta de segunda derivada a lo largo de las líneas magnéticas locales. Sigue lazos cerrados y bucles curvados cerca del limbo con **más del 50% de reducción de ruido aleatorio** frente a filtros tangenciales.
+     - *Deslizador Mezcla (Blend):* Regula la proporción de detalle direccional inyectado sobre la corona base.
+   * **Gradiente Rotacional de Larson–Sekanina (Larson & Sekanina 1984):** Diferencia angular de segundo orden en coordenadas polares evaluada con interpolación cúbica de Keys ($a = -0.5$) libre de artefactos periódicos.
+     - *Ángulo $\Delta\theta$:* Apertura angular de rotación (habitualmente $0.4^\circ$ para texturas ultra-finas o $1.0^\circ$ para chorros anchos).
+     - *Casilla "Proteger protuberancias H-alfa (Anti-fantasmas)":* Analiza el exceso cromático $R/G > 1.12 \times \text{mediana}$ en la cromosfera y enmascara las protuberancias solares, impidiendo que generen copias fantasma oscuras a $\pm\Delta\theta$.
+   * **Filtro SWAP / Misión PROBA2 de la ESA (Seaton et al. 2023):** Filtrado polar de mediana móvil ($\pm 15^\circ$) y compresión de potencia $I / (F + t_0)^{c_0}$ con reescalado por raíz cuarta en $[0.5, 2.0]$. **Genera una imagen solar autónoma completa**, revelando al mismo tiempo la estructura interna brillante y los filamentos externos tenues sin requerir mezclas adicionales.
+     - *Ventana angular:* Sector azimutal de suavizado de fondo (por defecto $15.0^\circ$).
+     - *Factor $c_0$:* Grado de compresión radial de la corona (por defecto $0.75$).
+   * **WOW Bilateral Guiado Edge-Aware (AEL 1.3.5):** Descomposición à-trous con spline B3 normalizado, pares simétricos y pesos de rango calculados a partir de una guía sin bilateral, erradicando la inversión de signo en filamentos tenues y acelerado **819×** en Rust.
+     - *Escalas:* Número de niveles de descomposición de ondículas (por defecto 5).
+     - *Casilla "Pesos de rango guiados":* Garantiza que el detalle fino mantenga siempre su signo fotométrico positivo y elimina halos en el limbo.
+   * **NAFE (Noise Adaptive Fuzzy Equalization - Miloslav Druckmüller 2013):** Ecualización difusa con vecindario de 129 px (12 componentes gaussianas), convoluciones FFT 2D y compuerta de ruido adaptativa en el eje de intensidad ($12\times$ el ruido medido en la corona lejana).
+     - *Deslizador Sigma:* Umbral de adaptación de ruido difuso (por defecto $12.0$).
+     - *Casilla "Modo de mezcla Overlay":* Combina el microcontraste NAFE en modo Superposición sobre la imagen base o muestra la salida directa.
+   * **NRGF Continuo (Normalizing Radial Gradient Filter):** Normalización radial $1/r^2$ con compuerta radial suave (*Radial Gate*).
+     - *Casilla "Encadenar sectores angulares (chain)":* Restringe los perfiles a sectores angulares compartidos, evitando saltos de brillo en tomas con Luna descentrada o recortada por el encuadre.
+   * **MGN Invariante (Morgan & Druckmüller 2014):** Descomposición multiescala en 6 frecuencias espaciales con adaptación dinámica a la escala de datos flotante (`data_scale`), eliminando variaciones de contraste por normalizaciones externas.
+   * **Casilla "Normalización de detalle por anillos (Anti-quemado en Limbo)":** Mide la mediana y la dispersión MAD ($1.4826 \cdot \text{MAD}$) en anillos concéntricos de 2 px en torno al centro solar e interpola radialmente con función sigmoidal $\tanh$. Evita que el limbo solar brillante se sature en blanco puro o que el cielo exterior se empaste.
 
-4. **Calibración Espectral y Control de Ruido:**
+4. **Exportación Nativa a Photoshop PSD Multicapa (16 Bits):**
+   * Pulsa el botón **"Exportar PSD Multicapa"** para generar automáticamente un proyecto `.psd` de 16 bits por canal listo para Photoshop, GIMP o PixInsight.
+   * Incluye todas las capas maestras estandarizadas (`Fondo HDR Base`, `01 NRGF`, `02 WOW Edge-Aware`, `09 NAFE`, `11 Steerable G2`, `15 Larson-Sekanina`, `16 SWAP`) con sus modos de mezcla nativos (`Normal`, `Overlay`), permitiendo ajustar la opacidad de cada filtro de forma no destructiva.
+
+5. **Calibración Espectral y Flujo de Trabajo:**
    * **Balance de Blancos Coronal Automático:** Muestrea fotométricamente el anillo coronal intermedio ($1.2 - 1.8 R_\odot$) para neutralizar dominantes de dispersión atmosférica manteniendo intacta la crominancia roja de las protuberancias solares ($H\alpha$).
    * **Reducción de Ruido Cromático Local:** Suavizado selectivo en los canales de color ($A, B$) guiado por la señal coronal con máscara protectora del limbo para suprimir grano térmico sin emborronar estructuras.
-
-5. **Flujo de Trabajo:**
-   * Guarda directamente en formato **TIFF de 16 bits** de máxima calidad o pulsa **Enviar al Revelador** para aplicar estirado hiperbólico (GHS), curvas de contraste o composición por capas.
+   * **Exportación y Envío:** Guarda directamente en formato **TIFF de 16 bits** de máxima calidad o pulsa **Enviar al Revelador** para aplicar estirado hiperbólico (GHS), curvas de contraste o composición por capas.
 
 ### Módulo 4: Eclipses (Collage)
 * Selecciona las fotos clave de las distintas fases (inicio parcial, totalidad, final parcial).

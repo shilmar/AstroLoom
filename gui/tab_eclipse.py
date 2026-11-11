@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
     QProgressBar, QMessageBox, QGroupBox, QRadioButton, QSlider,
-    QDoubleSpinBox, QSplitter, QTextEdit, QScrollArea, QCheckBox,
+    QDoubleSpinBox, QSpinBox, QSplitter, QTextEdit, QScrollArea, QCheckBox,
     QSizePolicy, QAbstractItemView, QApplication, QButtonGroup, QComboBox
 )
 from PySide6.QtCore import Qt, Signal, QThread, QPoint, QPointF, QRectF
@@ -42,7 +42,15 @@ from core.eclipse import (
     apply_asinh_stretch,
     apply_nrgf,
     apply_mgn,
-    apply_coronal_highpass
+    apply_coronal_highpass,
+    display_detail_rings,
+    apply_steerable_g2,
+    apply_larson_sekanina,
+    apply_swap_filter,
+    compute_red_excess_mask,
+    apply_nafe,
+    apply_wow_edge_aware,
+    export_coronal_layers_psd
 )
 from core.stacking import load_image_as_float32
 from core.icc_manager import save_tiff_with_icc
@@ -539,6 +547,7 @@ class EclipseWorker(QThread):
                 progress_msg = "Calculando ponderaciones y fusionando flujo fotométrico HDR..." if mode == "solar" else "Fusionando tomas con exposición multiescala (Mertens HDR)..."
                 self.progress.emit(75, progress_msg)
                 auto_wb = self.params.get("auto_wb_corona", True)
+                gradual_handover = self.params.get("gradual_handover", True)
                 hdr_raw = fuse_hdr_bracketing(
                     aligned_images,
                     exposures,
@@ -547,7 +556,8 @@ class EclipseWorker(QThread):
                     mode=mode,
                     lunar_mask_params=lunar_mask,
                     subtract_sky=subtract_sky,
-                    auto_wb_corona=auto_wb
+                    auto_wb_corona=auto_wb,
+                    gradual_handover=gradual_handover
                 )
 
                 hdr_stretched = apply_asinh_stretch(hdr_raw, stretch_factor=asinh_factor) if asinh_factor > 1.0 else hdr_raw.copy()
@@ -571,7 +581,50 @@ class EclipseWorker(QThread):
                 hp_strength = self.params.get("hp_strength", 0.5)
                 reach = self.params.get("reach", 3.5)
 
-                if filter_type == "mgn":
+                use_detail_rings = self.params.get("use_detail_rings", True)
+                if filter_type == "steerable_g2":
+                    self.progress.emit(25, "Calculando filtro Steerable G2 (Freeman & Adelson / tensor de estructura)...")
+                    blend = self.params.get("blend", 0.50)
+                    filtered = apply_steerable_g2(
+                        base_img,
+                        center_x=cx,
+                        center_y=cy,
+                        radius_min=r,
+                        blend_ratio=blend,
+                        radius_max_factor=reach,
+                        use_detail_rings=use_detail_rings
+                    )
+                elif filter_type == "larson_sekanina":
+                    self.progress.emit(25, "Calculando gradiente rotacional Larson-Sekanina (Keys bicubic)...")
+                    ls_dtheta = self.params.get("ls_delta_theta", 1.0)
+                    ls_protect = self.params.get("ls_protect_prominences", True)
+                    blend = self.params.get("blend", 0.50)
+                    filtered = apply_larson_sekanina(
+                        base_img,
+                        center_x=cx,
+                        center_y=cy,
+                        delta_theta_deg=ls_dtheta,
+                        blend_ratio=blend,
+                        protect_prominences=ls_protect,
+                        radius_min=r,
+                        radius_max_factor=reach,
+                        use_detail_rings=use_detail_rings
+                    )
+                elif filter_type == "swap":
+                    self.progress.emit(25, "Calculando filtro SWAP (compresión polar angular tipo PROBA2)...")
+                    swap_win = self.params.get("swap_window_deg", 15.0)
+                    swap_c0 = self.params.get("swap_c0", 0.75)
+                    blend = self.params.get("blend", 1.0)
+                    filtered = apply_swap_filter(
+                        base_img,
+                        center_x=cx,
+                        center_y=cy,
+                        radius_min=r,
+                        window_deg=swap_win,
+                        c0=swap_c0,
+                        blend_ratio=blend
+                    )
+                elif filter_type == "mgn":
                     self.progress.emit(25, "Calculando filtro multiescala MGN (Morgan & Druckmüller)...")
                     mgn_k = self.params.get("mgn_k", 0.70)
                     mgn_gamma = self.params.get("mgn_gamma", 2.8)
@@ -590,10 +643,40 @@ class EclipseWorker(QThread):
                         chroma_denoise_sigma=chroma_denoise,
                         lunar_mask_params=lunar_mask
                     )
+                elif filter_type == "nafe":
+                    self.progress.emit(25, "Calculando ecualización difusa NAFE (Druckmüller 2013 / FFT)...")
+                    sigma = self.params.get("nafe_sigma", 0.035)
+                    use_ov = self.params.get("nafe_use_overlay", True)
+                    blend = self.params.get("blend", 0.79)
+                    filtered = apply_nafe(
+                        base_img,
+                        center_x=cx,
+                        center_y=cy,
+                        radius_min=r,
+                        sigma=sigma,
+                        blend_ratio=blend,
+                        use_overlay=use_ov
+                    )
+                elif filter_type == "wow":
+                    self.progress.emit(25, "Calculando WOW guiado bilateral (starlet B3 / AEL 1.3.5)...")
+                    scales = self.params.get("wow_scales", 7)
+                    guided = self.params.get("wow_guided", True)
+                    blend = self.params.get("blend", 0.50)
+                    filtered = apply_wow_edge_aware(
+                        base_img,
+                        center_x=cx,
+                        center_y=cy,
+                        radius_min=r,
+                        n_scales=scales,
+                        guided=guided,
+                        blend_ratio=blend,
+                        use_detail_rings=use_detail_rings
+                    )
                 else:
                     bin_px = self.params.get("bin_px", 2.0)
                     robust = self.params.get("robust", True)
                     blend = self.params.get("blend", 0.55)
+                    part_annuli = self.params.get("nrgf_partial_annuli", "observed")
 
                     self.progress.emit(20, "Calculando filtro NRGF (gradiente radial polar)...")
                     filtered = apply_nrgf(
@@ -604,7 +687,9 @@ class EclipseWorker(QThread):
                         robust=robust,
                         blend_ratio=blend,
                         radius_min=r,
-                        radius_max_factor=reach
+                        radius_max_factor=reach,
+                        use_detail_rings=use_detail_rings,
+                        partial_annuli=part_annuli
                     )
 
                 if use_highpass and hp_strength > 0.01:
@@ -615,11 +700,35 @@ class EclipseWorker(QThread):
                         radius_min=r,
                         center_x=cx,
                         center_y=cy,
-                        radius_max_factor=reach
+                        radius_max_factor=reach,
+                        use_detail_rings=use_detail_rings
                     )
 
                 self.progress.emit(100, "Filtros de corona aplicados con éxito.")
                 self.finished.emit(filtered, "apply_filters")
+
+            elif self.task_type == "export_coronal_psd":
+                filepath = self.params["filepath"]
+                base_img = self.params["base_image"]
+                cx = self.params["cx"]
+                cy = self.params["cy"]
+                r = self.params["radius"]
+                depth = self.params.get("depth", 16)
+
+                self.progress.emit(20, "Generando capas de filtros coronales (NRGF, WOW, MGN, NAFE, Steerable G2, Larson-Sekanina, SWAP)...")
+                ok, desc, num_layers = export_coronal_layers_psd(
+                    filepath,
+                    base_img,
+                    cx,
+                    cy,
+                    r,
+                    depth=depth,
+                    log_fn=lambda m: self.progress.emit(50, m)
+                )
+                if not ok:
+                    raise RuntimeError(desc)
+                self.progress.emit(100, f"PSD exportado: {desc}")
+                self.finished.emit((filepath, desc), "export_coronal_psd")
 
         except Exception as e:
             self.error.emit(f"Error durante el procesado: {str(e)}")
@@ -854,6 +963,15 @@ class EclipseTab(QWidget):
         self.slider_asinh.valueChanged.connect(self._on_asinh_slider_changed)
         hdr_layout.addWidget(self.slider_asinh)
 
+        self.chk_gradual_handover = QCheckBox("Traspaso gradual de exposición (anti-anillos HDR)")
+        self.chk_gradual_handover.setChecked(True)
+        self.chk_gradual_handover.setToolTip(
+            "Atenúa la caída abrupta de varianza distribuyendo el peso con la exposición más corta (AEL 1.4.0), "
+            "eliminando discontinuidades y falsos anillos en las isófotas de transición."
+        )
+        self.chk_gradual_handover.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        hdr_layout.addWidget(self.chk_gradual_handover)
+
         self.btn_fuse_hdr = QPushButton("FUSIONAR BRACKETING HDR")
         self.btn_fuse_hdr.setIcon(get_icon("zap", color="#ffffff"))
         self.btn_fuse_hdr.setFixedHeight(40)
@@ -863,25 +981,86 @@ class EclipseTab(QWidget):
         hdr_layout.addWidget(self.btn_fuse_hdr)
         left_layout.addWidget(self.grp_hdr)
 
-        # SECCIÓN 4: Filtros de Corona Solar (MGN / NRGF)
-        self.grp_nrgf = CollapsibleSection("4. Filtros de Corona Solar (MGN / NRGF)", is_expanded=True, icon_name="sparkles")
+        # SECCIÓN 4: Filtros de Corona Solar
+        self.grp_nrgf = CollapsibleSection("4. Filtros de Corona Solar", is_expanded=True, icon_name="sparkles")
         nrgf_layout = self.grp_nrgf.content_layout
 
-        lbl_algo = QLabel("Algoritmo de Detalle Coronal:")
+        lbl_algo = QLabel("Algoritmo de Corona Solar:")
         lbl_algo.setStyleSheet("font-weight: bold; color: #eceff4; font-size: 11px;")
         nrgf_layout.addWidget(lbl_algo)
 
-        row_algo = QHBoxLayout()
-        self.rb_filter_mgn = QRadioButton("MGN Multiescala (Druckmüller)")
-        self.rb_filter_mgn.setToolTip("Multi-scale Gaussian Normalization (Morgan & Druckmüller 2014). Normaliza el contraste simultáneamente en múltiples escalas espaciales sin generar anillos concéntricos ni recortar el cielo exterior.")
-        self.rb_filter_mgn.setChecked(True)
-        self.rb_filter_nrgf = QRadioButton("NRGF Clásico")
-        self.rb_filter_nrgf.setToolTip("Normalized Radial Gradient Filter estándar por bines polares radiales con compuerta.")
-        row_algo.addWidget(self.rb_filter_mgn)
-        row_algo.addWidget(self.rb_filter_nrgf)
-        nrgf_layout.addLayout(row_algo)
+        self.combo_filter_algo = QComboBox()
+        self.combo_filter_algo.addItems([
+            "Steerable G2 (Freeman & Adelson) — Recomendado 2026",
+            "MGN Multiescala (Morgan & Druckmüller)",
+            "Gradiente Rotacional (Larson-Sekanina)",
+            "Filtro SWAP (Misión PROBA2 / Seaton et al.)",
+            "Polar Radial NRGF",
+            "NAFE Difuso (Miloslav Druckmüller 2013)",
+            "WOW Guiado Bilateral (Edge-Aware / Auchère et al.)"
+        ])
+        self.combo_filter_algo.setStyleSheet("""
+            QComboBox {
+                background-color: #1e293b;
+                color: #eceff4;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1e293b;
+                color: #eceff4;
+                selection-background-color: #0d47a1;
+            }
+        """)
+        nrgf_layout.addWidget(self.combo_filter_algo)
 
-        # Contenedor MGN
+        self.chk_detail_rings = QCheckBox("Normalización de detalle por anillos (anti-quemado en limbo)")
+        self.chk_detail_rings.setChecked(True)
+        self.chk_detail_rings.setToolTip(
+            "Normaliza el detalle coronal anillo por anillo con mediana y MAD radiales continuas (AEL 1.3.4 / Issue #9), "
+            "evitando la saturación a blanco/negro puro cerca del limbo solar."
+        )
+        self.chk_detail_rings.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        nrgf_layout.addWidget(self.chk_detail_rings)
+
+        # 1. Contenedor Steerable G2
+        self.container_steerable = QWidget()
+        g2_box_layout = QVBoxLayout(self.container_steerable)
+        g2_box_layout.setContentsMargins(0, 2, 0, 2)
+        g2_box_layout.setSpacing(6)
+
+        self.slider_blend_g2 = PrecisionSliderRow(
+            title="Fuerza Steerable G2",
+            min_val=0,
+            max_val=100,
+            default_val=50,
+            unit="%",
+            decimals=0,
+            label_width=135
+        )
+        self.slider_blend_g2.setToolTip("Ponderación de la segunda derivada orientada analítica a lo largo del tensor de estructura coronal.")
+        g2_box_layout.addWidget(self.slider_blend_g2)
+
+        self.slider_reach_g2 = PrecisionSliderRow(
+            title="Alcance Corona",
+            min_val=12,
+            max_val=50,
+            default_val=35,
+            scale=10.0,
+            unit="x",
+            decimals=1,
+            label_width=135
+        )
+        g2_box_layout.addWidget(self.slider_reach_g2)
+        nrgf_layout.addWidget(self.container_steerable)
+
+        # 2. Contenedor MGN
         self.container_mgn = QWidget()
         mgn_box_layout = QVBoxLayout(self.container_mgn)
         mgn_box_layout.setContentsMargins(0, 2, 0, 2)
@@ -948,8 +1127,98 @@ class EclipseTab(QWidget):
         self.slider_mgn_chroma_denoise.setToolTip("Suavizado espacial de crominancia (AEL local_chromaticity). Elimina el grano de ruido coloreado del fondo sin afectar la nitidez de los filamentos.")
         mgn_box_layout.addWidget(self.slider_mgn_chroma_denoise)
         nrgf_layout.addWidget(self.container_mgn)
+        self.container_mgn.setVisible(False)
 
-        # Contenedor NRGF
+        # 3. Contenedor Larson-Sekanina
+        self.container_ls = QWidget()
+        ls_box_layout = QVBoxLayout(self.container_ls)
+        ls_box_layout.setContentsMargins(0, 2, 0, 2)
+        ls_box_layout.setSpacing(6)
+
+        row_ls_dtheta = QHBoxLayout()
+        row_ls_dtheta.addWidget(QLabel("Ángulo Δθ:"))
+        self.spin_ls_dtheta = QDoubleSpinBox()
+        self.spin_ls_dtheta.setRange(0.2, 10.0)
+        self.spin_ls_dtheta.setValue(1.0)
+        self.spin_ls_dtheta.setSingleStep(0.2)
+        self.spin_ls_dtheta.setSuffix("°")
+        self.spin_ls_dtheta.setToolTip("Paso angular para el gradiente rotacional con interpolador de Keys (a = -0.5).")
+        row_ls_dtheta.addWidget(self.spin_ls_dtheta)
+        ls_box_layout.addLayout(row_ls_dtheta)
+
+        self.chk_ls_prominences = QCheckBox("Proteger protuberancias H-alfa (anti-fantasmas)")
+        self.chk_ls_prominences.setChecked(True)
+        self.chk_ls_prominences.setToolTip("Enmascara el exceso cromático R/G en el limbo para evitar que protuberancias intensas creen réplicas oscuras (AEL 1.4.2).")
+        self.chk_ls_prominences.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        ls_box_layout.addWidget(self.chk_ls_prominences)
+
+        self.slider_blend_ls = PrecisionSliderRow(
+            title="Fuerza Larson-Sek.",
+            min_val=0,
+            max_val=100,
+            default_val=50,
+            unit="%",
+            decimals=0,
+            label_width=135
+        )
+        ls_box_layout.addWidget(self.slider_blend_ls)
+
+        self.slider_reach_ls = PrecisionSliderRow(
+            title="Alcance Corona",
+            min_val=12,
+            max_val=50,
+            default_val=35,
+            scale=10.0,
+            unit="x",
+            decimals=1,
+            label_width=135
+        )
+        ls_box_layout.addWidget(self.slider_reach_ls)
+        nrgf_layout.addWidget(self.container_ls)
+        self.container_ls.setVisible(False)
+
+        # 4. Contenedor SWAP
+        self.container_swap = QWidget()
+        swap_box_layout = QVBoxLayout(self.container_swap)
+        swap_box_layout.setContentsMargins(0, 2, 0, 2)
+        swap_box_layout.setSpacing(6)
+
+        row_swap_win = QHBoxLayout()
+        row_swap_win.addWidget(QLabel("Ventana angular ±:"))
+        self.spin_swap_window = QDoubleSpinBox()
+        self.spin_swap_window.setRange(3.0, 60.0)
+        self.spin_swap_window.setValue(15.0)
+        self.spin_swap_window.setSingleStep(1.0)
+        self.spin_swap_window.setSuffix("°")
+        self.spin_swap_window.setToolTip("Ventana angular para la mediana móvil a lo largo de cada círculo concéntrico polar (Seaton et al. 2023).")
+        row_swap_win.addWidget(self.spin_swap_window)
+        swap_box_layout.addLayout(row_swap_win)
+
+        row_swap_c0 = QHBoxLayout()
+        row_swap_c0.addWidget(QLabel("Compresión radial c0:"))
+        self.spin_swap_c0 = QDoubleSpinBox()
+        self.spin_swap_c0.setRange(0.1, 1.5)
+        self.spin_swap_c0.setValue(0.75)
+        self.spin_swap_c0.setSingleStep(0.05)
+        self.spin_swap_c0.setToolTip("Factor de potencia radial reducida c0 (estándar PROBA2 = 0.75).")
+        row_swap_c0.addWidget(self.spin_swap_c0)
+        swap_box_layout.addLayout(row_swap_c0)
+
+        self.slider_blend_swap = PrecisionSliderRow(
+            title="Mezcla con Original",
+            min_val=0,
+            max_val=100,
+            default_val=100,
+            unit="%",
+            decimals=0,
+            label_width=135
+        )
+        self.slider_blend_swap.setToolTip("100% = Representación completa autónoma SWAP (visión satelital); valores inferiores fusionan con la imagen base.")
+        swap_box_layout.addWidget(self.slider_blend_swap)
+        nrgf_layout.addWidget(self.container_swap)
+        self.container_swap.setVisible(False)
+
+        # 5. Contenedor NRGF
         self.container_nrgf = QWidget()
         nrgf_box_layout = QVBoxLayout(self.container_nrgf)
         nrgf_box_layout.setContentsMargins(0, 2, 0, 2)
@@ -996,10 +1265,86 @@ class EclipseTab(QWidget):
             label_width=135
         )
         nrgf_box_layout.addWidget(self.slider_blend_nrgf)
+
+        self.chk_nrgf_chain = QCheckBox("Encadenamiento angular (anti-halos en bordes)")
+        self.chk_nrgf_chain.setChecked(True)
+        self.chk_nrgf_chain.setToolTip("Encadena perfiles radiales sobre sectores angulares comunes (AEL 1.4.1), eliminando saltos cuando el sensor o la Luna recortan el campo.")
+        nrgf_box_layout.addWidget(self.chk_nrgf_chain)
+
         nrgf_layout.addWidget(self.container_nrgf)
         self.container_nrgf.setVisible(False)
 
-        self.rb_filter_mgn.toggled.connect(self._on_filter_algo_changed)
+        # 6. Contenedor NAFE (Druckmüller 2013)
+        self.container_nafe = QWidget()
+        nafe_box_layout = QVBoxLayout(self.container_nafe)
+        nafe_box_layout.setContentsMargins(0, 2, 0, 2)
+        nafe_box_layout.setSpacing(6)
+
+        row_nafe_sigma = QHBoxLayout()
+        row_nafe_sigma.addWidget(QLabel("Compuerta de Ruido σ:"))
+        self.spin_nafe_sigma = QDoubleSpinBox()
+        self.spin_nafe_sigma.setRange(0.001, 0.5)
+        self.spin_nafe_sigma.setValue(0.035)
+        self.spin_nafe_sigma.setSingleStep(0.005)
+        self.spin_nafe_sigma.setDecimals(4)
+        self.spin_nafe_sigma.setToolTip("Dispersión gaussiana σ sobre el eje de intensidad (12x ruido medido en corona exterior).")
+        row_nafe_sigma.addWidget(self.spin_nafe_sigma)
+        nafe_box_layout.addLayout(row_nafe_sigma)
+
+        self.chk_nafe_overlay = QCheckBox("Modo de fusión Overlay (capa estándar 09 NAFE)")
+        self.chk_nafe_overlay.setChecked(True)
+        self.chk_nafe_overlay.setToolTip("Aplica la ecualización difusa E en modo de fusión Overlay fotométrico.")
+        nafe_box_layout.addWidget(self.chk_nafe_overlay)
+
+        self.slider_blend_nafe = PrecisionSliderRow(
+            title="Opacidad NAFE",
+            min_val=0,
+            max_val=100,
+            default_val=79,
+            unit="%",
+            decimals=0,
+            label_width=135
+        )
+        self.slider_blend_nafe.setToolTip("Opacidad de capa (estándar AEL = 79% en modo Overlay).")
+        nafe_box_layout.addWidget(self.slider_blend_nafe)
+        nrgf_layout.addWidget(self.container_nafe)
+        self.container_nafe.setVisible(False)
+
+        # 7. Contenedor WOW Bilateral Guiado
+        self.container_wow = QWidget()
+        wow_box_layout = QVBoxLayout(self.container_wow)
+        wow_box_layout.setContentsMargins(0, 2, 0, 2)
+        wow_box_layout.setSpacing(6)
+
+        row_wow_scales = QHBoxLayout()
+        row_wow_scales.addWidget(QLabel("Escalas à-trous B3:"))
+        self.spin_wow_scales = QSpinBox()
+        self.spin_wow_scales.setRange(3, 8)
+        self.spin_wow_scales.setValue(7)
+        self.spin_wow_scales.setToolTip("Número de escalas de descomposición wavelet B3 (estándar = 7).")
+        row_wow_scales.addWidget(self.spin_wow_scales)
+        wow_box_layout.addLayout(row_wow_scales)
+
+        self.chk_wow_guided = QCheckBox("Ponderación guiada (previene inversión de signo, Issue #4)")
+        self.chk_wow_guided.setChecked(True)
+        self.chk_wow_guided.setToolTip("Calcula los pesos bilaterales a partir de la guía desacoplada, preservando la polaridad de las ondas finas.")
+        wow_box_layout.addWidget(self.chk_wow_guided)
+
+        self.slider_blend_wow = PrecisionSliderRow(
+            title="Mezcla WOW",
+            min_val=0,
+            max_val=100,
+            default_val=50,
+            unit="%",
+            decimals=0,
+            label_width=135
+        )
+        self.slider_blend_wow.setToolTip("Porcentaje de mezcla en modo Overlay sobre la corona base.")
+        wow_box_layout.addWidget(self.slider_blend_wow)
+        nrgf_layout.addWidget(self.container_wow)
+        self.container_wow.setVisible(False)
+
+        self.combo_filter_algo.currentIndexChanged.connect(self._on_filter_algo_changed)
 
         self.chk_highpass = QCheckBox("Realce de hilos finos (filtro bilateral tangencial)")
         self.chk_highpass.setChecked(False)
@@ -1083,6 +1428,15 @@ class EclipseTab(QWidget):
         btn_tiff_row.addWidget(self.btn_save_tiff_16)
         btn_tiff_row.addWidget(self.btn_save_tiff_32)
         export_layout.addLayout(btn_tiff_row)
+
+        self.btn_export_psd = QPushButton("Exportar PSD Multicapa de Corona...")
+        self.btn_export_psd.setIcon(get_icon("layers", color="#ce93d8"))
+        self.btn_export_psd.setFixedHeight(38)
+        self.btn_export_psd.setCursor(Qt.PointingHandCursor)
+        self.btn_export_psd.setStyleSheet("font-weight: bold; background: #2a1835; color: #ce93d8; border: 1px solid #ab47bc; padding: 6px; border-radius: 4px;")
+        self.btn_export_psd.setToolTip("Exporta archivo PSD 16-bit de Photoshop con todas las capas científicas de corona (NRGF, WOW, MGN, NAFE, Steerable G2, Larson-Sekanina, SWAP).")
+        self.btn_export_psd.clicked.connect(self._on_export_psd_clicked)
+        export_layout.addWidget(self.btn_export_psd)
 
         self.btn_send_to_dev = QPushButton("Enviar al Revelador / Editor")
         self.btn_send_to_dev.setIcon(get_icon("arrow_right", color="#ffffff"))
@@ -1605,6 +1959,7 @@ class EclipseTab(QWidget):
             "crop_size": crop_size,
             "subtract_sky": sub_sky,
             "auto_wb_corona": self.chk_auto_wb.isChecked(),
+            "gradual_handover": self.chk_gradual_handover.isChecked(),
             "sat_thresh": sat_thresh,
             "asinh_factor": asinh_factor,
             "mode": mode
@@ -1617,9 +1972,15 @@ class EclipseTab(QWidget):
         self.worker.start()
 
     def _on_filter_algo_changed(self):
-        is_mgn = self.rb_filter_mgn.isChecked()
-        self.container_mgn.setVisible(is_mgn)
-        self.container_nrgf.setVisible(not is_mgn)
+        idx = self.combo_filter_algo.currentIndex()
+        self.container_steerable.setVisible(idx == 0)
+        self.container_mgn.setVisible(idx == 1)
+        self.container_ls.setVisible(idx == 2)
+        self.container_swap.setVisible(idx == 3)
+        self.container_nrgf.setVisible(idx == 4)
+        self.container_nafe.setVisible(idx == 5)
+        self.container_wow.setVisible(idx == 6)
+        self.chk_detail_rings.setVisible(idx in (0, 2, 4, 6))
 
     def _on_apply_filters_clicked(self):
         if self.worker is not None and self.worker.isRunning():
@@ -1641,12 +2002,39 @@ class EclipseTab(QWidget):
             QMessageBox.warning(self, "Atención", "Define o auto-detecta el radio del limbo antes de aplicar los filtros.")
             return
 
-        is_mgn = self.rb_filter_mgn.isChecked()
-        filter_type = "mgn" if is_mgn else "nrgf"
+        idx = self.combo_filter_algo.currentIndex()
+        reach = 3.5
+        if idx == 0:
+            filter_type = "steerable_g2"
+            blend = self.slider_blend_g2.value() / 100.0
+            reach = self.slider_reach_g2.value() / 10.0
+        elif idx == 1:
+            filter_type = "mgn"
+            blend = self.slider_blend.value() / 100.0
+            reach = 3.5
+        elif idx == 2:
+            filter_type = "larson_sekanina"
+            blend = self.slider_blend_ls.value() / 100.0
+            reach = self.slider_reach_ls.value() / 10.0
+        elif idx == 3:
+            filter_type = "swap"
+            blend = self.slider_blend_swap.value() / 100.0
+            reach = 3.5
+        elif idx == 4:
+            filter_type = "nrgf"
+            blend = self.slider_blend_nrgf.value() / 100.0
+            reach = self.slider_reach.value() / 10.0
+        elif idx == 5:
+            filter_type = "nafe"
+            blend = self.slider_blend_nafe.value() / 100.0
+            reach = 3.5
+        else:
+            filter_type = "wow"
+            blend = self.slider_blend_wow.value() / 100.0
+            reach = 3.5
+
         bin_px = self.spin_bin_px.value()
         robust = self.rb_robust.isChecked()
-        blend = (self.slider_blend.value() if is_mgn else self.slider_blend_nrgf.value()) / 100.0
-        reach = self.slider_reach.value() / 10.0
         mgn_k = self.slider_mgn_k.value() / 100.0
         mgn_gamma = self.slider_mgn_gamma.value() / 10.0
         mgn_noise_floor = self.slider_mgn_noise_floor.value() / 1000.0
@@ -1674,10 +2062,66 @@ class EclipseTab(QWidget):
             "blend": blend,
             "reach": reach,
             "use_highpass": use_hp,
-            "hp_strength": hp_strength
+            "hp_strength": hp_strength,
+            "use_detail_rings": self.chk_detail_rings.isChecked(),
+            "ls_delta_theta": self.spin_ls_dtheta.value(),
+            "ls_protect_prominences": self.chk_ls_prominences.isChecked(),
+            "swap_window_deg": self.spin_swap_window.value(),
+            "swap_c0": self.spin_swap_c0.value(),
+            "nrgf_partial_annuli": "chain" if self.chk_nrgf_chain.isChecked() else "observed",
+            "nafe_sigma": self.spin_nafe_sigma.value(),
+            "nafe_use_overlay": self.chk_nafe_overlay.isChecked(),
+            "wow_scales": self.spin_wow_scales.value(),
+            "wow_guided": self.chk_wow_guided.isChecked(),
         }
 
         self.worker = EclipseWorker("apply_filters", params)
+        self.worker.progress.connect(self._on_worker_progress)
+        self.worker.finished.connect(self._on_worker_finished)
+        self.worker.error.connect(self._on_worker_error)
+        self.worker.start()
+
+    def _on_export_psd_clicked(self):
+        base_img = self.fused_hdr_img if self.fused_hdr_img is not None else self.current_preview_img
+        if base_img is None:
+            QMessageBox.warning(self, "Atención", "No hay imagen cargada o fusionada para exportar como PSD.")
+            return
+
+        ref_f = self.bracketing_files[self.ref_file_idx] if self.bracketing_files else None
+        if ref_f and ref_f.get("cx") is not None:
+            cx, cy, r = ref_f["cx"], ref_f["cy"], ref_f["radius"]
+        else:
+            cx = self.spin_cx.value()
+            cy = self.spin_cy.value()
+            r = self.spin_radius.value()
+
+        if r <= 5:
+            QMessageBox.warning(self, "Atención", "Define o auto-detecta el radio del limbo antes de exportar el PSD multicapa.")
+            return
+
+        out_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Exportar PSD Multicapa de Corona Solar",
+            "eclipse_coronal_layers.psd",
+            "Archivos PSD de Photoshop (*.psd)"
+        )
+        if not out_path:
+            return
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(10)
+        self.log(f"Iniciando exportación de PSD multicapa coronal a {os.path.basename(out_path)}...")
+
+        params = {
+            "filepath": out_path,
+            "base_image": base_img,
+            "cx": cx,
+            "cy": cy,
+            "radius": r,
+            "depth": 16
+        }
+
+        self.worker = EclipseWorker("export_coronal_psd", params)
         self.worker.progress.connect(self._on_worker_progress)
         self.worker.finished.connect(self._on_worker_finished)
         self.worker.error.connect(self._on_worker_error)
@@ -1750,6 +2194,15 @@ class EclipseTab(QWidget):
             self.canvas.set_image(result)
             self._update_canvas_guide()
             self.log("Filtros de corona aplicados con compuerta radial (fondo limpio).")
+
+        elif task_type == "export_coronal_psd":
+            filepath, desc = result
+            self.log(f"✓ {desc}")
+            QMessageBox.information(
+                self,
+                "Exportación PSD Exitosa",
+                f"Archivo PSD multicapa guardado con éxito:\n{filepath}\n\n{desc}"
+            )
 
     def _on_worker_error(self, err_msg: str):
         self.progress_bar.setVisible(False)

@@ -63,6 +63,13 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(eclipse::compute_mgn_scaled_and_chroma_rs, m)?)?;
     m.add_function(wrap_pyfunction!(eclipse::compute_mgn_prominence_mask_rs, m)?)?;
     m.add_function(wrap_pyfunction!(eclipse::blend_mgn_prominences_and_mask_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(eclipse::display_detail_rings_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(eclipse::accumulate_steerable_g2_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(eclipse::compute_larson_sekanina_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(eclipse::polar_circular_median_filter_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(eclipse::compute_red_excess_mask_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(eclipse::paired_b3_step_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(eclipse::b3_normalized_rs, m)?)?;
 
     // 8. Alineación por Asterismos y Triángulos Estelares - Prioridad 6 (core/panorama.py)
     m.add_function(wrap_pyfunction!(panorama::build_star_asterisms_rs, m)?)?;

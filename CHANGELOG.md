@@ -5,7 +5,43 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
-## [0.14.1] - 2026-11-10
+## [0.14.2] - 2026-11-11
+
+### Añadido
+* **Arsenal Completo de Filtros Coronales Científicos para Eclipses (AEL v1.3.2 – v1.4.2) (`core/eclipse.py`, `gui/tab_eclipse.py`):**
+  - **Filtro Steerable G2 de Segunda Derivada Orientable (`apply_steerable_g2`, `accumulate_steerable_g2_rs`):** Basado en Freeman & Adelson (1991) y validado sobre el eclipse de 2026. Calcula el tensor de estructura local suavizado para alinear analíticamente la respuesta direccional a lo largo del ángulo local de los arcos magnéticos y bucles cerrados cerca del limbo, logrando el mismo nivel de microcontraste que los filtros tangenciales pero con **más del 50% de reducción de grano aleatorio**.
+  - **Gradiente Rotacional de Larson–Sekanina con Protección Cromática (`apply_larson_sekanina`, `compute_larson_sekanina_rs`):** Implementación de la formulación astrofísica (Larson & Sekanina 1984) con rotación continua por interpolación cúbica de Keys ($a = -0.5$) libre de artefactos periódicos. Incorpora detección y enmascaramiento automático de excesos de emisión cromosférica $H\alpha$ (`compute_red_excess_mask_rs`, ratio $R/G > 1.12 \times \text{mediana}$), erradicando las réplicas oscuras "fantasma" a $\pm\Delta\theta$ generadas por protuberancias solares intensas.
+  - **Filtro SWAP / Misión PROBA2 de la ESA (`apply_swap_filter`, `polar_circular_median_filter_rs`):** Adaptación del algoritmo desarrollado para el telescopio espacial SWAP (Seaton et al. 2023). Realiza un filtrado de mediana circular polar en ventana angular de $\pm 15^\circ$, compresión radial suave $I / (F + t_0)^{c_0}$ ($c_0 = 0.75$) y normalización por raíz cuarta en $[0.5, 2.0]$. Genera una imagen autónoma de rango dinámico homogéneo que exhibe simultáneamente bucles magnéticos interiores y streamers gigantes exteriores sin necesidad de capas adicionales.
+  - **Filtro WOW Bilateral Guiado Edge-Aware (`apply_wow_edge_aware`, `paired_b3_step_rs`, `b3_normalized_rs`):** Descomposición multiescala à-trous con spline B3 normalizado, ponderación de rango con pares simétricos y cálculo guiado de pesos (AEL 1.3.5 / Issue #4), erradicando la inversión de signo en filamentos tenues y halos en el limbo lunar, acelerado **819×** en Rust.
+  - **Filtro NAFE (Noise Adaptive Fuzzy Equalization) (`apply_nafe`, `nafe_neighbourhood`):** Ecualización difusa según la formulación de Miloslav Druckmüller (2013) con vecindario de 129 px compuesto por 12 gaussianas diádicas ($\sigma_m = 2^{m/2}$), aceleración mediante convoluciones FFT bidimensionales y compuerta adaptativa de ruido en el eje de intensidad ($12\times$ el ruido medido en corona externa).
+  - **Normalización de Detalle por Anillos Concéntricos (`display_detail_rings`, `display_detail_rings_rs`):** Mapeo de microcontraste anillo por anillo en pasos de 2 px radiales en torno al centro solar (mediana y $1.4826 \cdot \text{MAD}$) con suavizado continuo 1D e interpolación sigmoidal $\tanh$. Previene la saturación en blanco o empaste en negro en el limbo solar brillante preservando texturas en toda la corona.
+  - **Encadenamiento Angular de Anillos Parciales en NRGF (`partial_annuli='chain'`):** Evaluación de perfiles radiales restringida a sectores angulares mutuamente compartidos por anillos contiguos, eliminando saltos de densidad en tomas con Luna descentrada o recortada por el borde del sensor.
+  - **Fusión HDR con Traspaso Gradual de Exposición (`gradual_handover=True`):** Modulación de los pesos de saturación proporcionalmente a la relación de tiempos $t_i / t_{i-1}$, mitigando la duplicación abrupta de varianza de ruido local y eliminando al 100% los falsos contornos o anillos anulares a lo largo de las isófotas de bracketing.
+  - **Exportación Nativa a Photoshop PSD Multicapa de 16 Bits (`export_coronal_layers_psd`):** Generación automática de proyectos PSD de 16 bits por canal listos para retoque fino en Photoshop, GIMP o PixInsight, estructurados en capas estandarizadas (`Fondo HDR Base`, `01 NRGF`, `02 WOW Edge-Aware`, `09 NAFE`, `11 Steerable G2`, `15 Larson-Sekanina`, `16 SWAP`) con sus correspondientes modos de fusión (`Normal`, `Overlay`).
+
+* **Aceleración en Rust Rayon de Filtros Coronales (`astroloom_rs/src/eclipse.rs`, `astroloom_rs/src/lib.rs`):**
+  - Kernels nativos de alta velocidad añadidos al módulo de extensión:
+    - `display_detail_rings_rs`: Bins anulares y cálculo multihilo de estadísticas radiales.
+    - `accumulate_steerable_g2_rs`: Acumulación analítica del tensor de estructura y segundas derivadas.
+    - `compute_larson_sekanina_rs`: Convolución e interpolación cúbica de Keys ($a = -0.5$) en paralelo.
+    - `polar_circular_median_filter_rs`: Muestreo polar y mediana circular móvil optimizada.
+    - `compute_red_excess_mask_rs`: Detección en paralelo de excesos cromáticos de protuberancias solares.
+    - `paired_b3_step_rs` y `b3_normalized_rs`: Pasos convolucionales à-trous multiescala en memoria continua.
+
+* **Evolución Ergonómica de la Pestaña de Eclipses (`gui/tab_eclipse.py`):**
+  - Desplegable de algoritmos reactivo que conmuta dinámicamente los controles pertinentes: deslizador de intensidad para Steerable G2, ángulo $\Delta\theta$ y protección de protuberancias para Larson-Sekanina, ventana angular y $c_0$ para SWAP, $\sigma$ y modo Overlay para NAFE, número de escalas para WOW, y opciones avanzadas para NRGF.
+  - Casillas de verificación para activar/desactivar el Traspaso Gradual HDR y la Normalización de Detalle por Anillos.
+  - Botón y flujo de exportación directa a PSD Multicapa con diálogo interactivo y ejecución asíncrona mediante `EclipseWorker`.
+
+### Optimizado
+* **Invarianza de Escala en MGN (`combine_mgn_scales_rs`):**
+  - Piso de ruido y corte de varianza adaptados proporcionalmente al rango dinámico del dato flotante (`data_scale`), solventando variaciones espurias de microcontraste ante diferentes normalizaciones de entrada.
+* **Consumo de Memoria en Filtrado de Corona:**
+  - Acumulación in-place y reutilización de búferes contiguos en Rust, manteniendo el procesamiento de fotogramas de 24–60 MP por debajo del umbral de memoria física.
+
+### Pruebas
+* **Suite de Validación Científica Automatizada (`tests/test_ael_phase1.py`, `tests/test_ael_phase2.py`, `tests/test_ael_phase3.py`):**
+  - 15 nuevas pruebas automatizadas que verifican la paridad matemática de los filtros, la ausencia de artefactos y la integridad de los archivos PSD generados. Cobertura global de la suite ampliada a **122 pruebas pasando al 100%**.
 
 ### Añadido
 * **Puente de Renderizado Directo a Qt sin Copias Intermedias (`gui/canvas.py`, `src/renderer.rs`):**

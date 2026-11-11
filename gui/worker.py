@@ -1,5 +1,5 @@
 """
-gui/worker.py - Hilos secundarios de ejecución (QThread) para el pipeline de Apilator,
+gui/worker.py - Hilos secundarios de ejecución (QThread) para el pipeline de Astroloom,
 incluyendo apilado dual subpíxel y StarNet++.
 """
 

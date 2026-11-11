@@ -1,5 +1,5 @@
 """
-core/icc_manager.py - Gestor integral de perfiles de color ICC para Apilator.
+core/icc_manager.py - Gestor integral de perfiles de color ICC para Asrtoloom.
 Permite incrustar etiquetas estándar ICC (Tag 34675 / InterColorProfile) en archivos TIFF,
 garantizando compatibilidad colorimétrica total.
 """
