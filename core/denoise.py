@@ -33,8 +33,10 @@ def compute_denoise_mask(
     lum_mask = np.clip(1.0 - y, 0.0, 1.0) ** lum_exp
 
     # 2. Detección de bordes y gradientes espaciales (protección de estrellas y nebulosas)
-    gx = cv2.Sobel(y, cv2.CV_32F, 1, 0, ksize=3)
-    gy = cv2.Sobel(y, cv2.CV_32F, 0, 1, ksize=3)
+    # Suavizado previo para evitar que el ruido estocástico de píxel dispare el gradiente
+    y_smooth = cv2.GaussianBlur(y, (0, 0), sigmaX=1.5)
+    gx = cv2.Sobel(y_smooth, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(y_smooth, cv2.CV_32F, 0, 1, ksize=3)
     grad = np.sqrt(gx**2 + gy**2)
 
     edge_sensitivity = 2.0 + 18.0 * float(masking)
@@ -87,16 +89,28 @@ def apply_astro_denoise(
 
     # --- 1. REDUCCIÓN DE RUIDO CROMÁTICO (COLOR NOISE) ---
     if color_strength > 1e-4:
-        scale_c = 1.8 if is_full_res else 1.0
-        ksize = 5 if is_draft else int(max(3, round((3.0 + 8.0 * (color_strength ** 0.8)) * scale_c)))
-        if ksize % 2 == 0:
-            ksize += 1
-        sigma_c = float((1.0 + 3.5 * color_strength) * scale_c)
-
-        cr_clean = cv2.GaussianBlur(cr, (ksize, ksize), sigma_c)
-        cb_clean = cv2.GaussianBlur(cb, (ksize, ksize), sigma_c)
-
         blend_c = float(np.clip(color_strength, 0.0, 1.0))
+        if is_draft:
+            cr_clean = cv2.GaussianBlur(cr, (5, 5), 1.0 + 3.5 * color_strength)
+            cb_clean = cv2.GaussianBlur(cb, (5, 5), 1.0 + 3.5 * color_strength)
+        else:
+            # Submuestreo multiescala para abarcar manchas de demosaicing (8-16px) sin sangrado
+            scale_factor = 0.25 if (is_full_res and min(cr.shape[:2]) >= 128) else 0.5
+            w_sub = max(16, int(round(cr.shape[1] * scale_factor)))
+            h_sub = max(16, int(round(cr.shape[0] * scale_factor)))
+            cr_sub = cv2.resize(cr, (w_sub, h_sub), interpolation=cv2.INTER_AREA)
+            cb_sub = cv2.resize(cb, (w_sub, h_sub), interpolation=cv2.INTER_AREA)
+
+            sigma_sub = float(1.2 + 2.8 * color_strength)
+            ksize_sub = int(max(3, round(3.0 + 4.0 * color_strength)))
+            if ksize_sub % 2 == 0:
+                ksize_sub += 1
+            cr_sub_clean = cv2.GaussianBlur(cr_sub, (ksize_sub, ksize_sub), sigma_sub)
+            cb_sub_clean = cv2.GaussianBlur(cb_sub, (ksize_sub, ksize_sub), sigma_sub)
+
+            cr_clean = cv2.resize(cr_sub_clean, (cr.shape[1], cr.shape[0]), interpolation=cv2.INTER_LINEAR)
+            cb_clean = cv2.resize(cb_sub_clean, (cb.shape[1], cb.shape[0]), interpolation=cv2.INTER_LINEAR)
+
         ycrcb[..., 1] = cr * (1.0 - blend_c) + cr_clean * blend_c
         ycrcb[..., 2] = cb * (1.0 - blend_c) + cb_clean * blend_c
 

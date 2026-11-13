@@ -873,7 +873,12 @@ class AIDenoiseWorker(QThread):
         tile_size: int = 512,
         overlap: int = 64,
         clean_chroma: bool = True,
-        chroma_strength: float = 0.5,
+        chroma_strength: float = 0.85,
+        strength: float = 1.0,
+        multiscale_chroma: bool = True,
+        auto_mtf: bool = True,
+        detail_recovery: float = 0.0,
+        sky_mask: Optional[np.ndarray] = None,
         parent=None
     ):
         super().__init__(parent)
@@ -883,6 +888,11 @@ class AIDenoiseWorker(QThread):
         self.overlap = overlap
         self.clean_chroma = clean_chroma
         self.chroma_strength = chroma_strength
+        self.strength = strength
+        self.multiscale_chroma = multiscale_chroma
+        self.auto_mtf = auto_mtf
+        self.detail_recovery = detail_recovery
+        self.sky_mask = sky_mask
         self._is_cancelled = False
 
     def cancel(self):
@@ -898,6 +908,11 @@ class AIDenoiseWorker(QThread):
                 overlap=self.overlap,
                 clean_chroma=self.clean_chroma,
                 chroma_strength=self.chroma_strength,
+                strength=self.strength,
+                multiscale_chroma=self.multiscale_chroma,
+                auto_mtf=self.auto_mtf,
+                detail_recovery=self.detail_recovery,
+                sky_mask=self.sky_mask,
                 progress_callback=lambda curr, total: self.progress_changed.emit(curr, total),
                 cancel_check=lambda: self._is_cancelled
             )

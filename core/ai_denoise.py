@@ -55,8 +55,12 @@ def get_nafnet_model_path() -> Optional[str]:
         os.path.join(root, "models", DEFAULT_NAFNET_FILENAME),
         os.path.join(root, "models", "nafnet-sidd-w32.onnx"),
         os.path.join(root, "models", "NAFNet-SIDD-width32.onnx"),
+        os.path.join(root, "models", "NAFNet-SIDD-width64.onnx"),
+        os.path.join(root, "models", "nafnet-sidd-w64.onnx"),
         os.path.join(root, "assets", "models", DEFAULT_NAFNET_FILENAME),
         os.path.join(root, "assets", "models", "nafnet-sidd-w32.onnx"),
+        os.path.join(root, "assets", "models", "NAFNet-SIDD-width64.onnx"),
+        os.path.join(root, "assets", "models", "nafnet-sidd-w64.onnx"),
         os.path.join(root, DEFAULT_NAFNET_FILENAME)
     ]
     if getattr(sys, "frozen", False):
@@ -203,8 +207,21 @@ def _get_tile_coords(length: int, tile_size: int, overlap: int) -> List[int]:
     return sorted(list(set(coords)))
 
 
-def _create_inference_session(model_path: str) -> "ort.InferenceSession":
-    """Inicializa la sesión ONNX con el proveedor de hardware más rápido disponible."""
+_SESSION_CACHE: dict[str, "ort.InferenceSession"] = {}
+
+
+def clear_nafnet_session_cache() -> None:
+    """Libera las sesiones ONNX retenidas en memoria caché."""
+    global _SESSION_CACHE
+    _SESSION_CACHE.clear()
+
+
+def _create_inference_session(model_path: str, use_cache: bool = True) -> "ort.InferenceSession":
+    """Inicializa o recupera de caché la sesión ONNX con el proveedor de hardware más rápido disponible."""
+    abs_path = os.path.abspath(model_path)
+    if use_cache and abs_path in _SESSION_CACHE:
+        return _SESSION_CACHE[abs_path]
+
     available_providers = ort.get_available_providers()
     providers = []
     if "CUDAExecutionProvider" in available_providers:
@@ -219,7 +236,127 @@ def _create_inference_session(model_path: str) -> "ort.InferenceSession":
     opts.intra_op_num_threads = min(16, max(1, cpu_cores))
     opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
 
-    return ort.InferenceSession(model_path, sess_options=opts, providers=providers)
+    sess = ort.InferenceSession(abs_path, sess_options=opts, providers=providers)
+    if use_cache:
+        _SESSION_CACHE[abs_path] = sess
+    return sess
+
+
+def _compute_image_stats(img: np.ndarray) -> Tuple[float, float, float]:
+    """
+    Calcula estadísticas globales (mediana, MAD, sigma_hat) usando una muestra regular
+    de máximo ~200k píxeles para velocidad instantánea sin pérdida de representatividad.
+    """
+    total_pix = img.shape[0] * img.shape[1]
+    if total_pix > 200_000:
+        step = int(np.ceil(np.sqrt(total_pix / 200_000)))
+        sample = img[::step, ::step]
+    else:
+        sample = img
+
+    med = float(np.median(sample))
+    mad = float(np.median(np.abs(sample - med)))
+    sigma_hat = float(1.4826 * mad)
+    return med, mad, sigma_hat
+
+
+def _apply_mtf(x: np.ndarray, m: float) -> np.ndarray:
+    """
+    Transformación directa analítica MTF:
+    MTF(m, x) = (m - 1.0) * x / ((2.0 * m - 1.0) * x - m)
+    """
+    if abs(m - 0.5) < 1e-4:
+        return x
+    denom = (2.0 * m - 1.0) * x - m
+    denom = np.where(np.abs(denom) < 1e-7, np.sign(denom) * 1e-7 + (denom == 0) * 1e-7, denom)
+    out = (m - 1.0) * x / denom
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
+
+
+def _apply_inv_mtf(y: np.ndarray, m: float) -> np.ndarray:
+    """
+    Transformación inversa analítica MTF:
+    MTF^-1(m, y) = m * y / ((2.0 * m - 1.0) * y - (m - 1.0))
+    """
+    if abs(m - 0.5) < 1e-4:
+        return y
+    denom = (2.0 * m - 1.0) * y - (m - 1.0)
+    denom = np.where(np.abs(denom) < 1e-7, np.sign(denom) * 1e-7 + (denom == 0) * 1e-7, denom)
+    out = (m * y) / denom
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
+
+
+def _run_single_scale_tiled(
+    img_rgb: np.ndarray,
+    session: "ort.InferenceSession",
+    input_name: str,
+    output_name: str,
+    tile_size: int = 512,
+    overlap: int = 64,
+    progress_offset: int = 0,
+    total_tiles_all: int = 0,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None
+) -> np.ndarray:
+    """
+    Ejecuta una pasada completa de inferencia NAFNet tesela por tesela con ventana Hann 2D.
+    """
+    orig_h, orig_w = img_rgb.shape[:2]
+
+    pad_h = max(0, tile_size - orig_h)
+    pad_w = max(0, tile_size - orig_w)
+    if pad_h > 0 or pad_w > 0:
+        padded_img = cv2.copyMakeBorder(img_rgb, 0, pad_h, 0, pad_w, cv2.BORDER_REFLECT)
+    else:
+        padded_img = img_rgb
+
+    h_pad, w_pad = padded_img.shape[:2]
+    y_coords = _get_tile_coords(h_pad, tile_size, overlap)
+    x_coords = _get_tile_coords(w_pad, tile_size, overlap)
+
+    hann_win = compute_hann_2d_window(tile_size, tile_size)
+
+    accumulator_img = np.zeros((h_pad, w_pad, 3), dtype=np.float32)
+    accumulator_weights = np.zeros((h_pad, w_pad, 1), dtype=np.float32)
+
+    current_tile = 0
+    for y in y_coords:
+        for x in x_coords:
+            if cancel_check and cancel_check():
+                raise InterruptedError("Inferencia NAFNet cancelada por el usuario.")
+
+            tile_in = padded_img[y:y + tile_size, x:x + tile_size]
+            tensor_in = np.transpose(tile_in, (2, 0, 1))[np.newaxis, ...].astype(np.float32)
+
+            outputs = session.run([output_name], {input_name: tensor_in})
+            out_tile = outputs[0].squeeze(0)
+            out_tile = np.transpose(out_tile, (1, 2, 0))
+
+            if HAS_RUST_AI and hasattr(astroloom_rs, 'accumulate_tile_hann_inplace_rs'):
+                astroloom_rs.accumulate_tile_hann_inplace_rs(
+                    accumulator_img, accumulator_weights, np.ascontiguousarray(out_tile, dtype=np.float32), hann_win, y, x
+                )
+            else:
+                accumulator_img[y:y + tile_size, x:x + tile_size] += out_tile * hann_win
+                accumulator_weights[y:y + tile_size, x:x + tile_size] += hann_win
+
+            current_tile += 1
+            if progress_callback and total_tiles_all > 0:
+                progress_callback(progress_offset + current_tile, total_tiles_all)
+
+    if HAS_RUST_AI and hasattr(astroloom_rs, 'reconstruct_hann_tiling_rs'):
+        clean_out = astroloom_rs.reconstruct_hann_tiling_rs(
+            accumulator_img, accumulator_weights, orig_h, orig_w
+        )
+    else:
+        clean_padded = np.divide(
+            accumulator_img,
+            accumulator_weights,
+            out=np.zeros_like(accumulator_img),
+            where=accumulator_weights > 1e-12
+        )
+        clean_out = clean_padded[:orig_h, :orig_w]
+    return np.clip(clean_out, 0.0, 1.0).astype(np.float32)
 
 
 def run_nafnet_tiled_inference(
@@ -228,7 +365,12 @@ def run_nafnet_tiled_inference(
     tile_size: int = 512,
     overlap: int = 64,
     clean_chroma: bool = True,
-    chroma_strength: float = 0.5,
+    chroma_strength: float = 0.85,
+    strength: float = 1.0,
+    multiscale_chroma: bool = True,
+    auto_mtf: bool = True,
+    detail_recovery: float = 0.0,
+    sky_mask: Optional[np.ndarray] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None
 ) -> np.ndarray:
@@ -236,17 +378,22 @@ def run_nafnet_tiled_inference(
     Ejecuta reducción de ruido profunda con NAFNet sobre la imagen mediante Tiling y Ventana 2D de Hann.
 
     Parámetros:
-        img_rgb: Imagen RGB float32 [0.0, 1.0].
+        img_rgb: Imagen RGB float32 [0.0, 1.0] o uint8 [0, 255].
         model_path: Ruta opcional al archivo .onnx.
         tile_size: Dimensión cuadrada de cada bloque (múltiplo de 16, default 512).
         overlap: Píxeles de solapamiento entre bloques contiguos (default 64).
-        clean_chroma: Si es True, ejecuta filtrado cromático suave preliminar.
-        chroma_strength: Fuerza de limpieza cromática [0.0, 1.0].
+        clean_chroma: Si es True, mantiene retrocompatibilidad para limpieza de croma.
+        chroma_strength: Intensidad de eliminación de ruido cromático [0.0, 1.0].
+        strength: Intensidad de reducción residual [0.0, 1.35].
+        multiscale_chroma: Si es True, ejecuta inferencia a dos escalas (1.0x luminancia + 0.5x croma).
+        auto_mtf: Si es True, estira automáticamente datos lineales para la red y revierte al final.
+        detail_recovery: Factor de reinyección de microestructuras [0.0, 1.0].
+        sky_mask: Máscara espacial opcional [0.0, 1.0] para modular intensidad (cielo vs suelo).
         progress_callback: fn(bloque_actual, total_bloques).
         cancel_check: fn() -> bool, True para abortar.
 
     Retorna:
-        np.ndarray: Imagen RGB float32 [0.0, 1.0] reducida de ruido con microestructura intacta.
+        np.ndarray: Imagen RGB float32 [0.0, 1.0] reducida de ruido con preservación fotométrica exacta.
     """
     if not HAS_ONNX:
         raise RuntimeError("onnxruntime no está instalado en el entorno.")
@@ -264,76 +411,129 @@ def run_nafnet_tiled_inference(
     if base.ndim == 2:
         base = np.stack([base] * 3, axis=-1)
 
-    # 1. Limpieza de croma previa opcional
-    if clean_chroma and chroma_strength > 1e-4:
-        base = preprocess_chroma_clean(base, color_strength=chroma_strength)
+    # Invarianza fotométrica rápida: si la fuerza es nula, devolver entrada intacta
+    if strength <= 1e-5 and chroma_strength <= 1e-5:
+        return base
 
     orig_h, orig_w = base.shape[:2]
 
-    # Relleno reflectivo si la imagen es menor que el tamaño de bloque
-    pad_h = max(0, tile_size - orig_h)
-    pad_w = max(0, tile_size - orig_w)
-    if pad_h > 0 or pad_w > 0:
-        padded_img = cv2.copyMakeBorder(base, 0, pad_h, 0, pad_w, cv2.BORDER_REFLECT)
+    # Pre-estirado MTF global reversible si los datos son lineales o sub-estirados
+    s_bp = 0.0
+    m_param = 0.5
+    is_mtf_applied = False
+
+    if auto_mtf:
+        med, mad, sigma_hat = _compute_image_stats(base)
+        if med < 0.15:
+            s_bp = max(0.0, float(med - 2.8 * sigma_hat))
+            s_bp = min(s_bp, max(0.0, med - 1e-4))
+            denom = max(1e-6, 1.0 - s_bp)
+            base_norm = np.clip((base - s_bp) / denom, 0.0, 1.0).astype(np.float32)
+            med_norm = float(np.clip((med - s_bp) / denom, 1e-4, 0.9999))
+            t_target = 0.22
+            denom_m = med_norm * (2.0 * t_target - 1.0) - t_target
+            if abs(denom_m) > 1e-7:
+                m_cand = (med_norm * (t_target - 1.0)) / denom_m
+                m_param = float(np.clip(m_cand, 0.001, 0.999))
+                base_stretched = _apply_mtf(base_norm, m_param)
+                is_mtf_applied = True
+            else:
+                base_stretched = base_norm
+        else:
+            base_stretched = base
     else:
-        padded_img = base
+        base_stretched = base
 
-    h_pad, w_pad = padded_img.shape[:2]
-
-    y_coords = _get_tile_coords(h_pad, tile_size, overlap)
-    x_coords = _get_tile_coords(w_pad, tile_size, overlap)
-    total_tiles = len(y_coords) * len(x_coords)
-
-    hann_win = compute_hann_2d_window(tile_size, tile_size)
-
-    accumulator_img = np.zeros((h_pad, w_pad, 3), dtype=np.float32)
-    accumulator_weights = np.zeros((h_pad, w_pad, 1), dtype=np.float32)
-
-    session = _create_inference_session(path)
+    # Inicializar sesión ONNX (reutiliza caché global si ya está cargada)
+    session = _create_inference_session(path, use_cache=True)
     input_name = session.get_inputs()[0].name
     output_name = session.get_outputs()[0].name
 
-    current_tile = 0
-    for y in y_coords:
-        for x in x_coords:
-            if cancel_check and cancel_check():
-                raise InterruptedError("Inferencia NAFNet cancelada por el usuario.")
+    # Cálculo de bloques totales para reporte de progreso continuo
+    pad_h_1x = max(0, tile_size - orig_h)
+    pad_w_1x = max(0, tile_size - orig_w)
+    tiles_1x = len(_get_tile_coords(orig_h + pad_h_1x, tile_size, overlap)) * len(_get_tile_coords(orig_w + pad_w_1x, tile_size, overlap))
 
-            # Extraer bloque
-            tile_in = padded_img[y:y + tile_size, x:x + tile_size]
-
-            # Formato tensor NCHW float32
-            tensor_in = np.transpose(tile_in, (2, 0, 1))[np.newaxis, ...].astype(np.float32)
-
-            # Inferencia ONNX
-            outputs = session.run([output_name], {input_name: tensor_in})
-            out_tile = outputs[0].squeeze(0)  # (3, H, W)
-            out_tile = np.transpose(out_tile, (1, 2, 0))  # (H, W, 3)
-
-            # Ponderación con ventana 2D de Hann
-            if HAS_RUST_AI and hasattr(astroloom_rs, 'accumulate_tile_hann_inplace_rs'):
-                astroloom_rs.accumulate_tile_hann_inplace_rs(
-                    accumulator_img, accumulator_weights, np.ascontiguousarray(out_tile, dtype=np.float32), hann_win, y, x
-                )
-            else:
-                accumulator_img[y:y + tile_size, x:x + tile_size] += out_tile * hann_win
-                accumulator_weights[y:y + tile_size, x:x + tile_size] += hann_win
-
-            current_tile += 1
-            if progress_callback:
-                progress_callback(current_tile, total_tiles)
-
-    # Reconstrucción normalizada sin división por cero
-    if HAS_RUST_AI and hasattr(astroloom_rs, 'reconstruct_hann_tiling_rs'):
-        clean_out = astroloom_rs.reconstruct_hann_tiling_rs(
-            accumulator_img, accumulator_weights, orig_h, orig_w
-        )
+    use_multiscale = multiscale_chroma and (chroma_strength > 1e-4) and (orig_h >= 32 and orig_w >= 32)
+    if use_multiscale:
+        h_half = max(16, orig_h // 2)
+        w_half = max(16, orig_w // 2)
+        pad_h_05x = max(0, tile_size - h_half)
+        pad_w_05x = max(0, tile_size - w_half)
+        tiles_05x = len(_get_tile_coords(h_half + pad_h_05x, tile_size, overlap)) * len(_get_tile_coords(w_half + pad_w_05x, tile_size, overlap))
     else:
-        clean_padded = np.divide(
-            accumulator_img,
-            accumulator_weights,
-            out=np.zeros_like(accumulator_img),
-            where=accumulator_weights > 1e-12
+        tiles_05x = 0
+
+    total_tiles_all = tiles_1x + tiles_05x
+
+    # Pasada 1: Resolución nativa (1.0x) para luminancia y detalle fino
+    out_1x = _run_single_scale_tiled(
+        base_stretched, session, input_name, output_name,
+        tile_size=tile_size, overlap=overlap,
+        progress_offset=0, total_tiles_all=total_tiles_all,
+        progress_callback=progress_callback, cancel_check=cancel_check
+    )
+
+    # Pasada 2: Escala media (0.5x) para croma desacoplado
+    if use_multiscale:
+        small_in = cv2.resize(base_stretched, (w_half, h_half), interpolation=cv2.INTER_AREA)
+        out_05x_small = _run_single_scale_tiled(
+            small_in, session, input_name, output_name,
+            tile_size=tile_size, overlap=overlap,
+            progress_offset=tiles_1x, total_tiles_all=total_tiles_all,
+            progress_callback=progress_callback, cancel_check=cancel_check
         )
-        clean_out = clean_padded[:orig_h, :orig_w]
-    return np.clip(clean_out, 0.0, 1.0).astype(np.float32)
+        out_05x = cv2.resize(out_05x_small, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+
+        # Fusión en espacio YCrCb: Y de 1.0x + Cr/Cb de 0.5x
+        ycrcb_1x = cv2.cvtColor(out_1x, cv2.COLOR_RGB2YCrCb)
+        ycrcb_05x = cv2.cvtColor(out_05x, cv2.COLOR_RGB2YCrCb)
+        blend_c = float(np.clip(chroma_strength, 0.0, 1.0))
+        ycrcb_fused = np.empty_like(ycrcb_1x)
+        ycrcb_fused[..., 0] = ycrcb_1x[..., 0]
+        ycrcb_fused[..., 1] = ycrcb_1x[..., 1] * (1.0 - blend_c) + ycrcb_05x[..., 1] * blend_c
+        ycrcb_fused[..., 2] = ycrcb_1x[..., 2] * (1.0 - blend_c) + ycrcb_05x[..., 2] * blend_c
+        clean_stretched = cv2.cvtColor(ycrcb_fused, cv2.COLOR_YCrCb2RGB)
+    else:
+        if clean_chroma and chroma_strength > 1e-4:
+            clean_stretched = preprocess_chroma_clean(out_1x, color_strength=chroma_strength)
+        else:
+            clean_stretched = out_1x
+
+    # Modulación residual (strength) y máscara de cielo
+    residual = base_stretched - clean_stretched
+    eff_strength = float(strength)
+
+    if sky_mask is not None:
+        sm = sky_mask
+        if sm.shape[:2] != (orig_h, orig_w):
+            sm = cv2.resize(sm, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+        if sm.ndim == 2:
+            sm = sm[..., np.newaxis]
+        sm = np.clip(sm, 0.0, 1.0).astype(np.float32)
+        eff_strength = eff_strength * (0.45 + 0.55 * sm)
+
+    blended_stretched = np.clip(base_stretched - eff_strength * residual, 0.0, 1.0).astype(np.float32)
+
+    # Recuperación opcional de microdetalle
+    if detail_recovery > 1e-4:
+        y_orig = cv2.cvtColor(base_stretched, cv2.COLOR_RGB2GRAY)
+        g1 = cv2.GaussianBlur(y_orig, (0, 0), sigmaX=0.8)
+        g2 = cv2.GaussianBlur(y_orig, (0, 0), sigmaX=2.0)
+        d_hf = g1 - g2
+        _, _, sigma_y = _compute_image_stats(y_orig)
+        hf_mask = (np.abs(d_hf) > (2.5 * sigma_y)).astype(np.float32)
+        d_hf_protected = d_hf * hf_mask * float(detail_recovery)
+
+        ycrcb_blended = cv2.cvtColor(blended_stretched, cv2.COLOR_RGB2YCrCb)
+        ycrcb_blended[..., 0] = np.clip(ycrcb_blended[..., 0] + d_hf_protected, 0.0, 1.0)
+        blended_stretched = cv2.cvtColor(ycrcb_blended, cv2.COLOR_YCrCb2RGB)
+
+    # Reversión analítica de MTF y des-normalización a fotometría original
+    if is_mtf_applied:
+        inv_mtf = _apply_inv_mtf(blended_stretched, m_param)
+        clean_out = np.clip(inv_mtf * (1.0 - s_bp) + s_bp, 0.0, 1.0).astype(np.float32)
+    else:
+        clean_out = blended_stretched
+
+    return clean_out
