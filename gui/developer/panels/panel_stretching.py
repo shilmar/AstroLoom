@@ -40,6 +40,7 @@ class StretchingPanel(QWidget):
         self.ghs_hp_val: float = 0.0
         self.ghs_lp_val: float = 0.0
         self.ghs_bp_val: float = 0.0
+        self._signals_blocked: bool = False
 
         self._setup_ui()
 
@@ -466,8 +467,9 @@ class StretchingPanel(QWidget):
             self.btn_mode_ghs.setChecked(True)
             self.w_mtf_container.setVisible(False)
             self.w_ghs_container.setVisible(True)
-        self.parameter_changed.emit()
-        self.action_committed.emit()
+        if not getattr(self, '_signals_blocked', False):
+            self.parameter_changed.emit()
+            self.action_committed.emit()
 
     def set_ghs_color_mode(self, mode: str) -> None:
         if mode not in ("luma", "rgb"):
@@ -477,8 +479,9 @@ class StretchingPanel(QWidget):
             self.btn_ghs_luma.setChecked(True)
         else:
             self.btn_ghs_rgb.setChecked(True)
-        self.parameter_changed.emit()
-        self.action_committed.emit()
+        if not getattr(self, '_signals_blocked', False):
+            self.parameter_changed.emit()
+            self.action_committed.emit()
 
     def sync_controls(self, bp: float, m: float) -> None:
         self.block_signals(True)
@@ -611,6 +614,7 @@ class StretchingPanel(QWidget):
             self.block_signals(False)
 
     def block_signals(self, blocked: bool) -> None:
+        self._signals_blocked = blocked
         for w in (
             self.slider_bp, self.spin_bp,
             self.slider_mtf, self.spin_mtf,

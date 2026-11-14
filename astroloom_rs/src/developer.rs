@@ -1,7 +1,7 @@
 use crate::stacking::compute_median_in_place;
 use numpy::ndarray::{Array1, Array2, Array3};
 use numpy::{
-    IntoPyArray, PyArray1, PyArray3, PyReadonlyArray1, PyReadonlyArray2,
+    IntoPyArray, PyArray1, PyArray2, PyArray3, PyReadonlyArray1, PyReadonlyArray2,
     PyReadonlyArray3,
 };
 use pyo3::prelude::*;
@@ -844,3 +844,207 @@ pub fn blend_orton_and_diffusion_rs<'py>(
     let arr = Array3::from_shape_vec((h, w, c), out_vec).unwrap();
     arr.into_pyarray(py)
 }
+
+// ============================================================================
+// MÁSCARAS VECTORIALES ANALÍTICAS (GRADIENTE LINEAL Y RADIAL)
+// ============================================================================
+
+#[inline(always)]
+fn hermite_smoothstep(t: f32) -> f32 {
+    let t_c = t.clamp(0.0, 1.0);
+    1.0 - (3.0 * t_c * t_c - 2.0 * t_c * t_c * t_c)
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    h,
+    w,
+    x0,
+    y0,
+    x1,
+    y1,
+    midpoint=0.5,
+    profile="smoothstep",
+    span_b=1.0,
+    crop_rect=None,
+    full_shape=None
+))]
+pub fn compute_linear_gradient_rs<'py>(
+    py: Python<'py>,
+    h: usize,
+    w: usize,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    midpoint: f32,
+    profile: &str,
+    span_b: f32,
+    crop_rect: Option<(usize, usize, usize, usize)>,
+    full_shape: Option<(usize, usize)>,
+) -> Bound<'py, PyArray2<f32>> {
+    let (x_offset, y_offset, fw, fh) = match (crop_rect, full_shape) {
+        (Some((cx1, cy1, _, _)), Some((fh_val, fw_val))) if fw_val > 0 && fh_val > 0 => {
+            (cx1 as f32, cy1 as f32, fw_val as f32, fh_val as f32)
+        }
+        _ => (0.0, 0.0, w as f32, h as f32),
+    };
+
+    let aspect = if fh > 0.0 { fw / fh } else { 1.0 };
+    let vx = (x1 - x0) * aspect;
+    let vy = y1 - y0;
+    let len_sq = vx * vx + vy * vy;
+    let mid = midpoint.clamp(0.01, 0.99);
+
+    let is_linear = profile == "linear";
+    let is_exponential = profile == "exponential";
+    let is_reflected = profile == "reflected";
+    let span_b_safe = span_b.max(0.01);
+    let inv_span_b = 1.0 / span_b_safe;
+
+    let out_vec = py.allow_threads(|| {
+        let mut buf = vec![0.0f32; h * w];
+
+        if len_sq < 1e-7 {
+            // Vector nulo: gradiente degenerado
+            return buf;
+        }
+
+        let inv_len_sq = 1.0 / len_sq;
+
+        buf.par_chunks_mut(w)
+            .enumerate()
+            .for_each(|(y_idx, row_slice)| {
+                let py_coord = (y_idx as f32 + y_offset) / fh.max(1.0);
+                let dy = py_coord - y0;
+                let dy_vy = dy * vy;
+
+                for x_idx in 0..w {
+                    let px_coord = (x_idx as f32 + x_offset) / fw.max(1.0);
+                    let dx = (px_coord - x0) * aspect;
+                    let proj = dx * vx + dy_vy;
+
+                    let val = if is_reflected {
+                        let t = if proj >= 0.0 {
+                            (proj * inv_len_sq).clamp(0.0, 1.0)
+                        } else {
+                            (proj.abs() * inv_len_sq * inv_span_b).clamp(0.0, 1.0)
+                        };
+                        hermite_smoothstep(t)
+                    } else {
+                        let mut t = (proj * inv_len_sq).clamp(0.0, 1.0);
+
+                        if (mid - 0.5).abs() > 1e-4 {
+                            if t < mid {
+                                t = 0.5 * (t / mid);
+                            } else {
+                                t = 0.5 + 0.5 * ((t - mid) / (1.0 - mid));
+                            }
+                        }
+
+                        if is_linear {
+                            1.0 - t
+                        } else if is_exponential {
+                            (1.0 - t) * (1.0 - t)
+                        } else {
+                            hermite_smoothstep(t)
+                        }
+                    };
+
+                    row_slice[x_idx] = val.clamp(0.0, 1.0);
+                }
+            });
+
+        buf
+    });
+
+    let arr = Array2::from_shape_vec((h, w), out_vec).unwrap();
+    arr.into_pyarray(py)
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    h,
+    w,
+    cx,
+    cy,
+    rx,
+    ry,
+    angle_deg=0.0,
+    feather=0.5,
+    crop_rect=None,
+    full_shape=None
+))]
+pub fn compute_radial_gradient_rs<'py>(
+    py: Python<'py>,
+    h: usize,
+    w: usize,
+    cx: f32,
+    cy: f32,
+    rx: f32,
+    ry: f32,
+    angle_deg: f32,
+    feather: f32,
+    crop_rect: Option<(usize, usize, usize, usize)>,
+    full_shape: Option<(usize, usize)>,
+) -> Bound<'py, PyArray2<f32>> {
+    let (x_offset, y_offset, fw, fh) = match (crop_rect, full_shape) {
+        (Some((cx1, cy1, _, _)), Some((fh_val, fw_val))) if fw_val > 0 && fh_val > 0 => {
+            (cx1 as f32, cy1 as f32, fw_val as f32, fh_val as f32)
+        }
+        _ => (0.0, 0.0, w as f32, h as f32),
+    };
+
+    let aspect = if fh > 0.0 { fw / fh } else { 1.0 };
+    let inv_aspect = 1.0 / aspect.max(1e-5);
+    let rx_safe = rx.abs().max(1e-5);
+    let ry_safe = ry.abs().max(1e-5);
+    let feather_safe = feather.clamp(0.01, 1.0);
+    let d_in = (1.0 - feather_safe).max(0.0);
+    let inv_feather = 1.0 / feather_safe;
+
+    let rad = angle_deg.to_radians();
+    let cos_t = rad.cos();
+    let sin_t = rad.sin();
+
+    let out_vec = py.allow_threads(|| {
+        let mut buf = vec![0.0f32; h * w];
+
+        buf.par_chunks_mut(w)
+            .enumerate()
+            .for_each(|(y_idx, row_slice)| {
+                let py_coord = (y_idx as f32 + y_offset) / fh.max(1.0);
+                let dy = py_coord - cy;
+
+                for x_idx in 0..w {
+                    let px_coord = (x_idx as f32 + x_offset) / fw.max(1.0);
+                    let dx = px_coord - cx;
+
+                    // Rotación métrica en el plano de píxeles (aspect-ratio aware)
+                    let x_rot = dx * cos_t + (dy * inv_aspect) * sin_t;
+                    let y_rot = -(dx * aspect) * sin_t + dy * cos_t;
+
+                    let nx = x_rot / rx_safe;
+                    let ny = y_rot / ry_safe;
+                    let d = (nx * nx + ny * ny).sqrt();
+
+                    let val = if d <= d_in {
+                        1.0
+                    } else if d >= 1.0 {
+                        0.0
+                    } else {
+                        let t = (d - d_in) * inv_feather;
+                        hermite_smoothstep(t)
+                    };
+
+                    row_slice[x_idx] = val.clamp(0.0, 1.0);
+                }
+            });
+
+        buf
+    });
+
+    let arr = Array2::from_shape_vec((h, w), out_vec).unwrap();
+    arr.into_pyarray(py)
+}
+

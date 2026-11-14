@@ -12,7 +12,7 @@ import uuid
 import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple, Set
 
 from core.config_manager import load_config, APP_ROOT
 
@@ -41,10 +41,80 @@ PARAM_KEYS_DETAILS = {
     "ond_est_val", "ond_bg_val", "denoise_val", "layer_idx", "lp_val"
 }
 
+# Límites físicos de los deslizadores para interpolación y escalado de presets
+PARAM_BOUNDS: Dict[str, Tuple[int, int]] = {
+    "temp_val": (-1000, 1000),
+    "tint_val": (-1000, 1000),
+    "sat_sky_val": (0, 300),
+    "sat_gnd_val": (0, 300),
+    "vibrance_val": (-100, 100),
+    "contrast_val": (-100, 100),
+    "gnd_ev_val": (-200, 300),
+    "gnd_sh_val": (0, 100),
+    "gnd_bp_val": (-50, 100),
+    "gnd_antihalo_val": (0, 100),
+    "gnd_edge_shift_val": (-15, 15),
+    "stars_val": (0, 200),
+    "contrast_starless_val": (-100, 100),
+    "clarity_val": (-200, 200),
+    "dehaze_val": (-200, 200),
+    "ond_est_val": (-100, 100),
+    "ond_bg_val": (0, 100),
+    "denoise_val": (0, 100),
+    "lp_val": (0, 100),
+}
+
+DEFAULT_NEUTRAL_PARAMS: Dict[str, Any] = {
+    "lp_val": 0,
+    "layer_idx": 0,
+    "stars_val": 100,
+    "contrast_starless_val": 0,
+    "clarity_val": 0,
+    "dehaze_val": 0,
+    "ond_est_val": 0,
+    "ond_bg_val": 0,
+    "denoise_val": 0,
+    "temp_val": 0,
+    "tint_val": 0,
+    "sat_sky_val": 100,
+    "sat_gnd_val": 100,
+    "vibrance_val": 0,
+    "contrast_val": 0,
+    "gnd_ev_val": 0,
+    "gnd_sh_val": 0,
+    "gnd_bp_val": 0,
+    "gnd_antihalo_val": 0,
+    "gnd_edge_shift_val": 0,
+    "curves": None,
+}
+
+
+def infer_preset_requirements(params: Dict[str, Any]) -> Tuple[bool, bool]:
+    """
+    Analiza un diccionario de parámetros e infiere automáticamente si necesita:
+    - Máscara Cielo / Suelo (requires_sky_mask)
+    - Separación StarNet++ AI (requires_starnet)
+    """
+    if not isinstance(params, dict):
+        return False, False
+
+    needs_sky = False
+    for k in ("gnd_ev_val", "gnd_sh_val", "gnd_bp_val", "gnd_antihalo_val", "gnd_edge_shift_val"):
+        if params.get(k, 0) != 0:
+            needs_sky = True
+            break
+
+    needs_starnet = False
+    stars = params.get("stars_val", 100)
+    if stars <= 85 or params.get("layer_idx", 0) != 0:
+        needs_starnet = True
+
+    return needs_sky, needs_starnet
+
 
 @dataclass
 class DeveloperPreset:
-    """Representa un ajuste preestablecido de revelado astronómico."""
+    """Representa un ajuste preestablecido de revelado astronómico con metadatos de dependencias."""
     id: str
     name: str
     description: str = ""
@@ -53,11 +123,20 @@ class DeveloperPreset:
     author: str = "AstroLoom"
     created_at: str = field(default_factory=lambda: datetime.datetime.now().isoformat())
     params: Dict[str, Any] = field(default_factory=dict)
+    requires_sky_mask: Optional[bool] = None
+    requires_starnet: Optional[bool] = None
+
+    def __post_init__(self):
+        inferred_sky, inferred_starnet = infer_preset_requirements(self.params)
+        if self.requires_sky_mask is None:
+            self.requires_sky_mask = inferred_sky
+        if self.requires_starnet is None:
+            self.requires_starnet = inferred_starnet
 
     def to_dict(self) -> Dict[str, Any]:
         """Serializa el preset a un diccionario compatible con JSON."""
         return {
-            "version": "1.0",
+            "version": "1.1",
             "id": self.id,
             "name": self.name,
             "description": self.description,
@@ -66,11 +145,15 @@ class DeveloperPreset:
             "author": self.author,
             "created_at": self.created_at,
             "params": self.params,
+            "requires_sky_mask": self.requires_sky_mask,
+            "requires_starnet": self.requires_starnet,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "DeveloperPreset":
-        """Deserializa un preset desde un diccionario JSON."""
+        """Deserializa un preset desde un diccionario JSON con retrocompatibilidad."""
+        params = dict(data.get("params", {}))
+        inferred_sky, inferred_starnet = infer_preset_requirements(params)
         return cls(
             id=str(data.get("id", str(uuid.uuid4()))),
             name=str(data.get("name", "Preset sin nombre")),
@@ -79,7 +162,9 @@ class DeveloperPreset:
             is_builtin=bool(data.get("is_builtin", False)),
             author=str(data.get("author", "Usuario")),
             created_at=str(data.get("created_at", datetime.datetime.now().isoformat())),
-            params=dict(data.get("params", {})),
+            params=params,
+            requires_sky_mask=bool(data.get("requires_sky_mask", inferred_sky)),
+            requires_starnet=bool(data.get("requires_starnet", inferred_starnet)),
         )
 
 
@@ -96,6 +181,8 @@ def get_builtin_presets() -> List[DeveloperPreset]:
             description="Restablece todos los parámetros de color, contraste y StarNet a sus valores neutros (sin alterar el estirado MTF de la imagen).",
             is_builtin=True,
             author="AstroLoom",
+            requires_sky_mask=False,
+            requires_starnet=False,
             params={
                 "lp_val": 0,
                 "layer_idx": 0,
@@ -125,6 +212,8 @@ def get_builtin_presets() -> List[DeveloperPreset]:
             description="Realce agresivo de bandas oscuras y carril de polvo en el centro galáctico con microtextura de ondículas y contraste refinado.",
             is_builtin=True,
             author="AstroLoom",
+            requires_sky_mask=False,
+            requires_starnet=False,
             params={
                 "lp_val": 10,
                 "layer_idx": 0,
@@ -154,6 +243,8 @@ def get_builtin_presets() -> List[DeveloperPreset]:
             description="Estilo equilibrado, fiel a la visión telescópica con transición suave de estrellas y colores no saturados en exceso.",
             is_builtin=True,
             author="AstroLoom",
+            requires_sky_mask=False,
+            requires_starnet=False,
             params={
                 "lp_val": 15,
                 "layer_idx": 0,
@@ -183,6 +274,8 @@ def get_builtin_presets() -> List[DeveloperPreset]:
             description="Prioriza la visibilidad y rango dinámico del primer plano terrestre levantando sombras (+1.2 EV) sin quemar el cielo estrellado.",
             is_builtin=True,
             author="AstroLoom",
+            requires_sky_mask=True,
+            requires_starnet=False,
             params={
                 "lp_val": 10,
                 "layer_idx": 0,
@@ -212,6 +305,8 @@ def get_builtin_presets() -> List[DeveloperPreset]:
             description="Optimizado para nebulosas difusas y objetos de espacio profundo; reduce estrellas de fondo y destaca estructuras gaseosas débiles.",
             is_builtin=True,
             author="AstroLoom",
+            requires_sky_mask=False,
+            requires_starnet=False,
             params={
                 "lp_val": 15,
                 "layer_idx": 0,
@@ -241,6 +336,8 @@ def get_builtin_presets() -> List[DeveloperPreset]:
             description="Atenúa cúpulas de luz amarillentas/anaranjadas de ciudades cercanas, neutraliza la dominante térmica y limpia el fondo.",
             is_builtin=True,
             author="AstroLoom",
+            requires_sky_mask=False,
+            requires_starnet=False,
             params={
                 "lp_val": 38,
                 "layer_idx": 0,
@@ -270,6 +367,8 @@ def get_builtin_presets() -> List[DeveloperPreset]:
             description="Comprime las estrellas a pequeñas cabezas de alfiler discretas (35%), despejando la visión de nebulosas y nubes galácticas.",
             is_builtin=True,
             author="AstroLoom",
+            requires_sky_mask=False,
+            requires_starnet=True,
             params={
                 "lp_val": 0,
                 "layer_idx": 0,
@@ -299,6 +398,8 @@ def get_builtin_presets() -> List[DeveloperPreset]:
             description="Elimina totalmente la capa de estrellas (0%), dejando visible únicamente el gas nebuloso y polvo con realce de texturas.",
             is_builtin=True,
             author="AstroLoom",
+            requires_sky_mask=False,
+            requires_starnet=True,
             params={
                 "lp_val": 0,
                 "layer_idx": 1,
@@ -490,3 +591,40 @@ def filter_preset_params(
             target[k] = preset_params[k]
 
     return target
+
+
+def interpolate_preset_params(
+    base_params: Dict[str, Any],
+    preset_params: Dict[str, Any],
+    intensity_pct: float = 100.0,
+    scope: str = SCOPE_ALL,
+) -> Dict[str, Any]:
+    """
+    Modula los parámetros de un preset según una intensidad porcentual (0% a 150%).
+    A 100%: aplica exactamente los valores del preset.
+    A 0%: mantiene los valores base actuales (sin cambios).
+    A 50%: aplica la mitad del efecto relativo del preset frente al estado base.
+    A >100%: intensifica los valores respetando los límites físicos de los deslizadores.
+    """
+    filtered_preset = filter_preset_params(preset_params, base_params, scope)
+    alpha = max(0.0, float(intensity_pct) / 100.0)
+
+    result = base_params.copy()
+
+    for k, target_val in filtered_preset.items():
+        if k in KEYS_EXCLUDED_FROM_PRESETS:
+            continue
+
+        base_val = base_params.get(k, DEFAULT_NEUTRAL_PARAMS.get(k, 0))
+
+        if isinstance(target_val, (int, float)) and k in PARAM_BOUNDS:
+            min_bound, max_bound = PARAM_BOUNDS[k]
+            # Interpolación lineal (lerp)
+            interp = float(base_val) + alpha * (float(target_val) - float(base_val))
+            clamped = max(min_bound, min(max_bound, int(round(interp))))
+            result[k] = clamped
+        else:
+            # Para tipos no escalables linealmente (ej. curvas o layer_idx)
+            result[k] = target_val if alpha >= 0.5 else base_val
+
+    return result

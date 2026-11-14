@@ -4,23 +4,30 @@ gui/dialog_presets.py - Diálogos interactivos para guardar, importar, exportar 
 los ajustes preestablecidos (Presets) de revelado en AstroLoom Studio Pro 2.0.
 Diseño homogéneo con iconografía vectorial SVG, sin emojis y acabado Slate/Charcoal.
 """
+import numpy as np
+import cv2
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QImage, QPixmap, QPainter
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit,
     QComboBox, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QMessageBox, QFileDialog, QRadioButton, QButtonGroup,
-    QSplitter, QWidget, QFrame, QSizePolicy
+    QSplitter, QWidget, QFrame, QSizePolicy, QScrollArea, QGridLayout,
+    QSlider, QCheckBox, QStackedWidget
 )
 
 from core.developer_presets import (
     DeveloperPreset, get_builtin_presets, load_user_presets,
     save_user_preset, delete_user_preset, export_preset_file, import_preset_file,
+    interpolate_preset_params,
     SCOPE_ALL, SCOPE_TONE, SCOPE_COLOR, SCOPE_DETAILS
 )
+from core.stretch import calculate_mtf_params
+from gui.developer.developer_state import DeveloperState
+from gui.developer.pipeline import apply_developer_pipeline
 from gui.theme import (
     STYLE_RUN_IDLE, STYLE_TRANSFER_BTN, STYLE_STATUS_PILL,
     BG_WINDOW, BG_PANEL, BG_CARD, BG_INPUT, BORDER_BASE, BORDER_FOCUS,
@@ -203,20 +210,205 @@ class SavePresetDialog(QDialog):
             QMessageBox.critical(self, "Error al Guardar", f"No se pudo guardar el archivo del preset:\n{e}")
 
 
-class PresetManagerDialog(QDialog):
-    """Diálogo completo de administración, importación, exportación y borrado de presets."""
+def numpy_to_qpixmap(arr: Optional[np.ndarray], width: int = 216, height: int = 115) -> QPixmap:
+    """Convierte un array float32 [0..1] RGB a QPixmap con escalado nítido."""
+    if arr is None:
+        pix = QPixmap(width, height)
+        pix.fill(QColor("#101420"))
+        return pix
 
-    # Señal emitida cuando el usuario decide aplicar un preset desde el gestor: (preset, scope)
-    apply_preset_requested = Signal(object, str)
+    arr_u8 = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
+    if arr_u8.ndim == 2:
+        arr_u8 = np.repeat(arr_u8[..., np.newaxis], 3, axis=2)
+    elif arr_u8.ndim == 3 and arr_u8.shape[2] == 1:
+        arr_u8 = np.repeat(arr_u8[..., np.newaxis], 3, axis=2)
+
+    arr_u8 = np.ascontiguousarray(arr_u8)
+    h, w, ch = arr_u8.shape
+    bytes_per_line = ch * w
+    qimg = QImage(arr_u8.data, w, h, bytes_per_line, QImage.Format_RGB888)
+    pix = QPixmap.fromImage(qimg)
+    return pix.scaled(width, height, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+
+
+def create_fallback_thumbnail(width: int = 216, height: int = 115, title: str = "") -> QPixmap:
+    """Genera una miniatura gráfica decorativa cuando no hay imagen activa en el revelador."""
+    pix = QPixmap(width, height)
+    pix.fill(QColor("#0e121d"))
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    rng = np.random.RandomState(abs(hash(title)) % 10000)
+    for _ in range(25):
+        sx = int(rng.uniform(5, width - 5))
+        sy = int(rng.uniform(5, height - 5))
+        r = float(rng.uniform(0.8, 2.2))
+        alpha = int(rng.uniform(100, 240))
+        p.setBrush(QColor(226, 232, 240, alpha))
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(sx, sy, int(r), int(r))
+    p.end()
+    return pix
+
+
+class PresetCardWidget(QFrame):
+    """Tarjeta interactiva para visualización de presets con miniatura gráfica y distintivos."""
+    clicked = Signal(object)
+    double_clicked = Signal(object)
+
+    def __init__(self, preset: DeveloperPreset, thumb_pixmap: Optional[QPixmap] = None, parent=None):
+        super().__init__(parent)
+        self.preset = preset
+        self._is_selected = False
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedWidth(230)
+        self.setFixedHeight(215)
+        self._setup_ui(thumb_pixmap)
+        self._update_style()
+
+    def _setup_ui(self, thumb_pixmap: Optional[QPixmap]):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(7, 7, 7, 7)
+        layout.setSpacing(5)
+
+        # 1. Contenedor de la miniatura
+        self.lbl_thumb = QLabel()
+        self.lbl_thumb.setFixedHeight(115)
+        self.lbl_thumb.setAlignment(Qt.AlignCenter)
+        self.lbl_thumb.setStyleSheet("background-color: #0c0f18; border-radius: 5px;")
+        if thumb_pixmap and not thumb_pixmap.isNull():
+            self.lbl_thumb.setPixmap(thumb_pixmap)
+        else:
+            self.lbl_thumb.setPixmap(create_fallback_thumbnail(216, 115, self.preset.name))
+        layout.addWidget(self.lbl_thumb)
+
+        # 2. Badges de Requisitos y Origen
+        row_badges = QHBoxLayout()
+        row_badges.setSpacing(4)
+
+        lbl_req = QLabel()
+        if getattr(self.preset, "requires_starnet", False):
+            lbl_req.setText("✨ StarNet")
+            lbl_req.setStyleSheet("""
+                background-color: rgba(251, 191, 36, 0.12);
+                color: #fbbf24;
+                border: 1px solid rgba(251, 191, 36, 0.35);
+                border-radius: 3px;
+                padding: 1px 4px;
+                font-size: 9px;
+                font-weight: 700;
+            """)
+        elif getattr(self.preset, "requires_sky_mask", False):
+            lbl_req.setText("🌄 Auto-Suelo")
+            lbl_req.setStyleSheet("""
+                background-color: rgba(74, 222, 128, 0.12);
+                color: #4ade80;
+                border: 1px solid rgba(74, 222, 128, 0.35);
+                border-radius: 3px;
+                padding: 1px 4px;
+                font-size: 9px;
+                font-weight: 700;
+            """)
+        else:
+            lbl_req.setText("⚡ Directo")
+            lbl_req.setStyleSheet("""
+                background-color: rgba(56, 189, 248, 0.12);
+                color: #38bdf8;
+                border: 1px solid rgba(56, 189, 248, 0.35);
+                border-radius: 3px;
+                padding: 1px 4px;
+                font-size: 9px;
+                font-weight: 700;
+            """)
+        row_badges.addWidget(lbl_req)
+
+        lbl_orig = QLabel("Fábrica" if self.preset.is_builtin else "Usuario")
+        orig_color = "#94a3b8" if self.preset.is_builtin else "#e879f9"
+        lbl_orig.setStyleSheet(f"""
+            background-color: #111522;
+            color: {orig_color};
+            border: 1px solid #22293d;
+            border-radius: 3px;
+            padding: 1px 4px;
+            font-size: 9px;
+            font-weight: 600;
+        """)
+        row_badges.addWidget(lbl_orig)
+        row_badges.addStretch()
+        layout.addLayout(row_badges)
+
+        # 3. Título del Preset
+        self.lbl_title = QLabel(self.preset.name)
+        self.lbl_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #f8fafc;")
+        self.lbl_title.setWordWrap(True)
+        self.lbl_title.setMaximumHeight(34)
+        layout.addWidget(self.lbl_title)
+
+        # 4. Categoría
+        lbl_cat = QLabel(self.preset.category)
+        lbl_cat.setStyleSheet("font-size: 10px; color: #64748b;")
+        layout.addWidget(lbl_cat)
+        layout.addStretch()
+
+    def set_thumbnail(self, pixmap: QPixmap):
+        if pixmap and not pixmap.isNull():
+            self.lbl_thumb.setPixmap(pixmap)
+
+    def set_selected(self, selected: bool):
+        self._is_selected = selected
+        self._update_style()
+
+    def _update_style(self):
+        if self._is_selected:
+            self.setStyleSheet("""
+                PresetCardWidget {
+                    background-color: #152238;
+                    border: 2px solid #38bdf8;
+                    border-radius: 8px;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                PresetCardWidget {
+                    background-color: #111422;
+                    border: 1px solid #20273a;
+                    border-radius: 8px;
+                }
+                PresetCardWidget:hover {
+                    background-color: #161b2c;
+                    border: 1px solid #38bdf8;
+                }
+            """)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.preset)
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.double_clicked.emit(self.preset)
+        super().mouseDoubleClickEvent(event)
+
+
+class PresetManagerDialog(QDialog):
+    """Diálogo visual completo de galería, administración, importación y exportación de presets."""
+
+    # Señal emitida cuando el usuario decide aplicar un preset: (preset, scope, intensity_pct)
+    apply_preset_requested = Signal(object, str, float)
+    # Señal de previsualización temporal en el lienzo principal
+    preview_preset_requested = Signal(object, str, float)
+    # Señal de cancelación de previsualización (restaura estado original)
+    preview_cancelled = Signal()
 
     def __init__(self, current_params: Dict[str, Any], parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.current_params = current_params
         self.all_presets: List[DeveloperPreset] = []
         self.selected_preset: Optional[DeveloperPreset] = None
+        self.card_widgets: List[PresetCardWidget] = []
 
-        self.setWindowTitle("Gestor de Ajustes Preestablecidos (Presets)")
-        self.resize(840, 560)
+        self.setWindowTitle("Galería y Gestor de Presets de Revelado")
+        self.resize(1000, 660)
         self.setModal(True)
         self.setStyleSheet("""
             QDialog {
@@ -228,8 +420,87 @@ class PresetManagerDialog(QDialog):
             }
         """)
 
+        # Preparación de datos de miniatura basados en la imagen real del usuario
+        self.raw_thumb_base = None
+        self.thumb_mask = None
+        self.thumb_starless = None
+        self.thumb_stars = None
+        self.thumb_bp = 0.0
+        self.thumb_mtf = 0.5
+        self._init_thumbnail_data()
+
         self._setup_ui()
         self._refresh_presets()
+
+    def _init_thumbnail_data(self):
+        parent_tab = self.parent()
+        if parent_tab is None:
+            return
+
+        target_img = getattr(parent_tab, 'preview_proxy', None)
+        if target_img is None:
+            target_img = getattr(parent_tab, 'image_32bit', None)
+
+        if target_img is None:
+            return
+
+        try:
+            h, w = target_img.shape[:2]
+            tw = 220
+            th = max(60, int(h * (220.0 / float(w))))
+            self.raw_thumb_base = cv2.resize(target_img, (tw, th), interpolation=cv2.INTER_AREA)
+
+            curr_mask = getattr(parent_tab, 'current_mask', None)
+            if curr_mask is not None:
+                self.thumb_mask = cv2.resize(curr_mask, (tw, th), interpolation=cv2.INTER_LINEAR)
+
+            curr_sl = getattr(parent_tab, 'image_starless', None)
+            if curr_sl is not None:
+                self.thumb_starless = cv2.resize(curr_sl, (tw, th), interpolation=cv2.INTER_AREA)
+
+            curr_st = getattr(parent_tab, 'image_stars', None)
+            if curr_st is not None:
+                self.thumb_stars = cv2.resize(curr_st, (tw, th), interpolation=cv2.INTER_AREA)
+
+            st_mtf = getattr(getattr(parent_tab, 'state', None), 'mtf_val', 0.5)
+            st_bp = getattr(getattr(parent_tab, 'state', None), 'bp_val', 0.0)
+            if st_mtf >= 0.499 and st_bp == 0.0:
+                bp_calc, m_calc = calculate_mtf_params(self.raw_thumb_base, target_background=0.20)
+                self.thumb_bp = bp_calc
+                self.thumb_mtf = m_calc
+            else:
+                self.thumb_bp = st_bp
+                self.thumb_mtf = st_mtf
+        except Exception as e:
+            print(f"[PresetManagerDialog] Error preparando base de miniaturas: {e}")
+
+    def _generate_thumbnail_for_preset(self, preset: DeveloperPreset) -> QPixmap:
+        if self.raw_thumb_base is None:
+            return create_fallback_thumbnail(216, 115, preset.name)
+
+        try:
+            st = DeveloperState()
+            for k, v in self.current_params.items():
+                if hasattr(st, k):
+                    setattr(st, k, v)
+            for k, v in preset.params.items():
+                if hasattr(st, k):
+                    setattr(st, k, v)
+
+            st.bp_val = self.thumb_bp
+            st.mtf_val = self.thumb_mtf
+
+            res = apply_developer_pipeline(
+                self.raw_thumb_base,
+                st,
+                precomputed_mask=self.thumb_mask,
+                image_starless=self.thumb_starless,
+                image_stars=self.thumb_stars,
+                is_preview=True
+            )
+            return numpy_to_qpixmap(res, 216, 115)
+        except Exception:
+            return create_fallback_thumbnail(216, 115, preset.name)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -240,13 +511,13 @@ class PresetManagerDialog(QDialog):
         header_layout = QHBoxLayout()
         header_layout.setSpacing(10)
         lbl_icon = QLabel()
-        lbl_icon.setPixmap(get_svg_pixmap("sliders", color="#38bdf8", size=22))
+        lbl_icon.setPixmap(get_svg_pixmap("sparkles", color="#38bdf8", size=24))
         header_layout.addWidget(lbl_icon)
 
         title_box = QVBoxLayout()
-        lbl_header = QLabel("Gestor de Presets de Revelado")
-        lbl_header.setStyleSheet("font-size: 15px; font-weight: 700; color: #f8fafc;")
-        lbl_sub = QLabel("Administra, inspecciona, importa y exporta estilos de procesado astronómico")
+        lbl_header = QLabel("Galería Visual y Gestor de Presets")
+        lbl_header.setStyleSheet("font-size: 16px; font-weight: 700; color: #f8fafc;")
+        lbl_sub = QLabel("Explora miniaturas sobre tu imagen, modula la intensidad del estilo y previsualiza en tiempo real")
         lbl_sub.setStyleSheet("font-size: 11px; color: #94a3b8;")
         title_box.addWidget(lbl_header)
         title_box.addWidget(lbl_sub)
@@ -266,19 +537,19 @@ class PresetManagerDialog(QDialog):
             }
         """)
 
-        # --- LADO IZQUIERDO: Tabla de Presets ---
+        # --- LADO IZQUIERDO: Catálogo y Vistas (Tarjetas / Tabla) ---
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 8, 0)
         left_layout.setSpacing(8)
 
-        # Filtro de búsqueda / categoría
+        # Barra de Filtros y Conmutador de Vista
         filter_layout = QHBoxLayout()
         filter_layout.setSpacing(8)
 
         self.txt_filter = QLineEdit()
         self.txt_filter.setClearButtonEnabled(True)
-        self.txt_filter.setPlaceholderText("Buscar por nombre o descripción...")
+        self.txt_filter.setPlaceholderText("Buscar preset por nombre...")
         self.txt_filter.setStyleSheet("""
             QLineEdit {
                 background-color: #131724;
@@ -312,9 +583,68 @@ class PresetManagerDialog(QDialog):
         """)
         self.combo_cat_filter.currentTextChanged.connect(self._apply_filter)
         filter_layout.addWidget(self.combo_cat_filter)
+
+        # Selector de Vista: Tarjetas vs Tabla
+        self.btn_view_cards = QPushButton("Tarjetas")
+        self.btn_view_cards.setIcon(get_icon("sliders", color="#38bdf8", size=13))
+        self.btn_view_cards.setCheckable(True)
+        self.btn_view_cards.setChecked(True)
+
+        self.btn_view_table = QPushButton("Lista Pro")
+        self.btn_view_table.setIcon(get_icon("file", color="#94a3b8", size=13))
+        self.btn_view_table.setCheckable(True)
+        self.btn_view_table.setChecked(False)
+
+        view_btn_style = """
+            QPushButton {
+                background-color: #131724;
+                border: 1px solid #242c3e;
+                border-radius: 5px;
+                padding: 6px 10px;
+                color: #cbd5e1;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:checked {
+                background-color: #1e293b;
+                border-color: #38bdf8;
+                color: #38bdf8;
+            }
+        """
+        self.btn_view_cards.setStyleSheet(view_btn_style)
+        self.btn_view_table.setStyleSheet(view_btn_style)
+
+        view_grp = QButtonGroup(self)
+        view_grp.addButton(self.btn_view_cards, 0)
+        view_grp.addButton(self.btn_view_table, 1)
+        view_grp.idClicked.connect(self._on_view_mode_changed)
+
+        filter_layout.addWidget(self.btn_view_cards)
+        filter_layout.addWidget(self.btn_view_table)
         left_layout.addLayout(filter_layout)
 
-        # Tabla de Presets Pro
+        # Contenedor Apilado de Vistas
+        self.stack_views = QStackedWidget()
+
+        # Vista 1: Cuadrícula de Tarjetas con Miniaturas
+        self.scroll_cards = QScrollArea()
+        self.scroll_cards.setWidgetResizable(True)
+        self.scroll_cards.setStyleSheet("""
+            QScrollArea {
+                background-color: #0b0e17;
+                border: 1px solid #1e2538;
+                border-radius: 6px;
+            }
+        """)
+        self.w_cards_container = QWidget()
+        self.w_cards_container.setStyleSheet("background-color: transparent;")
+        self.grid_cards = QGridLayout(self.w_cards_container)
+        self.grid_cards.setContentsMargins(10, 10, 10, 10)
+        self.grid_cards.setSpacing(12)
+        self.scroll_cards.setWidget(self.w_cards_container)
+        self.stack_views.addWidget(self.scroll_cards)
+
+        # Vista 2: Tabla Pro
         self.table = QTableWidget()
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(["Nombre del Preset", "Categoría", "Origen"])
@@ -354,11 +684,13 @@ class PresetManagerDialog(QDialog):
                 border-bottom: 1px solid #242c3f;
             }
         """)
-        self.table.itemSelectionChanged.connect(self._on_selection_changed)
+        self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
         self.table.doubleClicked.connect(self._on_table_double_clicked)
-        left_layout.addWidget(self.table)
+        self.stack_views.addWidget(self.table)
 
-        # Botones bajo la tabla
+        left_layout.addWidget(self.stack_views, 1)
+
+        # Botones bajo el catálogo
         tbl_btn_layout = QHBoxLayout()
         tbl_btn_layout.setSpacing(8)
 
@@ -427,13 +759,13 @@ class PresetManagerDialog(QDialog):
         left_layout.addLayout(tbl_btn_layout)
         splitter.addWidget(left_widget)
 
-        # --- LADO DERECHO: Detalle del Preset y Aplicación ---
+        # --- LADO DERECHO: Detalle, Intensidad y Aplicación ---
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(8, 0, 0, 0)
         right_layout.setSpacing(10)
 
-        # Tarjeta de Detalles del Preset
+        # Tarjeta 1: Detalles del Preset
         card_detail = QFrame()
         card_detail.setStyleSheet("QFrame { background-color: #141724; border: 1px solid #222738; border-radius: 8px; }")
         detail_layout = QVBoxLayout(card_detail)
@@ -461,39 +793,107 @@ class PresetManagerDialog(QDialog):
         """)
         detail_layout.addWidget(self.lbl_detail_badge)
 
-        self.lbl_detail_desc = QLabel("Elige un preset de la lista para ver su descripción y parámetros.")
+        self.lbl_detail_desc = QLabel("Elige un preset de la lista para ver su descripción y modular su intensidad.")
         self.lbl_detail_desc.setStyleSheet("color: #94a3b8; font-size: 11px; line-height: 1.3;")
         self.lbl_detail_desc.setWordWrap(True)
         detail_layout.addWidget(self.lbl_detail_desc)
 
-        # Resumen de Parámetros Clave
-        lbl_params_hdr = QLabel("Parámetros Configurados:")
-        lbl_params_hdr.setStyleSheet("font-weight: 600; font-size: 11px; color: #cbd5e1; margin-top: 4px;")
-        detail_layout.addWidget(lbl_params_hdr)
+        # Tarjeta 1b: Requisitos de Capas del Preset
+        self.card_reqs = QFrame()
+        self.card_reqs.setStyleSheet("background-color: #0d101a; border: 1px solid #1c2233; border-radius: 6px; padding: 6px;")
+        reqs_layout = QVBoxLayout(self.card_reqs)
+        reqs_layout.setContentsMargins(6, 6, 6, 6)
+        reqs_layout.setSpacing(4)
 
-        self.txt_params_summary = QTextEdit()
-        self.txt_params_summary.setReadOnly(True)
-        self.txt_params_summary.setStyleSheet("""
-            QTextEdit {
-                background-color: #0b0e15;
-                border: 1px solid #1a202c;
-                border-radius: 6px;
+        lbl_reqs_title = QLabel("REQUISITOS DE CAPAS")
+        lbl_reqs_title.setStyleSheet("font-size: 9px; font-weight: 700; color: #64748b; letter-spacing: 0.5px;")
+        reqs_layout.addWidget(lbl_reqs_title)
+
+        self.lbl_req_sky = QLabel("● Cielo/Suelo: No requerida")
+        self.lbl_req_sky.setStyleSheet("font-size: 11px; color: #94a3b8;")
+        reqs_layout.addWidget(self.lbl_req_sky)
+
+        self.lbl_req_starnet = QLabel("● StarNet AI: No requerida")
+        self.lbl_req_starnet.setStyleSheet("font-size: 11px; color: #94a3b8;")
+        reqs_layout.addWidget(self.lbl_req_starnet)
+
+        detail_layout.addWidget(self.card_reqs)
+        right_layout.addWidget(card_detail)
+
+        # Tarjeta 2: Control de Intensidad del Preset
+        card_intensity = QFrame()
+        card_intensity.setStyleSheet("QFrame { background-color: #141724; border: 1px solid #222738; border-radius: 8px; }")
+        int_layout = QVBoxLayout(card_intensity)
+        int_layout.setContentsMargins(12, 10, 12, 10)
+        int_layout.setSpacing(6)
+
+        lbl_sec_int = QLabel("INTENSIDAD DEL PRESET")
+        lbl_sec_int.setStyleSheet("font-weight: 700; font-size: 10px; color: #80d8ff; letter-spacing: 0.6px;")
+        int_layout.addWidget(lbl_sec_int)
+
+        row_int_hdr = QHBoxLayout()
+        lbl_int_title = QLabel("Escala Global:")
+        lbl_int_title.setStyleSheet("font-size: 11px; color: #cbd5e1;")
+        row_int_hdr.addWidget(lbl_int_title)
+
+        self.lbl_intensity_val = QLabel("100%")
+        self.lbl_intensity_val.setStyleSheet("font-size: 12px; font-weight: 700; color: #38bdf8;")
+        row_int_hdr.addWidget(self.lbl_intensity_val)
+        row_int_hdr.addStretch()
+
+        self.btn_reset_int = QPushButton("100%")
+        self.btn_reset_int.setCursor(Qt.PointingHandCursor)
+        self.btn_reset_int.setStyleSheet("""
+            QPushButton {
+                background: #182030;
+                border: 1px solid #29354d;
+                border-radius: 3px;
                 color: #94a3b8;
-                font-family: monospace;
-                font-size: 11px;
-                padding: 6px;
+                font-size: 10px;
+                padding: 2px 6px;
+            }
+            QPushButton:hover {
+                color: #38bdf8;
+                border-color: #38bdf8;
             }
         """)
-        detail_layout.addWidget(self.txt_params_summary)
+        self.btn_reset_int.clicked.connect(lambda: self.slider_intensity.setValue(100))
+        row_int_hdr.addWidget(self.btn_reset_int)
+        int_layout.addLayout(row_int_hdr)
 
-        right_layout.addWidget(card_detail, 1)
+        self.slider_intensity = QSlider(Qt.Horizontal)
+        self.slider_intensity.setRange(0, 150)
+        self.slider_intensity.setValue(100)
+        self.slider_intensity.setStyleSheet("""
+            QSlider::groove:horizontal {
+                height: 4px;
+                background: #1e2638;
+                border-radius: 2px;
+            }
+            QSlider::sub-page:horizontal {
+                background: #0ea5e9;
+                border-radius: 2px;
+            }
+            QSlider::handle:horizontal {
+                background: #f8fafc;
+                border: 1px solid #38bdf8;
+                width: 14px;
+                margin-top: -5px;
+                margin-bottom: -5px;
+                border-radius: 7px;
+            }
+        """)
+        self.slider_intensity.valueChanged.connect(self._on_intensity_slider_changed)
+        int_layout.addWidget(self.slider_intensity)
 
-        # Tarjeta de Modo de Aplicación
+        right_layout.addWidget(card_intensity)
+
+        # Tarjeta 3: Modo de Aplicación
         card_scope = QFrame()
         card_scope.setStyleSheet("QFrame { background-color: #141724; border: 1px solid #222738; border-radius: 8px; }")
         scope_layout = QVBoxLayout(card_scope)
         scope_layout.setContentsMargins(12, 10, 12, 10)
-        scope_layout.setSpacing(6)
+        scope_layout.setSpacing(5)
 
         lbl_sec_scope = QLabel("MODO DE APLICACIÓN")
         lbl_sec_scope.setStyleSheet("font-weight: 700; font-size: 10px; color: #80d8ff; letter-spacing: 0.6px;")
@@ -516,6 +916,7 @@ class PresetManagerDialog(QDialog):
         self.scope_group.addButton(self.rad_tone, 1)
         self.scope_group.addButton(self.rad_color, 2)
         self.scope_group.addButton(self.rad_details, 3)
+        self.scope_group.idClicked.connect(lambda: self._emit_preview())
 
         scope_layout.addWidget(self.rad_all)
         scope_layout.addWidget(self.rad_tone)
@@ -523,6 +924,13 @@ class PresetManagerDialog(QDialog):
         scope_layout.addWidget(self.rad_details)
 
         right_layout.addWidget(card_scope)
+
+        # Checkbox de Previsualización en Vivo
+        self.chk_live_preview = QCheckBox("Previsualizar en el lienzo principal en tiempo real")
+        self.chk_live_preview.setChecked(True)
+        self.chk_live_preview.setStyleSheet("QCheckBox { color: #7dd3fc; font-size: 11px; font-weight: 600; }")
+        self.chk_live_preview.toggled.connect(self._on_live_preview_toggled)
+        right_layout.addWidget(self.chk_live_preview)
 
         # Botón Aplicar Preset Pro
         self.btn_apply = QPushButton("Aplicar Preset a la Imagen")
@@ -544,9 +952,6 @@ class PresetManagerDialog(QDialog):
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0369a1, stop:1 #0284c7);
                 border-color: #7dd3fc;
             }
-            QPushButton:pressed {
-                background-color: #075985;
-            }
             QPushButton:disabled {
                 background-color: #161c28;
                 color: #475569;
@@ -557,15 +962,15 @@ class PresetManagerDialog(QDialog):
         right_layout.addWidget(self.btn_apply)
 
         splitter.addWidget(right_widget)
-        splitter.setSizes([470, 330])
+        splitter.setSizes([600, 380])
         layout.addWidget(splitter, 1)
 
         # Barra inferior de cierre
         close_layout = QHBoxLayout()
         close_layout.addStretch()
-        btn_close = QPushButton("Cerrar")
-        btn_close.setCursor(Qt.PointingHandCursor)
-        btn_close.setStyleSheet("""
+        self.btn_close = QPushButton("Cerrar / Cancelar")
+        self.btn_close.setCursor(Qt.PointingHandCursor)
+        self.btn_close.setStyleSheet("""
             QPushButton {
                 background-color: #141724;
                 border: 1px solid #273044;
@@ -580,15 +985,23 @@ class PresetManagerDialog(QDialog):
                 border-color: #38bdf8;
             }
         """)
-        btn_close.clicked.connect(self.accept)
-        close_layout.addWidget(btn_close)
+        self.btn_close.clicked.connect(self.reject)
+        close_layout.addWidget(self.btn_close)
         layout.addLayout(close_layout)
 
+    def _on_view_mode_changed(self, mode_id: int):
+        self.stack_views.setCurrentIndex(mode_id)
+
     def _refresh_presets(self):
-        """Recarga la lista completa combinando built-in y presets de usuario."""
+        """Recarga la lista de presets, genera miniaturas y sincroniza las vistas."""
         builtins = get_builtin_presets()
         user_presets = load_user_presets()
         self.all_presets = builtins + user_presets
+
+        # Limpiar tarjetas anteriores
+        for card in self.card_widgets:
+            card.deleteLater()
+        self.card_widgets.clear()
 
         # Actualizar filtro de categorías
         current_cat = self.combo_cat_filter.currentText()
@@ -602,107 +1015,179 @@ class PresetManagerDialog(QDialog):
             self.combo_cat_filter.setCurrentText(current_cat)
         self.combo_cat_filter.blockSignals(False)
 
+        # Construir cuadrícula de tarjetas con miniaturas renderizadas
+        cols = 2
+        for idx, preset in enumerate(self.all_presets):
+            thumb_pix = self._generate_thumbnail_for_preset(preset)
+            card = PresetCardWidget(preset, thumb_pixmap=thumb_pix, parent=self.w_cards_container)
+            card.clicked.connect(self._on_card_clicked)
+            card.double_clicked.connect(self._on_card_double_clicked)
+            r, c = divmod(idx, cols)
+            self.grid_cards.addWidget(card, r, c)
+            self.card_widgets.append(card)
+
         self._apply_filter()
 
     def _apply_filter(self):
-        """Filtra las filas de la tabla según texto y categoría."""
+        """Filtra tanto las tarjetas visuales como la tabla según búsqueda y categoría."""
         search = self.txt_filter.text().strip().lower()
         cat_filter = self.combo_cat_filter.currentText()
 
-        filtered = []
-        for p in self.all_presets:
+        # Filtrar tarjetas
+        cols = 2
+        visible_idx = 0
+        for card in self.card_widgets:
+            p = card.preset
+            match = True
             if cat_filter != "Todas las categorías" and p.category != cat_filter:
-                continue
-            if search and search not in p.name.lower() and search not in p.description.lower():
-                continue
-            filtered.append(p)
+                match = False
+            elif search and search not in p.name.lower() and search not in p.description.lower():
+                match = False
 
+            card.setVisible(match)
+            if match:
+                self.grid_cards.removeWidget(card)
+                r, c = divmod(visible_idx, cols)
+                self.grid_cards.addWidget(card, r, c)
+                visible_idx += 1
+
+        # Filtrar tabla
+        filtered = [
+            c.preset for c in self.card_widgets if c.isVisible()
+        ]
+        self.table.blockSignals(True)
         self.table.setRowCount(len(filtered))
         for row, p in enumerate(filtered):
-            # Nombre con icono vectorial sutil
             item_name = QTableWidgetItem(p.name)
             item_name.setIcon(get_icon("sliders" if p.is_builtin else "file", color="#38bdf8" if p.is_builtin else "#fbbf24", size=13))
             item_name.setData(Qt.UserRole, p)
 
-            # Categoría
             item_cat = QTableWidgetItem(p.category)
             item_cat.setForeground(QColor("#94a3b8"))
 
-            # Origen: Texto limpio sin emojis
             origin_str = "Fábrica" if p.is_builtin else "Usuario"
             item_origin = QTableWidgetItem(origin_str)
             item_origin.setTextAlignment(Qt.AlignCenter)
-            if p.is_builtin:
-                item_origin.setForeground(QColor("#38bdf8"))
-            else:
-                item_origin.setForeground(QColor("#fbbf24"))
+            item_origin.setForeground(QColor("#38bdf8" if p.is_builtin else "#fbbf24"))
 
             self.table.setItem(row, 0, item_name)
             self.table.setItem(row, 1, item_cat)
             self.table.setItem(row, 2, item_origin)
+        self.table.blockSignals(False)
 
-        if len(filtered) > 0:
-            self.table.selectRow(0)
+        # Seleccionar el primer preset visible si no hay selección
+        if filtered:
+            self._select_preset(filtered[0])
         else:
-            self._on_selection_changed()
+            self._clear_selection()
 
-    def _on_selection_changed(self):
-        """Actualiza el panel de detalles según el preset seleccionado."""
+    def _on_card_clicked(self, preset: DeveloperPreset):
+        self._select_preset(preset)
+
+    def _on_card_double_clicked(self, preset: DeveloperPreset):
+        self._select_preset(preset)
+        self._on_apply_clicked()
+
+    def _on_table_selection_changed(self):
         selected_items = self.table.selectedItems()
         if not selected_items:
-            self.selected_preset = None
-            self.lbl_detail_name.setText("Ningún preset seleccionado")
-            self.lbl_detail_badge.setText("")
-            self.lbl_detail_badge.setVisible(False)
-            self.lbl_detail_desc.setText("Elige un preset de la lista para ver su descripción y parámetros.")
-            self.txt_params_summary.clear()
-            self.btn_export.setEnabled(False)
-            self.btn_delete.setEnabled(False)
-            self.btn_apply.setEnabled(False)
             return
-
         row = self.table.currentRow()
         item = self.table.item(row, 0)
-        preset: DeveloperPreset = item.data(Qt.UserRole)
+        if item:
+            preset: DeveloperPreset = item.data(Qt.UserRole)
+            self._select_preset(preset, sync_table=False)
+
+    def _on_table_double_clicked(self):
+        self._on_apply_clicked()
+
+    def _select_preset(self, preset: DeveloperPreset, sync_table: bool = True):
         self.selected_preset = preset
 
+        # Sincronizar tarjetas
+        for card in self.card_widgets:
+            card.set_selected(card.preset.id == preset.id)
+
+        # Sincronizar tabla si es necesario
+        if sync_table:
+            self.table.blockSignals(True)
+            for r in range(self.table.rowCount()):
+                it = self.table.item(r, 0)
+                if it and it.data(Qt.UserRole).id == preset.id:
+                    self.table.selectRow(r)
+                    break
+            self.table.blockSignals(False)
+
+        # Actualizar panel de detalles
         self.lbl_detail_name.setText(preset.name)
         origin_text = "Oficial de Fábrica" if preset.is_builtin else f"Usuario ({preset.author})"
         self.lbl_detail_badge.setText(f"{preset.category}  ·  {origin_text}")
         self.lbl_detail_badge.setVisible(True)
         self.lbl_detail_desc.setText(preset.description or "Sin descripción proporcionada.")
 
-        # Construir resumen de parámetros
-        lines = []
-        params = preset.params
-        if "contrast_val" in params or "gnd_ev_val" in params or "gnd_sh_val" in params:
-            lines.append("--- CONTRASTE & SUELO (Sin estirado) ---")
-            lines.append(f"  • Contraste: {params.get('contrast_val', 0)/100.0:+.2f}")
-            if params.get("gnd_ev_val", 0) != 0:
-                lines.append(f"  • Suelo EV: {params.get('gnd_ev_val', 0)/100.0:+.2f} EV")
-            if params.get("gnd_sh_val", 0) != 0:
-                lines.append(f"  • Sombras Suelo: {params.get('gnd_sh_val', 0)}%")
-            if params.get("gnd_bp_val", 0) != 0:
-                lines.append(f"  • Suelo BP: {params.get('gnd_bp_val', 0)/1000.0:+.3f}")
-        if "temp_val" in params or "tint_val" in params:
-            lines.append("--- COLOR & BALANCE ---")
-            lines.append(f"  • Temp: {params.get('temp_val', 0)/1000.0:+.3f}")
-            lines.append(f"  • Tinte: {params.get('tint_val', 0)/1000.0:+.3f}")
-            lines.append(f"  • Sat Cielo: {params.get('sat_sky_val', 100)/100.0:.2f}x")
-            lines.append(f"  • Vibración: {params.get('vibrance_val', 0)/100.0:+.2f}")
-        if "stars_val" in params or "clarity_val" in params:
-            lines.append("--- ESTRELLAS & FILTROS ---")
-            lines.append(f"  • Estrellas: {params.get('stars_val', 100)}%")
-            lines.append(f"  • Claridad: {params.get('clarity_val', 0)/100.0:+.2f}")
-            lines.append(f"  • Dehaze: {params.get('dehaze_val', 0)/100.0:+.2f}")
-            lines.append(f"  • Multiescala Estructura: {params.get('ond_est_val', 0)/100.0:+.2f}")
-            lines.append(f"  • Atenuar LP: {params.get('lp_val', 0)}%")
+        # Requisitos de procesamiento
+        parent_tab = self.parent()
+        has_ground_mask = getattr(parent_tab, 'current_mask', None) is not None if parent_tab else False
+        has_starnet = getattr(parent_tab, 'image_starless', None) is not None if parent_tab else False
 
-        self.txt_params_summary.setPlainText("\n".join(lines))
+        if getattr(preset, "requires_sky_mask", False):
+            if has_ground_mask:
+                self.lbl_req_sky.setText("● Cielo/Suelo: Máscara activa detectada ✓")
+                self.lbl_req_sky.setStyleSheet("font-size: 11px; color: #4ade80; font-weight: 600;")
+            else:
+                self.lbl_req_sky.setText("● Cielo/Suelo: Se auto-detectará con IA (<0.5s) ⚡")
+                self.lbl_req_sky.setStyleSheet("font-size: 11px; color: #38bdf8; font-weight: 600;")
+        else:
+            self.lbl_req_sky.setText("● Cielo/Suelo: No requerida")
+            self.lbl_req_sky.setStyleSheet("font-size: 11px; color: #64748b;")
+
+        if getattr(preset, "requires_starnet", False):
+            if has_starnet:
+                self.lbl_req_starnet.setText("● StarNet AI: Capas listas ✓")
+                self.lbl_req_starnet.setStyleSheet("font-size: 11px; color: #4ade80; font-weight: 600;")
+            else:
+                self.lbl_req_starnet.setText("● StarNet AI: Requiere desacoplo previo (~15s) ⚠️")
+                self.lbl_req_starnet.setStyleSheet("font-size: 11px; color: #fbbf24; font-weight: 600;")
+        else:
+            self.lbl_req_starnet.setText("● StarNet AI: No requerida")
+            self.lbl_req_starnet.setStyleSheet("font-size: 11px; color: #64748b;")
 
         self.btn_export.setEnabled(True)
         self.btn_delete.setEnabled(not preset.is_builtin)
         self.btn_apply.setEnabled(True)
+
+        self._emit_preview()
+
+    def _clear_selection(self):
+        self.selected_preset = None
+        self.lbl_detail_name.setText("Ningún preset seleccionado")
+        self.lbl_detail_badge.setVisible(False)
+        self.lbl_detail_desc.setText("Elige un preset de la lista o cuadrícula.")
+        self.lbl_req_sky.setText("● Cielo/Suelo: -")
+        self.lbl_req_starnet.setText("● StarNet AI: -")
+        self.btn_export.setEnabled(False)
+        self.btn_delete.setEnabled(False)
+        self.btn_apply.setEnabled(False)
+        self.preview_cancelled.emit()
+
+    def _on_intensity_slider_changed(self, val: int):
+        self.lbl_intensity_val.setText(f"{val}%")
+        self._emit_preview()
+
+    def _on_live_preview_toggled(self, checked: bool):
+        if checked:
+            self._emit_preview()
+        else:
+            self.preview_cancelled.emit()
+
+    def _emit_preview(self):
+        if not self.selected_preset or not getattr(self, "chk_live_preview", None):
+            return
+        if not self.chk_live_preview.isChecked():
+            return
+        scope = self._get_current_scope()
+        intensity = float(self.slider_intensity.value())
+        self.preview_preset_requested.emit(self.selected_preset, scope, intensity)
 
     def _get_current_scope(self) -> str:
         btn_id = self.scope_group.checkedId()
@@ -718,11 +1203,13 @@ class PresetManagerDialog(QDialog):
         if not self.selected_preset:
             return
         scope = self._get_current_scope()
-        self.apply_preset_requested.emit(self.selected_preset, scope)
+        intensity = float(self.slider_intensity.value())
+        self.apply_preset_requested.emit(self.selected_preset, scope, intensity)
         self.accept()
 
-    def _on_table_double_clicked(self):
-        self._on_apply_clicked()
+    def reject(self):
+        self.preview_cancelled.emit()
+        super().reject()
 
     def _on_export_clicked(self):
         if not self.selected_preset:

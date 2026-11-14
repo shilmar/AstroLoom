@@ -6,7 +6,7 @@ Permite seleccionar, aplicar por ámbito (Todo, Color, Detalles, Tono), guardar 
 from typing import Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
-    QPushButton, QSizePolicy
+    QPushButton, QSizePolicy, QSpinBox
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -55,7 +55,7 @@ class PresetsPanel(QWidget):
         self.lbl_preset_desc.setStyleSheet("color: #90a4ae; font-size: 11px; font-style: italic;")
         presets_layout.addWidget(self.lbl_preset_desc)
 
-        # Fila 3: Modo de Aplicación + Botón Aplicar en la misma línea (ahorro vertical)
+        # Fila 3: Modo de Aplicación + Intensidad + Botón Aplicar en la misma línea
         row_mode_apply = QHBoxLayout()
         row_mode_apply.setSpacing(6)
 
@@ -69,10 +69,29 @@ class PresetsPanel(QWidget):
         self.combo_preset_scope.setToolTip("Elige qué controles aplicar del preset (el estirado MTF y el punto negro de la imagen se respetan siempre)")
         row_mode_apply.addWidget(self.combo_preset_scope, stretch=1)
 
+        # Selector de Intensidad rápida (0% a 150%)
+        self.spin_intensity = QSpinBox()
+        self.spin_intensity.setRange(0, 150)
+        self.spin_intensity.setValue(100)
+        self.spin_intensity.setSuffix("%")
+        self.spin_intensity.setToolTip("Intensidad o escala global del preset (0% a 150%)")
+        self.spin_intensity.setStyleSheet("""
+            QSpinBox {
+                background-color: #131724;
+                border: 1px solid #242c3e;
+                border-radius: 4px;
+                color: #38bdf8;
+                font-weight: 600;
+                padding: 3px;
+                min-width: 52px;
+            }
+        """)
+        row_mode_apply.addWidget(self.spin_intensity)
+
         self.btn_apply_preset = QPushButton("Aplicar")
         self.btn_apply_preset.setIcon(get_icon("sparkles", color="#ffffff", size=12))
         self.btn_apply_preset.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.btn_apply_preset.setFixedWidth(84)
+        self.btn_apply_preset.setFixedWidth(74)
         self.btn_apply_preset.setStyleSheet("""
             QPushButton {
                 font-weight: bold;
@@ -96,12 +115,12 @@ class PresetsPanel(QWidget):
                 border-color: #1f373b;
             }
         """)
-        self.btn_apply_preset.setToolTip("Aplica el preset seleccionado a la imagen actual según el modo elegido")
+        self.btn_apply_preset.setToolTip("Aplica el preset seleccionado a la imagen actual según el modo e intensidad elegidos")
         self.btn_apply_preset.clicked.connect(self.apply_requested.emit)
         row_mode_apply.addWidget(self.btn_apply_preset)
         presets_layout.addLayout(row_mode_apply)
 
-        # Fila 4: Botones Guardar Actual y Administrar
+        # Fila 4: Botones Guardar Actual y Galería Visual
         row_preset_btns = QHBoxLayout()
         self.btn_save_preset = QPushButton("Guardar...")
         self.btn_save_preset.setIcon(get_icon("save", color="#94a3b8", hover_color="#38bdf8", size=12))
@@ -109,9 +128,24 @@ class PresetsPanel(QWidget):
         self.btn_save_preset.clicked.connect(self.save_requested.emit)
         row_preset_btns.addWidget(self.btn_save_preset)
 
-        self.btn_manage_presets = QPushButton("Gestor Presets...")
-        self.btn_manage_presets.setIcon(get_icon("settings", color="#94a3b8", hover_color="#38bdf8", size=12))
-        self.btn_manage_presets.setToolTip("Abre el administrador para importar, exportar, inspeccionar o eliminar presets")
+        self.btn_manage_presets = QPushButton("Galería de Presets...")
+        self.btn_manage_presets.setIcon(get_icon("sliders", color="#38bdf8", size=12))
+        self.btn_manage_presets.setToolTip("Abre la galería visual flotante con miniaturas, control de intensidad y previsualización en vivo")
+        self.btn_manage_presets.setStyleSheet("""
+            QPushButton {
+                font-weight: 600;
+                color: #e2e8f0;
+                background-color: #161e2e;
+                border: 1px solid #2b3954;
+                border-radius: 5px;
+                padding: 5px 8px;
+            }
+            QPushButton:hover {
+                border-color: #38bdf8;
+                color: #38bdf8;
+                background-color: #1a253a;
+            }
+        """)
         self.btn_manage_presets.clicked.connect(self.manage_requested.emit)
         row_preset_btns.addWidget(self.btn_manage_presets)
         presets_layout.addLayout(row_preset_btns)

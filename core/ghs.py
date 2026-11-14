@@ -9,6 +9,7 @@ protección analítica (HP/LP) y preservando la fidelidad cromática en espacio 
 
 from typing import Optional, Dict
 import numpy as np
+import cv2
 
 try:
     import astroloom_rs
@@ -185,11 +186,15 @@ def apply_ghs_stretch(
         return lut[idx].astype(np.float32)
 
 
-def estimate_ghs_params(img_float: np.ndarray, target_background: float = 0.18) -> Dict[str, float]:
+def estimate_ghs_params(
+    img_float: np.ndarray, 
+    target_background: float = 0.18,
+    sky_mask: Optional[np.ndarray] = None
+) -> Dict[str, float]:
     """
     Estima analíticamente los parámetros óptimos de GHS para una imagen lineal de astrofotografía:
-    - SP: Centrado en la mediana del fondo del cielo.
-    - BP: Derivado de la dispersión de ruido (mediana - 2.5 * MAD).
+    - SP: Centrado en la mediana del fondo del cielo (conciencia de máscara si se provee).
+    - BP: Derivado de la dispersión de ruido (mediana - 2.5 * MAD), protegiendo sombras del suelo.
     - D: Calculado para elevar el fondo a target_background (~0.18) sin reventar estrellas.
     - b: Configurado en 2.0 para una compresión equilibrada.
     - HP: 0.15 para protección inicial de centros de estrellas.
@@ -200,11 +205,27 @@ def estimate_ghs_params(img_float: np.ndarray, target_background: float = 0.18) 
     else:
         lum_sample = sample
 
-    med = float(np.median(lum_sample))
-    mad = float(np.median(np.abs(lum_sample - med)))
+    h_s, w_s = lum_sample.shape[:2]
+    med_all = float(np.median(lum_sample))
+    mad_all = float(np.median(np.abs(lum_sample - med_all)))
 
-    bp = float(np.clip(med - 2.5 * mad, 0.0, 0.90))
-    sp = float(np.clip(med, 0.0001, 0.90))
+    if sky_mask is not None:
+        if sky_mask.shape[:2] != (h_s, w_s):
+            m_s = cv2.resize(sky_mask.astype(np.float32), (w_s, h_s), interpolation=cv2.INTER_NEAREST)
+        else:
+            m_s = sky_mask.astype(np.float32)
+        sky_pixels = lum_sample[m_s > 0.50]
+        if len(sky_pixels) >= 50:
+            med_sky = float(np.median(sky_pixels))
+            mad_sky = float(np.median(np.abs(sky_pixels - med_sky)))
+            sp = float(np.clip(med_sky, 0.0001, 0.90))
+            bp = float(np.clip(min(med_sky - 2.5 * mad_sky, med_all - 2.5 * mad_all), 0.0, 0.90))
+        else:
+            sp = float(np.clip(med_all, 0.0001, 0.90))
+            bp = float(np.clip(med_all - 2.5 * mad_all, 0.0, 0.90))
+    else:
+        sp = float(np.clip(med_all, 0.0001, 0.90))
+        bp = float(np.clip(med_all - 2.5 * mad_all, 0.0, 0.90))
 
     b = 2.0
     hp = 0.15

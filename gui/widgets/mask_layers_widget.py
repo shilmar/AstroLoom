@@ -8,8 +8,8 @@ import uuid
 from typing import Optional, List, Dict, Any, Callable, Tuple
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, Signal, QSize, QTimer
-from PySide6.QtGui import QColor, QFont, QCursor, QImage, QPixmap, QPainter
+from PySide6.QtCore import Qt, Signal, QSize, QTimer, QRect
+from PySide6.QtGui import QColor, QFont, QCursor, QImage, QPixmap, QPainter, QPen
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QSlider, QDoubleSpinBox,
@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
 from core.mask_layers import (
     MaskLayer, compute_layer_mask, compute_effective_layer_mask, get_canvas_below_layer,
     MASK_TYPE_BRUSH, MASK_TYPE_GROUND, MASK_TYPE_SKY, MASK_TYPE_LUMA, MASK_TYPE_COLOR, MASK_TYPE_CUSTOM,
+    MASK_TYPE_GRADIENT_LINEAR, MASK_TYPE_GRADIENT_RADIAL,
+    LIMIT_MASK_NONE, LIMIT_MASK_SKY, LIMIT_MASK_GROUND,
     LAYER_KIND_ADJUSTMENT, LAYER_KIND_IMAGE,
     MASK_TYPE_IMAGE_BASE, MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_STARS, MASK_TYPE_IMAGE_GROUND,
     MASK_TYPE_IMAGE_RASTER, BLEND_MODE_NORMAL,
@@ -166,6 +168,9 @@ class MaskLayersWidget(QWidget):
     auto_stretch_starless_requested = Signal()   # Estirado Adaptativo RGB para capa starless
     interaction_started = Signal()
     interaction_finished = Signal()
+    raster_layer_import_requested = Signal()     # Petición para importar capa de imagen ráster externa
+    layer_move_tool_toggled = Signal(bool)       # (activo) conmuta el modo interactivo de mover en el lienzo
+    gradient_tool_toggled = Signal(bool, object) # (activo, layer) activa manipulación de gradiente en el lienzo
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -233,39 +238,77 @@ class MaskLayersWidget(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(8)
 
-        # 1. Barra de creación rápida de máscaras
-        row_create = QHBoxLayout()
-        row_create.setSpacing(5)
+        # 1. Barra de creación rápida de máscaras (en 2 filas compactas y ergonómicas)
+        layout_create = QVBoxLayout()
+        layout_create.setSpacing(4)
+
+        row_create_1 = QHBoxLayout()
+        row_create_1.setSpacing(4)
 
         self.btn_add_brush = QPushButton(" Pincel")
         self.btn_add_brush.setIcon(get_icon("brush", color="#e0e6f0", size=13))
         self.btn_add_brush.setCursor(Qt.PointingHandCursor)
         self.btn_add_brush.setToolTip("Crea una capa con máscara pintada a mano con dureza y opacidad de trazo")
         self.btn_add_brush.clicked.connect(lambda: self.add_new_layer(MASK_TYPE_BRUSH))
-        row_create.addWidget(self.btn_add_brush)
+        row_create_1.addWidget(self.btn_add_brush)
+
+        self.btn_add_linear = QPushButton(" Lineal")
+        self.btn_add_linear.setIcon(get_icon("sliders", color="#80d8ff", size=13))
+        self.btn_add_linear.setCursor(Qt.PointingHandCursor)
+        self.btn_add_linear.setToolTip("Filtro degradado lineal vectorial analítico (ideal para cúpulas de polución lumínica)")
+        self.btn_add_linear.clicked.connect(lambda: self.add_new_layer(MASK_TYPE_GRADIENT_LINEAR))
+        row_create_1.addWidget(self.btn_add_linear)
+
+        self.btn_add_radial = QPushButton(" Radial")
+        self.btn_add_radial.setIcon(get_icon("target", color="#80d8ff", size=13))
+        self.btn_add_radial.setCursor(Qt.PointingHandCursor)
+        self.btn_add_radial.setToolTip("Filtro graduado radial elíptico analítico (ideal para el núcleo de la Vía Láctea)")
+        self.btn_add_radial.clicked.connect(lambda: self.add_new_layer(MASK_TYPE_GRADIENT_RADIAL))
+        row_create_1.addWidget(self.btn_add_radial)
+
+        self.btn_add_raster = QPushButton(" Ráster")
+        self.btn_add_raster.setIcon(get_icon("layers", color="#ffb74d", size=13))
+        self.btn_add_raster.setCursor(Qt.PointingHandCursor)
+        self.btn_add_raster.setToolTip("Carga una imagen externa (H-Alfa, Suelo hora azul, cometa) como capa ráster con modo de fusión")
+        self.btn_add_raster.clicked.connect(self._on_add_raster_clicked)
+        row_create_1.addWidget(self.btn_add_raster)
+
+        layout_create.addLayout(row_create_1)
+
+        row_create_2 = QHBoxLayout()
+        row_create_2.setSpacing(4)
 
         self.btn_add_luma = QPushButton(" Luminancia")
         self.btn_add_luma.setIcon(get_icon("sparkles", color="#e0e6f0", size=13))
         self.btn_add_luma.setCursor(Qt.PointingHandCursor)
         self.btn_add_luma.setToolTip("Crea una máscara basada en el rango de brillo (Sombras, Medios, Luces)")
         self.btn_add_luma.clicked.connect(lambda: self.add_new_layer(MASK_TYPE_LUMA))
-        row_create.addWidget(self.btn_add_luma)
+        row_create_2.addWidget(self.btn_add_luma)
 
-        self.btn_add_color = QPushButton(" Color (HSV)")
+        self.btn_add_color = QPushButton(" Color")
         self.btn_add_color.setIcon(get_icon("palette", color="#e0e6f0", size=13))
         self.btn_add_color.setCursor(Qt.PointingHandCursor)
         self.btn_add_color.setToolTip("Crea una máscara basada en tono cromático (H-Alfa, OIII, Sodio, etc.)")
         self.btn_add_color.clicked.connect(lambda: self.add_new_layer(MASK_TYPE_COLOR))
-        row_create.addWidget(self.btn_add_color)
+        row_create_2.addWidget(self.btn_add_color)
 
-        self.btn_add_gnd = QPushButton(" Suelo / Cielo")
+        self.btn_add_gnd = QPushButton(" Suelo")
         self.btn_add_gnd.setIcon(get_icon("mountain", color="#e0e6f0", size=13))
         self.btn_add_gnd.setCursor(Qt.PointingHandCursor)
         self.btn_add_gnd.setToolTip("Crea una capa vinculada a la segmentación del terreno")
         self.btn_add_gnd.clicked.connect(lambda: self.add_new_layer(MASK_TYPE_GROUND))
-        row_create.addWidget(self.btn_add_gnd)
+        row_create_2.addWidget(self.btn_add_gnd)
 
-        main_layout.addLayout(row_create)
+        self.btn_add_sky = QPushButton(" Cielo")
+        self.btn_add_sky.setIcon(get_icon("cloud", color="#80d8ff", size=13))
+        self.btn_add_sky.setCursor(Qt.PointingHandCursor)
+        self.btn_add_sky.setToolTip("Crea una capa vinculada a la segmentación del cielo / bóveda celeste")
+        self.btn_add_sky.clicked.connect(lambda: self.add_new_layer(MASK_TYPE_SKY))
+        row_create_2.addWidget(self.btn_add_sky)
+
+        layout_create.addLayout(row_create_2)
+
+        main_layout.addLayout(layout_create)
 
         # Panel superior: Cabecera con selector S/M/L + Lista de capas + Acciones
         top_container = QWidget()
@@ -455,6 +498,95 @@ class MaskLayersWidget(QWidget):
         row_op.addWidget(self.slider_opacity, stretch=1)
         props_layout.addLayout(row_op)
 
+        # 4.bis Transformación espacial 2D para capas de imagen ráster (Mover, Escalar, Rotar)
+        self.grp_transform = QGroupBox("Transformación Espacial (Mover y Redimensionar)")
+        self.grp_transform.setObjectName("layer_transform_group")
+        trans_layout = QVBoxLayout(self.grp_transform)
+        trans_layout.setContentsMargins(8, 10, 8, 8)
+        trans_layout.setSpacing(6)
+
+        self.btn_toggle_move = QPushButton(" Mover y Redimensionar en Lienzo")
+        self.btn_toggle_move.setIcon(get_icon("maximize", color="#80d8ff", size=13))
+        self.btn_toggle_move.setCheckable(True)
+        self.btn_toggle_move.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_move.setToolTip(
+            "Activa el modo interactivo en el visor:\n"
+            "• Arrastra con el ratón sobre la imagen para desplazar la posición (Mover X/Y).\n"
+            "• Gira la rueda del ratón sobre la imagen para redimensionar (Escala)."
+        )
+        self.btn_toggle_move.setStyleSheet("""
+            QPushButton {
+                background-color: #1a2736;
+                color: #80d8ff;
+                border: 1px solid #0288d1;
+                border-radius: 4px;
+                padding: 5px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #243447;
+                border-color: #03a9f4;
+            }
+            QPushButton:checked {
+                background-color: #0288d1;
+                color: #ffffff;
+            }
+        """)
+        self.btn_toggle_move.toggled.connect(self._on_toggle_move_mode)
+        trans_layout.addWidget(self.btn_toggle_move)
+
+        self.row_trans_x = PrecisionSliderRow("Mover X:", -100, 100, 0, scale=1.0, unit=" %", force_sign=True, label_width=115)
+        self.slider_trans_x = self.row_trans_x.slider
+        self.slider_trans_x.valueChanged.connect(self._on_transform_slider_changed)
+        self.row_trans_x.sliderReleased.connect(self.ground_slider_released.emit)
+        trans_layout.addWidget(self.row_trans_x)
+
+        self.row_trans_y = PrecisionSliderRow("Mover Y:", -100, 100, 0, scale=1.0, unit=" %", force_sign=True, label_width=115)
+        self.slider_trans_y = self.row_trans_y.slider
+        self.slider_trans_y.valueChanged.connect(self._on_transform_slider_changed)
+        self.row_trans_y.sliderReleased.connect(self.ground_slider_released.emit)
+        trans_layout.addWidget(self.row_trans_y)
+
+        # Checkbox para vincular proporciones de escala
+        self.chk_link_scales = QCheckBox("Vincular relación de aspecto (Escala X = Y)")
+        self.chk_link_scales.setChecked(True)
+        self.chk_link_scales.setStyleSheet("color: #80d8ff; font-size: 11px; margin-top: 2px; margin-bottom: 2px;")
+        trans_layout.addWidget(self.chk_link_scales)
+
+        # Fila Escala X
+        self.row_trans_scale_x = PrecisionSliderRow("Escala X:", 10, 400, 100, scale=1.0, unit=" %", decimals=0, label_width=115)
+        self.slider_trans_scale_x = self.row_trans_scale_x.slider
+        self.slider_trans_scale_x.valueChanged.connect(self._on_scale_x_changed)
+        self.row_trans_scale_x.sliderReleased.connect(self.ground_slider_released.emit)
+        trans_layout.addWidget(self.row_trans_scale_x)
+
+        # Fila Escala Y
+        self.row_trans_scale_y = PrecisionSliderRow("Escala Y:", 10, 400, 100, scale=1.0, unit=" %", decimals=0, label_width=115)
+        self.slider_trans_scale_y = self.row_trans_scale_y.slider
+        self.slider_trans_scale_y.valueChanged.connect(self._on_scale_y_changed)
+        self.row_trans_scale_y.sliderReleased.connect(self.ground_slider_released.emit)
+        trans_layout.addWidget(self.row_trans_scale_y)
+
+        # Alias de compatibilidad
+        self.row_trans_scale = self.row_trans_scale_x
+        self.slider_trans_scale = self.slider_trans_scale_x
+
+        self.row_trans_angle = PrecisionSliderRow("Rotación:", -180, 180, 0, scale=1.0, unit="°", force_sign=True, label_width=115)
+        self.slider_trans_angle = self.row_trans_angle.slider
+        self.slider_trans_angle.valueChanged.connect(self._on_transform_slider_changed)
+        self.row_trans_angle.sliderReleased.connect(self.ground_slider_released.emit)
+        trans_layout.addWidget(self.row_trans_angle)
+
+        self.btn_reset_transform = QPushButton(" Restablecer Posición y Escala")
+        self.btn_reset_transform.setIcon(get_icon("rotate-ccw", color="#80d8ff", size=12))
+        self.btn_reset_transform.setCursor(Qt.PointingHandCursor)
+        self.btn_reset_transform.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        self.btn_reset_transform.clicked.connect(self._reset_layer_transform)
+        trans_layout.addWidget(self.btn_reset_transform)
+
+        props_layout.addWidget(self.grp_transform)
+
         # 5. Caja dinámica de definición de máscara (Pincel / Luminancia / Color / Suelo)
         self.grp_mask_def = QGroupBox("Definición de Máscara")
         self.grp_mask_def.setObjectName("mask_def_group")
@@ -467,6 +599,36 @@ class MaskLayersWidget(QWidget):
         brush_layout = QVBoxLayout(self.panel_brush)
         brush_layout.setContentsMargins(0, 0, 0, 0)
         brush_layout.setSpacing(6)
+
+        # Acciones de Máscara de Capa para capas Ráster
+        self.container_raster_mask_actions = QWidget()
+        row_rma = QHBoxLayout(self.container_raster_mask_actions)
+        row_rma.setContentsMargins(0, 0, 0, 4)
+        row_rma.setSpacing(6)
+
+        self.btn_raster_add_mask = QPushButton(" + Revelar Todo")
+        self.btn_raster_add_mask.setIcon(get_icon("plus", color="#80d8ff", size=12))
+        self.btn_raster_add_mask.setCursor(Qt.PointingHandCursor)
+        self.btn_raster_add_mask.setToolTip("Crea una máscara de capa blanca (100% visible) para ocultar zonas con el pincel en Borrar")
+        self.btn_raster_add_mask.clicked.connect(self._add_raster_layer_mask_white)
+        row_rma.addWidget(self.btn_raster_add_mask)
+
+        self.btn_raster_add_black = QPushButton(" + Ocultar Todo")
+        self.btn_raster_add_black.setIcon(get_icon("plus", color="#a5d6a7", size=12))
+        self.btn_raster_add_black.setCursor(Qt.PointingHandCursor)
+        self.btn_raster_add_black.setToolTip("Crea una máscara de capa negra (capa oculta) para descubrir con el pincel en Pintar (ideal para cometas y nebulosas)")
+        self.btn_raster_add_black.clicked.connect(self._add_raster_layer_mask_black)
+        row_rma.addWidget(self.btn_raster_add_black)
+
+        self.btn_raster_del_mask = QPushButton(" Quitar Máscara")
+        self.btn_raster_del_mask.setIcon(get_icon("trash", color="#ef9a9a", size=12))
+        self.btn_raster_del_mask.setCursor(Qt.PointingHandCursor)
+        self.btn_raster_del_mask.setToolTip("Elimina la máscara de capa (hace la capa 100% visible)")
+        self.btn_raster_del_mask.setStyleSheet("color: #ef9a9a;")
+        self.btn_raster_del_mask.clicked.connect(self._remove_raster_layer_mask)
+        row_rma.addWidget(self.btn_raster_del_mask)
+
+        brush_layout.addWidget(self.container_raster_mask_actions)
 
         # Fila Radio / Tamaño
         row_b_radius = QHBoxLayout()
@@ -507,7 +669,7 @@ class MaskLayersWidget(QWidget):
         row_b_flow.addWidget(self.slider_b_flow, stretch=1)
         brush_layout.addLayout(row_b_flow)
 
-        # Fila Modo de Trazo: Pintar (+) vs Borrar (-) y Limpiar
+        # Fila Modo de Trazo: Pintar (+) vs Borrar (-), Invertir y Limpiar
         row_b_mode = QHBoxLayout()
         self.btn_b_paint = QPushButton(" Pintar (+)")
         self.btn_b_paint.setIcon(get_icon("brush", color="#80d8ff", size=13))
@@ -523,6 +685,13 @@ class MaskLayersWidget(QWidget):
         self.btn_b_erase.setCursor(Qt.PointingHandCursor)
         self.btn_b_erase.clicked.connect(lambda: self._set_brush_mode("erase"))
         row_b_mode.addWidget(self.btn_b_erase)
+
+        self.btn_b_invert = QPushButton(" Invertir")
+        self.btn_b_invert.setIcon(get_icon("rotate_cw", color="#ce93d8", size=13))
+        self.btn_b_invert.setCursor(Qt.PointingHandCursor)
+        self.btn_b_invert.setToolTip("Invierte la máscara actual (blanco pasa a negro y viceversa) [Ctrl+I]")
+        self.btn_b_invert.clicked.connect(self.invert_selected_brush_mask)
+        row_b_mode.addWidget(self.btn_b_invert)
 
         self.btn_b_clear = QPushButton(" Limpiar")
         self.btn_b_clear.setIcon(get_icon("trash", color="#ef9a9a", size=13))
@@ -736,6 +905,114 @@ class MaskLayersWidget(QWidget):
         gnd_layout.addLayout(row_gnd_info)
 
         self.layout_mask_def.addWidget(self.panel_ground)
+
+        # Sub-panel Gradiente Lineal y Radial (Vectorial Analítico)
+        self.panel_gradient = QWidget()
+        grad_layout = QVBoxLayout(self.panel_gradient)
+        grad_layout.setContentsMargins(0, 0, 0, 0)
+        grad_layout.setSpacing(6)
+
+        # Fila Restricción de máscara (Edge-Snapping al horizonte / Suelo)
+        row_limit = QHBoxLayout()
+        row_limit.addWidget(QLabel("Limitar a:"))
+        self.combo_grad_limit = QComboBox()
+        self.combo_grad_limit.addItem("Sin límite (Toda la escena)", LIMIT_MASK_NONE)
+        self.combo_grad_limit.addItem("Imantar / Solo Cielo", LIMIT_MASK_SKY)
+        self.combo_grad_limit.addItem("Imantar / Solo Suelo", LIMIT_MASK_GROUND)
+        self.combo_grad_limit.setToolTip("Restringe analíticamente la influencia del gradiente a la máscara de cielo o suelo")
+        self.combo_grad_limit.currentIndexChanged.connect(self._on_grad_limit_changed)
+        row_limit.addWidget(self.combo_grad_limit, stretch=1)
+        grad_layout.addLayout(row_limit)
+
+        # Sub-contenedor Gradiente Lineal
+        self.container_linear_props = QWidget()
+        linear_vbox = QVBoxLayout(self.container_linear_props)
+        linear_vbox.setContentsMargins(0, 0, 0, 0)
+        linear_vbox.setSpacing(6)
+
+        row_lin_profile = QHBoxLayout()
+        row_lin_profile.addWidget(QLabel("Perfil:"))
+        self.combo_lin_profile = QComboBox()
+        self.combo_lin_profile.addItem("Suave (Smoothstep Cúbico)", "smoothstep")
+        self.combo_lin_profile.addItem("Lineal", "linear")
+        self.combo_lin_profile.addItem("Exponencial (Polución)", "exponential")
+        self.combo_lin_profile.addItem("Banda Reflejada (0 ➔ 1 ➔ 0)", "reflected")
+        self.combo_lin_profile.currentIndexChanged.connect(self._on_linear_profile_changed)
+        row_lin_profile.addWidget(self.combo_lin_profile, stretch=1)
+        linear_vbox.addLayout(row_lin_profile)
+
+        self.row_lin_midpoint = PrecisionSliderRow("Punto Medio:", 10, 90, 50, scale=1.0, unit="%", label_width=110)
+        self.slider_lin_midpoint = self.row_lin_midpoint.slider
+        self.slider_lin_midpoint.valueChanged.connect(self._on_linear_midpoint_changed)
+        self.row_lin_midpoint.sliderReleased.connect(self.ground_slider_released.emit)
+        linear_vbox.addWidget(self.row_lin_midpoint)
+
+        # Controles exclusivos de Banda Reflejada (doble lineal)
+        self.container_reflected_props = QWidget()
+        refl_vbox = QVBoxLayout(self.container_reflected_props)
+        refl_vbox.setContentsMargins(0, 0, 0, 0)
+        refl_vbox.setSpacing(4)
+
+        self.chk_lin_symmetric = QCheckBox("Banda Simétrica (Lado A = Lado B)")
+        self.chk_lin_symmetric.setChecked(True)
+        self.chk_lin_symmetric.setStyleSheet("color: #80d8ff; font-size: 11px;")
+        self.chk_lin_symmetric.toggled.connect(self._on_linear_symmetric_toggled)
+        refl_vbox.addWidget(self.chk_lin_symmetric)
+
+        self.row_lin_span_b = PrecisionSliderRow("Ancho Lado B:", 10, 300, 100, scale=1.0, unit="%", label_width=110)
+        self.slider_lin_span_b = self.row_lin_span_b.slider
+        self.slider_lin_span_b.valueChanged.connect(self._on_linear_span_b_changed)
+        self.row_lin_span_b.sliderReleased.connect(self.ground_slider_released.emit)
+        refl_vbox.addWidget(self.row_lin_span_b)
+
+        self.container_reflected_props.setVisible(False)
+        linear_vbox.addWidget(self.container_reflected_props)
+
+        grad_layout.addWidget(self.container_linear_props)
+
+        # Sub-contenedor Gradiente Radial
+        self.container_radial_props = QWidget()
+        radial_vbox = QVBoxLayout(self.container_radial_props)
+        radial_vbox.setContentsMargins(0, 0, 0, 0)
+        radial_vbox.setSpacing(6)
+
+        self.row_rad_feather = PrecisionSliderRow("Desvanecimiento:", 5, 100, 50, scale=1.0, unit="%", label_width=110)
+        self.slider_rad_feather = self.row_rad_feather.slider
+        self.slider_rad_feather.valueChanged.connect(self._on_radial_feather_changed)
+        self.row_rad_feather.sliderReleased.connect(self.ground_slider_released.emit)
+        radial_vbox.addWidget(self.row_rad_feather)
+
+        self.row_rad_angle = PrecisionSliderRow("Inclinación:", -180, 180, 0, scale=1.0, unit="°", force_sign=True, label_width=110)
+        self.slider_rad_angle = self.row_rad_angle.slider
+        self.slider_rad_angle.valueChanged.connect(self._on_radial_angle_changed)
+        self.row_rad_angle.sliderReleased.connect(self.ground_slider_released.emit)
+        radial_vbox.addWidget(self.row_rad_angle)
+
+        self.row_rad_rx = PrecisionSliderRow("Semieje X (Ancho):", 5, 150, 25, scale=1.0, unit="%", label_width=110)
+        self.slider_rad_rx = self.row_rad_rx.slider
+        self.slider_rad_rx.valueChanged.connect(self._on_radial_rx_changed)
+        self.row_rad_rx.sliderReleased.connect(self.ground_slider_released.emit)
+        radial_vbox.addWidget(self.row_rad_rx)
+
+        self.row_rad_ry = PrecisionSliderRow("Semieje Y (Alto):", 5, 150, 35, scale=1.0, unit="%", label_width=110)
+        self.slider_rad_ry = self.row_rad_ry.slider
+        self.slider_rad_ry.valueChanged.connect(self._on_radial_ry_changed)
+        self.row_rad_ry.sliderReleased.connect(self.ground_slider_released.emit)
+        radial_vbox.addWidget(self.row_rad_ry)
+
+        grad_layout.addWidget(self.container_radial_props)
+
+        # Fila Botón de Restablecer Geometría y Ayuda
+        row_grad_reset = QHBoxLayout()
+        self.btn_reset_grad_geom = QPushButton(" Restablecer Geometría")
+        self.btn_reset_grad_geom.setIcon(get_icon("rotate_ccw", color="#80d8ff", size=12))
+        self.btn_reset_grad_geom.setCursor(Qt.PointingHandCursor)
+        self.btn_reset_grad_geom.setToolTip("Restablece el gradiente a su posición, tamaño y orientación por defecto")
+        self.btn_reset_grad_geom.clicked.connect(self._reset_gradient_geometry)
+        row_grad_reset.addWidget(self.btn_reset_grad_geom)
+        grad_layout.addLayout(row_grad_reset)
+
+        self.layout_mask_def.addWidget(self.panel_gradient)
 
         # Fila Refinar Bordes (Guided Cross / LightCraft)
         row_refine = QHBoxLayout()
@@ -1643,6 +1920,12 @@ class MaskLayersWidget(QWidget):
         elif mask_type == MASK_TYPE_SKY:
             name = f"Cielo {count}"
             layer = MaskLayer(name=name, mask_type=mask_type)
+        elif mask_type == MASK_TYPE_GRADIENT_LINEAR:
+            name = f"Grad. Lineal {count}"
+            layer = MaskLayer(name=name, mask_type=mask_type, limit_mask=LIMIT_MASK_NONE)
+        elif mask_type == MASK_TYPE_GRADIENT_RADIAL:
+            name = f"Grad. Radial {count}"
+            layer = MaskLayer(name=name, mask_type=mask_type, limit_mask=LIMIT_MASK_NONE)
         elif mask_type == MASK_TYPE_IMAGE_RASTER:
             name = f"Ráster {count}"
             layer = MaskLayer(
@@ -1775,6 +2058,8 @@ class MaskLayersWidget(QWidget):
             if layer_id is None or layer.id == layer_id:
                 if hasattr(layer, "_thumb_pixmap_cache"):
                     layer._thumb_pixmap_cache.clear()
+                if hasattr(layer, "_thumb_mask_cache"):
+                    layer._thumb_mask_cache.clear()
         if rebuild_now and not self._updating_ui:
             if hasattr(self, '_thumb_rebuild_timer') and self._thumb_rebuild_timer.isActive():
                 self._thumb_rebuild_timer.stop()
@@ -1909,6 +2194,22 @@ class MaskLayersWidget(QWidget):
                         raw_img = raw_img * m_3d
 
                     small = cv2.resize(raw_img, (tw, th), interpolation=cv2.INTER_AREA)
+                    if layer.mask_type == MASK_TYPE_IMAGE_RASTER and not getattr(layer, 'is_transform_identity', lambda: True)():
+                        sx_val = max(0.01, float(getattr(layer, 'scale_x', getattr(layer, 'scale', 1.0))))
+                        sy_val = max(0.01, float(getattr(layer, 'scale_y', getattr(layer, 'scale', 1.0))))
+                        a_val = float(getattr(layer, 'angle', 0.0))
+                        theta = np.deg2rad(a_val)
+                        cos_t, sin_t = np.cos(theta), np.sin(theta)
+                        a, b = sx_val * cos_t, -sy_val * sin_t
+                        c, d = sx_val * sin_t, sy_val * cos_t
+                        cx_th, cy_th = tw / 2.0, th / 2.0
+                        tx_th = getattr(layer, 'offset_x', 0.0) * tw
+                        ty_th = getattr(layer, 'offset_y', 0.0) * th
+                        M_th = np.array([
+                            [a, b, cx_th - a * cx_th - b * cy_th + tx_th],
+                            [c, d, cy_th - c * cx_th - d * cy_th + ty_th]
+                        ], dtype=np.float32)
+                        small = cv2.warpAffine(small, M_th, (tw, th), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
                     # Si es una capa de imagen (que no sean solo estrellas ni suelo aislado) y sus valores son lineales oscuros, estirar para visibilidad
                     if layer.mask_type not in (MASK_TYPE_IMAGE_STARS, MASK_TYPE_IMAGE_GROUND) and small.ndim == 3 and np.percentile(small, 98) < 0.12:
                         from core.stretch import manual_stretch
@@ -1983,6 +2284,167 @@ class MaskLayersWidget(QWidget):
         cache[cache_key] = pix
         return pix
 
+    def _on_add_raster_clicked(self) -> None:
+        """Emite la señal para importar un archivo de imagen ráster externa como nueva capa."""
+        self.raster_layer_import_requested.emit()
+
+    def _get_layer_image_shape(self, layer: MaskLayer) -> Tuple[int, int]:
+        """Obtiene las dimensiones (alto, ancho) nativas para inicializar la máscara de capa."""
+        if self._image_reference_getter:
+            try:
+                base = self._image_reference_getter()
+                if base is not None and hasattr(base, 'shape') and len(base.shape) >= 2:
+                    return base.shape[:2]
+            except Exception:
+                pass
+        if getattr(layer, 'image_data', None) is not None and hasattr(layer.image_data, 'shape') and len(layer.image_data.shape) >= 2:
+            return layer.image_data.shape[:2]
+        return 1000, 1500
+
+    def _get_raster_mask_thumbnail_pixmap(self, layer: MaskLayer) -> QPixmap:
+        """
+        Genera o recupera de la caché la miniatura B/N de la máscara de capa de una capa ráster.
+        Si la capa no tiene máscara de pincel aún, muestra un recuadro punteado de placeholder (+ M).
+        """
+        mode = self._thumb_size_mode
+        tw, th = self._get_thumbnail_dimensions()
+
+        cache = getattr(layer, "_thumb_mask_cache", None)
+        if cache is None:
+            layer._thumb_mask_cache = cache = {}
+
+        m = layer.brush_mask
+        cache_key = (mode, tw, th, id(m), layer.inverted, layer.enabled)
+        if cache_key in cache:
+            return cache[cache_key]
+
+        pix = None
+        if m is not None:
+            try:
+                m_eval = 1.0 - m if layer.inverted else m
+                small = cv2.resize(m_eval, (tw, th), interpolation=cv2.INTER_AREA)
+                u8 = (np.clip(small, 0.0, 1.0) * 255.0).astype(np.uint8)
+                u8_contig = np.ascontiguousarray(u8)
+                qimg = QImage(u8_contig.data, tw, th, tw, QImage.Format_Grayscale8)
+                pix = QPixmap.fromImage(qimg)
+            except Exception:
+                pix = None
+        else:
+            pix = QPixmap(tw, th)
+            pix.fill(QColor("#080b11"))
+            painter = QPainter(pix)
+            pen = QPen(QColor("#334155"), 1, Qt.DashLine)
+            painter.setPen(pen)
+            painter.drawRect(0, 0, tw - 1, th - 1)
+            painter.setPen(QColor("#64748b"))
+            f = painter.font()
+            f.setPointSize(max(7, min(tw, th) // 4))
+            f.setBold(True)
+            painter.setFont(f)
+            painter.drawText(QRect(0, 0, tw, th), Qt.AlignCenter, "+ M")
+            painter.end()
+
+        if pix is None or pix.isNull():
+            pix = QPixmap(tw, th)
+            pix.fill(QColor("#080b11"))
+
+        if not layer.enabled:
+            dimmed = QPixmap(pix.size())
+            dimmed.fill(Qt.transparent)
+            p = QPainter(dimmed)
+            p.setOpacity(0.35)
+            p.drawPixmap(0, 0, pix)
+            p.end()
+            pix = dimmed
+
+        cache[cache_key] = pix
+        return pix
+
+    def _add_raster_layer_mask_white(self) -> None:
+        """Añade una máscara de capa blanca completa (Revelar Todo) a la capa ráster seleccionada."""
+        layer = self.get_selected_layer()
+        if layer and layer.mask_type == MASK_TYPE_IMAGE_RASTER:
+            h_m, w_m = self._get_layer_image_shape(layer)
+            layer.brush_mask = np.ones((h_m, w_m), dtype=np.float32)
+            layer.active_target = "mask"
+            layer.brush_mode = "erase"
+            self._last_brush_mode = "erase"
+            self._updating_ui = True
+            self.btn_b_paint.setChecked(False)
+            self.btn_b_erase.setChecked(True)
+            self._updating_ui = False
+            self.invalidate_layer_thumbnail(layer.id)
+            self._update_list_and_props_state()
+            self.brush_tool_toggled.emit(True, layer)
+            if self.btn_preview_mask.isChecked():
+                self._emit_mask_preview()
+            self.layers_changed.emit()
+
+    def _add_raster_layer_mask_black(self) -> None:
+        """Añade una máscara de capa negra completa (Ocultar Todo) a la capa ráster seleccionada."""
+        layer = self.get_selected_layer()
+        if layer and layer.mask_type == MASK_TYPE_IMAGE_RASTER:
+            h_m, w_m = self._get_layer_image_shape(layer)
+            layer.brush_mask = np.zeros((h_m, w_m), dtype=np.float32)
+            layer.active_target = "mask"
+            layer.brush_mode = "paint"
+            self._last_brush_mode = "paint"
+            self._updating_ui = True
+            self.btn_b_paint.setChecked(True)
+            self.btn_b_erase.setChecked(False)
+            self._updating_ui = False
+            self.invalidate_layer_thumbnail(layer.id)
+            self._update_list_and_props_state()
+            self.brush_tool_toggled.emit(True, layer)
+            if self.btn_preview_mask.isChecked():
+                self._emit_mask_preview()
+            self.layers_changed.emit()
+
+    def invert_selected_brush_mask(self) -> None:
+        """Invierte los valores de la máscara de pincel de la capa actual (1.0 - m) e intercambia modo pintar/borrar."""
+        layer = self.get_selected_layer()
+        if not layer or not getattr(layer, 'supports_brush', False):
+            return
+
+        h_m, w_m = self._get_layer_image_shape(layer)
+        if layer.brush_mask is None:
+            # Si no tenía máscara aún, arranca con máscara negra (oculta)
+            layer.brush_mask = np.zeros((h_m, w_m), dtype=np.float32)
+        else:
+            layer.brush_mask = np.clip(1.0 - layer.brush_mask, 0.0, 1.0).astype(np.float32)
+
+        # Intercambiar automáticamente el modo del pincel: pintar <-> borrar
+        new_mode = "paint" if layer.brush_mode == "erase" else "erase"
+        layer.brush_mode = new_mode
+        self._last_brush_mode = new_mode
+        self._updating_ui = True
+        self.btn_b_paint.setChecked(new_mode == "paint")
+        self.btn_b_erase.setChecked(new_mode == "erase")
+        self._updating_ui = False
+
+        if layer.mask_type == MASK_TYPE_IMAGE_RASTER:
+            layer.active_target = "mask"
+
+        self.invalidate_layer_thumbnail(layer.id)
+        self._update_list_and_props_state()
+        self.brush_tool_toggled.emit(True, layer)
+        if self.btn_preview_mask.isChecked():
+            self._emit_mask_preview()
+        self.layers_changed.emit()
+
+    def _remove_raster_layer_mask(self) -> None:
+        """Elimina la máscara de capa de la capa ráster seleccionada volviendo a dejarla al 100% visible."""
+        layer = self.get_selected_layer()
+        if layer and layer.mask_type == MASK_TYPE_IMAGE_RASTER:
+            layer.brush_mask = None
+            layer.active_target = "image"
+            self.invalidate_layer_thumbnail(layer.id)
+            self._update_list_and_props_state()
+            self.brush_tool_toggled.emit(False, None)
+            if self.btn_preview_mask.isChecked():
+                self.preview_mask_requested.emit(None)
+            self.layers_changed.emit()
+
     def _rebuild_list_items(self, select_layer_id: Optional[str] = None) -> None:
         """Regenera los elementos de la lista QListWidget con miniaturas, iconos, botón de ojo y estilos acordes a su tipo."""
         self._updating_ui = True
@@ -2034,6 +2496,8 @@ class MaskLayersWidget(QWidget):
                     MASK_TYPE_COLOR: "Color HSV",
                     MASK_TYPE_GROUND: "Máscara Suelo",
                     MASK_TYPE_SKY: "Máscara Cielo",
+                    MASK_TYPE_GRADIENT_LINEAR: "Grad. Lineal",
+                    MASK_TYPE_GRADIENT_RADIAL: "Grad. Radial",
                 }.get(layer.mask_type, "Ajuste")
 
                 icon_name = {
@@ -2042,6 +2506,8 @@ class MaskLayersWidget(QWidget):
                     MASK_TYPE_COLOR: "palette",
                     MASK_TYPE_GROUND: "mountain",
                     MASK_TYPE_SKY: "sparkles",
+                    MASK_TYPE_GRADIENT_LINEAR: "sliders",
+                    MASK_TYPE_GRADIENT_RADIAL: "target",
                 }.get(layer.mask_type, "layers")
                 fg_col = "#e0e6f0" if layer.enabled else "#607d8b"
 
@@ -2055,23 +2521,120 @@ class MaskLayersWidget(QWidget):
             row_layout.setContentsMargins(6, 2, 4, 2)
             row_layout.setSpacing(6)
 
-            # 1. Miniatura visual (RGB para imagen, B/N para máscaras)
-            pix = self._get_layer_thumbnail_pixmap(layer)
-            lbl_thumb = QLabel()
-            lbl_thumb.setFixedSize(tw + 2, th + 2)
-            border_col = "#28324a" if layer.enabled else "#161b26"
-            lbl_thumb.setStyleSheet(f"""
-                QLabel {{
-                    background-color: #07090e;
-                    border: 1px solid {border_col};
-                    border-radius: 3px;
-                }}
-            """)
-            lbl_thumb.setAlignment(Qt.AlignCenter)
-            lbl_thumb.setPixmap(pix)
-            lbl_thumb.setCursor(Qt.PointingHandCursor)
-            lbl_thumb.setToolTip("Miniatura de capa.\nHaz doble clic para previsualizar la máscara en el lienzo.")
-            row_layout.addWidget(lbl_thumb)
+            is_layer_selected = (select_layer_id and layer.id == select_layer_id) or (not select_layer_id and i == 0)
+            target = getattr(layer, 'active_target', 'image')
+
+            def make_click_handler(layer_id, r):
+                def _handler(e):
+                    self.list_layers.setCurrentRow(r)
+                    if self._selected_layer_id != layer_id:
+                        self._selected_layer_id = layer_id
+                        self._update_list_and_props_state()
+                return _handler
+
+            def make_eye_handler(r):
+                return lambda: self._toggle_layer_enabled_at(r)
+
+            def make_thumb_double_click_handler(l):
+                return lambda e: self._on_thumb_double_clicked(l)
+
+            if layer.mask_type == MASK_TYPE_IMAGE_RASTER:
+                # --- MODO DUAL THUMBNAIL ESTILO PHOTOSHOP (IMAGEN + MÁSCARA) ---
+                pix_img = self._get_layer_thumbnail_pixmap(layer)
+                lbl_thumb_img = QLabel()
+                lbl_thumb_img.setFixedSize(tw + 2, th + 2)
+                is_img_active = is_layer_selected and (target == "image")
+                border_img = "#38bdf8" if is_img_active else ("#28324a" if layer.enabled else "#161b26")
+                lbl_thumb_img.setStyleSheet(f"""
+                    QLabel {{
+                        background-color: #07090e;
+                        border: {2 if is_img_active else 1}px solid {border_img};
+                        border-radius: 3px;
+                    }}
+                """)
+                lbl_thumb_img.setAlignment(Qt.AlignCenter)
+                lbl_thumb_img.setPixmap(pix_img)
+                lbl_thumb_img.setCursor(Qt.PointingHandCursor)
+                lbl_thumb_img.setToolTip("Contenido de Imagen Ráster.\nHaz clic para seleccionarlo (ajustes tonales y modo de fusión).")
+                row_layout.addWidget(lbl_thumb_img)
+
+                # Miniatura de Máscara de Capa
+                pix_mask = self._get_raster_mask_thumbnail_pixmap(layer)
+                lbl_thumb_mask = QLabel()
+                lbl_thumb_mask.setFixedSize(tw + 2, th + 2)
+                has_mask = layer.brush_mask is not None
+                is_mask_active = is_layer_selected and (target == "mask")
+                border_mask = "#38bdf8" if is_mask_active else ("#28324a" if (has_mask and layer.enabled) else "#2d3748")
+                bstyle_mask = "solid" if (has_mask or is_mask_active) else "dashed"
+                lbl_thumb_mask.setStyleSheet(f"""
+                    QLabel {{
+                        background-color: #07090e;
+                        border: {2 if is_mask_active else 1}px {bstyle_mask} {border_mask};
+                        border-radius: 3px;
+                    }}
+                """)
+                lbl_thumb_mask.setAlignment(Qt.AlignCenter)
+                lbl_thumb_mask.setPixmap(pix_mask)
+                lbl_thumb_mask.setCursor(Qt.PointingHandCursor)
+                if has_mask:
+                    lbl_thumb_mask.setToolTip("Máscara de Capa (B/N).\nHaz clic para seleccionarla y pintar con el pincel.\nDoble clic para previsualizar en el lienzo.")
+                else:
+                    lbl_thumb_mask.setToolTip("Sin Máscara de Capa.\nHaz clic para añadir una máscara pintable (revelar todo).")
+                row_layout.addWidget(lbl_thumb_mask)
+
+                def make_img_click_handler(l_id, r):
+                    def _h(e):
+                        l = self.layers[r] if 0 <= r < len(self.layers) else None
+                        if l:
+                            l.active_target = "image"
+                        self.list_layers.setCurrentRow(r)
+                        self._selected_layer_id = l_id
+                        self._update_list_and_props_state()
+                        self._rebuild_list_items(select_layer_id=l_id)
+                    return _h
+
+                def make_mask_click_handler(l_id, r):
+                    def _h(e):
+                        if hasattr(self, 'btn_toggle_move') and self.btn_toggle_move.isChecked():
+                            self.btn_toggle_move.setChecked(False)
+                        l = self.layers[r] if 0 <= r < len(self.layers) else None
+                        if l:
+                            if l.brush_mask is None:
+                                h_m, w_m = self._get_layer_image_shape(l)
+                                l.brush_mask = np.ones((h_m, w_m), dtype=np.float32)
+                                l.brush_mode = "erase"
+                                self.invalidate_layer_thumbnail(l.id, rebuild_now=False)
+                            l.active_target = "mask"
+                        self.list_layers.setCurrentRow(r)
+                        self._selected_layer_id = l_id
+                        self._update_list_and_props_state()
+                        self._rebuild_list_items(select_layer_id=l_id)
+                    return _h
+
+                lbl_thumb_img.mousePressEvent = make_img_click_handler(layer.id, i)
+                lbl_thumb_mask.mousePressEvent = make_mask_click_handler(layer.id, i)
+                lbl_thumb_img.mouseDoubleClickEvent = make_thumb_double_click_handler(layer)
+                lbl_thumb_mask.mouseDoubleClickEvent = make_thumb_double_click_handler(layer)
+            else:
+                # 1. Miniatura visual estándar (RGB para imagen, B/N para máscaras)
+                pix = self._get_layer_thumbnail_pixmap(layer)
+                lbl_thumb = QLabel()
+                lbl_thumb.setFixedSize(tw + 2, th + 2)
+                border_col = "#28324a" if layer.enabled else "#161b26"
+                lbl_thumb.setStyleSheet(f"""
+                    QLabel {{
+                        background-color: #07090e;
+                        border: 1px solid {border_col};
+                        border-radius: 3px;
+                    }}
+                """)
+                lbl_thumb.setAlignment(Qt.AlignCenter)
+                lbl_thumb.setPixmap(pix)
+                lbl_thumb.setCursor(Qt.PointingHandCursor)
+                lbl_thumb.setToolTip("Miniatura de capa.\nHaz doble clic para previsualizar la máscara en el lienzo.")
+                row_layout.addWidget(lbl_thumb)
+                lbl_thumb.mousePressEvent = make_click_handler(layer.id, i)
+                lbl_thumb.mouseDoubleClickEvent = make_thumb_double_click_handler(layer)
 
             # 2. Micro-icono de tipo
             lbl_icon = QLabel()
@@ -2113,26 +2676,10 @@ class MaskLayersWidget(QWidget):
                 }
             """)
 
-            def make_click_handler(layer_id, r):
-                def _handler(e):
-                    self.list_layers.setCurrentRow(r)
-                    if self._selected_layer_id != layer_id:
-                        self._selected_layer_id = layer_id
-                        self._update_list_and_props_state()
-                return _handler
-
-            def make_eye_handler(r):
-                return lambda: self._toggle_layer_enabled_at(r)
-
-            def make_thumb_double_click_handler(l):
-                return lambda e: self._on_thumb_double_clicked(l)
-
             h = make_click_handler(layer.id, i)
             row_widget.mousePressEvent = h
             lbl_title.mousePressEvent = h
-            lbl_thumb.mousePressEvent = h
             lbl_icon.mousePressEvent = h
-            lbl_thumb.mouseDoubleClickEvent = make_thumb_double_click_handler(layer)
             btn_eye.clicked.connect(make_eye_handler(i))
 
             row_layout.addWidget(btn_eye)
@@ -2202,6 +2749,10 @@ class MaskLayersWidget(QWidget):
         self.container_layer_props.setVisible(has_sel)
         if hasattr(self, 'container_blend_mode'):
             self.container_blend_mode.setVisible(is_raster)
+        if hasattr(self, 'grp_transform'):
+            self.grp_transform.setVisible(is_raster and not is_sys)
+        if not is_raster and hasattr(self, 'btn_toggle_move') and self.btn_toggle_move.isChecked():
+            self.btn_toggle_move.setChecked(False)
         if hasattr(self, 'resize_handle'):
             self.resize_handle.setVisible(len(self.layers) > 0)
         self.btn_move_up.setEnabled(has_sel)
@@ -2254,6 +2805,23 @@ class MaskLayersWidget(QWidget):
             self.slider_opacity.setValue(op_pct)
             self.lbl_opacity.setText(f"{op_pct}%")
 
+            # Transformación espacial 2D (capas ráster)
+            if is_raster and hasattr(self, 'row_trans_x'):
+                tx_pct = int(round(getattr(layer, 'offset_x', 0.0) * 100))
+                ty_pct = int(round(getattr(layer, 'offset_y', 0.0) * 100))
+                sx_pct = int(round(getattr(layer, 'scale_x', getattr(layer, 'scale', 1.0)) * 100))
+                sy_pct = int(round(getattr(layer, 'scale_y', getattr(layer, 'scale', 1.0)) * 100))
+                ang_deg = int(round(getattr(layer, 'angle', 0.0)))
+                self.slider_trans_x.setValue(tx_pct)
+                self.slider_trans_y.setValue(ty_pct)
+                if hasattr(self, 'slider_trans_scale_x'):
+                    self.slider_trans_scale_x.setValue(sx_pct)
+                if hasattr(self, 'slider_trans_scale_y'):
+                    self.slider_trans_scale_y.setValue(sy_pct)
+                if hasattr(self, 'chk_link_scales'):
+                    self.chk_link_scales.setChecked(abs(sx_pct - sy_pct) <= 1)
+                self.slider_trans_angle.setValue(ang_deg)
+
             # Grupo de definición de máscara (Ocultar si es capa de sistema de StarNet)
             self.grp_mask_def.setVisible(not is_sys)
 
@@ -2263,11 +2831,31 @@ class MaskLayersWidget(QWidget):
                 self.panel_luma.setVisible(layer.mask_type == MASK_TYPE_LUMA)
                 self.panel_color.setVisible(layer.mask_type == MASK_TYPE_COLOR)
                 self.panel_ground.setVisible(layer.mask_type in (MASK_TYPE_GROUND, MASK_TYPE_SKY))
+                is_gradient = getattr(layer, 'is_gradient', False)
+                if hasattr(self, 'panel_gradient'):
+                    self.panel_gradient.setVisible(is_gradient)
+                    if is_gradient:
+                        is_linear = (layer.mask_type == MASK_TYPE_GRADIENT_LINEAR)
+                        self.container_linear_props.setVisible(is_linear)
+                        self.container_radial_props.setVisible(not is_linear)
+
+                # Acciones específicas de máscara en capa ráster
+                if hasattr(self, 'container_raster_mask_actions'):
+                    is_raster_layer = (layer.mask_type == MASK_TYPE_IMAGE_RASTER)
+                    self.container_raster_mask_actions.setVisible(is_raster_layer)
+                    if is_raster_layer:
+                        has_m = layer.brush_mask is not None
+                        self.btn_raster_add_mask.setVisible(not has_m)
+                        if hasattr(self, 'btn_raster_add_black'):
+                            self.btn_raster_add_black.setVisible(not has_m)
+                        self.btn_raster_del_mask.setVisible(has_m)
             else:
                 self.panel_brush.setVisible(False)
                 self.panel_luma.setVisible(False)
                 self.panel_color.setVisible(False)
                 self.panel_ground.setVisible(False)
+                if hasattr(self, 'panel_gradient'):
+                    self.panel_gradient.setVisible(False)
 
             if getattr(layer, 'supports_brush', False):
                 self.slider_b_radius.setValue(layer.brush_radius)
@@ -2291,6 +2879,27 @@ class MaskLayersWidget(QWidget):
                 self._update_color_swatch(hue_int)
                 self.spin_color_tol.setValue(int(layer.color_tolerance))
                 self.spin_color_sat.setValue(layer.color_min_sat)
+
+            elif getattr(layer, 'is_gradient', False) and hasattr(self, 'panel_gradient'):
+                l_idx = self.combo_grad_limit.findData(getattr(layer, 'limit_mask', LIMIT_MASK_NONE))
+                self.combo_grad_limit.setCurrentIndex(max(0, l_idx))
+                if layer.mask_type == MASK_TYPE_GRADIENT_LINEAR:
+                    prof = getattr(layer, 'linear_profile', 'smoothstep')
+                    p_idx = self.combo_lin_profile.findData(prof)
+                    self.combo_lin_profile.setCurrentIndex(max(0, p_idx))
+                    self.slider_lin_midpoint.setValue(int(round(getattr(layer, 'linear_midpoint', 0.5) * 100)))
+                    is_sym = getattr(layer, 'linear_symmetric', True)
+                    self.chk_lin_symmetric.setChecked(is_sym)
+                    self.slider_lin_span_b.setValue(int(round(getattr(layer, 'linear_span_b', 1.0) * 100)))
+                    is_refl = prof == "reflected"
+                    self.row_lin_midpoint.setVisible(not is_refl)
+                    self.container_reflected_props.setVisible(is_refl)
+                    self.row_lin_span_b.setVisible(is_refl and not is_sym)
+                elif layer.mask_type == MASK_TYPE_GRADIENT_RADIAL:
+                    self.slider_rad_feather.setValue(int(round(getattr(layer, 'radial_feather', 0.5) * 100)))
+                    self.slider_rad_angle.setValue(int(round(getattr(layer, 'radial_angle', 0.0))))
+                    self.slider_rad_rx.setValue(int(round(getattr(layer, 'radial_radius_x', 0.25) * 100)))
+                    self.slider_rad_ry.setValue(int(round(getattr(layer, 'radial_radius_y', 0.35) * 100)))
 
             # Ajustes locales
             self.slider_adj_ev.setValue(int(round(layer.exposure * 100)))
@@ -2340,9 +2949,24 @@ class MaskLayersWidget(QWidget):
 
         if not layer.enabled or is_sys:
             self.brush_tool_toggled.emit(False, None)
+            self.gradient_tool_toggled.emit(False, None)
             self.preview_mask_requested.emit(None)
+        elif getattr(layer, 'is_gradient', False):
+            self.brush_tool_toggled.emit(False, None)
+            self.gradient_tool_toggled.emit(True, layer)
+            if self.btn_preview_mask.isChecked():
+                self._emit_mask_preview()
+            else:
+                self.preview_mask_requested.emit(None)
         elif getattr(layer, 'supports_brush', False):
-            self.brush_tool_toggled.emit(True, layer)
+            self.gradient_tool_toggled.emit(False, None)
+            # En capas ráster, el pincel en el lienzo solo se activa si el objetivo seleccionado es la máscara
+            if layer.mask_type == MASK_TYPE_IMAGE_RASTER:
+                is_mask_target = (getattr(layer, 'active_target', 'image') == "mask" and layer.brush_mask is not None)
+                self.brush_tool_toggled.emit(is_mask_target, layer if is_mask_target else None)
+            else:
+                self.brush_tool_toggled.emit(True, layer)
+
             self.brush_params_changed.emit(
                 layer.brush_radius, layer.brush_hardness, layer.brush_flow, layer.brush_mode
             )
@@ -2352,6 +2976,7 @@ class MaskLayersWidget(QWidget):
                 self.preview_mask_requested.emit(None)
         else:
             self.brush_tool_toggled.emit(False, None)
+            self.gradient_tool_toggled.emit(False, None)
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
             else:
@@ -2447,6 +3072,18 @@ class MaskLayersWidget(QWidget):
             bg_c = "#241914"
             adj_title = "Ajustes de Capa Ráster / Filtro Coronal"
             mask_def_title = "Máscara Espacial de Capa (Pincel)"
+        elif mtype == MASK_TYPE_GRADIENT_LINEAR:
+            border_c = "#00bcd4"
+            title_c = "#80deea"
+            bg_c = "#141f22"
+            adj_title = "Ajustes Locales de Gradiente Lineal"
+            mask_def_title = "Propiedades de Gradiente Lineal"
+        elif mtype == MASK_TYPE_GRADIENT_RADIAL:
+            border_c = "#00acc1"
+            title_c = "#80deea"
+            bg_c = "#141f22"
+            adj_title = "Ajustes Locales de Gradiente Radial"
+            mask_def_title = "Propiedades de Gradiente Radial"
         else:
             border_c = "#2b3044"
             title_c = "#00e5ff"
@@ -2583,6 +3220,279 @@ class MaskLayersWidget(QWidget):
             self.lbl_opacity.setText(f"{val}%")
             self.layers_changed.emit()
 
+    # Controles de Transformación Espacial 2D (Mover y Redimensionar)
+    def _on_toggle_move_mode(self, checked: bool) -> None:
+        """Conmuta la herramienta interactiva de mover/redimensionar en el lienzo."""
+        layer = self.get_selected_layer()
+        if not layer or not getattr(layer, 'is_raster_image', False):
+            if checked:
+                self.btn_toggle_move.setChecked(False)
+            return
+        if checked:
+            # Desactivar temporalmente el pincel para evitar conflictos de eventos
+            self.brush_tool_toggled.emit(False, None)
+            if getattr(layer, 'active_target', None) == "mask":
+                layer.active_target = "image"
+                self._rebuild_list_items(select_layer_id=layer.id)
+        self.layer_move_tool_toggled.emit(checked)
+
+    def _on_scale_x_changed(self, val: int) -> None:
+        """Maneja el cambio de Escala X, replicando a Y si las proporciones están vinculadas."""
+        if self._updating_ui: return
+        if hasattr(self, 'chk_link_scales') and self.chk_link_scales.isChecked():
+            self._updating_ui = True
+            try:
+                self.slider_trans_scale_y.setValue(val)
+            finally:
+                self._updating_ui = False
+        self._on_transform_slider_changed()
+
+    def _on_scale_y_changed(self, val: int) -> None:
+        """Maneja el cambio de Escala Y, replicando a X si las proporciones están vinculadas."""
+        if self._updating_ui: return
+        if hasattr(self, 'chk_link_scales') and self.chk_link_scales.isChecked():
+            self._updating_ui = True
+            try:
+                self.slider_trans_scale_x.setValue(val)
+            finally:
+                self._updating_ui = False
+        self._on_transform_slider_changed()
+
+    def _on_transform_slider_changed(self) -> None:
+        """Actualiza los parámetros de transformación espacial 2D de la capa seleccionada."""
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if not layer or not getattr(layer, 'is_raster_image', False):
+            return
+        layer.offset_x = float(self.slider_trans_x.value()) / 100.0
+        layer.offset_y = float(self.slider_trans_y.value()) / 100.0
+        layer.scale_x = max(0.01, float(self.slider_trans_scale_x.value()) / 100.0)
+        layer.scale_y = max(0.01, float(self.slider_trans_scale_y.value()) / 100.0)
+        layer.scale = layer.scale_x
+        layer.angle = float(self.slider_trans_angle.value())
+
+        self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
+        self.layers_changed.emit()
+
+    def _reset_layer_transform(self) -> None:
+        """Restablece los parámetros de transformación espacial a los valores por defecto (0, 0, 100%, 100%, 0°)."""
+        layer = self.get_selected_layer()
+        if not layer or not getattr(layer, 'is_raster_image', False):
+            return
+        self._updating_ui = True
+        try:
+            layer.offset_x = 0.0
+            layer.offset_y = 0.0
+            layer.scale_x = 1.0
+            layer.scale_y = 1.0
+            layer.scale = 1.0
+            layer.angle = 0.0
+            self.slider_trans_x.setValue(0)
+            self.slider_trans_y.setValue(0)
+            self.slider_trans_scale_x.setValue(100)
+            self.slider_trans_scale_y.setValue(100)
+            self.slider_trans_angle.setValue(0)
+            if hasattr(self, 'chk_link_scales'):
+                self.chk_link_scales.setChecked(True)
+        finally:
+            self._updating_ui = False
+        self.invalidate_layer_thumbnail(layer.id, rebuild_now=True)
+        self.layers_changed.emit()
+        self.ground_slider_released.emit()
+
+    def set_layer_transform_from_canvas(self, dx_norm: float, dy_norm: float) -> None:
+        """Añade desplazamiento relativo arrastrado interactivamente desde el lienzo."""
+        layer = self.get_selected_layer()
+        if not layer or not getattr(layer, 'is_raster_image', False):
+            return
+        new_ox = max(-1.0, min(1.0, layer.offset_x + dx_norm))
+        new_oy = max(-1.0, min(1.0, layer.offset_y + dy_norm))
+        layer.offset_x = new_ox
+        layer.offset_y = new_oy
+
+        self._updating_ui = True
+        try:
+            self.slider_trans_x.setValue(int(round(new_ox * 100)))
+            self.slider_trans_y.setValue(int(round(new_oy * 100)))
+        finally:
+            self._updating_ui = False
+
+        self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
+        self.layers_changed.emit()
+
+    def set_layer_scale_from_canvas(self, factor: float) -> None:
+        """Aplica factor de escala desde la rueda del ratón en lienzo conservando la relación de aspecto."""
+        layer = self.get_selected_layer()
+        if not layer or not getattr(layer, 'is_raster_image', False):
+            return
+        cur_sx = getattr(layer, 'scale_x', getattr(layer, 'scale', 1.0))
+        cur_sy = getattr(layer, 'scale_y', getattr(layer, 'scale', 1.0))
+        new_sx = max(0.10, min(4.0, cur_sx * factor))
+        new_sy = max(0.10, min(4.0, cur_sy * factor))
+        layer.scale_x = new_sx
+        layer.scale_y = new_sy
+        layer.scale = new_sx
+
+        self._updating_ui = True
+        try:
+            self.slider_trans_scale_x.setValue(int(round(new_sx * 100)))
+            self.slider_trans_scale_y.setValue(int(round(new_sy * 100)))
+        finally:
+            self._updating_ui = False
+
+        self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
+        self.layers_changed.emit()
+
+    # Controles de Gradientes Lineal y Radial (Vectoriales Analíticos)
+    def _on_grad_limit_changed(self) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if not layer or not getattr(layer, 'is_gradient', False):
+            return
+        layer.limit_mask = self.combo_grad_limit.currentData()
+        self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
+        self.layers_changed.emit()
+
+    def _on_linear_profile_changed(self) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if not layer or layer.mask_type != MASK_TYPE_GRADIENT_LINEAR:
+            return
+        layer.linear_profile = self.combo_lin_profile.currentData()
+        is_refl = layer.linear_profile == "reflected"
+        self.row_lin_midpoint.setVisible(not is_refl)
+        self.container_reflected_props.setVisible(is_refl)
+        self.row_lin_span_b.setVisible(is_refl and not getattr(layer, 'linear_symmetric', True))
+        self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
+        self.layers_changed.emit()
+
+    def _on_linear_symmetric_toggled(self, checked: bool) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if not layer or layer.mask_type != MASK_TYPE_GRADIENT_LINEAR:
+            return
+        layer.linear_symmetric = checked
+        self.row_lin_span_b.setVisible(not checked)
+        self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
+        self.layers_changed.emit()
+
+    def _on_linear_span_b_changed(self) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if not layer or layer.mask_type != MASK_TYPE_GRADIENT_LINEAR:
+            return
+        layer.linear_span_b = float(self.slider_lin_span_b.value()) / 100.0
+        self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
+        self.layers_changed.emit()
+
+    def _on_linear_midpoint_changed(self) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if not layer or layer.mask_type != MASK_TYPE_GRADIENT_LINEAR:
+            return
+        layer.linear_midpoint = float(self.slider_lin_midpoint.value()) / 100.0
+        self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
+        self.layers_changed.emit()
+
+    def _on_radial_feather_changed(self) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if not layer or layer.mask_type != MASK_TYPE_GRADIENT_RADIAL:
+            return
+        layer.radial_feather = float(self.slider_rad_feather.value()) / 100.0
+        self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
+        self.layers_changed.emit()
+
+    def _on_radial_angle_changed(self) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if not layer or layer.mask_type != MASK_TYPE_GRADIENT_RADIAL:
+            return
+        layer.radial_angle = float(self.slider_rad_angle.value())
+        self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
+        self.layers_changed.emit()
+
+    def _on_radial_rx_changed(self) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if not layer or layer.mask_type != MASK_TYPE_GRADIENT_RADIAL:
+            return
+        layer.radial_radius_x = float(self.slider_rad_rx.value()) / 100.0
+        self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
+        self.layers_changed.emit()
+
+    def _on_radial_ry_changed(self) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if not layer or layer.mask_type != MASK_TYPE_GRADIENT_RADIAL:
+            return
+        layer.radial_radius_y = float(self.slider_rad_ry.value()) / 100.0
+        self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
+        self.layers_changed.emit()
+
+    def _reset_gradient_geometry(self) -> None:
+        layer = self.get_selected_layer()
+        if not layer or not getattr(layer, 'is_gradient', False):
+            return
+        self._updating_ui = True
+        try:
+            if layer.mask_type == MASK_TYPE_GRADIENT_LINEAR:
+                layer.linear_p0 = (0.5, 0.75)
+                layer.linear_p1 = (0.5, 0.35)
+                layer.linear_midpoint = 0.5
+                layer.linear_profile = "smoothstep"
+                layer.linear_symmetric = True
+                layer.linear_span_b = 1.0
+                self.slider_lin_midpoint.setValue(50)
+                self.chk_lin_symmetric.setChecked(True)
+                self.slider_lin_span_b.setValue(100)
+                self.row_lin_midpoint.setVisible(True)
+                self.container_reflected_props.setVisible(False)
+                idx = self.combo_lin_profile.findData("smoothstep")
+                if idx >= 0:
+                    self.combo_lin_profile.setCurrentIndex(idx)
+            elif layer.mask_type == MASK_TYPE_GRADIENT_RADIAL:
+                layer.radial_center = (0.5, 0.5)
+                layer.radial_radius_x = 0.25
+                layer.radial_radius_y = 0.35
+                layer.radial_angle = 0.0
+                layer.radial_feather = 0.5
+                self.slider_rad_feather.setValue(50)
+                self.slider_rad_angle.setValue(0)
+                self.slider_rad_rx.setValue(25)
+                self.slider_rad_ry.setValue(35)
+        finally:
+            self._updating_ui = False
+        self.invalidate_layer_thumbnail(layer.id, rebuild_now=True)
+        self.layers_changed.emit()
+        self.ground_slider_released.emit()
+
+    def update_gradient_ui_from_layer(self, layer: MaskLayer) -> None:
+        """Sincroniza los controles del panel de gradiente cuando se manipulan los gizmos en el lienzo."""
+        if not layer or not getattr(layer, 'is_gradient', False):
+            return
+        sel_layer = self.get_selected_layer()
+        if sel_layer and sel_layer.id == layer.id:
+            self._updating_ui = True
+            try:
+                if layer.mask_type == MASK_TYPE_GRADIENT_LINEAR:
+                    prof = getattr(layer, 'linear_profile', 'smoothstep')
+                    is_sym = getattr(layer, 'linear_symmetric', True)
+                    is_refl = prof == "reflected"
+                    self.slider_lin_midpoint.setValue(int(round(getattr(layer, 'linear_midpoint', 0.5) * 100)))
+                    self.chk_lin_symmetric.setChecked(is_sym)
+                    self.slider_lin_span_b.setValue(int(round(getattr(layer, 'linear_span_b', 1.0) * 100)))
+                    self.row_lin_midpoint.setVisible(not is_refl)
+                    self.container_reflected_props.setVisible(is_refl)
+                    self.row_lin_span_b.setVisible(is_refl and not is_sym)
+                elif layer.mask_type == MASK_TYPE_GRADIENT_RADIAL:
+                    self.slider_rad_feather.setValue(int(round(getattr(layer, 'radial_feather', 0.5) * 100)))
+                    self.slider_rad_angle.setValue(int(round(getattr(layer, 'radial_angle', 0.0))))
+                    self.slider_rad_rx.setValue(int(round(getattr(layer, 'radial_radius_x', 0.25) * 100)))
+                    self.slider_rad_ry.setValue(int(round(getattr(layer, 'radial_radius_y', 0.35) * 100)))
+            finally:
+                self._updating_ui = False
+
     # Controles de Pincel interactivo
     def _on_brush_param_changed(self) -> None:
         if self._updating_ui: return
@@ -2617,6 +3527,8 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if layer and getattr(layer, 'supports_brush', False):
             layer.brush_mask = None
+            if layer.mask_type == MASK_TYPE_IMAGE_RASTER:
+                layer.active_target = "image"
             self.invalidate_layer_thumbnail(layer.id)
             self.brush_tool_toggled.emit(True, layer)
             self.set_preview_active(False)

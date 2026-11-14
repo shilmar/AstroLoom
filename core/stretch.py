@@ -1,4 +1,5 @@
 # core/stretch.py
+from typing import Tuple, Optional
 import numpy as np
 import cv2
 
@@ -85,6 +86,165 @@ def calculate_mtf_params(img_float: np.ndarray, target_background: float = 0.20)
     # Límite mínimo para evitar sobreexposición destructiva en presencia de cúpulas de luz
     m = float(np.clip(m, 0.0050, 0.9999))
     return bp, m
+
+def calculate_sky_neutral_wb(
+    img_rgb: np.ndarray, 
+    sky_mask: Optional[np.ndarray] = None
+) -> Tuple[float, float]:
+    """
+    Calcula los factores de balance de blancos (Temp y Tint) para neutralizar el fondo estelar
+    aislado, excluyendo el suelo terrestre y descartando estrellas brillantes y el núcleo galáctico.
+    Retorna:
+        Tuple[float, float]: (temp_factor, tint_factor) normalizados en [-1.0, 1.0].
+    """
+    if img_rgb is None or img_rgb.ndim < 3 or img_rgb.shape[2] < 3:
+        return 0.0, 0.0
+
+    step = 4 if max(img_rgb.shape[:2]) > 1000 else 2
+    sample = img_rgb[::step, ::step]
+    h_s, w_s = sample.shape[:2]
+
+    if sky_mask is not None:
+        if sky_mask.shape[:2] != (h_s, w_s):
+            m_s = cv2.resize(sky_mask.astype(np.float32), (w_s, h_s), interpolation=cv2.INTER_NEAREST)
+        else:
+            m_s = sky_mask.astype(np.float32)
+        valid_sky = m_s > 0.80
+    else:
+        valid_sky = np.ones((h_s, w_s), dtype=bool)
+
+    if np.count_nonzero(valid_sky) < 50:
+        valid_sky = np.ones((h_s, w_s), dtype=bool)
+
+    r_s = sample[..., 0][valid_sky]
+    g_s = sample[..., 1][valid_sky]
+    b_s = sample[..., 2][valid_sky]
+
+    luma = 0.2126 * r_s + 0.7152 * g_s + 0.0722 * b_s
+    p_low = np.percentile(luma, 5.0)
+    p_high = np.percentile(luma, 65.0)
+
+    bg_filter = (luma >= p_low) & (luma <= p_high)
+    if np.count_nonzero(bg_filter) < 30:
+        bg_filter = np.ones_like(luma, dtype=bool)
+
+    r_bg = float(np.median(r_s[bg_filter]))
+    g_bg = float(np.median(g_s[bg_filter]))
+    b_bg = float(np.median(b_s[bg_filter]))
+
+    w_r = 1.0 / max(1e-5, r_bg)
+    w_g = 1.0 / max(1e-5, g_bg)
+    w_b = 1.0 / max(1e-5, b_bg)
+    w_mean = (w_r + w_g + w_b) / 3.0
+
+    gain_r = w_r / w_mean
+    gain_g = w_g / w_mean
+    gain_b = w_b / w_mean
+
+    temp_calc = gain_r - gain_b
+    tint_calc = 2.0 * (1.0 - gain_g)
+
+    temp_clamped = float(np.clip(temp_calc, -1.0, 1.0))
+    tint_clamped = float(np.clip(tint_calc, -1.0, 1.0))
+    return temp_clamped, tint_clamped
+
+def calculate_sky_mtf_params(
+    img_float: np.ndarray, 
+    sky_mask: Optional[np.ndarray] = None, 
+    target_background: float = 0.20
+) -> Tuple[float, float]:
+    """
+    Calcula el punto negro (bp) y el parámetro de medios tonos MTF (m) considerando
+    la región del cielo y protegiendo las sombras y detalles del suelo contra el recorte.
+    """
+    step = 4 if max(img_float.shape[:2]) > 1000 else 2
+    sample = img_float[::step, ::step]
+
+    if sample.ndim == 3:
+        luma = 0.2126 * sample[..., 0] + 0.7152 * sample[..., 1] + 0.0722 * sample[..., 2]
+    else:
+        luma = sample
+
+    h_s, w_s = luma.shape[:2]
+    med_all = float(np.median(luma))
+    mad_all = float(np.median(np.abs(luma - med_all)))
+
+    if sky_mask is not None:
+        if sky_mask.shape[:2] != (h_s, w_s):
+            m_s = cv2.resize(sky_mask.astype(np.float32), (w_s, h_s), interpolation=cv2.INTER_NEAREST)
+        else:
+            m_s = sky_mask.astype(np.float32)
+        sky_pixels = luma[m_s > 0.50]
+        if len(sky_pixels) >= 50:
+            med_sky = float(np.median(sky_pixels))
+            mad_sky = float(np.median(np.abs(sky_pixels - med_sky)))
+            bp_safe = float(np.clip(min(med_sky - 2.5 * mad_sky, med_all - 1.5 * mad_all), 0.0, 0.95))
+            med_target = med_sky
+        else:
+            bp_safe = float(np.clip(med_all - 1.5 * mad_all, 0.0, 0.95))
+            med_target = med_all
+    else:
+        bp_safe = float(np.clip(med_all - 1.5 * mad_all, 0.0, 0.95))
+        med_target = med_all
+
+    norm_med = max(1e-6, (med_target - bp_safe) / max(1e-6, 1.0 - bp_safe))
+    denom = norm_med * (2.0 * target_background - 1.0) - target_background
+    if abs(denom) < 1e-7:
+        m = 0.5
+    else:
+        m = (norm_med * (target_background - 1.0)) / denom
+
+    m = float(np.clip(m, 0.0050, 0.9999))
+    return bp_safe, m
+
+def calculate_smart_ground_lift(
+    img_float: np.ndarray, 
+    sky_mask: Optional[np.ndarray] = None
+) -> Tuple[float, float, float, str]:
+    """
+    Evalúa las métricas fotométricas del suelo (luminancia media y SNR de ruido)
+    y determina la compensación tonal óptima (Smart Ground Lift) en espacio lineal,
+    evitando la amplificación destructiva de ruido térmico propia del estirado MTF en tierra.
+    
+    Retorna:
+        Tuple[float, float, float, str]: (gnd_ev, gnd_shadows_pct, gnd_dn_pct, descripcion_diagnostico)
+    """
+    if sky_mask is None or img_float is None:
+        return 0.0, 0.0, 0.0, "Sin máscara de suelo definida (Ajustes de suelo en 0)"
+
+    step = 4 if max(img_float.shape[:2]) > 1000 else 2
+    sample = img_float[::step, ::step]
+
+    if sample.ndim == 3:
+        luma = 0.2126 * sample[..., 0] + 0.7152 * sample[..., 1] + 0.0722 * sample[..., 2]
+    else:
+        luma = sample
+
+    h_s, w_s = luma.shape[:2]
+    if sky_mask.shape[:2] != (h_s, w_s):
+        m_s = cv2.resize(sky_mask.astype(np.float32), (w_s, h_s), interpolation=cv2.INTER_NEAREST)
+    else:
+        m_s = sky_mask.astype(np.float32)
+
+    gnd_mask = m_s < 0.20
+    total_pixels = h_s * w_s
+    gnd_count = np.count_nonzero(gnd_mask)
+
+    if gnd_count < int(total_pixels * 0.02):
+        return 0.0, 0.0, 0.0, "Cielo casi total (>98% encuadre): suelo no requiere ajuste."
+
+    gnd_pixels = luma[gnd_mask]
+    med_gnd = float(np.median(gnd_pixels))
+    mad_gnd = float(np.median(np.abs(gnd_pixels - med_gnd)))
+    sigma_noise = max(1e-5, 1.4826 * mad_gnd)
+    snr_gnd = med_gnd / sigma_noise
+
+    if snr_gnd < 1.5 or med_gnd < 0.003:
+        return 0.0, 0.0, 0.0, f"Suelo silueta (Med={med_gnd:.4f}, SNR={snr_gnd:.1f}): conservado negro sin ruido."
+    elif snr_gnd < 4.0:
+        return 0.50, 20.0, 30.0, f"Suelo tenue (Med={med_gnd:.4f}, SNR={snr_gnd:.1f}): Lift prudente (+0.50 EV, Sombras +20%, Denoise 30%)."
+    else:
+        return 1.00, 35.0, 0.0, f"Suelo rico (Med={med_gnd:.4f}, SNR={snr_gnd:.1f}): Lift de detalle (+1.00 EV, Sombras +35%)."
 
 def mtf_curve(x: np.ndarray, m: float) -> np.ndarray:
     """Función de transferencia de medios tonos estándar (Midtone Transfer Function)."""

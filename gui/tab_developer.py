@@ -30,7 +30,8 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QMenu,
     QProgressDialog,
-    QCheckBox
+    QCheckBox,
+    QDialog
 )
 from PySide6.QtCore import Qt, QCoreApplication, QTimer, QEvent, QPoint
 from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap, QColor, QFont, QCursor
@@ -38,6 +39,9 @@ from core.stacking import load_image_as_float32
 from core.background_extraction import generate_sky_sample_points, extract_background_rbf
 from core.stretch import (
     calculate_mtf_params, 
+    calculate_sky_neutral_wb,
+    calculate_sky_mtf_params,
+    calculate_smart_ground_lift,
     manual_stretch, 
     compute_ghs_lut,
     apply_ghs_stretch,
@@ -253,6 +257,8 @@ class DeveloperTab(QWidget):
         self.redo_stack: list[dict] = []
         self._last_committed_state: Optional[dict] = None
         self._is_undoing_or_redoing: bool = False
+        self._is_applying_preset: bool = False
+        self._is_previewing_preset: bool = False
         self._undo_debounce_timer = QTimer(self)
         self._undo_debounce_timer.setSingleShot(True)
         self._undo_debounce_timer.setInterval(500)
@@ -420,6 +426,34 @@ class DeveloperTab(QWidget):
         self.btn_open_img.setCursor(Qt.PointingHandCursor)
         self.btn_open_img.clicked.connect(self.open_image_file)
         left_container_layout.addWidget(self.btn_open_img, 0)
+
+        # Botón de Arranque Rápido: 1-Click Start Astro-Reveal
+        self.btn_start_reveal = QPushButton("✨ 1-Click Start Astro-Reveal")
+        self.btn_start_reveal.setIcon(get_icon("sparkles", color="#ffd54f", size=16))
+        self.btn_start_reveal.setToolTip("Arranque en 1 clic para paisaje: detecta horizonte por IA, neutraliza el fondo celestial, auto-estira el cielo y evalúa el suelo con Smart Ground Lift.")
+        self.btn_start_reveal.setCursor(Qt.PointingHandCursor)
+        self.btn_start_reveal.setStyleSheet("""
+            QPushButton {
+                font-weight: bold;
+                font-size: 12px;
+                color: #fff9c4;
+                padding: 8px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1a237e, stop:1 #283593);
+                border: 1px solid #5c6bc0;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #283593, stop:1 #3949ab);
+                border: 1px solid #9fa8da;
+                color: #ffffff;
+            }
+            QPushButton:pressed {
+                background: #1a237e;
+                border: 1px solid #3949ab;
+            }
+        """)
+        self.btn_start_reveal.clicked.connect(self.start_astro_reveal)
+        left_container_layout.addWidget(self.btn_start_reveal, 0)
 
         # Scroll área para los acordeones
         self.left_scroll_area = QScrollArea()
@@ -864,6 +898,14 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.ground_antihalo_changed.connect(self.on_gnd_antihalo_changed)
         self.mask_layers_widget.ground_edge_shift_changed.connect(self.on_gnd_edge_shift_changed)
         self.mask_layers_widget.ground_ai_denoise_requested.connect(self.on_run_ground_ai_denoise_requested)
+        self.mask_layers_widget.raster_layer_import_requested.connect(self._on_import_raster_layer)
+        self.mask_layers_widget.layer_move_tool_toggled.connect(self._on_layer_move_tool_toggled)
+        self.canvas.layer_move_offset_dragged.connect(self._on_canvas_layer_offset_dragged)
+        self.canvas.layer_move_scale_wheel.connect(self._on_canvas_layer_scale_wheel)
+        self.canvas.layer_move_finished.connect(self._commit_action)
+        self.mask_layers_widget.gradient_tool_toggled.connect(self._on_layer_gradient_toggled)
+        self.canvas.gradient_changed.connect(self._on_canvas_gradient_changed)
+        self.canvas.gradient_drag_finished.connect(self._commit_action)
         if hasattr(self, 'panel_ground_sky') and self.panel_ground_sky is not None:
             self.panel_ground_sky.denoise_changed.connect(self.on_gnd_denoise_changed)
             self.panel_ground_sky.antihalo_changed.connect(self.on_gnd_antihalo_changed)
@@ -1191,6 +1233,11 @@ class DeveloperTab(QWidget):
         self.shortcut_open_proj = QShortcut(QKeySequence("Ctrl+O"), self)
         self.shortcut_open_proj.setContext(Qt.WindowShortcut)
         self.shortcut_open_proj.activated.connect(self.open_project_dialog)
+
+        # Atajo global 'Ctrl+I' para Invertir Máscara de Capa activa
+        self.shortcut_invert_mask = QShortcut(QKeySequence("Ctrl+I"), self)
+        self.shortcut_invert_mask.setContext(Qt.WindowShortcut)
+        self.shortcut_invert_mask.activated.connect(self._on_shortcut_invert_mask)
 
         layout.addWidget(splitter)
 
@@ -2023,6 +2070,14 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'btn_mask_tool'):
             self.btn_mask_tool.toggle()
 
+    def _on_shortcut_invert_mask(self) -> None:
+        """Invierte la máscara de la capa seleccionada mediante atajo Ctrl+I."""
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            return
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.invert_selected_brush_mask()
+
     def _on_toggle_mask_tool(self, enabled: bool) -> None:
         """Activa o desactiva la barra y modo de trazado interactivo de máscara en el lienzo."""
         if enabled and self.image_32bit is None:
@@ -2462,6 +2517,12 @@ class DeveloperTab(QWidget):
 
     def _record_mask_action(self, old_mask: Optional[np.ndarray], new_mask: Optional[np.ndarray], action_name: str = "Máscara") -> None:
         """Registra una acción de máscara en el historial de Deshacer / Rehacer."""
+        if (
+            self._is_undoing_or_redoing
+            or getattr(self, '_is_applying_preset', False)
+            or getattr(self, '_is_previewing_preset', False)
+        ):
+            return
         undo_item = {
             "type": "mask",
             "name": action_name,
@@ -2498,6 +2559,10 @@ class DeveloperTab(QWidget):
                 hasattr(self.mask_layers_widget, 'btn_preview_mask') and 
                 self.mask_layers_widget.btn_preview_mask.isChecked()
             )
+            if layer.brush_mask is not None and self.image_32bit is not None:
+                h_f, w_f = self.image_32bit.shape[:2]
+                if layer.brush_mask.shape[:2] != (h_f, w_f):
+                    layer.brush_mask = cv2.resize(layer.brush_mask, (w_f, h_f), interpolation=cv2.INTER_LINEAR)
             self.canvas.set_active_layer_mask(layer.brush_mask, show_overlay=show_overlay)
             if not show_overlay:
                 self.canvas.set_refined_mask(None)
@@ -3747,6 +3812,120 @@ class DeveloperTab(QWidget):
             self._update_undo_redo_buttons()
             self.log_message(f"Multicapa coronal transferida con éxito ({len(raster_layers)} capas ráster activas).")
 
+    def _on_import_raster_layer(self) -> None:
+        """Abre un diálogo de archivo para cargar una imagen externa como nueva capa ráster (H-Alfa, Suelo, etc.)."""
+        if self.image_32bit is None:
+            QMessageBox.information(
+                self, "Sin Imagen Base",
+                "Debes abrir primero una imagen base en el Revelador antes de añadir capas ráster de composición."
+            )
+            return
+
+        filtros = (
+            "Imágenes Astronómicas y RAW (*.tif *.tiff *.fits *.fit *.nef *.cr2 *.cr3 *.arw *.dng *.png *.jpg *.jpeg);;"
+            "Archivos TIFF / FITS (*.tif *.tiff *.fits *.fit);;"
+            "Archivos RAW (*.nef *.cr2 *.cr3 *.arw *.dng);;"
+            "Todos los archivos (*.*)"
+        )
+        cfg = load_config()
+        default_dir = cfg.get("stacked_dir", os.getcwd())
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Cargar Capa de Imagen Ráster (H-Alfa, Suelo Hora Azul, Cometa...)", default_dir, filtros
+        )
+        if not filepath:
+            return
+
+        try:
+            self.log_message(f"Cargando capa ráster: {os.path.basename(filepath)}...")
+            raw_img = load_image_as_float32(filepath, color_space=self.current_color_space)
+            if raw_img is None:
+                QMessageBox.warning(self, "Error de Carga", f"No se pudo cargar la imagen:\n{filepath}")
+                return
+
+            if np.isnan(raw_img).any() or np.isinf(raw_img).any():
+                raw_img = np.nan_to_num(raw_img, nan=0.0, posinf=1.0, neginf=0.0)
+
+            if raw_img.ndim == 2:
+                raw_img = np.repeat(raw_img[..., np.newaxis], 3, axis=-1)
+            elif raw_img.ndim == 3 and raw_img.shape[2] == 1:
+                raw_img = np.repeat(raw_img[..., np.newaxis], 3, axis=-1)
+
+            # Redimensionado adaptativo si difiere del tamaño de la imagen base
+            target_h, target_w = self.image_32bit.shape[:2]
+            if raw_img.shape[:2] != (target_h, target_w):
+                h_r, w_r = raw_img.shape[:2]
+                ar_raw = float(w_r) / float(h_r)
+                ar_target = float(target_w) / float(target_h)
+                if abs(ar_raw - ar_target) < 0.02:
+                    self.log_message(
+                        f"Ajustando dimensiones de la capa ráster ({w_r}x{h_r} -> {target_w}x{target_h})..."
+                    )
+                    raw_img = cv2.resize(raw_img, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                else:
+                    self.log_message(
+                        f"Encajando capa ráster preservando aspect ratio ({w_r}x{h_r} en lienzo {target_w}x{target_h})..."
+                    )
+                    scale = min(float(target_w) / float(w_r), float(target_h) / float(h_r))
+                    new_w = max(1, int(round(w_r * scale)))
+                    new_h = max(1, int(round(h_r * scale)))
+                    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+                    fitted = cv2.resize(raw_img, (new_w, new_h), interpolation=interp)
+
+                    canvas_layer = np.zeros((target_h, target_w, 3), dtype=np.float32)
+                    off_x = (target_w - new_w) // 2
+                    off_y = (target_h - new_h) // 2
+                    canvas_layer[off_y:off_y + new_h, off_x:off_x + new_w] = fitted
+                    raw_img = canvas_layer
+
+            layer_name = os.path.splitext(os.path.basename(filepath))[0]
+            layer = self.mask_layers_widget.add_raster_layer(
+                name=layer_name,
+                image_data=np.clip(raw_img, 0.0, 1.0).astype(np.float32),
+                blend_mode="normal",
+                opacity=1.0,
+                position=0
+            )
+
+            self.update_stretch_preview(immediate=True)
+            self._commit_action()
+            self.log_message(f"Capa ráster '{layer.name}' añadida con éxito.")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Error al Cargar Capa Ráster", f"Error inesperado al importar la imagen:\n{str(e)}")
+
+    def _on_layer_move_tool_toggled(self, active: bool) -> None:
+        """Activa o desactiva la interacción directa de mover/redimensionar capa en el lienzo."""
+        self.canvas.set_layer_move_enabled(active)
+        if active:
+            self.canvas.set_layer_brush_active(False)
+            self.log_message("Modo Mover/Escalar Capa activo: Arrastra con el ratón para desplazar la posición, rueda para escalar.")
+
+    def _on_canvas_layer_offset_dragged(self, dx_norm: float, dy_norm: float) -> None:
+        """Aplica el desplazamiento arrastrado interactivamente desde el visor."""
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_layer_transform_from_canvas(dx_norm, dy_norm)
+
+    def _on_canvas_layer_scale_wheel(self, factor: float) -> None:
+        """Aplica el factor de escala interactivo con la rueda del ratón desde el visor."""
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_layer_scale_from_canvas(factor)
+
+    def _on_layer_gradient_toggled(self, active: bool, layer: Optional[Any]) -> None:
+        """Activa o desactiva la interacción directa del gizmo de gradiente en el visor."""
+        if active and layer is not None and getattr(layer, 'enabled', True) and getattr(layer, 'is_gradient', False):
+            self.canvas.set_active_gradient_layer(layer)
+        else:
+            self.canvas.set_active_gradient_layer(None)
+
+    def _on_canvas_gradient_changed(self) -> None:
+        """Se invoca en tiempo real al arrastrar un manejador del gradiente en el lienzo."""
+        layer = getattr(self.canvas, 'active_gradient_layer', None)
+        if layer is not None and hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.update_gradient_ui_from_layer(layer)
+            self.mask_layers_widget.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
+        self.update_stretch_preview()
+
     def open_image_file(self):
         if not self._check_unsaved_changes():
             return
@@ -4516,7 +4695,8 @@ class DeveloperTab(QWidget):
                         sensor_center=(cx, cy)
                     )
                 else:
-                    self.canvas.set_external_crop(None, None)
+                    full_shape = self.image_32bit.shape[:2] if self.image_32bit is not None else None
+                    self.canvas.set_external_crop(None, full_shape)
                 self.canvas.load_image(base_to_render, display_stretched=stretched)
 
                 # Sincronización del comparador Antes / Después en modo Zoom 1:1
@@ -4544,7 +4724,12 @@ class DeveloperTab(QWidget):
                 self._update_canvas_info_label()
 
                 # Reiniciar temporizador de consolidación de historial (captura scroll de ratón y flechas)
-                if not self._is_undoing_or_redoing and hasattr(self, '_undo_debounce_timer'):
+                if (
+                    not self._is_undoing_or_redoing
+                    and not getattr(self, '_is_applying_preset', False)
+                    and not getattr(self, '_is_previewing_preset', False)
+                    and hasattr(self, '_undo_debounce_timer')
+                ):
                     self._undo_debounce_timer.start(500)
         finally:
             self._is_rendering_preview = False
@@ -4707,6 +4892,13 @@ class DeveloperTab(QWidget):
             self.sec_masks.expand()
             if hasattr(self, 'left_scroll_area'):
                 self.left_scroll_area.ensureWidgetVisible(self.sec_masks)
+
+        # Si había un preset pendiente de aplicar tras la separación de estrellas, aplicarlo ahora
+        if getattr(self, '_preset_pending_after_starnet', None) is not None:
+            pending = self._preset_pending_after_starnet
+            self._preset_pending_after_starnet = None
+            preset, scope, intensity_pct = pending
+            self.apply_preset(preset, scope=scope, intensity_pct=intensity_pct)
 
     def on_starnet_error(self, err_msg: str):
         self._set_ai_processing_state(False)
@@ -5555,6 +5747,102 @@ class DeveloperTab(QWidget):
             self.btn_curve_rgb.setChecked(mode == "rgb")
             self.btn_curve_hue.setChecked(mode == "hue_sat")
             self.btn_curve_luma.setChecked(mode == "luma_sat")
+
+    def start_astro_reveal(self) -> None:
+        """
+        Ejecuta el arranque inteligente '1-Click Start Astro-Reveal':
+        1. Detección automática de máscara de horizonte por IA (U²-Net + Guided Filter).
+        2. Neutralización del fondo celestial (Balance de blancos sobre cielo libre de nebulosas).
+        3. Auto-estirado asimétrico del cielo (MTF con Target=0.12).
+        4. Evaluación fotométrica del suelo y compensación controlada (Smart Ground Lift).
+        """
+        if self.image_32bit is None:
+            self.log_message("[ASTRO-REVEAL] No hay imagen cargada para realizar el arranque.")
+            return
+
+        self.setCursor(Qt.WaitCursor)
+        self.log_message("[ASTRO-REVEAL] ✨ Iniciando '1-Click Start Astro-Reveal'...")
+        QCoreApplication.processEvents()
+
+        try:
+            from core.ai_horizon import auto_detect_sky_mask
+            from core.ghs import estimate_ghs_params
+
+            # 1. Máscara de Horizonte (Cielo / Suelo)
+            if self.current_mask is None:
+                self.log_message("[ASTRO-REVEAL] Paso 1/4: Segmentando horizonte con IA...")
+                QCoreApplication.processEvents()
+                try:
+                    mask, method = auto_detect_sky_mask(self.image_32bit, force_algorithmic=False)
+                    self._apply_loaded_mask(mask, source_desc=f"1-Click Reveal ({method})")
+                except Exception as e_mask:
+                    self.log_message(f"[ASTRO-REVEAL] Aviso al detectar horizonte: {e_mask}")
+            else:
+                self.log_message("[ASTRO-REVEAL] Paso 1/4: Utilizando máscara de horizonte existente.")
+
+            sky_mask = self.current_mask
+            target_img = self.preview_proxy if self.preview_proxy is not None else self.image_32bit
+
+            # 2. Neutralización del Fondo Celestial
+            self.log_message("[ASTRO-REVEAL] Paso 2/4: Neutralizando fondo celestial...")
+            temp_calc, tint_calc = calculate_sky_neutral_wb(target_img, sky_mask)
+            temp_int = int(round(temp_calc * 1000.0))
+            tint_int = int(round(tint_calc * 1000.0))
+            if hasattr(self, 'slider_temp'):
+                self.slider_temp.setValue(temp_int)
+            if hasattr(self, 'slider_tint'):
+                self.slider_tint.setValue(tint_int)
+            self.temp_val = temp_calc
+            self.tint_val = tint_calc
+            self.log_message(f"[ASTRO-REVEAL] ✓ Fondo neutralizado: Temp={temp_calc:+.3f}, Tinte={tint_calc:+.3f}")
+
+            # Muestra con balance aplicado para cálculo exacto de estirado y suelo
+            balanced_sample = apply_white_balance(target_img, temp_calc, tint_calc)
+
+            # 3. Auto-Estirado Óptimo del Cielo (Calibración Dual MTF + GHS)
+            self.log_message("[ASTRO-REVEAL] Paso 3/4: Calculando auto-estirado óptimo de cielo (MTF Target=0.20 / GHS Target=0.18)...")
+            bp_mtf, m_mtf = calculate_sky_mtf_params(balanced_sample, sky_mask, target_background=0.20)
+            ghs_params = estimate_ghs_params(balanced_sample, target_background=0.18, sky_mask=sky_mask)
+
+            # Sincronizar ambos modos en el panel de estirado
+            self.sync_controls(bp_mtf, m_mtf)
+            if hasattr(self, 'panel_stretch') and self.panel_stretch is not None:
+                self.panel_stretch.set_state({
+                    "ghs_sp_val": ghs_params["sp"],
+                    "ghs_d_val": ghs_params["d"],
+                    "ghs_b_val": ghs_params["b"],
+                    "ghs_hp_val": ghs_params["hp"],
+                    "ghs_lp_val": ghs_params["lp"],
+                    "ghs_bp_val": ghs_params["bp"],
+                })
+
+            # Respetar el modo activo elegido por el usuario (o mantener coherencia si ya usaba GHS)
+            current_mode = getattr(self, 'stretch_mode', 'mtf')
+            if current_mode == 'ghs':
+                self.log_message(f"[ASTRO-REVEAL] ✓ Estirado GHS aplicado: SP={ghs_params['sp']:.5f}, D={ghs_params['d']:.2f}, BP={ghs_params['bp']:.5f} (HP={ghs_params['hp']:.2f})")
+            else:
+                self.log_message(f"[ASTRO-REVEAL] ✓ Estirado MTF aplicado: BP={bp_mtf:.5f}, MTF m={m_mtf:.5f} (Target=0.20)")
+
+            # 4. Evaluación y Smart Lift del Suelo
+            self.log_message("[ASTRO-REVEAL] Paso 4/4: Evaluando condiciones fotométricas del suelo...")
+            gnd_ev, gnd_sh, gnd_dn, diag_str = calculate_smart_ground_lift(balanced_sample, sky_mask)
+            if hasattr(self, 'slider_gnd_ev'):
+                self.slider_gnd_ev.setValue(int(round(gnd_ev * 100.0)))
+            if hasattr(self, 'slider_gnd_sh'):
+                self.slider_gnd_sh.setValue(int(round(gnd_sh)))
+            if hasattr(self, 'panel_ground_sky') and hasattr(self.panel_ground_sky, 'slider_gnd_dn') and self.panel_ground_sky.slider_gnd_dn is not None:
+                self.panel_ground_sky.slider_gnd_dn.setValue(int(round(gnd_dn)))
+            self.log_message(f"[ASTRO-REVEAL] ✓ {diag_str}")
+
+            # 5. Actualización final
+            self.update_stretch_preview(immediate=True)
+            self._commit_action()
+            self.log_message("✓ [ASTRO-REVEAL] 1-Click Start Astro-Reveal completado con éxito.")
+        except Exception as e:
+            self.log_message(f"[ERROR ASTRO-REVEAL] {e}")
+            QMessageBox.warning(self, "Astro-Reveal", f"No se pudo completar el auto-revelado:\n{e}")
+        finally:
+            self.unsetCursor()
 
     def apply_auto_mtf(self):
         target = self.preview_proxy if self.preview_proxy is not None else self.image_32bit
@@ -7002,7 +7290,12 @@ class DeveloperTab(QWidget):
 
     def _commit_action(self):
         """Registra el cambio actual en la pila de deshacer si difiere del último estado consolidado."""
-        if self._is_undoing_or_redoing or self._last_committed_state is None:
+        if (
+            self._is_undoing_or_redoing
+            or getattr(self, '_is_applying_preset', False)
+            or getattr(self, '_is_previewing_preset', False)
+            or self._last_committed_state is None
+        ):
             return
         current = self._capture_state()
         if self._state_different(self._last_committed_state, current):
@@ -7126,6 +7419,33 @@ class DeveloperTab(QWidget):
                 self.update_stretch_preview(immediate=True)
                 self._update_mask_status_ui()
                 self.log_message("↺ Deshacer: Cambio de máscara revertido")
+            elif target.get("type") == "preset":
+                redo_item = {
+                    "type": "preset",
+                    "preset_name": target.get("preset_name", "Preset"),
+                    "params": self._capture_state(),
+                    "mask": self.current_mask.copy() if self.current_mask is not None else None,
+                    "mask_source_name": getattr(self, '_mask_source_name', ""),
+                    "badge_text": self.sec_presets.lbl_status.text() if hasattr(self, 'sec_presets') and hasattr(self.sec_presets, 'lbl_status') else "",
+                }
+                self.redo_stack.append(redo_item)
+
+                old_mask = target.get("mask")
+                self.current_mask = old_mask.copy() if old_mask is not None else None
+                self._mask_source_name = target.get("mask_source_name", "")
+                self.canvas.set_refined_mask(self.current_mask)
+                self.canvas.set_mask_visible(self.current_mask is not None)
+                self._update_mask_status_ui()
+
+                if hasattr(self, 'sec_presets'):
+                    badge = target.get("badge_text", "")
+                    self.sec_presets.set_status_badge(badge, "#80d8ff" if badge else "")
+
+                self._restore_state(target.get("params", {}))
+                self._last_committed_state = self._capture_state()
+                if hasattr(self, '_undo_debounce_timer'):
+                    self._undo_debounce_timer.stop()
+                self.log_message(f"↺ Deshacer: Preset '{target.get('preset_name', '')}' revertido ({len(self.undo_stack)} pasos restantes)")
             else:
                 current = self._capture_state()
                 self.redo_stack.append(current)
@@ -7249,6 +7569,33 @@ class DeveloperTab(QWidget):
                 self.update_stretch_preview(immediate=True)
                 self._update_mask_status_ui()
                 self.log_message("↻ Rehacer: Cambio de máscara restablecido")
+            elif target.get("type") == "preset":
+                undo_item = {
+                    "type": "preset",
+                    "preset_name": target.get("preset_name", "Preset"),
+                    "params": self._capture_state(),
+                    "mask": self.current_mask.copy() if self.current_mask is not None else None,
+                    "mask_source_name": getattr(self, '_mask_source_name', ""),
+                    "badge_text": self.sec_presets.lbl_status.text() if hasattr(self, 'sec_presets') and hasattr(self.sec_presets, 'lbl_status') else "",
+                }
+                self.undo_stack.append(undo_item)
+
+                new_mask = target.get("mask")
+                self.current_mask = new_mask.copy() if new_mask is not None else None
+                self._mask_source_name = target.get("mask_source_name", "")
+                self.canvas.set_refined_mask(self.current_mask)
+                self.canvas.set_mask_visible(self.current_mask is not None)
+                self._update_mask_status_ui()
+
+                if hasattr(self, 'sec_presets'):
+                    badge = target.get("badge_text", "")
+                    self.sec_presets.set_status_badge(badge, "#80d8ff" if badge else "")
+
+                self._restore_state(target.get("params", {}))
+                self._last_committed_state = self._capture_state()
+                if hasattr(self, '_undo_debounce_timer'):
+                    self._undo_debounce_timer.stop()
+                self.log_message(f"↻ Rehacer: Preset '{target.get('preset_name', '')}' restaurado ({len(self.redo_stack)} pasos por rehacer)")
             else:
                 current = self._capture_state()
                 self.undo_stack.append(current)
@@ -7393,9 +7740,12 @@ class DeveloperTab(QWidget):
                 denoise_mask=getattr(self.panel_starnet, 'slider_denoise_mask', None).value() if hasattr(self.panel_starnet, 'slider_denoise_mask') else 50
             )
 
-        if "curves" in state and state["curves"] is not None and hasattr(self, 'curve_widget'):
+        if hasattr(self, 'curve_widget'):
             self.curve_widget.blockSignals(True)
-            self.curve_widget.set_state(state["curves"])
+            if "curves" in state and state["curves"] is not None:
+                self.curve_widget.set_state(state["curves"])
+            else:
+                self.curve_widget.reset_all_curves()
             self.curve_widget.blockSignals(False)
 
         if "mask_layers" in state and hasattr(self, 'mask_layers_widget'):
@@ -7429,7 +7779,7 @@ class DeveloperTab(QWidget):
             self.btn_undo.setEnabled(has_undo)
             if has_undo:
                 last_type = self.undo_stack[-1].get("type", "param")
-                desc = "recorte" if last_type == "crop" else ("separación StarNet" if last_type == "starnet_separation" else ("máscara" if last_type == "mask" else "ajuste"))
+                desc = "recorte" if last_type == "crop" else ("separación StarNet" if last_type == "starnet_separation" else ("máscara" if last_type == "mask" else ("preset" if last_type == "preset" else "ajuste")))
                 self.btn_undo.setToolTip(f"Deshacer último {desc} (Ctrl+Z) — {len(self.undo_stack)} pasos en historial")
             else:
                 self.btn_undo.setToolTip("Deshacer (Ctrl+Z) — Sin acciones para deshacer")
@@ -7438,7 +7788,7 @@ class DeveloperTab(QWidget):
             self.btn_redo.setEnabled(has_redo)
             if has_redo:
                 next_type = self.redo_stack[-1].get("type", "param")
-                desc = "recorte" if next_type == "crop" else ("separación StarNet" if next_type == "starnet_separation" else ("máscara" if next_type == "mask" else "ajuste"))
+                desc = "recorte" if next_type == "crop" else ("separación StarNet" if next_type == "starnet_separation" else ("máscara" if next_type == "mask" else ("preset" if next_type == "preset" else "ajuste")))
                 self.btn_redo.setToolTip(f"Rehacer {desc} (Ctrl+Y / Ctrl+Shift+Z) — {len(self.redo_stack)} pasos disponibles")
             else:
                 self.btn_redo.setToolTip("Rehacer (Ctrl+Y) — Sin acciones para rehacer")
@@ -7517,48 +7867,154 @@ class DeveloperTab(QWidget):
         if not isinstance(preset, DeveloperPreset):
             return
         scope = self.combo_preset_scope.currentData() or SCOPE_ALL
-        self.apply_preset(preset, scope)
+        intensity = getattr(self.panel_presets, 'spin_intensity', None)
+        intensity_val = float(intensity.value()) if intensity is not None else 100.0
+        self.apply_preset(preset, scope=scope, intensity_pct=intensity_val)
 
-    def apply_preset(self, preset: DeveloperPreset, scope: str = SCOPE_ALL):
+    def apply_preset(
+        self,
+        preset: DeveloperPreset,
+        scope: str = SCOPE_ALL,
+        intensity_pct: float = 100.0,
+        auto_horizon: bool = True
+    ):
         """Aplica los parámetros de un preset a la imagen actual registrando la acción en el historial de Deshacer."""
         if not preset or not preset.params:
             return
 
-        # 1. Registrar el estado previo para poder deshacer con Ctrl+Z
-        current_state = self._capture_state()
-        base_state = self._last_committed_state if self._last_committed_state is not None else current_state
-        self.undo_stack.append(base_state)
-        if len(self.undo_stack) > self.MAX_UNDO_STEPS:
-            self.undo_stack.pop(0)
-        self.redo_stack.clear()
+        if self.image_32bit is None:
+            QMessageBox.warning(self, "Aviso", "Carga o apila una imagen en el Revelador primero.")
+            return
 
-        # 2. Filtrar y fusionar parámetros según el ámbito elegido
-        target_state = filter_preset_params(preset.params, current_state, scope)
+        # 0. Verificación de StarNet si el preset lo requiere
+        effective_scope = scope
+        if getattr(preset, "requires_starnet", False) and self.image_starless is None:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Separación Estelar Requerida")
+            msg.setIcon(QMessageBox.Question)
+            msg.setText(
+                f"El preset <b>'{preset.name}'</b> incluye ajustes específicos para estrellas y fondo desacoplado.<br><br>"
+                "Para obtener el 100% de su efecto estético, se requiere desacoplar las estrellas con <b>StarNet++ AI</b> (~15-30s).<br><br>"
+                "¿Cómo deseas proceder?"
+            )
+            btn_run_starnet = msg.addButton("Ejecutar StarNet y Aplicar", QMessageBox.AcceptRole)
+            btn_apply_partial = msg.addButton("Aplicar sin StarNet (Solo Color y Tono)", QMessageBox.ActionRole)
+            btn_cancel = msg.addButton("Cancelar", QMessageBox.RejectRole)
+            msg.setDefaultButton(btn_run_starnet)
+            msg.exec()
 
-        # 3. Restaurar parámetros en todos los controles
-        self._restore_state(target_state)
-        self._last_committed_state = self._capture_state()
-        self._update_undo_redo_buttons()
+            clicked = msg.clickedButton()
+            if clicked == btn_cancel:
+                return
+            elif clicked == btn_run_starnet:
+                self._preset_pending_after_starnet = (preset, scope, intensity_pct)
+                self.run_starnet()
+                return
 
-        # 4. Mensaje explicativo en el log y badge de estado
-        scope_names = {
-            SCOPE_ALL: "Todo (Sin estirado)",
-            SCOPE_TONE: "Solo Contraste y Suelo",
-            SCOPE_COLOR: "Solo Color",
-            SCOPE_DETAILS: "Solo Estrellas/Detalles"
-        }
-        scope_str = scope_names.get(scope, scope)
-        self.log_message(f"[PRESET] Preset aplicado: '{preset.name}' [{scope_str}]")
+        # Capturamos el estado base y máscara ANTES de cualquier modificación del preset.
+        base_state = getattr(self, "_state_before_preset_dialog", None)
+        if base_state is None:
+            base_state = self._last_committed_state.copy() if self._last_committed_state is not None else self._capture_state()
+        else:
+            base_state = base_state.copy()
 
-        if hasattr(self, 'sec_presets'):
-            if preset and preset.name and "Neutro" not in preset.name:
-                badge_title = preset.name.split("-")[0].strip() if "-" in preset.name else preset.name
-                for em in ("⭐", "🌌", "✨", "🏞️", "🔭", "🏙️", "🌫️", "👤"):
-                    badge_title = badge_title.replace(em, "")
-                badge_title = badge_title.strip()
-                self.sec_presets.set_status_badge(f"● {badge_title}", "#80d8ff")
-            else:
-                self.sec_presets.set_status_badge("")
+        old_mask = getattr(self, "_mask_before_preset_dialog", None)
+        if old_mask is None:
+            old_mask = self.current_mask.copy() if self.current_mask is not None else None
+        else:
+            old_mask = old_mask.copy() if old_mask is not None else None
+
+        old_mask_source = getattr(self, "_mask_source_before_preset_dialog", getattr(self, "_mask_source_name", ""))
+        old_badge = getattr(self, "_badge_before_preset_dialog", None)
+        if old_badge is None:
+            old_badge = self.sec_presets.lbl_status.text() if hasattr(self, 'sec_presets') and hasattr(self.sec_presets, 'lbl_status') else ""
+
+        # Limpiamos las referencias del diálogo
+        self._state_before_preset_dialog = None
+        self._mask_before_preset_dialog = None
+        self._mask_source_before_preset_dialog = None
+        self._badge_before_preset_dialog = None
+
+        if hasattr(self, '_undo_debounce_timer'):
+            self._undo_debounce_timer.stop()
+
+        self._is_applying_preset = True
+        self._is_previewing_preset = False
+        try:
+            # 1. Detección automática de horizonte si el preset lo requiere y no hay máscara activa
+            if auto_horizon and getattr(preset, "requires_sky_mask", False) and self.current_mask is None:
+                try:
+                    self.log_message(f"[PRESET] El preset '{preset.name}' requiere separación cielo/suelo. Detectando horizonte con IA...")
+                    from core.ai_horizon import auto_detect_sky_mask
+                    mask, method = auto_detect_sky_mask(self.image_32bit)
+                    if mask is not None:
+                        self._apply_loaded_mask(mask, source_desc=f"Auto-Horizonte ({method})")
+                        self.canvas.set_mask_visible(False)
+                        self._set_mask_overlay_ui_state(False)
+                        self.log_message(f"✓ [PRESET] Horizonte auto-detectado con éxito ({method}).")
+                except Exception as e:
+                    self.log_message(f"[AVISO PRESET] No se pudo auto-detectar el horizonte: {e}. Puedes asignarlo manualmente.")
+
+            # 2. Si la imagen está en estado lineal crudo (negra), lanzar Auto-MTF adaptativo
+            curr_mtf = getattr(getattr(self, 'state', None), 'mtf_val', 0.5)
+            curr_bp = getattr(getattr(self, 'state', None), 'bp_val', 0.0)
+            if curr_mtf >= 0.499 and curr_bp == 0.0:
+                self.log_message("[PRESET] Imagen lineal detectada: aplicando Auto-MTF adaptativo de arranque...")
+                self.apply_auto_mtf()
+
+            # 3. Modulación con el slider de intensidad y filtrado de ámbito
+            from core.developer_presets import interpolate_preset_params
+            target_state = interpolate_preset_params(
+                base_state,
+                preset.params,
+                intensity_pct=intensity_pct,
+                scope=effective_scope
+            )
+
+            # 4. Restaurar parámetros en todos los controles
+            self._restore_state(target_state)
+            self._last_committed_state = self._capture_state()
+
+            # 5. Registrar exactamente UNA acción atómica en el historial de Deshacer
+            undo_item = {
+                "type": "preset",
+                "preset_name": preset.name,
+                "params": base_state,
+                "mask": old_mask,
+                "mask_source_name": old_mask_source,
+                "badge_text": old_badge,
+            }
+            self.undo_stack.append(undo_item)
+            if len(self.undo_stack) > self.MAX_UNDO_STEPS:
+                self.undo_stack.pop(0)
+            self.redo_stack.clear()
+            self._mark_dirty()
+            self._update_undo_redo_buttons()
+
+            # 6. Mensaje explicativo en el log y badge de estado
+            scope_names = {
+                SCOPE_ALL: "Todo (Sin estirado)",
+                SCOPE_TONE: "Solo Contraste y Suelo",
+                SCOPE_COLOR: "Solo Color",
+                SCOPE_DETAILS: "Solo Estrellas/Detalles"
+            }
+            scope_str = scope_names.get(effective_scope, effective_scope)
+            intensity_str = f" al {int(intensity_pct)}%" if abs(intensity_pct - 100.0) > 1.0 else ""
+            self.log_message(f"[PRESET] Preset aplicado: '{preset.name}' [{scope_str}]{intensity_str}")
+
+            if hasattr(self, 'sec_presets'):
+                if preset and preset.name and "Neutro" not in preset.name:
+                    badge_title = preset.name.split("-")[0].strip() if "-" in preset.name else preset.name
+                    for em in ("⭐", "🌌", "✨", "🏞️", "🔭", "🏙️", "🌫️", "👤"):
+                        badge_title = badge_title.replace(em, "")
+                    badge_title = badge_title.strip()
+                    self.sec_presets.set_status_badge(f"● {badge_title}{intensity_str}", "#80d8ff")
+                else:
+                    self.sec_presets.set_status_badge("")
+        finally:
+            self._is_applying_preset = False
+            if hasattr(self, '_undo_debounce_timer'):
+                self._undo_debounce_timer.stop()
 
     def open_save_preset_dialog(self):
         """Abre el diálogo para guardar los ajustes actuales como un preset."""
@@ -7573,14 +8029,82 @@ class DeveloperTab(QWidget):
             self.log_message(f"[PRESET] Nuevo preset guardado con éxito: '{dlg.created_preset.name}' ({dlg.created_preset.category})")
 
     def open_preset_manager_dialog(self):
-        """Abre el diálogo de gestión, importación y exportación de presets."""
+        """Abre la galería visual y gestor de presets con soporte de previsualización en vivo e intensidad."""
+        if hasattr(self, '_undo_debounce_timer'):
+            self._undo_debounce_timer.stop()
+
         current_params = self._capture_state()
+        self._state_before_preset_dialog = current_params.copy()
+        self._mask_before_preset_dialog = self.current_mask.copy() if self.current_mask is not None else None
+        self._mask_source_before_preset_dialog = getattr(self, '_mask_source_name', "")
+        self._badge_before_preset_dialog = self.sec_presets.lbl_status.text() if hasattr(self, 'sec_presets') and hasattr(self.sec_presets, 'lbl_status') else ""
+
         dlg = PresetManagerDialog(current_params, self)
-        dlg.apply_preset_requested.connect(self.apply_preset)
-        dlg.exec()
+        dlg.preview_preset_requested.connect(self._on_preset_dialog_preview)
+        dlg.preview_cancelled.connect(self._on_preset_dialog_cancel)
+        dlg.apply_preset_requested.connect(lambda p, s, intensity: self.apply_preset(p, s, intensity_pct=intensity))
+
+        self._is_previewing_preset = True
+        try:
+            result = dlg.exec()
+            if result != QDialog.Accepted:
+                self._on_preset_dialog_cancel()
+        finally:
+            self._is_previewing_preset = False
+            self._state_before_preset_dialog = None
+            self._mask_before_preset_dialog = None
+            self._mask_source_before_preset_dialog = None
+            self._badge_before_preset_dialog = None
+            if hasattr(self, '_undo_debounce_timer'):
+                self._undo_debounce_timer.stop()
+
         curr_preset = self.combo_presets.currentData(Qt.UserRole)
         curr_id = curr_preset.id if isinstance(curr_preset, DeveloperPreset) else None
         self._populate_presets_combo(select_preset_id=curr_id)
+
+    def _on_preset_dialog_preview(self, preset: DeveloperPreset, scope: str, intensity_pct: float):
+        """Previsualiza un preset temporalmente en el lienzo principal sin guardarlo en el historial."""
+        if not preset or not preset.params:
+            return
+        base = getattr(self, "_state_before_preset_dialog", None)
+        if base is None:
+            base = self._capture_state()
+            self._state_before_preset_dialog = base.copy()
+
+        from core.developer_presets import interpolate_preset_params
+        preview_state = interpolate_preset_params(
+            base,
+            preset.params,
+            intensity_pct=intensity_pct,
+            scope=scope
+        )
+        self._is_previewing_preset = True
+        try:
+            self._restore_state(preview_state)
+        finally:
+            self._is_previewing_preset = True
+
+    def _on_preset_dialog_cancel(self):
+        """Restaura el estado previo del revelador al cancelar o cerrar el diálogo."""
+        saved_state = getattr(self, "_state_before_preset_dialog", None)
+        if saved_state is not None:
+            self._is_previewing_preset = True
+            try:
+                self._restore_state(saved_state)
+                if hasattr(self, '_mask_before_preset_dialog'):
+                    old_mask = self._mask_before_preset_dialog
+                    self.current_mask = old_mask.copy() if old_mask is not None else None
+                    self._mask_source_name = getattr(self, '_mask_source_before_preset_dialog', "")
+                    self.canvas.set_refined_mask(self.current_mask)
+                    self.canvas.set_mask_visible(self.current_mask is not None)
+                    self._update_mask_status_ui()
+                if hasattr(self, 'sec_presets') and getattr(self, '_badge_before_preset_dialog', None) is not None:
+                    badge_text = self._badge_before_preset_dialog
+                    self.sec_presets.set_status_badge(badge_text, "#80d8ff" if badge_text else "")
+                self._last_committed_state = self._capture_state()
+            finally:
+                if hasattr(self, '_undo_debounce_timer'):
+                    self._undo_debounce_timer.stop()
 
     # =========================================================================
     # GESTIÓN DE PROYECTOS Y SESIONES (.devloom)

@@ -159,17 +159,81 @@ def export_developer_psd(
             "mask": _format_mask(ground_mask)
         })
 
-    # 5. Capas de ajuste locales o máscaras de usuario adicionales
+    # 5. Capas de ajuste locales o capas ráster de usuario adicionales
     if adjustment_layers:
-        user_adjustments = [
+        user_layers = [
             l for l in adjustment_layers 
-            if not getattr(l, 'is_system_layer', False) and getattr(l, 'layer_kind', 'adjustment') == 'adjustment'
+            if not getattr(l, 'is_system_layer', False)
         ]
-        for idx, adj in enumerate(user_adjustments):
+        for idx, adj in enumerate(user_layers):
+            is_raster = getattr(adj, 'mask_type', None) == 'image_raster' or getattr(adj, 'layer_kind', None) == 'image'
             bmask = getattr(adj, 'brush_mask', None)
             if bmask is None:
                 bmask = getattr(adj, 'custom_mask', None)
-            if bmask is not None:
+
+            if is_raster and getattr(adj, 'image_data', None) is not None:
+                raw_img = getattr(adj, 'image_data')
+                if raw_img.ndim == 2:
+                    raw_img = np.repeat(raw_img[..., np.newaxis], 3, axis=-1)
+                elif raw_img.ndim == 3 and raw_img.shape[2] == 1:
+                    raw_img = np.repeat(raw_img, 3, axis=-1)
+                if raw_img.shape[:2] != (h, w):
+                    raw_img = cv2.resize(raw_img, (w, h), interpolation=cv2.INTER_AREA)
+
+                # Aplicar transformación espacial 2D (offset, escala X/Y, rotación) si no es identidad
+                if not getattr(adj, 'is_transform_identity', lambda: True)():
+                    scale_x = max(0.01, float(getattr(adj, 'scale_x', getattr(adj, 'scale', 1.0))))
+                    scale_y = max(0.01, float(getattr(adj, 'scale_y', getattr(adj, 'scale', 1.0))))
+                    angle_val = float(getattr(adj, 'angle', 0.0))
+                    h_r, w_r = raw_img.shape[:2]
+                    theta = np.deg2rad(angle_val)
+                    cos_t, sin_t = np.cos(theta), np.sin(theta)
+                    a = scale_x * cos_t
+                    b = -scale_y * sin_t
+                    c = scale_x * sin_t
+                    d = scale_y * cos_t
+                    cx, cy = w / 2.0, h / 2.0
+                    tx = float(getattr(adj, 'offset_x', 0.0)) * w
+                    ty = float(getattr(adj, 'offset_y', 0.0)) * h
+                    M = np.array([
+                        [a * (w / float(w_r)), b * (h / float(h_r)), cx - a * cx - b * cy + tx],
+                        [c * (w / float(w_r)), d * (h / float(h_r)), cy - c * cx - d * cy + ty]
+                    ], dtype=np.float32)
+                    raw_img = cv2.warpAffine(
+                        raw_img, M, (w, h),
+                        flags=cv2.INTER_LINEAR,
+                        borderMode=cv2.BORDER_CONSTANT,
+                        borderValue=(0.0, 0.0, 0.0)
+                    )
+                    pts = np.array([[0.0, 0.0], [float(w_r), 0.0], [float(w_r), float(h_r)], [0.0, float(h_r)]], dtype=np.float32)
+                    pts_dst = cv2.transform(pts.reshape(1, -1, 2), M).reshape(-1, 2)
+                    valid_alpha = np.zeros((h, w), dtype=np.float32)
+                    cv2.fillConvexPoly(valid_alpha, np.int32(np.round(pts_dst)), 1.0)
+                    if bmask is not None:
+                        bmask = bmask * valid_alpha
+                    else:
+                        bmask = valid_alpha
+
+                b_mode = getattr(adj, 'blend_mode', 'normal')
+                psd_mode = {
+                    "normal": "norm",
+                    "screen": "scrn",
+                    "luminosity": "lum ",
+                    "soft_light": "sLit",
+                    "overlay": "over",
+                    "multiply": "mul "
+                }.get(b_mode, "norm")
+
+                layer_records.append({
+                    "name": f"Ráster - {getattr(adj, 'name', f'Capa {idx+1}')}",
+                    "top": 0, "left": 0, "bottom": h, "right": w,
+                    "blend_mode": psd_mode,
+                    "opacity": int(np.clip(getattr(adj, 'opacity', 1.0), 0.0, 1.0) * 255),
+                    "visible": getattr(adj, 'enabled', True),
+                    "rgb": _format_rgb(raw_img),
+                    "mask": _format_mask(bmask) if bmask is not None else None
+                })
+            elif not is_raster and bmask is not None:
                 adj_name = f"Ajuste - {getattr(adj, 'name', f'Capa {idx+1}')}"
                 try:
                     from core.mask_layers import apply_local_adjustments_to_image

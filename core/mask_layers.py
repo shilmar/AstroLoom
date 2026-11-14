@@ -140,7 +140,14 @@ MASK_TYPE_GROUND = "ground"         # Máscara Suelo (invertida del cielo)
 MASK_TYPE_SKY = "sky"               # Máscara Cielo
 MASK_TYPE_LUMA = "luminance"        # Rango de Luminancia (Sombras/Medios/Luces)
 MASK_TYPE_COLOR = "color"           # Rango de Color (HSV)
+MASK_TYPE_GRADIENT_LINEAR = "gradient_linear"  # Filtro Graduado Lineal vectorial
+MASK_TYPE_GRADIENT_RADIAL = "gradient_radial"  # Filtro Graduado Radial vectorial
 MASK_TYPE_CUSTOM = "custom"         # Trazos libres / raster personalizado
+
+# Restricción espacial de máscara (Edge-Snapping al horizonte / Suelo)
+LIMIT_MASK_NONE = "none"            # Afecta a toda la escena sin recorte
+LIMIT_MASK_SKY = "sky"              # Restringido exclusivamente al cielo
+LIMIT_MASK_GROUND = "ground"        # Restringido exclusivamente al suelo
 
 # Tipos Especiales de Capas de Imagen (StarNet / Pipeline / Eclipses)
 MASK_TYPE_IMAGE_BASE = "image_base"          # 🖼️ Fondo (Imagen Base inicial)
@@ -166,6 +173,30 @@ class MaskLayer:
     # Propiedades para capas de imagen ráster (layer_kind == "image")
     image_data: Optional[np.ndarray] = None     # Array Float32 RGB [0.0, 1.0] o 2D Mono
     blend_mode: str = BLEND_MODE_NORMAL         # Modo de fusión ("normal", "screen", "luminosity", etc.)
+    active_target: str = "image"                # "image" o "mask" (foco de edición en miniatura dual)
+
+    # Transformación espacial 2D (Mover y Redimensionar)
+    offset_x: float = 0.0                       # Desplazamiento horizontal relativo [-1.0, 1.0] (fracción de ancho)
+    offset_y: float = 0.0                       # Desplazamiento vertical relativo [-1.0, 1.0] (fracción de alto)
+    scale_x: float = 1.0                        # Factor de escala horizontal (0.05x a 10.0x, 1.0 = 100%)
+    scale_y: float = 1.0                        # Factor de escala vertical (0.05x a 10.0x, 1.0 = 100%)
+    scale: float = 1.0                          # Factor de escala uniforme (compatibilidad hacia atrás)
+    angle: float = 0.0                          # Ángulo de rotación en grados (-180.0° a +180.0°)
+
+    def __post_init__(self):
+        if self.scale != 1.0 and self.scale_x == 1.0 and self.scale_y == 1.0:
+            self.scale_x = self.scale
+            self.scale_y = self.scale
+        elif (self.scale_x != 1.0 or self.scale_y != 1.0) and self.scale == 1.0:
+            self.scale = self.scale_x
+
+    def is_transform_identity(self) -> bool:
+        """Determina si la capa no tiene transformación espacial (offset 0, escala 1, rotación 0)."""
+        return (abs(self.offset_x) < 1e-4 and 
+                abs(self.offset_y) < 1e-4 and 
+                abs(self.scale_x - 1.0) < 1e-4 and 
+                abs(self.scale_y - 1.0) < 1e-4 and 
+                abs(self.angle) < 1e-3)
 
     # Parámetros para máscara de Pincel interactivo
     brush_radius: int = 35          # Radio en píxeles (5 a 250 px)
@@ -183,6 +214,24 @@ class MaskLayer:
     color_hue: float = 0.0          # 0.0 a 360.0 grados
     color_tolerance: float = 30.0   # Tolerancia angular en grados
     color_min_sat: float = 0.08     # Saturación mínima
+
+    # Parámetros para máscara de Gradiente Lineal vectorial
+    linear_p0: Tuple[float, float] = (0.5, 0.75)    # Punto inicio / cresta (1.0) coords normalizadas (x, y)
+    linear_p1: Tuple[float, float] = (0.5, 0.35)    # Punto fin / borde A (0.0) coords normalizadas (x, y)
+    linear_midpoint: float = 0.5                    # Posición media (0.01 a 0.99)
+    linear_profile: str = "smoothstep"              # "smoothstep", "linear", "exponential", "reflected"
+    linear_symmetric: bool = True                   # Si la banda reflejada es simétrica (Lado B = Lado A)
+    linear_span_b: float = 1.0                      # Factor de escala ancho Lado B (0.1x a 3.0x, 1.0 = 100%)
+
+    # Parámetros para máscara de Gradiente Radial vectorial
+    radial_center: Tuple[float, float] = (0.5, 0.5) # Centro de la elipse (cx, cy) normalizado [0.0, 1.0]
+    radial_radius_x: float = 0.25                   # Semieje horizontal normalizado (0.01 a 2.0)
+    radial_radius_y: float = 0.35                   # Semieje vertical normalizado (0.01 a 2.0)
+    radial_angle: float = 0.0                       # Inclinación en grados (-180.0° a +180.0°)
+    radial_feather: float = 0.5                     # Desvanecimiento interior (0.05 a 1.00)
+
+    # Restricción espacial de máscara (Edge-Snapping al horizonte / Suelo)
+    limit_mask: str = LIMIT_MASK_NONE               # "none", "sky", "ground"
 
     # Refinamiento de bordes por Filtro Cruzado Guiado (guided_cross / LightCraft)
     refine_edges: bool = False      # Activa refinado automático contra la escena
@@ -230,6 +279,11 @@ class MaskLayer:
         """Indica si la capa transporta una imagen ráster externa (p. ej. filtro coronal o composición)."""
         return self.mask_type == MASK_TYPE_IMAGE_RASTER
 
+    @property
+    def is_gradient(self) -> bool:
+        """Indica si la capa es un filtro graduado analítico (lineal o radial)."""
+        return self.mask_type in (MASK_TYPE_GRADIENT_LINEAR, MASK_TYPE_GRADIENT_RADIAL)
+
     def to_dict(self) -> Dict[str, Any]:
         """Serializa la capa a un diccionario JSON preservando la máscara de pincel y curva."""
         d = asdict(self)
@@ -253,6 +307,12 @@ class MaskLayer:
         data_clean = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         if "curve_points" in data_clean and data_clean["curve_points"]:
             data_clean["curve_points"] = [tuple(p) for p in data_clean["curve_points"]]
+        if "linear_p0" in data_clean and data_clean["linear_p0"]:
+            data_clean["linear_p0"] = tuple(data_clean["linear_p0"])
+        if "linear_p1" in data_clean and data_clean["linear_p1"]:
+            data_clean["linear_p1"] = tuple(data_clean["linear_p1"])
+        if "radial_center" in data_clean and data_clean["radial_center"]:
+            data_clean["radial_center"] = tuple(data_clean["radial_center"])
         inst = cls(**data_clean)
         b64_str = data.get("brush_mask_b64")
         if b64_str:
@@ -266,6 +326,117 @@ class MaskLayer:
         if not inst.is_curve_identity() and inst.curve_lut is None:
             inst.curve_lut = compute_curve_lut_from_points(inst.curve_points)
         return inst
+
+
+def compute_linear_gradient_py(
+    h: int, w: int,
+    x0: float, y0: float,
+    x1: float, y1: float,
+    midpoint: float = 0.5,
+    profile: str = "smoothstep",
+    span_b: float = 1.0,
+    crop_rect: Optional[Tuple[int, int, int, int]] = None,
+    full_shape: Optional[Tuple[int, int]] = None
+) -> np.ndarray:
+    """Calcula analíticamente una máscara de gradiente lineal continua en Python/NumPy."""
+    if crop_rect is not None and full_shape is not None:
+        cx1, cy1, _, _ = crop_rect
+        fh, fw = full_shape
+        fh_f = max(1.0, float(fh))
+        fw_f = max(1.0, float(fw))
+        x_coords = (np.arange(w, dtype=np.float32) + cx1) / fw_f
+        y_coords = (np.arange(h, dtype=np.float32) + cy1) / fh_f
+        aspect = fw_f / fh_f
+    else:
+        fh_f = max(1.0, float(h))
+        fw_f = max(1.0, float(w))
+        x_coords = np.arange(w, dtype=np.float32) / fw_f
+        y_coords = np.arange(h, dtype=np.float32) / fh_f
+        aspect = fw_f / fh_f
+
+    vx = (x1 - x0) * aspect
+    vy = y1 - y0
+    len_sq = vx * vx + vy * vy
+    if len_sq < 1e-7:
+        return np.zeros((h, w), dtype=np.float32)
+
+    grid_x, grid_y = np.meshgrid(x_coords, y_coords)
+    dx = (grid_x - x0) * aspect
+    dy = grid_y - y0
+    proj = (dx * vx + dy * vy) / len_sq
+
+    if profile == "reflected":
+        span_b_safe = max(0.01, float(span_b))
+        t = np.where(proj >= 0.0, proj, np.abs(proj) / span_b_safe)
+        t = np.clip(t, 0.0, 1.0)
+        m = 1.0 - (3.0 * t * t - 2.0 * t * t * t)
+        return np.clip(m, 0.0, 1.0).astype(np.float32)
+
+    t = np.clip(proj, 0.0, 1.0)
+
+    mid = max(0.01, min(0.99, float(midpoint)))
+    if abs(mid - 0.5) > 1e-4:
+        mask_low = t < mid
+        t_adj = np.empty_like(t)
+        t_adj[mask_low] = 0.5 * (t[mask_low] / mid)
+        t_adj[~mask_low] = 0.5 + 0.5 * ((t[~mask_low] - mid) / (1.0 - mid))
+        t = t_adj
+
+    if profile == "linear":
+        m = 1.0 - t
+    elif profile == "exponential":
+        m = (1.0 - t) ** 2
+    else:  # smoothstep
+        m = 1.0 - (3.0 * t * t - 2.0 * t * t * t)
+
+    return np.clip(m, 0.0, 1.0).astype(np.float32)
+
+
+def compute_radial_gradient_py(
+    h: int, w: int,
+    cx: float, cy: float,
+    rx: float, ry: float,
+    angle_deg: float = 0.0,
+    feather: float = 0.5,
+    crop_rect: Optional[Tuple[int, int, int, int]] = None,
+    full_shape: Optional[Tuple[int, int]] = None
+) -> np.ndarray:
+    """Calcula analíticamente una máscara de gradiente radial elíptico en Python/NumPy."""
+    if crop_rect is not None and full_shape is not None:
+        cx1, cy1, _, _ = crop_rect
+        fh, fw = full_shape
+        fh_f = max(1.0, float(fh))
+        fw_f = max(1.0, float(fw))
+        x_coords = (np.arange(w, dtype=np.float32) + cx1) / fw_f
+        y_coords = (np.arange(h, dtype=np.float32) + cy1) / fh_f
+        aspect = fw_f / fh_f
+    else:
+        fh_f = max(1.0, float(h))
+        fw_f = max(1.0, float(w))
+        x_coords = np.arange(w, dtype=np.float32) / fw_f
+        y_coords = np.arange(h, dtype=np.float32) / fh_f
+        aspect = fw_f / fh_f
+
+    grid_x, grid_y = np.meshgrid(x_coords, y_coords)
+    dx = grid_x - cx
+    dy = grid_y - cy
+
+    rad = np.deg2rad(angle_deg)
+    cos_t, sin_t = np.cos(rad), np.sin(rad)
+    inv_aspect = 1.0 / max(1e-5, aspect)
+    x_rot = dx * cos_t + (dy * inv_aspect) * sin_t
+    y_rot = -(dx * aspect) * sin_t + dy * cos_t
+
+    rx_s = max(1e-5, abs(float(rx)))
+    ry_s = max(1e-5, abs(float(ry)))
+    d = np.sqrt((x_rot / rx_s) ** 2 + (y_rot / ry_s) ** 2)
+
+    feather_s = max(0.01, min(1.0, float(feather)))
+    d_in = max(0.0, 1.0 - feather_s)
+
+    t = np.clip((d - d_in) / feather_s, 0.0, 1.0)
+    m = 1.0 - (3.0 * t * t - 2.0 * t * t * t)
+    return np.clip(m, 0.0, 1.0).astype(np.float32)
 
 
 def compute_layer_mask(
@@ -349,10 +520,91 @@ def compute_layer_mask(
             invert=False
         )
 
+    elif layer.mask_type == MASK_TYPE_GRADIENT_LINEAR:
+        span_b = 1.0 if getattr(layer, "linear_symmetric", True) else float(getattr(layer, "linear_span_b", 1.0))
+        if HAS_RUST and hasattr(astroloom_rs, "compute_linear_gradient_rs"):
+            try:
+                m = astroloom_rs.compute_linear_gradient_rs(
+                    h, w,
+                    float(layer.linear_p0[0]), float(layer.linear_p0[1]),
+                    float(layer.linear_p1[0]), float(layer.linear_p1[1]),
+                    float(layer.linear_midpoint),
+                    str(layer.linear_profile),
+                    float(span_b),
+                    crop_rect,
+                    full_image_shape
+                )
+            except Exception:
+                m = compute_linear_gradient_py(
+                    h, w,
+                    layer.linear_p0[0], layer.linear_p0[1],
+                    layer.linear_p1[0], layer.linear_p1[1],
+                    layer.linear_midpoint,
+                    layer.linear_profile,
+                    span_b,
+                    crop_rect,
+                    full_image_shape
+                )
+        else:
+            m = compute_linear_gradient_py(
+                h, w,
+                layer.linear_p0[0], layer.linear_p0[1],
+                layer.linear_p1[0], layer.linear_p1[1],
+                layer.linear_midpoint,
+                layer.linear_profile,
+                span_b,
+                crop_rect,
+                full_image_shape
+            )
+
+    elif layer.mask_type == MASK_TYPE_GRADIENT_RADIAL:
+        if HAS_RUST and hasattr(astroloom_rs, "compute_radial_gradient_rs"):
+            try:
+                m = astroloom_rs.compute_radial_gradient_rs(
+                    h, w,
+                    float(layer.radial_center[0]), float(layer.radial_center[1]),
+                    float(layer.radial_radius_x), float(layer.radial_radius_y),
+                    float(layer.radial_angle),
+                    float(layer.radial_feather),
+                    crop_rect,
+                    full_image_shape
+                )
+            except Exception:
+                m = compute_radial_gradient_py(
+                    h, w,
+                    layer.radial_center[0], layer.radial_center[1],
+                    layer.radial_radius_x, layer.radial_radius_y,
+                    layer.radial_angle,
+                    layer.radial_feather,
+                    crop_rect,
+                    full_image_shape
+                )
+        else:
+            m = compute_radial_gradient_py(
+                h, w,
+                layer.radial_center[0], layer.radial_center[1],
+                layer.radial_radius_x, layer.radial_radius_y,
+                layer.radial_angle,
+                layer.radial_feather,
+                crop_rect,
+                full_image_shape
+            )
+
     elif layer.mask_type == MASK_TYPE_CUSTOM and layer.custom_mask is not None:
         m = _slice_or_resize_mask(layer.custom_mask)
     else:
         m = np.ones((h, w), dtype=np.float32)
+
+    # Restricción espacial de máscara (Edge-Snapping al horizonte / Suelo)
+    limit_mode = getattr(layer, "limit_mask", LIMIT_MASK_NONE)
+    if limit_mode == LIMIT_MASK_SKY and master_sky_mask is not None:
+        m_sky = master_sky_mask[..., 0] if master_sky_mask.ndim == 3 else master_sky_mask
+        m_sky = _slice_or_resize_mask(m_sky)
+        m = m * np.clip(m_sky, 0.0, 1.0)
+    elif limit_mode == LIMIT_MASK_GROUND and master_sky_mask is not None:
+        m_sky = master_sky_mask[..., 0] if master_sky_mask.ndim == 3 else master_sky_mask
+        m_sky = _slice_or_resize_mask(m_sky)
+        m = m * np.clip(1.0 - m_sky, 0.0, 1.0)
 
     # Inversión de máscara
     if layer.inverted:
@@ -987,25 +1239,65 @@ def apply_all_mask_layers(
                 if np.isnan(flt_img).any() or np.isinf(flt_img).any():
                     flt_img = np.nan_to_num(flt_img, nan=0.0, posinf=1.0, neginf=0.0)
 
-                # Escala o recorte según zoom / pirámide de resolución
-                if flt_img.shape[:2] != (img_h, img_w):
-                    if crop_rect is not None and full_image_shape is not None:
-                        x1, y1, x2, y2 = crop_rect
-                        h_f, w_f = full_image_shape
-                        h_r, w_r = flt_img.shape[:2]
-                        sx = w_r / float(w_f)
-                        sy = h_r / float(h_f)
-                        rx1 = max(0, min(w_r, int(round(x1 * sx))))
-                        ry1 = max(0, min(h_r, int(round(y1 * sy))))
-                        rx2 = max(0, min(w_r, int(round(x2 * sx))))
-                        ry2 = max(0, min(h_r, int(round(y2 * sy))))
-                        flt_sub = flt_img[ry1:ry2, rx1:rx2]
-                        if flt_sub.shape[:2] != (img_h, img_w):
-                            flt_img = cv2.resize(flt_sub, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
-                        else:
-                            flt_img = flt_sub
+                h_r, w_r = flt_img.shape[:2]
+                has_transform = not getattr(layer, 'is_transform_identity', lambda: True)()
+                is_zoomed = (crop_rect is not None and full_image_shape is not None)
+
+                if is_zoomed:
+                    x1, y1, x2, y2 = crop_rect
+                    h_f, w_f = float(full_image_shape[0]), float(full_image_shape[1])
+                else:
+                    x1, y1 = 0.0, 0.0
+                    h_f, w_f = float(img_h), float(img_w)
+
+                valid_alpha = None
+                if has_transform or (is_zoomed and (abs(w_r - w_f) > 1 or abs(h_r - h_f) > 1)):
+                    scale_x = max(0.01, float(getattr(layer, 'scale_x', getattr(layer, 'scale', 1.0))))
+                    scale_y = max(0.01, float(getattr(layer, 'scale_y', getattr(layer, 'scale', 1.0))))
+                    angle_val = float(getattr(layer, 'angle', 0.0))
+                    theta = np.deg2rad(angle_val)
+                    cos_t, sin_t = np.cos(theta), np.sin(theta)
+                    a = scale_x * cos_t
+                    b = -scale_y * sin_t
+                    c = scale_x * sin_t
+                    d = scale_y * cos_t
+
+                    cx = w_f / 2.0
+                    cy = h_f / 2.0
+                    tx = float(getattr(layer, 'offset_x', 0.0)) * w_f
+                    ty = float(getattr(layer, 'offset_y', 0.0)) * h_f
+
+                    M = np.array([
+                        [a * (w_f / float(w_r)), b * (h_f / float(h_r)), cx - a * cx - b * cy + tx - x1],
+                        [c * (w_f / float(w_r)), d * (h_f / float(h_r)), cy - c * cx - d * cy + ty - y1]
+                    ], dtype=np.float32)
+
+                    flt_img = cv2.warpAffine(
+                        flt_img, M, (img_w, img_h),
+                        flags=cv2.INTER_LINEAR,
+                        borderMode=cv2.BORDER_CONSTANT,
+                        borderValue=(0.0, 0.0, 0.0)
+                    )
+
+                    if has_transform:
+                        pts = np.array([[0.0, 0.0], [float(w_r), 0.0], [float(w_r), float(h_r)], [0.0, float(h_r)]], dtype=np.float32)
+                        pts_dst = cv2.transform(pts.reshape(1, -1, 2), M).reshape(-1, 2)
+                        valid_alpha = np.zeros((img_h, img_w), dtype=np.float32)
+                        cv2.fillConvexPoly(valid_alpha, np.int32(np.round(pts_dst)), 1.0)
+                elif is_zoomed:
+                    # Zoom 100% sin transformación espacial: recorte directo 1:1 nativo
+                    rx1 = max(0, min(w_r, int(round(x1))))
+                    ry1 = max(0, min(h_r, int(round(y1))))
+                    rx2 = max(0, min(w_r, int(round(x2))))
+                    ry2 = max(0, min(h_r, int(round(y2))))
+                    sub_crop = flt_img[ry1:ry2, rx1:rx2]
+                    if sub_crop.shape[:2] != (img_h, img_w):
+                        flt_img = cv2.resize(sub_crop, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
                     else:
-                        # shortcut: cache transient resized draft for 60 FPS slider scrubbing, clear on source change
+                        flt_img = sub_crop.copy()
+                else:
+                    # Vista previa / ajuste sin transformación
+                    if flt_img.shape[:2] != (img_h, img_w):
                         cache_key = (id(layer.image_data), img_h, img_w)
                         cached = getattr(layer, "_cached_resized", None)
                         if cached is not None and cached[0] == cache_key:
@@ -1039,9 +1331,15 @@ def apply_all_mask_layers(
                         crop_rect=crop_rect,
                         full_image_shape=full_image_shape
                     )
+                    # shortcut: brush_mask is authored in canvas coordinate space, so valid_alpha clips boundaries
+                    if valid_alpha is not None:
+                        m_eff = m_eff * valid_alpha
                     weight = np.clip(m_eff * layer.opacity, 0.0, 1.0).astype(np.float32)
                 else:
-                    weight = float(layer.opacity)
+                    if valid_alpha is not None:
+                        weight = np.clip(valid_alpha * layer.opacity, 0.0, 1.0).astype(np.float32)
+                    else:
+                        weight = float(layer.opacity)
 
                 # Fusión con el lienzo subyacente según blend_mode
                 canvas = apply_blend_mode(canvas, flt_img, getattr(layer, "blend_mode", BLEND_MODE_NORMAL), weight)

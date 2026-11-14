@@ -48,6 +48,11 @@ class MaskCanvas(QWidget):
     bg_sample_mode_toggled = Signal(bool)
     dust_spots_changed = Signal()
     dust_spot_mode_toggled = Signal(bool)
+    layer_move_offset_dragged = Signal(float, float) # (dx_norm, dy_norm) desplazamiento relativo
+    layer_move_scale_wheel = Signal(float)           # factor multiplicativo de escala
+    layer_move_finished = Signal()
+    gradient_changed = Signal()                      # Emite cuando se manipulan los gizmos de gradiente lineal/radial
+    gradient_drag_finished = Signal()                # Emite al soltar el ratón tras manipular un gradiente
 
     def __init__(self, parent: Optional[QWidget] = None, enable_masking: bool = True):
         super().__init__(parent)
@@ -82,6 +87,23 @@ class MaskCanvas(QWidget):
         self._brush_hover_pos: Optional[QPoint] = None
         self._stroke_start_mask: Optional[np.ndarray] = None
         self._stroke_buffer: Optional[np.ndarray] = None
+
+        # Transformación espacial interactiva de capas ráster (Mover / Escalar)
+        self.layer_move_active: bool = False
+        self._layer_move_dragging: bool = False
+        self._layer_move_start_pt: Optional[QPoint] = None
+
+        # Gizmos interactivos para máscaras de Gradiente Lineal y Radial
+        self.gradient_gizmo_active: bool = False
+        self.active_gradient_layer: Optional[Any] = None
+        self._gradient_dragging_handle: Optional[str] = None
+        self._gradient_drag_start_norm: Optional[QPointF] = None
+        self._gradient_initial_p0: Optional[Tuple[float, float]] = None
+        self._gradient_initial_p1: Optional[Tuple[float, float]] = None
+        self._gradient_initial_center: Optional[Tuple[float, float]] = None
+        self._gradient_initial_rx: float = 0.25
+        self._gradient_initial_ry: float = 0.35
+        self._gradient_initial_angle: float = 0.0
 
         # Parámetros del modo Zoom 1:1
         self.is_zoomed: bool = False
@@ -192,6 +214,35 @@ class MaskCanvas(QWidget):
         else:
             self._brush_drawing = False
             self._brush_hover_pos = None
+            self.setCursor(Qt.ArrowCursor)
+        self.update()
+
+    def set_layer_move_enabled(self, enabled: bool) -> None:
+        """Activa o desactiva la interacción directa en el lienzo para mover y redimensionar la capa ráster."""
+        self.layer_move_active = enabled
+        if enabled:
+            self.layer_brush_active = False
+            self.crop_mode = False
+            self.eyedropper_active = False
+            self.magnifier_active = False
+            self.dust_spot_mode = False
+            self.bg_sample_mode = False
+            self.enable_masking = False
+            self.setCursor(Qt.SizeAllCursor)
+        else:
+            self._layer_move_dragging = False
+            self._layer_move_start_pt = None
+            self.setCursor(Qt.ArrowCursor)
+        self.update()
+
+    def set_active_gradient_layer(self, layer: Optional[Any]) -> None:
+        """Activa o desactiva la visualización y manipulación interactiva del gizmo de gradiente (lineal o radial)."""
+        is_grad = layer is not None and getattr(layer, "is_gradient", False)
+        self.gradient_gizmo_active = is_grad
+        self.active_gradient_layer = layer if is_grad else None
+        self._gradient_dragging_handle = None
+        self._gradient_drag_start_norm = None
+        if not is_grad and self.cursor().shape() in (Qt.SizeAllCursor, Qt.CrossCursor, Qt.PointingHandCursor):
             self.setCursor(Qt.ArrowCursor)
         self.update()
 
@@ -754,6 +805,122 @@ class MaskCanvas(QWidget):
                     return idx
         return None
 
+    def _hit_test_gradient_gizmo(self, screen_pt: QPointF, tolerance_px: float = 12.0) -> Optional[str]:
+        """Detecta si una posición de pantalla colisiona con algún tirador o eje del gradiente activo."""
+        layer = self.active_gradient_layer
+        if not self.gradient_gizmo_active or layer is None:
+            return None
+
+        tol_sq = tolerance_px * tolerance_px
+
+        if layer.mask_type == "gradient_linear":
+            p0 = getattr(layer, "linear_p0", (0.5, 0.75))
+            p1 = getattr(layer, "linear_p1", (0.5, 0.35))
+            mid = getattr(layer, "linear_midpoint", 0.5)
+            prof = getattr(layer, "linear_profile", "smoothstep")
+            is_refl = prof == "reflected"
+            span_b = 1.0 if getattr(layer, "linear_symmetric", True) else float(getattr(layer, "linear_span_b", 1.0))
+
+            s0 = self._norm_img_to_widget(p0[0], p0[1])
+            s1 = self._norm_img_to_widget(p1[0], p1[1])
+            if s0 is None or s1 is None:
+                return None
+
+            vx = s1.x() - s0.x()
+            vy = s1.y() - s0.y()
+
+            # 1. Tirador P0 (Inicio / Cresta 100%)
+            if (screen_pt.x() - s0.x()) ** 2 + (screen_pt.y() - s0.y()) ** 2 <= tol_sq:
+                return "p0"
+
+            # 2. Tirador P1 (Borde A 0%)
+            if (screen_pt.x() - s1.x()) ** 2 + (screen_pt.y() - s1.y()) ** 2 <= tol_sq:
+                return "p1"
+
+            if is_refl:
+                # 3. Tirador P2 (Borde B 0%)
+                s2_x = s0.x() - vx * span_b
+                s2_y = s0.y() - vy * span_b
+                if (screen_pt.x() - s2_x) ** 2 + (screen_pt.y() - s2_y) ** 2 <= tol_sq:
+                    return "p2"
+
+                # 4. Eje longitudinal completo (de P2 a P1 pasando por P0)
+                v_tot_x = s1.x() - s2_x
+                v_tot_y = s1.y() - s2_y
+                len_tot_sq = v_tot_x * v_tot_x + v_tot_y * v_tot_y
+                if len_tot_sq > 1e-4:
+                    t = ((screen_pt.x() - s2_x) * v_tot_x + (screen_pt.y() - s2_y) * v_tot_y) / len_tot_sq
+                    if 0.0 <= t <= 1.0:
+                        proj_x = s2_x + t * v_tot_x
+                        proj_y = s2_y + t * v_tot_y
+                        dist_line_sq = (screen_pt.x() - proj_x) ** 2 + (screen_pt.y() - proj_y) ** 2
+                        if dist_line_sq <= tol_sq:
+                            return "axis"
+            else:
+                # 3. Tirador Punto Medio
+                sm_x = s0.x() + vx * mid
+                sm_y = s0.y() + vy * mid
+                if (screen_pt.x() - sm_x) ** 2 + (screen_pt.y() - sm_y) ** 2 <= tol_sq:
+                    return "midpoint"
+
+                # 4. Eje central (traslación en bloque)
+                len_sq = vx * vx + vy * vy
+                if len_sq > 1e-4:
+                    t = ((screen_pt.x() - s0.x()) * vx + (screen_pt.y() - s0.y()) * vy) / len_sq
+                    if 0.0 <= t <= 1.0:
+                        proj_x = s0.x() + t * vx
+                        proj_y = s0.y() + t * vy
+                        dist_line_sq = (screen_pt.x() - proj_x) ** 2 + (screen_pt.y() - proj_y) ** 2
+                        if dist_line_sq <= tol_sq:
+                            return "axis"
+
+        elif layer.mask_type == "gradient_radial":
+            center = getattr(layer, "radial_center", (0.5, 0.5))
+            sc = self._norm_img_to_widget(center[0], center[1])
+            if sc is None:
+                return None
+
+            target_rect, source_rect, scale = self.get_render_geometry()
+            if scale <= 0:
+                return None
+
+            iw = float(self.base_pixmap.width())
+            ih = float(self.base_pixmap.height())
+            rx_px = max(6.0, float(getattr(layer, "radial_radius_x", 0.25)) * iw * scale)
+            ry_px = max(6.0, float(getattr(layer, "radial_radius_y", 0.35)) * ih * scale)
+            angle_deg = float(getattr(layer, "radial_angle", 0.0))
+
+            # 1. Centro
+            if (screen_pt.x() - sc.x()) ** 2 + (screen_pt.y() - sc.y()) ** 2 <= tol_sq:
+                return "center"
+
+            # Transformar punto a sistema local de la elipse
+            rad = np.deg2rad(angle_deg)
+            cos_t, sin_t = np.cos(rad), np.sin(rad)
+            dx = screen_pt.x() - sc.x()
+            dy = screen_pt.y() - sc.y()
+            lx = dx * cos_t + dy * sin_t
+            ly = -dx * sin_t + dy * cos_t
+
+            # 2. Tirador de Rotación (rx_px + 24px)
+            rot_stem_x = rx_px + 24.0
+            rot_stem_y = 0.0
+            if (lx - rot_stem_x) ** 2 + (ly - rot_stem_y) ** 2 <= tol_sq:
+                return "rotate"
+
+            # 3. Tiradores cardinales
+            if (lx - rx_px) ** 2 + ly ** 2 <= tol_sq or (lx + rx_px) ** 2 + ly ** 2 <= tol_sq:
+                return "rx"
+            if lx ** 2 + (ly - ry_px) ** 2 <= tol_sq or lx ** 2 + (ly + ry_px) ** 2 <= tol_sq:
+                return "ry"
+
+            # 4. Borde de la elipse (traslación)
+            norm_d = np.sqrt((lx / rx_px) ** 2 + (ly / ry_px) ** 2)
+            if abs(norm_d - 1.0) * min(rx_px, ry_px) <= tolerance_px:
+                return "body"
+
+        return None
+
     def center_on_image_point(self, pt: Tuple[float, float], zoom_in: bool = True) -> None:
         """Centra la vista en coordenadas de la imagen, con opción de activar zoom 1:1."""
         if not self.base_pixmap or self.base_pixmap.isNull():
@@ -869,6 +1036,37 @@ class MaskCanvas(QWidget):
             return
 
         pos = event.position().toPoint()
+
+        # -4.bis Manejo de Gizmo de Gradiente Lineal y Radial Interactivo
+        if self.gradient_gizmo_active and self.active_gradient_layer is not None and event.button() == Qt.LeftButton:
+            handle = self._hit_test_gradient_gizmo(event.position())
+            if handle is not None:
+                self._gradient_dragging_handle = handle
+                self._gradient_drag_start_norm = self._widget_to_norm_img(event.position())
+                self._gradient_initial_p0 = getattr(self.active_gradient_layer, "linear_p0", (0.5, 0.75))
+                self._gradient_initial_p1 = getattr(self.active_gradient_layer, "linear_p1", (0.5, 0.35))
+                self._gradient_initial_span_b = float(getattr(self.active_gradient_layer, "linear_span_b", 1.0))
+                self._gradient_initial_center = getattr(self.active_gradient_layer, "radial_center", (0.5, 0.5))
+                self._gradient_initial_rx = float(getattr(self.active_gradient_layer, "radial_radius_x", 0.25))
+                self._gradient_initial_ry = float(getattr(self.active_gradient_layer, "radial_radius_y", 0.35))
+                self._gradient_initial_angle = float(getattr(self.active_gradient_layer, "radial_angle", 0.0))
+                if handle in ("axis", "center", "body"):
+                    self.setCursor(Qt.ClosedHandCursor)
+                elif handle == "rotate":
+                    self.setCursor(Qt.PointingHandCursor)
+                else:
+                    self.setCursor(Qt.CrossCursor)
+                self.update()
+                event.accept()
+                return
+
+        # -4. Manejo de Transformación Espacial de Capa Ráster (Mover)
+        if self.layer_move_active and event.button() == Qt.LeftButton:
+            self._layer_move_dragging = True
+            self._layer_move_start_pt = event.position().toPoint()
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+            return
 
         # -3. Manejo de Manchas de Polvo (Sensor Dust Spot Mode)
         if self.dust_spot_mode:
@@ -1069,6 +1267,8 @@ class MaskCanvas(QWidget):
                         else:
                             w_m = self.base_pixmap.width()
                             h_m = self.base_pixmap.height()
+                    elif self.external_full_shape:
+                        h_m, w_m = self.external_full_shape
                     else:
                         w_m = self.base_pixmap.width()
                         h_m = self.base_pixmap.height()
@@ -1102,6 +1302,130 @@ class MaskCanvas(QWidget):
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position().toPoint()
+
+        # -4.bis Manejo de Arrastre de Gizmo de Gradiente
+        if self.gradient_gizmo_active and self._gradient_dragging_handle is not None and self.active_gradient_layer is not None:
+            norm_pt = self._widget_to_norm_img(event.position())
+            layer = self.active_gradient_layer
+            h_type = self._gradient_dragging_handle
+
+            if norm_pt is not None:
+                if layer.mask_type == "gradient_linear":
+                    if h_type == "p0":
+                        layer.linear_p0 = (float(np.clip(norm_pt.x(), 0.0, 1.0)), float(np.clip(norm_pt.y(), 0.0, 1.0)))
+                    elif h_type == "p1":
+                        layer.linear_p1 = (float(np.clip(norm_pt.x(), 0.0, 1.0)), float(np.clip(norm_pt.y(), 0.0, 1.0)))
+                    elif h_type == "p2":
+                        p0 = layer.linear_p0
+                        p1 = layer.linear_p1
+                        iw = float(self.base_pixmap.width())
+                        ih = float(self.base_pixmap.height())
+                        aspect = (iw / ih) if ih > 0 else 1.0
+                        vx = (p1[0] - p0[0]) * aspect
+                        vy = p1[1] - p0[1]
+                        lsq = vx * vx + vy * vy
+                        if lsq > 1e-5:
+                            dx = (norm_pt.x() - p0[0]) * aspect
+                            dy = norm_pt.y() - p0[1]
+                            proj_b = -(dx * vx + dy * vy) / lsq
+                            if getattr(layer, "linear_symmetric", True):
+                                scale_factor = max(0.05, float(proj_b))
+                                layer.linear_p1 = (
+                                    float(np.clip(p0[0] + (p1[0] - p0[0]) * scale_factor, 0.0, 1.0)),
+                                    float(np.clip(p0[1] + (p1[1] - p0[1]) * scale_factor, 0.0, 1.0))
+                                )
+                            else:
+                                layer.linear_span_b = float(np.clip(proj_b, 0.1, 3.0))
+                    elif h_type == "midpoint":
+                        p0 = layer.linear_p0
+                        p1 = layer.linear_p1
+                        iw = float(self.base_pixmap.width())
+                        ih = float(self.base_pixmap.height())
+                        aspect = (iw / ih) if ih > 0 else 1.0
+                        vx = (p1[0] - p0[0]) * aspect
+                        vy = p1[1] - p0[1]
+                        lsq = vx * vx + vy * vy
+                        if lsq > 1e-5:
+                            dx = (norm_pt.x() - p0[0]) * aspect
+                            dy = norm_pt.y() - p0[1]
+                            t = (dx * vx + dy * vy) / lsq
+                            layer.linear_midpoint = float(np.clip(t, 0.05, 0.95))
+                    elif h_type == "axis" and self._gradient_drag_start_norm is not None and self._gradient_initial_p0 and self._gradient_initial_p1:
+                        dx = norm_pt.x() - self._gradient_drag_start_norm.x()
+                        dy = norm_pt.y() - self._gradient_drag_start_norm.y()
+                        layer.linear_p0 = (
+                            float(np.clip(self._gradient_initial_p0[0] + dx, 0.0, 1.0)),
+                            float(np.clip(self._gradient_initial_p0[1] + dy, 0.0, 1.0))
+                        )
+                        layer.linear_p1 = (
+                            float(np.clip(self._gradient_initial_p1[0] + dx, 0.0, 1.0)),
+                            float(np.clip(self._gradient_initial_p1[1] + dy, 0.0, 1.0))
+                        )
+                elif layer.mask_type == "gradient_radial":
+                    if (h_type == "center" or h_type == "body") and self._gradient_drag_start_norm is not None and self._gradient_initial_center:
+                        dx = norm_pt.x() - self._gradient_drag_start_norm.x()
+                        dy = norm_pt.y() - self._gradient_drag_start_norm.y()
+                        layer.radial_center = (
+                            float(np.clip(self._gradient_initial_center[0] + dx, 0.0, 1.0)),
+                            float(np.clip(self._gradient_initial_center[1] + dy, 0.0, 1.0))
+                        )
+                    elif h_type in ("rx", "ry", "rotate"):
+                        cx, cy = layer.radial_center
+                        iw = float(self.base_pixmap.width())
+                        ih = float(self.base_pixmap.height())
+                        aspect = (iw / ih) if ih > 0 else 1.0
+                        inv_aspect = 1.0 / max(1e-5, aspect)
+                        dx = norm_pt.x() - cx
+                        dy = norm_pt.y() - cy
+                        if h_type == "rotate":
+                            ang_rad = np.arctan2(dy * ih, dx * iw)
+                            layer.radial_angle = float(np.rad2deg(ang_rad))
+                        elif h_type == "rx":
+                            rad = np.deg2rad(layer.radial_angle)
+                            cos_t, sin_t = np.cos(rad), np.sin(rad)
+                            lx = abs(dx * cos_t + (dy * inv_aspect) * sin_t)
+                            layer.radial_radius_x = float(np.clip(lx, 0.02, 1.5))
+                        elif h_type == "ry":
+                            rad = np.deg2rad(layer.radial_angle)
+                            cos_t, sin_t = np.cos(rad), np.sin(rad)
+                            ly = abs(-(dx * aspect) * sin_t + dy * cos_t)
+                            layer.radial_radius_y = float(np.clip(ly, 0.02, 1.5))
+
+                self.gradient_changed.emit()
+                self.update()
+                event.accept()
+                return
+
+        # Cursor reactivo al sobrevolar gizmos de gradiente cuando no se arrastra
+        if self.gradient_gizmo_active and self._gradient_dragging_handle is None and self.active_gradient_layer is not None:
+            hover_h = self._hit_test_gradient_gizmo(event.position())
+            if hover_h in ("axis", "center", "body"):
+                self.setCursor(Qt.SizeAllCursor)
+            elif hover_h == "rotate":
+                self.setCursor(Qt.PointingHandCursor)
+            elif hover_h in ("p0", "p1", "p2", "midpoint", "rx", "ry"):
+                self.setCursor(Qt.CrossCursor)
+
+        # -4. Manejo de Transformación Espacial de Capa Ráster (Mover)
+        if self.layer_move_active and self._layer_move_dragging and self._layer_move_start_pt is not None:
+            pt = event.position().toPoint()
+            dx = pt.x() - self._layer_move_start_pt.x()
+            dy = pt.y() - self._layer_move_start_pt.y()
+            self._layer_move_start_pt = pt
+
+            if self.is_zoomed and getattr(self, 'external_full_shape', None) is not None:
+                h_f, w_f = self.external_full_shape
+                dx_norm = float(dx) / max(1.0, float(w_f))
+                dy_norm = float(dy) / max(1.0, float(h_f))
+            else:
+                target_rect, _, _ = self.get_render_geometry()
+                w_disp = max(1.0, float(target_rect.width()))
+                h_disp = max(1.0, float(target_rect.height()))
+                dx_norm = float(dx) / w_disp
+                dy_norm = float(dy) / h_disp
+            self.layer_move_offset_dragged.emit(dx_norm, dy_norm)
+            event.accept()
+            return
 
         # -3. Manejo de Manchas de Polvo (Sensor Dust Spot Mode)
         if self.dust_spot_mode:
@@ -1267,6 +1591,23 @@ class MaskCanvas(QWidget):
         super().mouseDoubleClickEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if self._gradient_dragging_handle is not None and event.button() == Qt.LeftButton:
+            self._gradient_dragging_handle = None
+            self._gradient_drag_start_norm = None
+            self.setCursor(Qt.ArrowCursor)
+            self.gradient_drag_finished.emit()
+            self.update()
+            event.accept()
+            return
+
+        if self.layer_move_active and self._layer_move_dragging and event.button() == Qt.LeftButton:
+            self._layer_move_dragging = False
+            self._layer_move_start_pt = None
+            self.setCursor(Qt.SizeAllCursor if self.layer_move_active else Qt.ArrowCursor)
+            self.layer_move_finished.emit()
+            event.accept()
+            return
+
         if self.dust_spot_mode and self._dust_dragging_idx is not None:
             self._dust_dragging_idx = None
             hit_idx = self._hit_test_dust_spot(event.position())
@@ -1338,7 +1679,14 @@ class MaskCanvas(QWidget):
 
     def wheelEvent(self, event) -> None:
         """Permite escalar dinámicamente la lupa flotante o el radio de los pinceles con la rueda del ratón."""
-        if self.magnifier_active:
+        if self.layer_move_active:
+            delta = event.angleDelta().y()
+            if delta != 0:
+                factor = 1.05 if delta > 0 else 0.95
+                self.layer_move_scale_wheel.emit(factor)
+            event.accept()
+            return
+        elif self.magnifier_active:
             delta = event.angleDelta().y()
             if delta > 0:
                 self.magnifier_zoom = min(8.0, round(self.magnifier_zoom + 0.5, 1))
@@ -1416,6 +1764,17 @@ class MaskCanvas(QWidget):
         else:
             _, _, scale = self.get_render_geometry()
             native_r = max(2, int(screen_radius / max(1e-4, scale)))
+            if self.base_pixmap and not self.base_pixmap.isNull():
+                pw = max(1.0, float(self.base_pixmap.width()))
+                ph = max(1.0, float(self.base_pixmap.height()))
+                sx = float(w_m) / pw
+                sy = float(h_m) / ph
+                mx = int(round(ipt.x() * sx))
+                my = int(round(ipt.y() * sy))
+                mx = max(0, min(w_m - 1, mx))
+                my = max(0, min(h_m - 1, my))
+                mask_r = max(1, int(round(native_r * ((sx + sy) / 2.0))))
+                return QPoint(mx, my), mask_r
             return ipt, native_r
 
     def _apply_brush_stamp(self, pt: QPoint, native_radius: int) -> None:
@@ -1754,6 +2113,212 @@ class MaskCanvas(QWidget):
         # Superposición de Manchas de Polvo y Curación (Sensor Dust Spots)
         if self.dust_spot_mode or self.dust_spots:
             self._draw_dust_spots_overlay(painter)
+
+        # Superposición de Gizmo de Gradiente Lineal y Radial Interactivo
+        if self.gradient_gizmo_active and self.active_gradient_layer is not None:
+            self._draw_gradient_gizmo(painter)
+
+    def _draw_gradient_gizmo(self, painter: QPainter) -> None:
+        """Renderiza los manejadores y líneas guía interactivas para máscaras de gradiente lineal o radial."""
+        layer = self.active_gradient_layer
+        if not self.gradient_gizmo_active or layer is None:
+            return
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        pen_cyan = QPen(QColor("#80d8ff"), 1.8)
+        pen_dashed = QPen(QColor("#80d8ff"), 1.4, Qt.DashLine)
+        pen_dotted = QPen(QColor(128, 216, 255, 140), 1.2, Qt.DotLine)
+        brush_cyan = QBrush(QColor("#00e5ff"))
+        brush_white = QBrush(QColor("#ffffff"))
+        brush_mid = QBrush(QColor("#ffd54f"))
+        pen_white = QPen(QColor("#ffffff"), 1.5)
+
+        if layer.mask_type == "gradient_linear":
+            p0 = getattr(layer, "linear_p0", (0.5, 0.75))
+            p1 = getattr(layer, "linear_p1", (0.5, 0.35))
+            mid = getattr(layer, "linear_midpoint", 0.5)
+            prof = getattr(layer, "linear_profile", "smoothstep")
+            is_refl = prof == "reflected"
+            span_b = 1.0 if getattr(layer, "linear_symmetric", True) else float(getattr(layer, "linear_span_b", 1.0))
+
+            s0 = self._norm_img_to_widget(p0[0], p0[1])
+            s1 = self._norm_img_to_widget(p1[0], p1[1])
+            if s0 is not None and s1 is not None:
+                vx = s1.x() - s0.x()
+                vy = s1.y() - s0.y()
+                len_axis = float(np.hypot(vx, vy))
+                if len_axis > 1e-3:
+                    ux = vx / len_axis
+                    uy = vy / len_axis
+                    px = -uy
+                    py = ux
+                else:
+                    px, py = 0.0, 1.0
+
+                span_bar = 90.0
+
+                if is_refl:
+                    s2 = QPointF(s0.x() - vx * span_b, s0.y() - vy * span_b)
+
+                    # 1. Eje longitudinal P2 -> P1 pasando por P0
+                    painter.setPen(QPen(QColor(0, 0, 0, 160), 3.0))
+                    painter.drawLine(s2, s1)
+                    painter.setPen(pen_dashed)
+                    painter.drawLine(s2, s1)
+
+                    # 2. Barra de cresta P0 (100% de opacidad)
+                    p0_a = QPointF(s0.x() - px * span_bar, s0.y() - py * span_bar)
+                    p0_b = QPointF(s0.x() + px * span_bar, s0.y() + py * span_bar)
+                    painter.setPen(QPen(QColor(0, 0, 0, 160), 3.5))
+                    painter.drawLine(p0_a, p0_b)
+                    painter.setPen(pen_cyan)
+                    painter.drawLine(p0_a, p0_b)
+
+                    # 3. Barra perpendicular Borde A P1 (0% de opacidad)
+                    p1_a = QPointF(s1.x() - px * span_bar, s1.y() - py * span_bar)
+                    p1_b = QPointF(s1.x() + px * span_bar, s1.y() + py * span_bar)
+                    painter.setPen(QPen(QColor(0, 0, 0, 160), 3.5))
+                    painter.drawLine(p1_a, p1_b)
+                    painter.setPen(pen_dashed)
+                    painter.drawLine(p1_a, p1_b)
+
+                    # 4. Barra perpendicular Borde B P2 (0% de opacidad)
+                    p2_a = QPointF(s2.x() - px * span_bar, s2.y() - py * span_bar)
+                    p2_b = QPointF(s2.x() + px * span_bar, s2.y() + py * span_bar)
+                    painter.setPen(QPen(QColor(0, 0, 0, 160), 3.5))
+                    painter.drawLine(p2_a, p2_b)
+                    painter.setPen(pen_dashed)
+                    painter.drawLine(p2_a, p2_b)
+
+                    # 5. Tiradores
+                    # Tirador P0 (Cresta: Cyan sólido con borde blanco)
+                    painter.setBrush(brush_cyan)
+                    painter.setPen(pen_white)
+                    painter.drawEllipse(s0, 6.0, 6.0)
+
+                    # Tirador P1 (Borde A: Blanco con borde cyan)
+                    painter.setBrush(brush_white)
+                    painter.setPen(pen_cyan)
+                    painter.drawEllipse(s1, 6.0, 6.0)
+
+                    # Tirador P2 (Borde B: Blanco con borde ámbar si asimétrico, cyan si simétrico)
+                    painter.setBrush(brush_white)
+                    pen_p2 = QPen(QColor("#ffb74d"), 2.0) if not getattr(layer, "linear_symmetric", True) else pen_cyan
+                    painter.setPen(pen_p2)
+                    painter.drawEllipse(s2, 6.0, 6.0)
+
+                else:
+                    # 1. Eje central P0 -> P1 con sombra suave para contraste
+                    painter.setPen(QPen(QColor(0, 0, 0, 160), 3.0))
+                    painter.drawLine(s0, s1)
+                    painter.setPen(pen_dashed)
+                    painter.drawLine(s0, s1)
+
+                    # 2. Barra perpendicular de inicio P0 (100% de opacidad)
+                    p0_a = QPointF(s0.x() - px * span_bar, s0.y() - py * span_bar)
+                    p0_b = QPointF(s0.x() + px * span_bar, s0.y() + py * span_bar)
+                    painter.setPen(QPen(QColor(0, 0, 0, 160), 3.5))
+                    painter.drawLine(p0_a, p0_b)
+                    painter.setPen(pen_cyan)
+                    painter.drawLine(p0_a, p0_b)
+
+                    # 3. Barra perpendicular de fin P1 (0% de opacidad)
+                    p1_a = QPointF(s1.x() - px * span_bar, s1.y() - py * span_bar)
+                    p1_b = QPointF(s1.x() + px * span_bar, s1.y() + py * span_bar)
+                    painter.setPen(QPen(QColor(0, 0, 0, 160), 3.5))
+                    painter.drawLine(p1_a, p1_b)
+                    painter.setPen(pen_dashed)
+                    painter.drawLine(p1_a, p1_b)
+
+                    # 4. Línea de Punto Medio
+                    sm = QPointF(s0.x() + vx * mid, s0.y() + vy * mid)
+                    pm_a = QPointF(sm.x() - px * (span_bar * 0.6), sm.y() - py * (span_bar * 0.6))
+                    pm_b = QPointF(sm.x() + px * (span_bar * 0.6), sm.y() + py * (span_bar * 0.6))
+                    painter.setPen(pen_dotted)
+                    painter.drawLine(pm_a, pm_b)
+
+                    # 5. Tiradores circulares
+                    # Tirador P0 (Cyan sólido con borde blanco)
+                    painter.setBrush(brush_cyan)
+                    painter.setPen(pen_white)
+                    painter.drawEllipse(s0, 6.0, 6.0)
+
+                    # Tirador P1 (Blanco con borde cyan)
+                    painter.setBrush(brush_white)
+                    painter.setPen(pen_cyan)
+                    painter.drawEllipse(s1, 6.0, 6.0)
+
+                    # Tirador Punto Medio (Rombo)
+                    painter.setBrush(brush_mid)
+                    painter.setPen(pen_white)
+                    mid_diamond = QPainterPath()
+                    mid_diamond.moveTo(sm.x(), sm.y() - 5.0)
+                    mid_diamond.lineTo(sm.x() + 5.0, sm.y())
+                    mid_diamond.lineTo(sm.x(), sm.y() + 5.0)
+                    mid_diamond.lineTo(sm.x() - 5.0, sm.y())
+                    mid_diamond.closeSubpath()
+                    painter.drawPath(mid_diamond)
+
+        elif layer.mask_type == "gradient_radial":
+            center = getattr(layer, "radial_center", (0.5, 0.5))
+            sc = self._norm_img_to_widget(center[0], center[1])
+            if sc is not None:
+                target_rect, source_rect, scale = self.get_render_geometry()
+                iw = float(self.base_pixmap.width())
+                ih = float(self.base_pixmap.height())
+                rx_px = max(6.0, float(getattr(layer, "radial_radius_x", 0.25)) * iw * scale)
+                ry_px = max(6.0, float(getattr(layer, "radial_radius_y", 0.35)) * ih * scale)
+                angle_deg = float(getattr(layer, "radial_angle", 0.0))
+                feather = float(getattr(layer, "radial_feather", 0.5))
+
+                painter.save()
+                painter.translate(sc)
+                painter.rotate(angle_deg)
+
+                # 1. Elipse exterior principal (límite 0% opacidad)
+                rect_outer = QRectF(-rx_px, -ry_px, rx_px * 2.0, ry_px * 2.0)
+                painter.setPen(QPen(QColor(0, 0, 0, 160), 3.0))
+                painter.drawEllipse(rect_outer)
+                painter.setPen(pen_dashed)
+                painter.drawEllipse(rect_outer)
+
+                # 2. Elipse interior (límite 100% opacidad antes del desvanecimiento)
+                inner_factor = max(0.0, 1.0 - feather)
+                if inner_factor > 0.02:
+                    rx_in = rx_px * inner_factor
+                    ry_in = ry_px * inner_factor
+                    rect_inner = QRectF(-rx_in, -ry_in, rx_in * 2.0, ry_in * 2.0)
+                    painter.setPen(pen_dotted)
+                    painter.drawEllipse(rect_inner)
+
+                # 3. Tiradores cardinales (4 puntos)
+                painter.setBrush(brush_white)
+                painter.setPen(pen_cyan)
+                painter.drawEllipse(QPointF(rx_px, 0.0), 5.0, 5.0)
+                painter.drawEllipse(QPointF(-rx_px, 0.0), 5.0, 5.0)
+                painter.drawEllipse(QPointF(0.0, ry_px), 5.0, 5.0)
+                painter.drawEllipse(QPointF(0.0, -ry_px), 5.0, 5.0)
+
+                # 4. Vástago y Tirador de Rotación
+                stem_end = QPointF(rx_px + 24.0, 0.0)
+                painter.setPen(pen_cyan)
+                painter.drawLine(QPointF(rx_px, 0.0), stem_end)
+                painter.setBrush(brush_cyan)
+                painter.setPen(pen_white)
+                painter.drawEllipse(stem_end, 5.5, 5.5)
+
+                # 5. Centro (cruz y círculo)
+                painter.setPen(pen_white)
+                painter.drawLine(QPointF(-6.0, 0.0), QPointF(6.0, 0.0))
+                painter.drawLine(QPointF(0.0, -6.0), QPointF(0.0, 6.0))
+                painter.setBrush(brush_cyan)
+                painter.drawEllipse(QPointF(0.0, 0.0), 4.0, 4.0)
+
+                painter.restore()
+
+        painter.restore()
 
     def _draw_bg_samples_overlay(self, painter: QPainter) -> None:
         """Renderiza las cajas de muestreo interactivo de fondo en el lienzo con estética DBE / GraXpert."""
