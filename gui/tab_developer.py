@@ -146,6 +146,7 @@ class DeveloperTab(QWidget):
         self.active_filepath = None
         self.current_project_path: Optional[str] = None
         self._is_dirty: bool = False
+        self._is_loading_project: bool = False
         self.current_color_space = "srgb"
         self.gx_worker = None
         self.sn_worker = None
@@ -2487,7 +2488,7 @@ class DeveloperTab(QWidget):
             else:
                 self.sec_gnd_tone.set_status_badge("")
 
-        if hasattr(self, 'mask_layers_widget') and self.image_starless is not None:
+        if hasattr(self, 'mask_layers_widget') and self.image_starless is not None and not getattr(self, '_is_loading_project', False):
             self.mask_layers_widget.ensure_starnet_layers(has_ground=(self.current_mask is not None))
 
         is_mask_present = (self.current_mask is not None)
@@ -3750,13 +3751,16 @@ class DeveloperTab(QWidget):
 
             self.image_32bit = np.clip(raw_img, 0.0, 1.0).astype(np.float32)
             self.canvas.set_native_image_size((self.image_32bit.shape[1], self.image_32bit.shape[0]))
-            self._generate_preview_proxy()
-            self.apply_auto_mtf()
-            self.initial_bp = self.panel_stretch.bp_val if hasattr(self, 'panel_stretch') else 0.0
-            self.initial_mtf = self.panel_stretch.mtf_val if hasattr(self, 'panel_stretch') else 0.15
-            self.has_custom_snapshot = False
-            self.snapshot_before_pixmap = None
-            self._generate_before_reference()
+
+            is_loading = getattr(self, '_is_loading_project', False)
+            if not is_loading:
+                self._generate_preview_proxy()
+                self.apply_auto_mtf()
+                self.initial_bp = self.panel_stretch.bp_val if hasattr(self, 'panel_stretch') else 0.0
+                self.initial_mtf = self.panel_stretch.mtf_val if hasattr(self, 'panel_stretch') else 0.15
+                self.has_custom_snapshot = False
+                self.snapshot_before_pixmap = None
+                self._generate_before_reference()
             self._update_canvas_info_label()
 
             if self.current_mask is not None:
@@ -3766,7 +3770,7 @@ class DeveloperTab(QWidget):
             self._update_mask_status_ui()
 
             # Asegurar que se crea la capa Fondo (Imagen Base) en el Gestor de Capas
-            if hasattr(self, 'mask_layers_widget'):
+            if not is_loading and hasattr(self, 'mask_layers_widget'):
                 self.mask_layers_widget.ensure_base_layer()
 
             # Inicializar historial de Deshacer / Rehacer limpio para la nueva imagen
@@ -4538,6 +4542,8 @@ class DeveloperTab(QWidget):
         return final_img
 
     def update_stretch_preview(self, immediate: bool = False):
+        if getattr(self, '_is_loading_project', False):
+            return
         if self.is_zoomed_100 and not immediate:
             self._slider_changed_during_zoom = True
         if immediate:
@@ -7607,7 +7613,7 @@ class DeveloperTab(QWidget):
             self._mark_dirty()
             self._update_undo_redo_buttons()
 
-    def _restore_state(self, state: dict) -> None:
+    def _restore_state(self, state: dict, render_preview: bool = True) -> None:
         """Restaura todos los controles al estado paramétrico especificado delegando en los paneles modulares."""
         if not state:
             return
@@ -7769,7 +7775,8 @@ class DeveloperTab(QWidget):
                 self.canvas.set_refined_mask(None)
                 self.canvas.set_mask_visible(False)
 
-        self.update_stretch_preview(immediate=True)
+        if render_preview:
+            self.update_stretch_preview(immediate=True)
 
     def _update_undo_redo_buttons(self):
         """Actualiza la disponibilidad visual y tooltips de los botones Deshacer y Rehacer."""
@@ -8285,6 +8292,7 @@ class DeveloperTab(QWidget):
     def load_project(self, filepath: str) -> bool:
         """Carga una sesión completa de desarrollo desde un archivo .devloom con barra de progreso."""
         from core.project_io import load_devloom_project, resolve_source_image_path
+        self._is_loading_project = True
         progress = None
         try:
             self.setCursor(Qt.WaitCursor)
@@ -8406,7 +8414,7 @@ class DeveloperTab(QWidget):
             # 5. Restaurar estado de controles y paneles
             on_progress(90, "Restaurando parámetros de revelado y curvas...")
             if dev_state:
-                self._restore_state(dev_state)
+                self._restore_state(dev_state, render_preview=False)
 
             # 6. Resetear historial de Deshacer/Rehacer al estado recién cargado
             self.undo_stack.clear()
@@ -8421,6 +8429,7 @@ class DeveloperTab(QWidget):
 
             # 8. Forzar renderizado y refresco inmediato
             on_progress(98, "Renderizando vista previa...")
+            self._is_loading_project = False
             self._invalidate_pipeline_caches()
             self.update_stretch_preview(immediate=True)
             if hasattr(self, 'mask_layers_widget'):
@@ -8435,6 +8444,7 @@ class DeveloperTab(QWidget):
             QMessageBox.critical(self, "Error al cargar proyecto", f"No se pudo cargar el archivo:\n{e}")
             return False
         finally:
+            self._is_loading_project = False
             if progress:
                 progress.close()
             self.unsetCursor()
