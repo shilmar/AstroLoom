@@ -67,6 +67,8 @@ def save_devloom_project(
             brush_arr = layer_dict.pop("brush_mask", None)
             raster_arr = layer_dict.pop("image_data", None)
 
+        layer_dict.pop("proxy_preview", None)
+        layer_dict.pop("proxy_draft", None)
         layer_dict.pop("brush_mask_b64", None)
 
         if brush_arr is not None and isinstance(brush_arr, np.ndarray):

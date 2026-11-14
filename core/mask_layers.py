@@ -172,6 +172,8 @@ class MaskLayer:
 
     # Propiedades para capas de imagen ráster (layer_kind == "image")
     image_data: Optional[np.ndarray] = None     # Array Float32 RGB [0.0, 1.0] o 2D Mono
+    proxy_preview: Optional[np.ndarray] = None  # Mipmap Nivel 1 (<= 1600 px) para vista previa interactiva
+    proxy_draft: Optional[np.ndarray] = None    # Mipmap Nivel 2 (<= 1000 px) para arrastre a 60 fps
     blend_mode: str = BLEND_MODE_NORMAL         # Modo de fusión ("normal", "screen", "luminosity", etc.)
     active_target: str = "image"                # "image" o "mask" (foco de edición en miniatura dual)
 
@@ -183,12 +185,74 @@ class MaskLayer:
     scale: float = 1.0                          # Factor de escala uniforme (compatibilidad hacia atrás)
     angle: float = 0.0                          # Ángulo de rotación en grados (-180.0° a +180.0°)
 
+    @staticmethod
+    def _sanitize_image_data(img: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        """Sanea y normaliza arrays de imagen ráster una sola vez al ingresarlos."""
+        if img is None:
+            return None
+        flt = img
+        if flt.dtype != np.float32:
+            if flt.dtype == np.uint8:
+                flt = flt.astype(np.float32) / 255.0
+            elif flt.dtype == np.uint16:
+                flt = flt.astype(np.float32) / 65535.0
+            else:
+                flt = flt.astype(np.float32)
+        if flt.ndim == 2:
+            flt = np.repeat(flt[..., np.newaxis], 3, axis=-1)
+        elif flt.ndim == 3 and flt.shape[2] == 1:
+            flt = np.repeat(flt, 3, axis=-1)
+        if np.isnan(flt).any() or np.isinf(flt).any():
+            flt = np.nan_to_num(flt, nan=0.0, posinf=1.0, neginf=0.0)
+        return np.ascontiguousarray(flt, dtype=np.float32)
+
+    def _generate_proxies(self) -> None:
+        """Genera pirámides de resolución (mipmaps) para capas ráster."""
+        if self.image_data is None:
+            self.proxy_preview = None
+            self.proxy_draft = None
+            return
+        h, w = self.image_data.shape[:2]
+        max_dim = max(h, w)
+        if max_dim > 1600:
+            scale_p = 1600.0 / float(max_dim)
+            pw = max(4, (int(w * scale_p) // 4) * 4)
+            ph = max(4, (int(h * scale_p) // 4) * 4)
+            self.proxy_preview = np.ascontiguousarray(
+                cv2.resize(self.image_data, (pw, ph), interpolation=cv2.INTER_AREA),
+                dtype=np.float32
+            )
+        else:
+            self.proxy_preview = self.image_data
+
+        p_h, p_w = self.proxy_preview.shape[:2]
+        p_max = max(p_h, p_w)
+        if p_max > 1000:
+            scale_d = 1000.0 / float(p_max)
+            dw = max(4, (int(p_w * scale_d) // 4) * 4)
+            dh = max(4, (int(p_h * scale_d) // 4) * 4)
+            self.proxy_draft = np.ascontiguousarray(
+                cv2.resize(self.proxy_preview, (dw, dh), interpolation=cv2.INTER_AREA),
+                dtype=np.float32
+            )
+        else:
+            self.proxy_draft = self.proxy_preview
+
     def __post_init__(self):
         if self.scale != 1.0 and self.scale_x == 1.0 and self.scale_y == 1.0:
             self.scale_x = self.scale
             self.scale_y = self.scale
         elif (self.scale_x != 1.0 or self.scale_y != 1.0) and self.scale == 1.0:
             self.scale = self.scale_x
+
+        if self.image_data is not None:
+            self.image_data = self._sanitize_image_data(self.image_data)
+            self._generate_proxies()
+
+    def set_image_data(self, img: Optional[np.ndarray]) -> None:
+        """Asigna y sanea una nueva matriz de píxeles ráster, regenerando sus mipmaps."""
+        self.image_data = self._sanitize_image_data(img)
+        self._generate_proxies()
 
     def is_transform_identity(self) -> bool:
         """Determina si la capa no tiene transformación espacial (offset 0, escala 1, rotación 0)."""
@@ -289,6 +353,8 @@ class MaskLayer:
         d = asdict(self)
         d.pop("custom_mask", None)
         d.pop("image_data", None)
+        d.pop("proxy_preview", None)
+        d.pop("proxy_draft", None)
         d.pop("brush_mask", None)
         d.pop("curve_lut", None)
         if self.brush_mask is not None:
@@ -1078,6 +1144,62 @@ def apply_blend_mode(
         return apply_normal_blend(canvas, top, weight)
 
 
+# --- Caché de Composición Incremental (Sub-composite Cache) ---
+_SUBCOMPOSITE_CACHE: Dict[Tuple, np.ndarray] = {}
+_MAX_SUBCOMPOSITE_CACHE = 16
+
+def clear_subcomposite_cache() -> None:
+    """Vacía la caché de composiciones parciales de capas."""
+    _SUBCOMPOSITE_CACHE.clear()
+
+def _compute_subcomposite_key(
+    composite_image: np.ndarray,
+    layers_below: List[MaskLayer],
+    master_sky_mask: Optional[np.ndarray] = None,
+    starless_image: Optional[np.ndarray] = None,
+    stars_image: Optional[np.ndarray] = None,
+    crop_rect: Optional[Tuple[int, int, int, int]] = None,
+    fast_draft: bool = False
+) -> Tuple:
+    layer_signatures = tuple(
+        (
+            l.id,
+            l.enabled,
+            float(l.opacity),
+            l.mask_type,
+            getattr(l, "blend_mode", "normal"),
+            float(l.exposure),
+            float(l.contrast),
+            float(l.temp),
+            float(l.tint),
+            float(l.highlights),
+            float(l.shadows),
+            float(l.saturation),
+            tuple(l.curve_points) if l.curve_points else (),
+            float(getattr(l, "offset_x", 0.0)),
+            float(getattr(l, "offset_y", 0.0)),
+            float(getattr(l, "scale_x", 1.0)),
+            float(getattr(l, "scale_y", 1.0)),
+            float(getattr(l, "angle", 0.0)),
+            id(l.image_data),
+            id(l.brush_mask),
+            id(l.custom_mask),
+            l.inverted,
+        )
+        for l in layers_below
+    )
+    return (
+        id(composite_image),
+        composite_image.shape,
+        id(master_sky_mask) if master_sky_mask is not None else None,
+        id(starless_image) if starless_image is not None else None,
+        id(stars_image) if stars_image is not None else None,
+        crop_rect,
+        fast_draft,
+        layer_signatures
+    )
+
+
 def apply_all_mask_layers(
     composite_image: np.ndarray,
     mask_layers: List[MaskLayer],
@@ -1117,12 +1239,21 @@ def apply_all_mask_layers(
     # =========================================================================
     # MODO COMPOSITOR MULTICAPA COMPLETO (Estilo Photoshop: evaluación Bottom-Up)
     # =========================================================================
-    # En la interfaz de usuario, la fila 0 es la capa superior (TOP), y la última fila es la base (BOTTOM).
-    # Para evaluar la pila de abajo hacia arriba, invertimos el orden de las capas.
-    eval_layers = list(reversed(mask_layers))
+    # Aceleración incremental: reutilizar prefijo ya compuesto si está en caché
+    start_cut = len(mask_layers)
+    canvas = None
+    if len(mask_layers) > 1 and not crop_rect:
+        for cut in range(1, len(mask_layers)):
+            ck = _compute_subcomposite_key(
+                composite_image, mask_layers[cut:], master_sky_mask, starless_image, stars_image, crop_rect, fast_draft
+            )
+            if ck in _SUBCOMPOSITE_CACHE:
+                canvas = _SUBCOMPOSITE_CACHE[ck].copy()
+                start_cut = cut
+                break
+    if canvas is None:
+        canvas = composite_image.copy()
 
-    # Base inicial del lienzo (Fondo estirado y ajustado por el pipeline)
-    canvas = composite_image.copy()
     img_h, img_w = canvas.shape[:2]
 
     # Máscara 2D de cielo y suelo normalizada
@@ -1150,7 +1281,19 @@ def apply_all_mask_layers(
                 sky_m = cv2.resize(sky_m, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
         gnd_m = np.clip(1.0 - sky_m, 0.0, 1.0).astype(np.float32)
 
-    for layer in eval_layers:
+    # Iterar de fondo a cima desde start_cut - 1 hasta la cima (índice 0)
+    for i in range(start_cut - 1, -1, -1):
+        # Poblar la caché de subcomposición para consultas O(1) de capas superiores
+        if i + 1 < len(mask_layers) and not crop_rect:
+            ck = _compute_subcomposite_key(
+                composite_image, mask_layers[i + 1:], master_sky_mask, starless_image, stars_image, crop_rect, fast_draft
+            )
+            if ck not in _SUBCOMPOSITE_CACHE:
+                if len(_SUBCOMPOSITE_CACHE) >= _MAX_SUBCOMPOSITE_CACHE:
+                    _SUBCOMPOSITE_CACHE.pop(next(iter(_SUBCOMPOSITE_CACHE)))
+                _SUBCOMPOSITE_CACHE[ck] = canvas.copy()
+
+        layer = mask_layers[i]
         if not layer.enabled:
             continue
 
@@ -1161,9 +1304,14 @@ def apply_all_mask_layers(
                        abs(layer.saturation - 1.0) > 1e-3 or abs(layer.shadows) > 1e-3 or 
                        abs(layer.highlights) > 1e-3 or layer.has_curve())
             if has_adj:
-                canvas = apply_local_adjustments_to_image(canvas, np.ones((img_h, img_w), dtype=np.float32), layer, fast_draft=fast_draft)
+                eff_starless_m = sky_m if (layer.mask_type == MASK_TYPE_IMAGE_STARLESS and sky_m is not None) else np.ones((img_h, img_w), dtype=np.float32)
+                canvas = apply_local_adjustments_to_image(canvas, eff_starless_m, layer, fast_draft=fast_draft)
             if layer.opacity < 0.999:
-                canvas = canvas * layer.opacity
+                if layer.mask_type == MASK_TYPE_IMAGE_STARLESS and sky_m is not None:
+                    w = (sky_m * (1.0 - layer.opacity))[..., np.newaxis]
+                    canvas = canvas * (1.0 - w)
+                else:
+                    canvas = canvas * layer.opacity
 
         elif layer.mask_type == MASK_TYPE_IMAGE_GROUND:
             # Capa 🏞️ Suelo / Terreno
@@ -1223,21 +1371,23 @@ def apply_all_mask_layers(
             # Capa 🎨 Imagen Ráster Genérica (Filtros Eclipses, Composición Externa)
             if layer.image_data is not None and layer.opacity > 1e-4:
                 flt_img = layer.image_data
-                if flt_img.dtype != np.float32:
-                    if flt_img.dtype == np.uint8:
-                        flt_img = flt_img.astype(np.float32) / 255.0
-                    elif flt_img.dtype == np.uint16:
-                        flt_img = flt_img.astype(np.float32) / 65535.0
+                # shortcut: image_data is sanitized on ingest in MaskLayer.__post_init__, avoid 28ms NaN scan per frame
+                if flt_img.dtype != np.float32 or flt_img.ndim != 3 or flt_img.shape[2] != 3:
+                    flt_img = MaskLayer._sanitize_image_data(flt_img)
+                    layer.image_data = flt_img
+                    layer._generate_proxies()
+
+                # Selección del mipmap óptimo (Fase 2: Mipmaps multi-escala por capa)
+                is_zoomed = (crop_rect is not None and full_image_shape is not None)
+                if not is_zoomed:
+                    if fast_draft and getattr(layer, 'proxy_draft', None) is not None:
+                        flt_img = layer.proxy_draft
+                    elif getattr(layer, 'proxy_preview', None) is not None and (img_w <= 1600 and img_h <= 1600):
+                        flt_img = layer.proxy_preview
                     else:
-                        flt_img = flt_img.astype(np.float32)
-
-                if flt_img.ndim == 2:
-                    flt_img = np.repeat(flt_img[..., np.newaxis], 3, axis=-1)
-                elif flt_img.ndim == 3 and flt_img.shape[2] == 1:
-                    flt_img = np.repeat(flt_img, 3, axis=-1)
-
-                if np.isnan(flt_img).any() or np.isinf(flt_img).any():
-                    flt_img = np.nan_to_num(flt_img, nan=0.0, posinf=1.0, neginf=0.0)
+                        flt_img = layer.image_data
+                else:
+                    flt_img = layer.image_data
 
                 h_r, w_r = flt_img.shape[:2]
                 has_transform = not getattr(layer, 'is_transform_identity', lambda: True)()
@@ -1312,13 +1462,49 @@ def apply_all_mask_layers(
                            abs(layer.saturation - 1.0) > 1e-3 or abs(layer.shadows) > 1e-3 or 
                            abs(layer.highlights) > 1e-3 or layer.has_curve())
                 if has_adj:
-                    flt_img = apply_pre_curve_adjustments(flt_img, layer, fast_draft=fast_draft)
-                    if not layer.is_curve_identity():
-                        if layer.curve_lut is None:
-                            layer.curve_lut = compute_curve_lut_from_points(layer.curve_points)
-                        u8 = (np.clip(flt_img, 0.0, 1.0) * 255.0).astype(np.uint8)
-                        lut_u8 = (np.clip(layer.curve_lut, 0.0, 1.0) * 255.0).astype(np.uint8)
-                        flt_img = (cv2.LUT(u8, lut_u8).astype(np.float32) / 255.0)
+                    if HAS_RUST and hasattr(astroloom_rs, "apply_layer_adjustments_fused"):
+                        orig_c = np.ascontiguousarray(np.clip(flt_img, 0.0, 1.0), dtype=np.float32)
+                        has_curve = not layer.is_curve_identity()
+                        has_contrast = abs(layer.contrast) > 1e-3
+                        if has_curve or has_contrast:
+                            if has_curve:
+                                if layer.curve_lut is None:
+                                    layer.curve_lut = compute_curve_lut_from_points(layer.curve_points)
+                                lut = layer.curve_lut.copy()
+                            else:
+                                lut = np.linspace(0.0, 1.0, 256, dtype=np.float32)
+
+                            if has_contrast:
+                                lut = adjust_contrast(lut, layer.contrast, fast_draft=False)
+                            lut_c = np.ascontiguousarray(np.clip(lut, 0.0, 1.0), dtype=np.float32)
+                        else:
+                            lut_c = None
+
+                        flt_img = np.asarray(
+                            astroloom_rs.apply_layer_adjustments_fused(
+                                orig_c,
+                                None,
+                                lut_c,
+                                opacity=1.0,
+                                exposure=float(layer.exposure),
+                                contrast=0.0,
+                                highlights=float(layer.highlights),
+                                shadows=float(layer.shadows),
+                                saturation=float(layer.saturation),
+                                vibrance=0.0,
+                                temp=float(layer.temp),
+                                tint=float(layer.tint)
+                            ),
+                            dtype=np.float32
+                        )
+                    else:
+                        flt_img = apply_pre_curve_adjustments(flt_img, layer, fast_draft=fast_draft)
+                        if not layer.is_curve_identity():
+                            if layer.curve_lut is None:
+                                layer.curve_lut = compute_curve_lut_from_points(layer.curve_points)
+                            u8 = (np.clip(flt_img, 0.0, 1.0) * 255.0).astype(np.uint8)
+                            lut_u8 = (np.clip(layer.curve_lut, 0.0, 1.0) * 255.0).astype(np.uint8)
+                            flt_img = (cv2.LUT(u8, lut_u8).astype(np.float32) / 255.0)
 
                 # Ponderación por máscara si está presente o invertida
                 has_mask = (layer.brush_mask is not None or layer.inverted or layer.custom_mask is not None)
@@ -1388,7 +1574,15 @@ def get_canvas_below_layer(
     if not layers_below:
         return composite_image
 
-    return apply_all_mask_layers(
+    # Consulta O(1) en caché de subcomposición incremental (<0.05 ms)
+    ck = _compute_subcomposite_key(
+        composite_image, layers_below, master_sky_mask, starless_image, stars_image, crop_rect
+    )
+    cached = _SUBCOMPOSITE_CACHE.get(ck)
+    if cached is not None:
+        return cached
+
+    res = apply_all_mask_layers(
         composite_image,
         layers_below,
         master_sky_mask=master_sky_mask,
@@ -1397,5 +1591,9 @@ def get_canvas_below_layer(
         crop_rect=crop_rect,
         full_image_shape=full_image_shape
     )
+    if len(_SUBCOMPOSITE_CACHE) >= _MAX_SUBCOMPOSITE_CACHE:
+        _SUBCOMPOSITE_CACHE.pop(next(iter(_SUBCOMPOSITE_CACHE)))
+    _SUBCOMPOSITE_CACHE[ck] = res
+    return res
 
 

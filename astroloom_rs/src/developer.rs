@@ -2,7 +2,7 @@ use crate::stacking::compute_median_in_place;
 use numpy::ndarray::{Array1, Array2, Array3};
 use numpy::{
     IntoPyArray, PyArray1, PyArray2, PyArray3, PyReadonlyArray1, PyReadonlyArray2,
-    PyReadonlyArray3,
+    PyReadonlyArray3, PyReadonlyArrayDyn,
 };
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -1047,4 +1047,224 @@ pub fn compute_radial_gradient_rs<'py>(
     let arr = Array2::from_shape_vec((h, w), out_vec).unwrap();
     arr.into_pyarray(py)
 }
+
+// ============================================================================
+// GENERADORES NATIVOS DE MÁSCARAS ANALÍTICAS (Fase 3: Luminancia y Rango Color)
+// ============================================================================
+
+#[inline(always)]
+fn smoothstep_f32(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let diff = (edge1 - edge0).max(1e-6);
+    let t = ((x - edge0) / diff).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+#[inline(always)]
+fn rgb_to_hue_sat(r: f32, g: f32, b: f32) -> (f32, f32) {
+    let v = r.max(g.max(b));
+    let min_c = r.min(g.min(b));
+    let c = v - min_c;
+    if v <= 1e-7 || c <= 1e-7 {
+        return (0.0, 0.0);
+    }
+    let s = c / v;
+    let mut h = if (v - r).abs() < 1e-7 {
+        60.0 * (g - b) / c
+    } else if (v - g).abs() < 1e-7 {
+        120.0 + 60.0 * (b - r) / c
+    } else {
+        240.0 + 60.0 * (r - g) / c
+    };
+    if h < 0.0 {
+        h += 360.0;
+    } else if h >= 360.0 {
+        h -= 360.0;
+    }
+    (h, s)
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    image,
+    luma_min=0.0,
+    luma_max=1.0,
+    feather=0.08,
+    invert=false
+))]
+pub fn generate_luminance_mask_rs<'py>(
+    py: Python<'py>,
+    image: PyReadonlyArrayDyn<'py, f32>,
+    luma_min: f32,
+    luma_max: f32,
+    feather: f32,
+    invert: bool,
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    let img_view = image.as_array();
+    let f = feather.max(1e-4);
+    let l_min = luma_min.min(luma_max);
+    let l_max = luma_min.max(luma_max);
+    let ndim = img_view.ndim();
+
+    if ndim == 3 {
+        let view3 = img_view.into_dimensionality::<numpy::ndarray::Ix3>().map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("Invalid 3D image shape: {}", e))
+        })?;
+        let (h, w, c) = view3.dim();
+        let out_vec = py.allow_threads(|| {
+            let mut buf = vec![0.0f32; h * w];
+
+            buf.par_chunks_mut(w)
+                .enumerate()
+                .for_each(|(y, row_slice)| {
+                    for x in 0..w {
+                        let luma = if c >= 3 {
+                            let r = unsafe { *view3.uget((y, x, 0)) };
+                            let g = unsafe { *view3.uget((y, x, 1)) };
+                            let b = unsafe { *view3.uget((y, x, 2)) };
+                            0.2126 * r + 0.7152 * g + 0.0722 * b
+                        } else {
+                            unsafe { *view3.uget((y, x, 0)) }.clamp(0.0, 1.0)
+                        };
+
+                        let low_ramp = if l_min > 0.0 {
+                            smoothstep_f32(l_min - f, l_min, luma)
+                        } else {
+                            1.0
+                        };
+                        let high_ramp = if l_max < 1.0 {
+                            1.0 - smoothstep_f32(l_max, l_max + f, luma)
+                        } else {
+                            1.0
+                        };
+
+                        let mut val = (low_ramp * high_ramp).clamp(0.0, 1.0);
+                        if invert {
+                            val = 1.0 - val;
+                        }
+                        row_slice[x] = val;
+                    }
+                });
+
+            buf
+        });
+
+        let arr = Array2::from_shape_vec((h, w), out_vec).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to reshape output mask: {}", e))
+        })?;
+        Ok(arr.into_pyarray(py))
+    } else if ndim == 2 {
+        let view2 = img_view.into_dimensionality::<numpy::ndarray::Ix2>().map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("Invalid 2D image shape: {}", e))
+        })?;
+        let (h, w) = view2.dim();
+        let out_vec = py.allow_threads(|| {
+            let mut buf = vec![0.0f32; h * w];
+
+            buf.par_chunks_mut(w)
+                .enumerate()
+                .for_each(|(y, row_slice)| {
+                    for x in 0..w {
+                        let luma = unsafe { *view2.uget((y, x)) }.clamp(0.0, 1.0);
+
+                        let low_ramp = if l_min > 0.0 {
+                            smoothstep_f32(l_min - f, l_min, luma)
+                        } else {
+                            1.0
+                        };
+                        let high_ramp = if l_max < 1.0 {
+                            1.0 - smoothstep_f32(l_max, l_max + f, luma)
+                        } else {
+                            1.0
+                        };
+
+                        let mut val = (low_ramp * high_ramp).clamp(0.0, 1.0);
+                        if invert {
+                            val = 1.0 - val;
+                        }
+                        row_slice[x] = val;
+                    }
+                });
+
+            buf
+        });
+
+        let arr = Array2::from_shape_vec((h, w), out_vec).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to reshape output mask: {}", e))
+        })?;
+        Ok(arr.into_pyarray(py))
+    } else {
+        Err(pyo3::exceptions::PyValueError::new_err(
+            "Image must be 2D or 3D float32 array",
+        ))
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    image,
+    target_hue_deg,
+    hue_tolerance_deg=30.0,
+    min_saturation=0.08,
+    feather=0.08,
+    invert=false
+))]
+pub fn generate_color_range_mask_rs<'py>(
+    py: Python<'py>,
+    image: PyReadonlyArray3<'py, f32>,
+    target_hue_deg: f32,
+    hue_tolerance_deg: f32,
+    min_saturation: f32,
+    feather: f32,
+    invert: bool,
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    let img_view = image.as_array();
+    let (h, w, c) = img_view.dim();
+    if c < 3 {
+        let arr = Array2::ones((h, w));
+        return Ok(arr.into_pyarray(py));
+    }
+
+    let target_h = target_hue_deg.rem_euclid(360.0);
+    let tol = hue_tolerance_deg.max(1.0);
+    let f = feather.max(0.01);
+    let fade_deg = f * 45.0;
+    let s_min = min_saturation.max(0.01);
+    let s_edge0 = (s_min - f * 0.15).max(0.0);
+
+    let out_vec = py.allow_threads(|| {
+        let mut buf = vec![0.0f32; h * w];
+
+        buf.par_chunks_mut(w)
+            .enumerate()
+            .for_each(|(y, row_slice)| {
+                for x in 0..w {
+                    let r = unsafe { *img_view.uget((y, x, 0)) }.clamp(0.0, 1.0);
+                    let g = unsafe { *img_view.uget((y, x, 1)) }.clamp(0.0, 1.0);
+                    let b = unsafe { *img_view.uget((y, x, 2)) }.clamp(0.0, 1.0);
+
+                    let (hue, sat) = rgb_to_hue_sat(r, g, b);
+
+                    let diff = (hue - target_h).abs();
+                    let angular_dist = diff.min(360.0 - diff);
+
+                    let hue_mask = 1.0 - smoothstep_f32(tol, tol + fade_deg, angular_dist);
+                    let sat_ramp = smoothstep_f32(s_edge0, s_min, sat);
+
+                    let mut val = (hue_mask * sat_ramp).clamp(0.0, 1.0);
+                    if invert {
+                        val = 1.0 - val;
+                    }
+                    row_slice[x] = val;
+                }
+            });
+
+        buf
+    });
+
+    let arr = Array2::from_shape_vec((h, w), out_vec).map_err(|e| {
+        pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to reshape output mask: {}", e))
+    })?;
+    Ok(arr.into_pyarray(py))
+}
+
 

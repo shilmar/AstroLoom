@@ -562,15 +562,17 @@ def apply_developer_pipeline(
             except InterruptedError:
                 return None
 
-            if in_mask_dec is not None:
-                res_deconv = (deconvolved * in_mask_dec) + (in_deconv * (1.0 - in_mask_dec))
-            else:
-                res_deconv = deconvolved
-
             if is_draft_deconv and in_deconv.shape[:2] != (orig_h_dec, orig_w_dec):
-                stretched = cv2.resize(res_deconv, (orig_w_dec, orig_h_dec), interpolation=cv2.INTER_LINEAR)
+                deconv_full = cv2.resize(deconvolved, (orig_w_dec, orig_h_dec), interpolation=cv2.INTER_LINEAR)
+                if precomputed_mask is not None:
+                    stretched = (deconv_full * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+                else:
+                    stretched = deconv_full
             else:
-                stretched = res_deconv
+                if precomputed_mask is not None:
+                    stretched = (deconvolved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+                else:
+                    stretched = deconvolved
 
         if abort_flag and abort_flag():
             return None
@@ -625,7 +627,11 @@ def apply_developer_pipeline(
                 is_starless=False,
             )
             if is_draft_ort and in_ort.shape[:2] != (orig_h_ort, orig_w_ort):
-                stretched = cv2.resize(res_ort, (orig_w_ort, orig_h_ort), interpolation=cv2.INTER_LINEAR)
+                res_ort_full = cv2.resize(res_ort, (orig_w_ort, orig_h_ort), interpolation=cv2.INTER_LINEAR)
+                if precomputed_mask is not None:
+                    stretched = (res_ort_full * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+                else:
+                    stretched = res_ort_full
             else:
                 stretched = res_ort
 
@@ -670,7 +676,11 @@ def apply_developer_pipeline(
                 stars_layer=None,
             )
             if is_draft_sd and in_sd.shape[:2] != (orig_h_sd, orig_w_sd):
-                stretched = cv2.resize(res_sd, (orig_w_sd, orig_h_sd), interpolation=cv2.INTER_LINEAR)
+                res_sd_full = cv2.resize(res_sd, (orig_w_sd, orig_h_sd), interpolation=cv2.INTER_LINEAR)
+                if precomputed_mask is not None:
+                    stretched = (res_sd_full * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+                else:
+                    stretched = res_sd_full
             else:
                 stretched = res_sd
 

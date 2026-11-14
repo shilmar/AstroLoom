@@ -48,6 +48,8 @@ class PipelineWorker(QRunnable):
         precomputed_spatial_base: Optional[np.ndarray] = None,
         precomputed_stretched_stars: Optional[np.ndarray] = None,
         cached_ground_ai: Optional[np.ndarray] = None,
+        precomputed_pre_lp_base: Optional[np.ndarray] = None,
+        is_dragging_deconv: bool = False,
     ):
         super().__init__()
         self.setAutoDelete(True)
@@ -70,6 +72,8 @@ class PipelineWorker(QRunnable):
         self.precomputed_spatial_base = precomputed_spatial_base
         self.precomputed_stretched_stars = precomputed_stretched_stars
         self.cached_ground_ai = cached_ground_ai
+        self.precomputed_pre_lp_base = precomputed_pre_lp_base
+        self.is_dragging_deconv = is_dragging_deconv
 
         self.signals = PipelineSignals()
         self._is_aborted = False
@@ -96,6 +100,7 @@ class PipelineWorker(QRunnable):
                 is_scrubbing=self.is_scrubbing,
                 crop_rect=self.crop_rect,
                 full_shape=self.full_shape,
+                precomputed_pre_lp_base=self.precomputed_pre_lp_base,
                 precomputed_linear_base=self.precomputed_linear_base,
                 precomputed_stretched_base=self.precomputed_stretched_base,
                 precomputed_graded_base=self.precomputed_graded_base,
@@ -103,6 +108,7 @@ class PipelineWorker(QRunnable):
                 precomputed_stretched_stars=self.precomputed_stretched_stars,
                 cached_ground_ai=self.cached_ground_ai,
                 return_milestones=True,
+                is_dragging_deconv=self.is_dragging_deconv,
                 abort_flag=lambda: self._is_aborted,
             )
 
@@ -130,7 +136,8 @@ class AsyncPipelineManager(QObject):
         self._active_worker: Optional[PipelineWorker] = None
 
     def cancel_pending(self):
-        """Cancela el worker activo si existe."""
+        """Cancela el worker activo si existe e invalida solicitudes en vuelo."""
+        self._current_request_id += 1
         if self._active_worker is not None:
             self._active_worker.abort()
             self._active_worker = None
@@ -155,13 +162,13 @@ class AsyncPipelineManager(QObject):
         precomputed_spatial_base: Optional[np.ndarray] = None,
         precomputed_stretched_stars: Optional[np.ndarray] = None,
         cached_ground_ai: Optional[np.ndarray] = None,
+        precomputed_pre_lp_base: Optional[np.ndarray] = None,
+        is_dragging_deconv: bool = False,
     ) -> int:
         """Envía una nueva tarea de renderizado descartando las solicitudes anteriores."""
-        self._current_request_id += 1
-        req_id = self._current_request_id
-
-        # Abortar worker anterior si aún sigue ejecutándose
+        # Abortar worker anterior e invalidar solicitudes pendientes en vuelo
         self.cancel_pending()
+        req_id = self._current_request_id
 
         worker = PipelineWorker(
             request_id=req_id,
@@ -183,6 +190,8 @@ class AsyncPipelineManager(QObject):
             precomputed_spatial_base=precomputed_spatial_base,
             precomputed_stretched_stars=precomputed_stretched_stars,
             cached_ground_ai=cached_ground_ai,
+            precomputed_pre_lp_base=precomputed_pre_lp_base,
+            is_dragging_deconv=is_dragging_deconv,
         )
         self._active_worker = worker
 

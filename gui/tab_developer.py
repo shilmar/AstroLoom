@@ -84,7 +84,7 @@ from core.mask_layers import (
     MASK_TYPE_IMAGE_GROUND, MASK_TYPE_BRUSH, MASK_TYPE_LUMA, MASK_TYPE_COLOR,
     MASK_TYPE_GROUND, MASK_TYPE_SKY, MASK_TYPE_IMAGE_RASTER,
     apply_pre_curve_adjustments, get_canvas_below_layer, compute_effective_layer_mask,
-    apply_local_adjustments_to_image
+    apply_local_adjustments_to_image, clear_subcomposite_cache
 )
 from gui.widgets.curve_widget import CurveWidget
 from gui.widgets.live_histogram import LiveRGBHistogramWidget
@@ -328,9 +328,12 @@ class DeveloperTab(QWidget):
         self._cache_pre_layers_stars: Optional[np.ndarray] = None
         self._is_scrubbing_heavy_slider: bool = False
         self._is_scrubbing_lut_slider: bool = False
+        self._is_scrubbing_layer_slider: bool = False
         self._is_slider_pressed: bool = False
         self._is_dragging_deconv: bool = False
         self.async_pipeline = AsyncPipelineManager(self)
+        self.async_pipeline.preview_ready.connect(self._on_async_preview_ready)
+        self.async_pipeline.pipeline_failed.connect(self._on_async_pipeline_failed)
 
         # Memoria de tamaños para paneles ocultables (Lightroom style)
         self._last_left_panel_width = 380
@@ -900,6 +903,7 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.ground_edge_shift_changed.connect(self.on_gnd_edge_shift_changed)
         self.mask_layers_widget.ground_ai_denoise_requested.connect(self.on_run_ground_ai_denoise_requested)
         self.mask_layers_widget.raster_layer_import_requested.connect(self._on_import_raster_layer)
+        self.mask_layers_widget.master_mask_updated.connect(self._on_master_mask_updated_from_raster)
         self.mask_layers_widget.layer_move_tool_toggled.connect(self._on_layer_move_tool_toggled)
         self.canvas.layer_move_offset_dragged.connect(self._on_canvas_layer_offset_dragged)
         self.canvas.layer_move_scale_wheel.connect(self._on_canvas_layer_scale_wheel)
@@ -2608,7 +2612,7 @@ class DeveloperTab(QWidget):
             self._commit_action()
             self.update_stretch_preview()
 
-    def _get_layer_image_for_histogram(self, layer) -> tuple[Optional[np.ndarray], Optional[np.ndarray], bool]:
+    def _get_layer_image_for_histogram(self, layer, target_size: Optional[tuple[int, int]] = None) -> tuple[Optional[np.ndarray], Optional[np.ndarray], bool]:
         """
         Retorna la imagen de trabajo y máscara espacial correspondiente a la capa seleccionada
         para renderizar su histograma de fondo en la Curva Tonal de Capa.
@@ -2759,8 +2763,36 @@ class DeveloperTab(QWidget):
                     raw_img = np.repeat(raw_img[..., np.newaxis], 3, axis=-1)
                 elif raw_img.ndim == 3 and raw_img.shape[2] == 1:
                     raw_img = np.repeat(raw_img, 3, axis=-1)
+
+                if target_size is not None:
+                    # Reducción previa ultrarrápida para miniaturas (ej. 48x48)
+                    src = getattr(layer, 'proxy_draft', None)
+                    if src is None:
+                        src = getattr(layer, 'proxy_preview', None)
+                    if src is None:
+                        src = raw_img
+                    raw_img = cv2.resize(src, target_size, interpolation=cv2.INTER_LINEAR)
+                elif self.preview_proxy is not None:
+                    h_p, w_p = self.preview_proxy.shape[:2]
+                    src = getattr(layer, 'proxy_preview', None)
+                    if src is None:
+                        src = raw_img
+                    if src.shape[:2] != (h_p, w_p):
+                        raw_img = cv2.resize(src, (w_p, h_p), interpolation=cv2.INTER_LINEAR)
+                    else:
+                        raw_img = src
+                elif getattr(layer, 'proxy_preview', None) is not None:
+                    raw_img = layer.proxy_preview
+                elif raw_img.shape[0] > 1024 or raw_img.shape[1] > 1024:
+                    scale = 1024.0 / max(raw_img.shape[0], raw_img.shape[1])
+                    nw = max(1, int(round(raw_img.shape[1] * scale)))
+                    nh = max(1, int(round(raw_img.shape[0] * scale)))
+                    raw_img = cv2.resize(raw_img, (nw, nh), interpolation=cv2.INTER_LINEAR)
+
                 img = apply_pre_curve_adjustments(raw_img, layer)
                 m = getattr(layer, 'brush_mask', None)
+                if m is not None and target_size is not None and (m.shape[1], m.shape[0]) != target_size:
+                    m = cv2.resize(m, target_size, interpolation=cv2.INTER_NEAREST)
                 return img, m, False
             return None, None, False
 
@@ -3548,6 +3580,7 @@ class DeveloperTab(QWidget):
 
     def _invalidate_pipeline_caches(self):
         """Invalida todas las cachés intermedias del pipeline de procesado."""
+        clear_subcomposite_cache()
         self._cache_starless_key = None
         self._cache_starless_linear = None
         self._cache_starless_pre_key = None
@@ -3898,11 +3931,26 @@ class DeveloperTab(QWidget):
             traceback.print_exc()
             QMessageBox.critical(self, "Error al Cargar Capa Ráster", f"Error inesperado al importar la imagen:\n{str(e)}")
 
+    def _on_master_mask_updated_from_raster(self, new_mask: np.ndarray) -> None:
+        """Actualiza la máscara maestra de horizonte de la escena a partir de la detección realizada en una capa ráster."""
+        if new_mask is None or self.image_32bit is None:
+            return
+        h, w = self.image_32bit.shape[:2]
+        if new_mask.shape[:2] != (h, w):
+            new_mask = cv2.resize(new_mask, (w, h), interpolation=cv2.INTER_LINEAR)
+        self.current_mask = np.ascontiguousarray(np.clip(new_mask, 0.0, 1.0), dtype=np.float32)
+        self._mask_source_name = "Hora Azul (Capa Ráster)"
+        self._generate_preview_proxy()
+        self.update_stretch_preview()
+        self.canvas.set_refined_mask(self.current_mask, mode="bicolor")
+        self._update_mask_status_ui()
+        self.log_message("[MÁSCARA] Horizonte maestro de la escena sincronizado desde Capa Ráster (Hora Azul).")
+
     def _on_layer_move_tool_toggled(self, active: bool) -> None:
         """Activa o desactiva la interacción directa de mover/redimensionar capa en el lienzo."""
         self.canvas.set_layer_move_enabled(active)
         if active:
-            self.canvas.set_layer_brush_active(False)
+            self.canvas.set_layer_brush_enabled(False)
             self.log_message("Modo Mover/Escalar Capa activo: Arrastra con el ratón para desplazar la posición, rueda para escalar.")
 
     def _on_canvas_layer_offset_dragged(self, dx_norm: float, dy_norm: float) -> None:
@@ -4288,8 +4336,9 @@ class DeveloperTab(QWidget):
         target_img: np.ndarray,
         precomputed_mask: Optional[np.ndarray] = None,
         apply_mask_layers: bool = True,
-        is_preview: bool = True
-    ) -> np.ndarray:
+        is_preview: bool = True,
+        asynchronous: bool = False
+    ) -> Optional[np.ndarray]:
         if target_img is None:
             return None
 
@@ -4459,13 +4508,14 @@ class DeveloperTab(QWidget):
             bool(mask_layers and len(mask_layers) > 0),
         )
 
-        # Determinar hitos en caché reutilizables
-        pre_spatial = self._cache_ms_spatial_img if (is_preview and self._cache_ms_spatial_key == key_spatial) else None
-        pre_graded = self._cache_ms_graded_img if (is_preview and self._cache_ms_graded_key == key_graded and pre_spatial is None) else None
-        pre_stretched = self._cache_ms_stretch_img if (is_preview and self._cache_ms_stretch_key == key_stretch and pre_spatial is None and pre_graded is None) else None
-        pre_linear = self._cache_ms_linear_img if (is_preview and self._cache_ms_linear_key == key_linear and pre_spatial is None and pre_graded is None and pre_stretched is None) else None
-        pre_pre_lp = self._cache_ms_pre_lp_img if (is_preview and self._cache_ms_pre_lp_key == key_pre_lp and pre_spatial is None and pre_graded is None and pre_stretched is None and pre_linear is None) else None
-        pre_stars = self._cache_ms_stars_img if (is_preview and getattr(self, '_cache_ms_stars_key', None) == key_stars and self._cache_ms_stars_img is not None) else None
+        # Determinar hitos en caché reutilizables (con comprobación dimensional estricta)
+        t_shape = target_img.shape[:2]
+        pre_spatial = self._cache_ms_spatial_img if (is_preview and self._cache_ms_spatial_key == key_spatial and getattr(self._cache_ms_spatial_img, 'shape', None) and self._cache_ms_spatial_img.shape[:2] == t_shape) else None
+        pre_graded = self._cache_ms_graded_img if (is_preview and self._cache_ms_graded_key == key_graded and pre_spatial is None and getattr(self._cache_ms_graded_img, 'shape', None) and self._cache_ms_graded_img.shape[:2] == t_shape) else None
+        pre_stretched = self._cache_ms_stretch_img if (is_preview and self._cache_ms_stretch_key == key_stretch and pre_spatial is None and pre_graded is None and getattr(self._cache_ms_stretch_img, 'shape', None) and self._cache_ms_stretch_img.shape[:2] == t_shape) else None
+        pre_linear = self._cache_ms_linear_img if (is_preview and self._cache_ms_linear_key == key_linear and pre_spatial is None and pre_graded is None and pre_stretched is None and getattr(self._cache_ms_linear_img, 'shape', None) and self._cache_ms_linear_img.shape[:2] == t_shape) else None
+        pre_pre_lp = self._cache_ms_pre_lp_img if (is_preview and self._cache_ms_pre_lp_key == key_pre_lp and pre_spatial is None and pre_graded is None and pre_stretched is None and pre_linear is None and getattr(self._cache_ms_pre_lp_img, 'shape', None) and self._cache_ms_pre_lp_img.shape[:2] == t_shape) else None
+        pre_stars = self._cache_ms_stars_img if (is_preview and getattr(self, '_cache_ms_stars_key', None) == key_stars and self._cache_ms_stars_img is not None and getattr(self._cache_ms_stars_img, 'shape', None) and self._cache_ms_stars_img.shape[:2] == t_shape) else None
 
         # Build DeveloperState snapshot
         state = DeveloperState.from_dict(self._capture_state())
@@ -4489,6 +4539,37 @@ class DeveloperTab(QWidget):
         is_scrubbing = getattr(self, '_is_scrubbing_heavy_slider', False)
 
         cached_gnd_ai = self._cache_ground_ai if getattr(self, 'gnd_ai_denoise_enabled', False) else None
+
+        if asynchronous and getattr(self, 'async_pipeline', None) is not None:
+            self._last_async_meta = (
+                key_pre_lp, key_linear, key_stretch, key_graded, key_spatial, key_stars,
+                is_zoomed, is_scrubbing, st_img, precomputed_mask
+            )
+            self._last_async_base = target_img
+            self.async_pipeline.submit(
+                target_img=target_img,
+                state=state,
+                cached_ground_ai=cached_gnd_ai,
+                precomputed_mask=precomputed_mask,
+                image_stars=st_img,
+                image_starless=sl_img,
+                mask_layers=mask_layers,
+                curve_luts=curve_luts,
+                psf_kernel=psf_kernel,
+                is_preview=is_preview,
+                is_scrubbing=is_scrubbing,
+                crop_rect=crop_rect,
+                full_shape=full_shape,
+                precomputed_pre_lp_base=pre_pre_lp,
+                precomputed_linear_base=pre_linear,
+                precomputed_stretched_base=pre_stretched,
+                precomputed_graded_base=pre_graded,
+                precomputed_spatial_base=pre_spatial,
+                precomputed_stretched_stars=pre_stars,
+                is_dragging_deconv=getattr(self, '_is_dragging_deconv', False),
+            )
+            return None
+
         final_img, out_pre_lp, out_lin, out_str, out_grd, out_spt, out_stars = apply_developer_pipeline(
             target_img=target_img,
             state=state,
@@ -4514,23 +4595,23 @@ class DeveloperTab(QWidget):
         )
 
         if is_preview:
-            self._cache_ms_pre_lp_key = key_pre_lp
-            self._cache_ms_pre_lp_img = out_pre_lp
-            self._cache_ms_linear_key = key_linear
-            self._cache_ms_linear_img = out_lin
-            if out_lin is not None and not is_zoomed and not is_scrubbing:
-                self._cache_ms_linear_u16 = np.clip(out_lin * 65535.0, 0, 65535).astype(np.uint16)
-            if st_img is not None and not is_zoomed and not is_scrubbing:
-                self._cache_ms_stars_u16 = np.clip(st_img * 65535.0, 0, 65535).astype(np.uint16)
-            self._cache_ms_stretch_key = key_stretch
-            self._cache_ms_stretch_img = out_str
-            self._cache_ms_graded_key = key_graded
-            self._cache_ms_graded_img = out_grd
-            self._cache_ms_spatial_key = key_spatial
-            self._cache_ms_spatial_img = out_spt
-            self._cache_ms_stars_key = key_stars
-            self._cache_ms_stars_img = out_stars
             if not is_scrubbing:
+                self._cache_ms_pre_lp_key = key_pre_lp
+                self._cache_ms_pre_lp_img = out_pre_lp
+                self._cache_ms_linear_key = key_linear
+                self._cache_ms_linear_img = out_lin
+                if out_lin is not None and not is_zoomed:
+                    self._cache_ms_linear_u16 = np.clip(out_lin * 65535.0, 0, 65535).astype(np.uint16)
+                if st_img is not None and not is_zoomed:
+                    self._cache_ms_stars_u16 = np.clip(st_img * 65535.0, 0, 65535).astype(np.uint16)
+                self._cache_ms_stretch_key = key_stretch
+                self._cache_ms_stretch_img = out_str
+                self._cache_ms_graded_key = key_graded
+                self._cache_ms_graded_img = out_grd
+                self._cache_ms_spatial_key = key_spatial
+                self._cache_ms_spatial_img = out_spt
+                self._cache_ms_stars_key = key_stars
+                self._cache_ms_stars_img = out_stars
                 self._cache_pre_layers_key = (key_spatial, key_stars)
                 self._cache_pre_layers_stretched = out_spt
                 self._cache_pre_layers_stars = out_stars
@@ -4540,6 +4621,60 @@ class DeveloperTab(QWidget):
                 self._cached_rendered_image = final_img
 
         return final_img
+
+    def _on_async_preview_ready(self, req_id: int, result: Any):
+        if result is None:
+            return
+        final_img, out_pre_lp, out_lin, out_str, out_grd, out_spt, out_stars = result
+        if final_img is None:
+            return
+
+        meta = getattr(self, '_last_async_meta', None)
+        if meta is not None:
+            key_pre_lp, key_linear, key_stretch, key_graded, key_spatial, key_stars, is_zoomed, is_scrubbing, st_img, precomputed_mask = meta
+            if is_scrubbing and not getattr(self, '_is_slider_pressed', False) and not getattr(self, '_is_scrubbing_heavy_slider', False):
+                # Descartar solicitud de borrador tardía si el usuario ya soltó el deslizador
+                return
+            if not is_scrubbing:
+                self._cache_ms_pre_lp_key = key_pre_lp
+                self._cache_ms_pre_lp_img = out_pre_lp
+                self._cache_ms_linear_key = key_linear
+                self._cache_ms_linear_img = out_lin
+                if out_lin is not None and not is_zoomed:
+                    self._cache_ms_linear_u16 = np.clip(out_lin * 65535.0, 0, 65535).astype(np.uint16)
+                if st_img is not None and not is_zoomed:
+                    self._cache_ms_stars_u16 = np.clip(st_img * 65535.0, 0, 65535).astype(np.uint16)
+                self._cache_ms_stretch_key = key_stretch
+                self._cache_ms_stretch_img = out_str
+                self._cache_ms_graded_key = key_graded
+                self._cache_ms_graded_img = out_grd
+                self._cache_ms_spatial_key = key_spatial
+                self._cache_ms_spatial_img = out_spt
+                self._cache_ms_stars_key = key_stars
+                self._cache_ms_stars_img = out_stars
+                self._cache_pre_layers_key = (key_spatial, key_stars)
+                self._cache_pre_layers_stretched = out_spt
+                self._cache_pre_layers_stars = out_stars
+                self._cached_base_stretched = out_spt
+                self._cached_stars_stretched = out_stars
+                self._cached_sky_mask = precomputed_mask
+                self._cached_rendered_image = final_img
+
+        self._last_rendered_preview = final_img
+        base_to_render = getattr(self, '_last_async_base', None)
+        if base_to_render is not None:
+            full_shape = self.image_32bit.shape[:2] if self.image_32bit is not None else None
+            self.canvas.set_external_crop(None, full_shape)
+            self.canvas.load_image(base_to_render, display_stretched=final_img)
+
+        # Actualización fluida y controlada del histograma en vivo
+        if not self.is_zoomed_100 and hasattr(self, '_hist_throttle_timer'):
+            if not self._hist_throttle_timer.isActive():
+                self._hist_throttle_timer.start(50)
+        self._update_canvas_info_label()
+
+    def _on_async_pipeline_failed(self, req_id: int, error_msg: str):
+        logger.error(f"[Async Pipeline #{req_id} Error] {error_msg}")
 
     def update_stretch_preview(self, immediate: bool = False):
         if getattr(self, '_is_loading_project', False):
@@ -4551,10 +4686,10 @@ class DeveloperTab(QWidget):
                 self._preview_throttle_timer.stop()
             if hasattr(self, '_refine_timer'):
                 self._refine_timer.stop()
-            self._do_update_stretch_preview()
+            self._do_update_stretch_preview(synchronous=True)
             self._refresh_histograms_now()
         else:
-            if getattr(self, '_is_slider_pressed', False):
+            if getattr(self, '_is_slider_pressed', False) and not getattr(self, '_is_scrubbing_lut_slider', False) and not getattr(self, '_is_scrubbing_layer_slider', False):
                 self._is_scrubbing_heavy_slider = True
 
             if hasattr(self, '_refine_timer') and getattr(self, '_is_scrubbing_heavy_slider', False):
@@ -4564,7 +4699,7 @@ class DeveloperTab(QWidget):
             if hasattr(self, '_preview_throttle_timer'):
                 self._preview_throttle_timer.start(16)
             else:
-                self._do_update_stretch_preview()
+                self._do_update_stretch_preview(synchronous=False)
                 self._refresh_histograms_now()
 
     def _on_refine_preview_timeout(self):
@@ -4613,7 +4748,7 @@ class DeveloperTab(QWidget):
             return False
         return True
 
-    def _do_update_stretch_preview(self):
+    def _do_update_stretch_preview(self, synchronous: bool = False):
         if getattr(self, '_is_rendering_preview', False):
             return
         self._is_rendering_preview = True
@@ -4686,7 +4821,16 @@ class DeveloperTab(QWidget):
                 else:
                     stretched = manual_stretch(base_to_render, black_point=self.spin_bp.value(), midtone=self.spin_mtf.value())
             else:
-                stretched = self._apply_pipeline_on_image(base_to_render, precomputed_mask=active_mask)
+                if synchronous and getattr(self, 'async_pipeline', None) is not None:
+                    self.async_pipeline.cancel_pending()
+                use_async = (not synchronous and not self.is_zoomed_100 and getattr(self, 'async_pipeline', None) is not None)
+                stretched = self._apply_pipeline_on_image(
+                    base_to_render,
+                    precomputed_mask=active_mask,
+                    asynchronous=use_async
+                )
+                if use_async:
+                    return
 
             if stretched is not None:
                 self._last_rendered_preview = stretched
@@ -7193,7 +7337,7 @@ class DeveloperTab(QWidget):
         # 2. Conectar eventos del Gestor de Capas si existen
         if hasattr(self, 'mask_layers_widget'):
             if hasattr(self.mask_layers_widget, 'interaction_started'):
-                self.mask_layers_widget.interaction_started.connect(self._on_heavy_slider_pressed)
+                self.mask_layers_widget.interaction_started.connect(self._on_layer_slider_pressed)
             if hasattr(self.mask_layers_widget, 'interaction_finished'):
                 self.mask_layers_widget.interaction_finished.connect(self._on_slider_interaction_finished)
 
@@ -7208,6 +7352,7 @@ class DeveloperTab(QWidget):
         self._is_slider_pressed = True
         self._is_scrubbing_heavy_slider = True
         self._is_scrubbing_lut_slider = True
+        self._is_scrubbing_layer_slider = False
         self._is_dragging_deconv = False
 
     def _on_heavy_slider_pressed(self):
@@ -7217,6 +7362,17 @@ class DeveloperTab(QWidget):
         self._is_slider_pressed = True
         self._is_scrubbing_heavy_slider = True
         self._is_scrubbing_lut_slider = False
+        self._is_scrubbing_layer_slider = False
+        self._is_dragging_deconv = False
+
+    def _on_layer_slider_pressed(self):
+        """Activa el modo de interacción para capas locales manteniendo la resolución de vista previa nativa."""
+        if hasattr(self, 'async_pipeline'):
+            self.async_pipeline.cancel_pending()
+        self._is_slider_pressed = True
+        self._is_scrubbing_heavy_slider = False
+        self._is_scrubbing_lut_slider = False
+        self._is_scrubbing_layer_slider = True
         self._is_dragging_deconv = False
 
     def _on_deconv_slider_pressed(self):
@@ -7226,6 +7382,7 @@ class DeveloperTab(QWidget):
         self._is_slider_pressed = True
         self._is_scrubbing_heavy_slider = True
         self._is_scrubbing_lut_slider = False
+        self._is_scrubbing_layer_slider = False
         self._is_dragging_deconv = True
 
     def _on_slider_interaction_finished(self):
@@ -7235,6 +7392,7 @@ class DeveloperTab(QWidget):
         self._is_slider_pressed = False
         self._is_scrubbing_heavy_slider = False
         self._is_scrubbing_lut_slider = False
+        self._is_scrubbing_layer_slider = False
         self._is_dragging_deconv = False
         self.update_stretch_preview(immediate=True)
         self._commit_action()
@@ -7246,6 +7404,7 @@ class DeveloperTab(QWidget):
         self._is_slider_pressed = False
         self._is_scrubbing_heavy_slider = False
         self._is_scrubbing_lut_slider = False
+        self._is_scrubbing_layer_slider = False
         self._is_dragging_deconv = False
         self.update_stretch_preview(immediate=True)
         self._commit_action()

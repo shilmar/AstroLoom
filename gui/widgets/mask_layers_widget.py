@@ -14,11 +14,13 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QSlider, QDoubleSpinBox,
     QSpinBox, QCheckBox, QComboBox, QLineEdit, QGroupBox,
-    QFrame, QSizePolicy, QMessageBox, QSplitter, QButtonGroup
+    QFrame, QSizePolicy, QMessageBox, QSplitter, QButtonGroup,
+    QApplication, QMenu
 )
 
 from core.mask_layers import (
     MaskLayer, compute_layer_mask, compute_effective_layer_mask, get_canvas_below_layer,
+    clear_subcomposite_cache,
     MASK_TYPE_BRUSH, MASK_TYPE_GROUND, MASK_TYPE_SKY, MASK_TYPE_LUMA, MASK_TYPE_COLOR, MASK_TYPE_CUSTOM,
     MASK_TYPE_GRADIENT_LINEAR, MASK_TYPE_GRADIENT_RADIAL,
     LIMIT_MASK_NONE, LIMIT_MASK_SKY, LIMIT_MASK_GROUND,
@@ -171,6 +173,7 @@ class MaskLayersWidget(QWidget):
     raster_layer_import_requested = Signal()     # Petición para importar capa de imagen ráster externa
     layer_move_tool_toggled = Signal(bool)       # (activo) conmuta el modo interactivo de mover en el lienzo
     gradient_tool_toggled = Signal(bool, object) # (activo, layer) activa manipulación de gradiente en el lienzo
+    master_mask_updated = Signal(object)        # (np.ndarray float32) máscara maestra de horizonte sincronizada desde capa ráster
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -602,31 +605,60 @@ class MaskLayersWidget(QWidget):
 
         # Acciones de Máscara de Capa para capas Ráster
         self.container_raster_mask_actions = QWidget()
-        row_rma = QHBoxLayout(self.container_raster_mask_actions)
-        row_rma.setContentsMargins(0, 0, 0, 4)
-        row_rma.setSpacing(6)
+        layout_rma = QVBoxLayout(self.container_raster_mask_actions)
+        layout_rma.setContentsMargins(0, 0, 0, 4)
+        layout_rma.setSpacing(4)
+
+        # Fila 1 de creación: Revelar Todo / Ocultar Todo
+        self.row_rma_basic = QWidget()
+        row_rma_1 = QHBoxLayout(self.row_rma_basic)
+        row_rma_1.setContentsMargins(0, 0, 0, 0)
+        row_rma_1.setSpacing(6)
 
         self.btn_raster_add_mask = QPushButton(" + Revelar Todo")
         self.btn_raster_add_mask.setIcon(get_icon("plus", color="#80d8ff", size=12))
         self.btn_raster_add_mask.setCursor(Qt.PointingHandCursor)
         self.btn_raster_add_mask.setToolTip("Crea una máscara de capa blanca (100% visible) para ocultar zonas con el pincel en Borrar")
         self.btn_raster_add_mask.clicked.connect(self._add_raster_layer_mask_white)
-        row_rma.addWidget(self.btn_raster_add_mask)
+        row_rma_1.addWidget(self.btn_raster_add_mask)
 
         self.btn_raster_add_black = QPushButton(" + Ocultar Todo")
         self.btn_raster_add_black.setIcon(get_icon("plus", color="#a5d6a7", size=12))
         self.btn_raster_add_black.setCursor(Qt.PointingHandCursor)
         self.btn_raster_add_black.setToolTip("Crea una máscara de capa negra (capa oculta) para descubrir con el pincel en Pintar (ideal para cometas y nebulosas)")
         self.btn_raster_add_black.clicked.connect(self._add_raster_layer_mask_black)
-        row_rma.addWidget(self.btn_raster_add_black)
+        row_rma_1.addWidget(self.btn_raster_add_black)
+        layout_rma.addWidget(self.row_rma_basic)
 
+        # Fila 2 de creación: Máscara Suelo / Máscara Cielo (IA / Trípode Hora Azul)
+        self.row_rma_horizon = QWidget()
+        row_rma_2 = QHBoxLayout(self.row_rma_horizon)
+        row_rma_2.setContentsMargins(0, 0, 0, 0)
+        row_rma_2.setSpacing(6)
+
+        self.btn_raster_add_ground = QPushButton(" + Máscara Suelo")
+        self.btn_raster_add_ground.setIcon(get_icon("mountain", color="#a5d6a7", size=12))
+        self.btn_raster_add_ground.setCursor(Qt.PointingHandCursor)
+        self.btn_raster_add_ground.setToolTip("Crea una máscara de suelo (1.0 en suelo, 0.0 en cielo) ideal para tomas de hora azul en trípode.\nUsa IA sobre la capa ráster o aprovecha el horizonte de la escena.")
+        self.btn_raster_add_ground.clicked.connect(lambda: self._add_raster_layer_mask_ground())
+        row_rma_2.addWidget(self.btn_raster_add_ground)
+
+        self.btn_raster_add_sky = QPushButton(" + Máscara Cielo")
+        self.btn_raster_add_sky.setIcon(get_icon("sparkles", color="#80d8ff", size=12))
+        self.btn_raster_add_sky.setCursor(Qt.PointingHandCursor)
+        self.btn_raster_add_sky.setToolTip("Crea una máscara de cielo (1.0 en cielo, 0.0 en suelo) para descubrir cielo/estrellas preservando el suelo.\nUsa IA sobre la capa ráster o aprovecha el horizonte de la escena.")
+        self.btn_raster_add_sky.clicked.connect(lambda: self._add_raster_layer_mask_sky())
+        row_rma_2.addWidget(self.btn_raster_add_sky)
+        layout_rma.addWidget(self.row_rma_horizon)
+
+        # Fila de eliminación: Quitar Máscara
         self.btn_raster_del_mask = QPushButton(" Quitar Máscara")
         self.btn_raster_del_mask.setIcon(get_icon("trash", color="#ef9a9a", size=12))
         self.btn_raster_del_mask.setCursor(Qt.PointingHandCursor)
         self.btn_raster_del_mask.setToolTip("Elimina la máscara de capa (hace la capa 100% visible)")
         self.btn_raster_del_mask.setStyleSheet("color: #ef9a9a;")
         self.btn_raster_del_mask.clicked.connect(self._remove_raster_layer_mask)
-        row_rma.addWidget(self.btn_raster_del_mask)
+        layout_rma.addWidget(self.btn_raster_del_mask)
 
         brush_layout.addWidget(self.container_raster_mask_actions)
 
@@ -1988,6 +2020,7 @@ class MaskLayersWidget(QWidget):
             self.set_preview_active(False)
             self.preview_mask_requested.emit(None)
 
+            clear_subcomposite_cache()
             self.layers.pop(idx)
             next_select = self.layers[idx].id if idx < len(self.layers) else (self.layers[-1].id if self.layers else None)
             self._rebuild_list_items(select_layer_id=next_select)
@@ -2003,7 +2036,7 @@ class MaskLayersWidget(QWidget):
             if layer.brush_mask is not None:
                 new_layer.brush_mask = layer.brush_mask.copy()
             if getattr(layer, "image_data", None) is not None:
-                new_layer.image_data = layer.image_data.copy()
+                new_layer.set_image_data(layer.image_data.copy())
             new_layer.name = f"{layer.name} (Copia)"
             idx = self.layers.index(layer)
             self.layers.insert(idx + 1, new_layer)
@@ -2159,7 +2192,10 @@ class MaskLayersWidget(QWidget):
             mask_img = None
             if self._layer_image_provider is not None:
                 try:
-                    img_prov, m_prov, _ = self._layer_image_provider(layer)
+                    try:
+                        img_prov, m_prov, _ = self._layer_image_provider(layer, target_size=(tw, th))
+                    except TypeError:
+                        img_prov, m_prov, _ = self._layer_image_provider(layer)
                     if img_prov is not None:
                         raw_img = img_prov
                         mask_img = m_prov
@@ -2193,7 +2229,10 @@ class MaskLayersWidget(QWidget):
                                 m_3d = m_3d[..., np.newaxis]
                         raw_img = raw_img * m_3d
 
-                    small = cv2.resize(raw_img, (tw, th), interpolation=cv2.INTER_AREA)
+                    if raw_img.shape[:2] == (th, tw):
+                        small = raw_img
+                    else:
+                        small = cv2.resize(raw_img, (tw, th), interpolation=cv2.INTER_AREA)
                     if layer.mask_type == MASK_TYPE_IMAGE_RASTER and not getattr(layer, 'is_transform_identity', lambda: True)():
                         sx_val = max(0.01, float(getattr(layer, 'scale_x', getattr(layer, 'scale', 1.0))))
                         sy_val = max(0.01, float(getattr(layer, 'scale_y', getattr(layer, 'scale', 1.0))))
@@ -2399,6 +2438,151 @@ class MaskLayersWidget(QWidget):
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
             self.layers_changed.emit()
+
+    def _detect_horizon_from_image(self, img: np.ndarray) -> Tuple[Optional[np.ndarray], str]:
+        """Ejecuta la detección de horizonte mediante IA U²-Net o algorítmico sobre una imagen."""
+        if QApplication.instance():
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            from core.ai_horizon import auto_detect_sky_mask
+            mask, method = auto_detect_sky_mask(img, force_algorithmic=False)
+            return mask, method
+        except Exception as e:
+            try:
+                from core.ai_horizon import detect_sky_mask_algorithmic
+                mask = detect_sky_mask_algorithmic(img)
+                return mask, "Algorítmico (Fallback)"
+            except Exception as e2:
+                if QApplication.instance():
+                    QMessageBox.warning(self, "Detección de Horizonte", f"No se pudo detectar el horizonte automáticamente:\n{e2}")
+                return None, ""
+        finally:
+            if QApplication.instance():
+                QApplication.restoreOverrideCursor()
+
+    def _apply_raster_horizon_mask(self, is_ground: bool = True, source_choice: Optional[str] = None) -> None:
+        """
+        Aplica una máscara de horizonte (Suelo o Cielo) a la capa ráster seleccionada.
+        Permite aislar el terreno de una toma de hora azul en trípode con alta precisión.
+
+        Parámetros:
+            is_ground: True para máscara de suelo (1.0 en suelo), False para máscara de cielo (1.0 en cielo).
+            source_choice: Forzar origen ("master", "raster" o None para selección automática/menú).
+        """
+        layer = self.get_selected_layer()
+        if not layer or layer.mask_type != MASK_TYPE_IMAGE_RASTER:
+            return
+
+        existing_master = self._master_mask_getter() if self._master_mask_getter else None
+        has_existing_master = (existing_master is not None)
+        raster_img = getattr(layer, 'image_data', None)
+
+        chosen_sky_mask = None
+        detected_fresh = False
+
+        if source_choice == "master":
+            chosen_sky_mask = existing_master
+        elif source_choice == "raster":
+            target = raster_img if raster_img is not None else (self._image_reference_getter() if self._image_reference_getter else None)
+            if target is not None:
+                chosen_sky_mask, _ = self._detect_horizon_from_image(target)
+                detected_fresh = True
+        else:
+            if has_existing_master and raster_img is not None:
+                # Ambas opciones disponibles: menú contextual rápido para elegir
+                menu = QMenu(self)
+                menu.setStyleSheet("""
+                    QMenu {
+                        background-color: #1a1e29;
+                        color: #e2e8f0;
+                        border: 1px solid #33384c;
+                        padding: 4px;
+                    }
+                    QMenu::item {
+                        padding: 6px 16px 6px 10px;
+                        border-radius: 4px;
+                    }
+                    QMenu::item:selected {
+                        background-color: #0288d1;
+                        color: #ffffff;
+                    }
+                """)
+                act_master = menu.addAction("Usar Máscara de Escena existente")
+                act_master.setIcon(get_icon("layers", color="#80d8ff", size=13))
+                act_raster_ai = menu.addAction("Detectar nuevo Horizonte con IA (desde Capa Ráster)")
+                act_raster_ai.setIcon(get_icon("sparkles", color="#a5d6a7", size=13))
+
+                sender_btn = getattr(self, 'btn_raster_add_ground' if is_ground else 'btn_raster_add_sky', None)
+                if sender_btn and sender_btn.isVisible():
+                    pos = sender_btn.mapToGlobal(sender_btn.rect().bottomLeft())
+                else:
+                    pos = QCursor.pos()
+
+                action = menu.exec(pos)
+                if not action:
+                    return
+                if action == act_master:
+                    chosen_sky_mask = existing_master
+                else:
+                    chosen_sky_mask, _ = self._detect_horizon_from_image(raster_img)
+                    detected_fresh = True
+            elif has_existing_master:
+                chosen_sky_mask = existing_master
+            else:
+                target = raster_img if raster_img is not None else (self._image_reference_getter() if self._image_reference_getter else None)
+                if target is None:
+                    return
+                chosen_sky_mask, _ = self._detect_horizon_from_image(target)
+                detected_fresh = True
+
+        if chosen_sky_mask is None:
+            return
+
+        h_m, w_m = self._get_layer_image_shape(layer)
+        if chosen_sky_mask.shape[:2] != (h_m, w_m):
+            sky_m = cv2.resize(chosen_sky_mask, (w_m, h_m), interpolation=cv2.INTER_LINEAR)
+        else:
+            sky_m = chosen_sky_mask.copy()
+
+        if sky_m.ndim == 3:
+            sky_m = sky_m[..., 0]
+
+        sky_m = np.ascontiguousarray(np.clip(sky_m, 0.0, 1.0), dtype=np.float32)
+
+        if is_ground:
+            # 1.0 en suelo, 0.0 en cielo
+            final_mask = np.clip(1.0 - sky_m, 0.0, 1.0).astype(np.float32)
+        else:
+            # 1.0 en cielo, 0.0 en suelo
+            final_mask = sky_m
+
+        layer.brush_mask = final_mask
+        layer.active_target = "mask"
+        layer.brush_mode = "erase"
+        self._last_brush_mode = "erase"
+
+        self._updating_ui = True
+        self.btn_b_paint.setChecked(False)
+        self.btn_b_erase.setChecked(True)
+        self._updating_ui = False
+
+        if detected_fresh and chosen_sky_mask is not None:
+            self.master_mask_updated.emit(chosen_sky_mask)
+
+        self.invalidate_layer_thumbnail(layer.id)
+        self._update_list_and_props_state()
+        self.brush_tool_toggled.emit(True, layer)
+        if self.btn_preview_mask.isChecked():
+            self._emit_mask_preview()
+        self.layers_changed.emit()
+
+    def _add_raster_layer_mask_ground(self, source_choice: Optional[str] = None) -> None:
+        """Añade una máscara de capa de suelo (ideal para tomas de hora azul en trípode) a la capa ráster seleccionada."""
+        self._apply_raster_horizon_mask(is_ground=True, source_choice=source_choice)
+
+    def _add_raster_layer_mask_sky(self, source_choice: Optional[str] = None) -> None:
+        """Añade una máscara de capa de cielo a la capa ráster seleccionada."""
+        self._apply_raster_horizon_mask(is_ground=False, source_choice=source_choice)
 
     def invert_selected_brush_mask(self) -> None:
         """Invierte los valores de la máscara de pincel de la capa actual (1.0 - m) e intercambia modo pintar/borrar."""
@@ -2705,6 +2889,7 @@ class MaskLayersWidget(QWidget):
         if 0 <= idx < len(self.layers):
             layer = self.layers[idx]
             new_state = not layer.enabled
+            clear_subcomposite_cache()
             layer.enabled = new_state
             self.invalidate_layer_thumbnail(layer.id)
 
@@ -2848,6 +3033,14 @@ class MaskLayersWidget(QWidget):
                         self.btn_raster_add_mask.setVisible(not has_m)
                         if hasattr(self, 'btn_raster_add_black'):
                             self.btn_raster_add_black.setVisible(not has_m)
+                        if hasattr(self, 'row_rma_basic'):
+                            self.row_rma_basic.setVisible(not has_m)
+                        if hasattr(self, 'row_rma_horizon'):
+                            self.row_rma_horizon.setVisible(not has_m)
+                        if hasattr(self, 'btn_raster_add_ground'):
+                            self.btn_raster_add_ground.setVisible(not has_m)
+                        if hasattr(self, 'btn_raster_add_sky'):
+                            self.btn_raster_add_sky.setVisible(not has_m)
                         self.btn_raster_del_mask.setVisible(has_m)
             else:
                 self.panel_brush.setVisible(False)

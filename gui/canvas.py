@@ -217,6 +217,10 @@ class MaskCanvas(QWidget):
             self.setCursor(Qt.ArrowCursor)
         self.update()
 
+    def set_layer_brush_active(self, active: bool) -> None:
+        """Alias para set_layer_brush_enabled."""
+        self.set_layer_brush_enabled(active)
+
     def set_layer_move_enabled(self, enabled: bool) -> None:
         """Activa o desactiva la interacción directa en el lienzo para mover y redimensionar la capa ráster."""
         self.layer_move_active = enabled

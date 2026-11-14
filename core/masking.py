@@ -327,6 +327,16 @@ def generate_luminance_mask(
     Retorna:
         np.ndarray: Máscara continua float32 2D con valores en [0.0, 1.0].
     """
+    if HAS_RUST and hasattr(astroloom_rs, "generate_luminance_mask_rs"):
+        img_c = np.ascontiguousarray(image_rgb, dtype=np.float32)
+        return astroloom_rs.generate_luminance_mask_rs(
+            img_c,
+            luma_min=float(luma_min),
+            luma_max=float(luma_max),
+            feather=float(feather),
+            invert=bool(invert)
+        )
+
     if image_rgb.ndim == 3:
         # Ponderación fotométrica Rec.709 para luminancia perceptual exacta
         luma = (
@@ -380,6 +390,17 @@ def generate_color_range_mask(
     """
     if image_rgb.ndim != 3:
         return np.ones(image_rgb.shape[:2], dtype=np.float32)
+
+    if HAS_RUST and hasattr(astroloom_rs, "generate_color_range_mask_rs"):
+        img_c = np.ascontiguousarray(image_rgb, dtype=np.float32)
+        return astroloom_rs.generate_color_range_mask_rs(
+            img_c,
+            target_hue_deg=float(target_hue_deg),
+            hue_tolerance_deg=float(hue_tolerance_deg),
+            min_saturation=float(min_saturation),
+            feather=float(feather),
+            invert=bool(invert)
+        )
 
     img_clipped = np.clip(image_rgb, 0.0, 1.0).astype(np.float32)
     hsv = cv2.cvtColor(img_clipped, cv2.COLOR_RGB2HSV)
