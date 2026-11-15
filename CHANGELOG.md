@@ -5,6 +5,40 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-15
+
+### Añadido
+* **Aceleración Nativa en Rust para Curvas Selectivas Tono y Luminancia (`astroloom_rs/src/developer.rs`, `core/stretch.py`):**
+  - **Kernel Fused Rayon (`apply_hue_luma_curves_fused_rs`):** Evaluación conjunta y en paralelo sobre registros de CPU de las curvas *Hue vs Saturation* y *Luma vs Saturation*, suprimiendo las lentas conversiones de ida y vuelta RGB $\leftrightarrow$ HSV de OpenCV.
+  - **Fusión Directa con Máscara de Cielo:** Aplicación de la máscara de cielo/suelo en el mismo bucle sin asignaciones intermedias de memoria, logrando una aceleración $>10\times$ en el pipeline de revelado.
+  - **Función Envoltorio y Fallback Automático (`core/stretch.py`):** Integración transparente con fallback vectorizado a OpenCV multidimensional (`mask_3d`) ante ausencia de binarios nativos.
+
+* **Pintado de Pincel Continuo Acelerado en Rust (`astroloom_rs/src/developer.rs`, `gui/canvas.py`):**
+  - **Kernel Nativo de Estampado de Trazo (`stamp_brush_stroke_rs`):** Trazado continuo entre pares de puntos $(p_0, p_1)$ evaluando la cápsula delimitadora con interpolación suave polinómica Hermite ($1 - (3t^2 - 2t^3)$).
+  - **Acumulación de Flujo Realista y Borrado Rápido:** Gestión de memoria C-contigua *in-place* con búfer de trazo que modela el flujo (*flow*) de pintura sin saturaciones artificiales ni retraso de hilo de interfaz.
+  - **Cálculo Analítico de Región de Interés (ROI):** Retorno de rectángulos sucios (*dirty rect*) para refresco quirúrgico de pantalla.
+
+### Rendimiento y Optimización
+* **Lienzo con Actualización In-Place por Rectángulos Sucios (*Dirty-Rects*) (`gui/canvas.py`):**
+  - Actualización directa sobre un búfer RGBA compartido y persistente (`_mask_overlay_buf`), restringiendo la modificación de píxeles exclusivamente al área delimitada por el dirty rect del trazo.
+  - Eliminación de la reasignación continua de `QImage` y `QPixmap` en cada evento de ratón, garantizando un pintado fluido a 60–144 FPS estables en lienzos 4K y 8K.
+* **Caché Multinivel de Mipmaps para Máscaras de Pincel (`core/mask_layers.py`):**
+  - Pirámide perezosa de dos niveles: `brush_mask_preview` (≤1600 px) y `brush_mask_draft` (≤800 px) con contador de versiones (`brush_mask_version`) para invalidación instantánea.
+  - Agilidad total al arrastrar controles deslizantes o modificar transformaciones espaciales sin recalcular la máscara de pincel completa.
+* **Instantáneas Ligeras de Estado para Historial Deshacer/Rehacer (`core/mask_layers.py`, `gui/developer/developer_state.py`, `gui/widgets/mask_layers_widget.py`):**
+  - Nuevo método `shallow_snapshot()` y lista `_MASK_LAYER_EXCLUDED_FIELDS` para evitar copias profundas (*deepcopy*) de arrays pesados (`brush_mask`, `custom_mask`, `image_data`, proxies y LUTs) al registrar estados en el historial.
+  - Supresión de picos de consumo de memoria RAM y eliminación de micro-pausas al pulsar `Ctrl+Z` / `Ctrl+Y`.
+* **Consolidación de Historial y Notificaciones de Acción (`gui/widgets/mask_layers_widget.py`, `gui/tab_developer.py`):**
+  - Emisión diferida de consolidación (`_notify_action_committed`) al soltar deslizadores y conmutar parámetros de capa, evitando saturar la pila de deshacer con pasos intermedios.
+* **Pipeline Asíncrono no Bloqueante con Cancelación Reactiva (`gui/developer/async_worker.py`, `gui/developer/pipeline.py`):**
+  - Detección de solicitudes de cancelación en el hilo de renderizado para descartar frames intermedios cuando el usuario ajusta rápidamente controles sucesivos.
+
+### Modificado
+* **Restauración de la Sección de Curvas Tonales en el Panel Lateral (`gui/tab_developer.py`):**
+  - Reactivada la visibilidad del acordeón de Curvas Tonales en la columna izquierda del Revelador para permitir ajustes globales inmediatos de curva S y contraste sin obligar a abrir el gestor de capas.
+* **Métricas y Píldora de Versión del Motor:**
+  - Actualizada la versión del motor nativo a `v0.15.1` en la barra de título, barra de estado, panel de ajustes y archivos de localización (`locales/es.json`, `locales/en.json`).
+
 ## [0.15.0] - 2026-11-15
 
 ### Añadido

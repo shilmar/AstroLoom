@@ -13,6 +13,7 @@ from core.stretch import (
     apply_curve_lut,
     apply_hue_vs_sat_curve,
     apply_luma_vs_sat_curve,
+    apply_hue_luma_curves_fused,
     adjust_contrast,
 )
 from core.light_pollution import LP_PRESET_TINTS, apply_parametric_light_pollution
@@ -419,18 +420,17 @@ def apply_developer_pipeline(
                     stretched = (curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
                 else:
                     stretched = curved
-            if "hue_sat" in curve_luts and curve_luts["hue_sat"] is not None:
-                hsv_curved = apply_hue_vs_sat_curve(stretched, curve_luts["hue_sat"])
-                if precomputed_mask is not None:
-                    stretched = (hsv_curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
-                else:
-                    stretched = hsv_curved
-            if "luma_sat" in curve_luts and curve_luts["luma_sat"] is not None:
-                luma_curved = apply_luma_vs_sat_curve(stretched, curve_luts["luma_sat"])
-                if precomputed_mask is not None:
-                    stretched = (luma_curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
-                else:
-                    stretched = luma_curved
+            has_hue_sat = "hue_sat" in curve_luts and curve_luts["hue_sat"] is not None
+            has_luma_sat = "luma_sat" in curve_luts and curve_luts["luma_sat"] is not None
+            if has_hue_sat or has_luma_sat:
+                lut_h = curve_luts.get("hue_sat")
+                lut_l = curve_luts.get("luma_sat")
+                stretched = apply_hue_luma_curves_fused(
+                    stretched,
+                    lut_hue_sat=lut_h,
+                    lut_luma_sat=lut_l,
+                    sky_mask=precomputed_mask
+                )
 
         # 8. Contraste específico del Fondo (Starless)
         contrast_starless = state.contrast_starless_val / 100.0

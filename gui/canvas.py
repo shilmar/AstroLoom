@@ -15,8 +15,10 @@ from gui.widgets.drop_widgets import collect_image_files_from_mime
 try:
     import astroloom_rs
     HAS_RUST_RENDERER = hasattr(astroloom_rs, "render_canvas_frame_rs")
+    HAS_RUST_BRUSH = hasattr(astroloom_rs, "stamp_brush_stroke_rs")
 except ImportError:
     HAS_RUST_RENDERER = False
+    HAS_RUST_BRUSH = False
 
 
 class MaskCanvas(QWidget):
@@ -68,6 +70,8 @@ class MaskCanvas(QWidget):
         self.base_pixmap: Optional[QPixmap] = None
         self.scribble_pixmap: Optional[QPixmap] = None
         self.refined_overlay: Optional[QPixmap] = None
+        self._mask_overlay_buf: Optional[np.ndarray] = None
+        self._mask_overlay_qimage: Optional[QImage] = None
         self.last_mask_array: Optional[np.ndarray] = None
 
         self.show_mask_overlay: bool = True
@@ -1288,8 +1292,8 @@ class MaskCanvas(QWidget):
                 mask_pt, mask_r = self._map_point_to_layer_mask(ipt, self.layer_brush_radius)
                 if mask_pt:
                     self._last_mask_pt = mask_pt
-                    self._apply_brush_stamp(mask_pt, mask_r)
-                    self.set_refined_mask(self.layer_brush_mask, mode="ruby")
+                    dirty = self._apply_brush_stamp(mask_pt, mask_r)
+                    self.set_refined_mask(self.layer_brush_mask, mode="ruby", dirty_rect=dirty)
                     self.set_mask_visible(True)
                     self.layer_brush_stroke_started.emit()
                     self.update()
@@ -1516,9 +1520,9 @@ class MaskCanvas(QWidget):
                 if ipt and getattr(self, '_last_mask_pt', None):
                     mask_pt, mask_r = self._map_point_to_layer_mask(ipt, self.layer_brush_radius)
                     if mask_pt:
-                        self._apply_brush_line(self._last_mask_pt, mask_pt, mask_r)
+                        dirty = self._apply_brush_line(self._last_mask_pt, mask_pt, mask_r)
                         self._last_mask_pt = mask_pt
-                        self.set_refined_mask(self.layer_brush_mask, mode="ruby")
+                        self.set_refined_mask(self.layer_brush_mask, mode="ruby", dirty_rect=dirty)
             self.update()
             if self._brush_drawing:
                 event.accept()
@@ -1641,7 +1645,10 @@ class MaskCanvas(QWidget):
                 self._stroke_start_mask = None
                 self._stroke_buffer = None
                 if self.layer_brush_mask is not None:
+                    if self._mask_overlay_qimage is not None and not self._mask_overlay_qimage.isNull():
+                        self.refined_overlay = QPixmap.fromImage(self._mask_overlay_qimage)
                     self.layer_brush_stroke_finished.emit(self.layer_brush_mask.copy())
+                self.update()
                 event.accept()
                 return
 
@@ -1784,70 +1791,90 @@ class MaskCanvas(QWidget):
                 return QPoint(mx, my), mask_r
             return ipt, native_r
 
-    def _apply_brush_stamp(self, pt: QPoint, native_radius: int) -> None:
-        """Aplica una estampación radial con dureza y flujo sobre la máscara de capa activa."""
+    def _apply_brush_line(self, p1: QPoint, p2: QPoint, native_radius: int) -> Optional[Tuple[int, int, int, int]]:
+        """Traza un segmento de pincel continuo evaluando la cápsula ROI (Rust si está disponible). Retorna el dirty_rect."""
         if self.layer_brush_mask is None:
-            return
-        cx, cy = pt.x(), pt.y()
-        mask = self.layer_brush_mask
-        h, w = mask.shape[:2]
-        r = max(2, int(native_radius))
-        x0 = max(0, cx - r)
-        x1 = min(w, cx + r + 1)
-        y0 = max(0, cy - r)
-        y1 = min(h, cy + r + 1)
-        if x0 >= x1 or y0 >= y1:
-            return
+            return None
 
-        ys = np.arange(y0, y1, dtype=np.float32)[:, np.newaxis] - cy
-        xs = np.arange(x0, x1, dtype=np.float32)[np.newaxis, :] - cx
-        dist_sq = xs * xs + ys * ys
-        r_sq = float(r * r)
+        h, w = self.layer_brush_mask.shape[:2]
+        if self._stroke_buffer is None or self._stroke_start_mask is None:
+            self._stroke_start_mask = self.layer_brush_mask.copy()
+            self._stroke_buffer = np.zeros((h, w), dtype=np.float32)
+
+        erase = (self.layer_brush_mode != "paint")
+        r = float(max(2, int(native_radius)))
+
+        if HAS_RUST_BRUSH and hasattr(astroloom_rs, 'stamp_brush_stroke_rs'):
+            try:
+                res = astroloom_rs.stamp_brush_stroke_rs(
+                    self.layer_brush_mask,
+                    (float(p1.x()), float(p1.y())),
+                    (float(p2.x()), float(p2.y())),
+                    r,
+                    float(self.layer_brush_hardness),
+                    float(self.layer_brush_flow),
+                    bool(erase),
+                    self._stroke_buffer,
+                    self._stroke_start_mask
+                )
+                if res is not None:
+                    return res
+            except Exception:
+                pass
+
+        # Fallback NumPy por ROI (cápsula continua)
+        x0 = max(0, int(min(p1.x(), p2.x()) - r))
+        x1 = min(w, int(max(p1.x(), p2.x()) + r + 1))
+        y0 = max(0, int(min(p1.y(), p2.y()) - r))
+        y1 = min(h, int(max(p1.y(), p2.y()) + r + 1))
+        if x0 >= x1 or y0 >= y1:
+            return None
+
+        vx = float(p2.x() - p1.x())
+        vy = float(p2.y() - p1.y())
+        v_sq = vx * vx + vy * vy
+        h_val = float(np.clip(self.layer_brush_hardness, 0.0, 0.999))
+        flow = float(np.clip(self.layer_brush_flow, 0.01, 1.0))
+
+        ys = np.arange(y0, y1, dtype=np.float32)[:, None] - p1.y()
+        xs = np.arange(x0, x1, dtype=np.float32)[None, :] - p1.x()
+
+        if v_sq > 1e-6:
+            proj_t = np.clip((xs * vx + ys * vy) / v_sq, 0.0, 1.0)
+        else:
+            proj_t = 0.0
+
+        dx = xs - proj_t * vx
+        dy = ys - proj_t * vy
+        dist_sq = dx * dx + dy * dy
+        r_sq = r * r
 
         inside = dist_sq <= r_sq
         if not np.any(inside):
-            return
+            return None
 
-        dist = np.sqrt(dist_sq) / float(r)
-        h_val = float(np.clip(self.layer_brush_hardness, 0.0, 0.999))
-
+        dist = np.sqrt(dist_sq) / r
         weight = np.zeros_like(dist)
         weight[dist <= h_val] = 1.0
-
         fade = (dist > h_val) & inside
         if np.any(fade):
             t = (dist[fade] - h_val) / (1.0 - h_val)
             weight[fade] = 1.0 - (3.0 * t * t - 2.0 * t * t * t)
 
-        # Si no se inicializó el buffer de trazo (e.g. primer clic directo), inicializarlo
-        if self._stroke_buffer is None or self._stroke_start_mask is None:
-            self._stroke_start_mask = mask.copy()
-            self._stroke_buffer = np.zeros((h, w), dtype=np.float32)
-
-        # Acumular el perfil máximo dentro del trazo continuo para preservar dureza y opacidad
         sub_buf = self._stroke_buffer[y0:y1, x0:x1]
         np.maximum(sub_buf, weight, out=sub_buf)
-
         sub_orig = self._stroke_start_mask[y0:y1, x0:x1]
-        flow = float(np.clip(self.layer_brush_flow, 0.01, 1.0))
 
-        if self.layer_brush_mode == "paint":
-            mask[y0:y1, x0:x1] = np.clip(sub_orig + (sub_buf * flow) * (1.0 - sub_orig), 0.0, 1.0)
+        if not erase:
+            self.layer_brush_mask[y0:y1, x0:x1] = np.clip(sub_orig + (sub_buf * flow) * (1.0 - sub_orig), 0.0, 1.0)
         else:
-            mask[y0:y1, x0:x1] = np.clip(sub_orig - (sub_buf * flow), 0.0, 1.0)
+            self.layer_brush_mask[y0:y1, x0:x1] = np.clip(sub_orig - (sub_buf * flow), 0.0, 1.0)
 
-    def _apply_brush_line(self, p1: QPoint, p2: QPoint, native_radius: int) -> None:
-        """Traza una línea continua interpolando estampaciones para evitar huecos en movimientos rápidos."""
-        dx = p2.x() - p1.x()
-        dy = p2.y() - p1.y()
-        dist = (dx * dx + dy * dy) ** 0.5
-        step = max(1.0, float(native_radius) * 0.25)
-        steps = max(1, int(dist / step))
-        for i in range(steps + 1):
-            t = i / steps
-            cx = int(round(p1.x() + dx * t))
-            cy = int(round(p1.y() + dy * t))
-            self._apply_brush_stamp(QPoint(cx, cy), native_radius)
+        return (x0, y0, x1, y1)
+
+    def _apply_brush_stamp(self, pt: QPoint, native_radius: int) -> Optional[Tuple[int, int, int, int]]:
+        """Aplica una estampación radial sobre la máscara de capa activa delegando en el kernel ROI."""
+        return self._apply_brush_line(pt, pt, native_radius)
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Space and not event.isAutoRepeat():
@@ -1958,8 +1985,15 @@ class MaskCanvas(QWidget):
             painter.drawPixmap(target_rect, self.base_pixmap, source_rect)
             if self.clipping_overlay and not self.clipping_overlay.isNull():
                 painter.drawPixmap(target_rect, self.clipping_overlay, source_rect)
-            if self.show_mask_overlay and self.refined_overlay and not self.refined_overlay.isNull() and self.refined_overlay.size() == self.base_pixmap.size():
-                painter.drawPixmap(target_rect, self.refined_overlay, source_rect)
+            if self.show_mask_overlay:
+                if (
+                    self._mask_overlay_qimage is not None and 
+                    self._mask_overlay_buf is not None and 
+                    self._mask_overlay_buf.shape[:2] == (self.base_pixmap.height(), self.base_pixmap.width())
+                ):
+                    painter.drawImage(target_rect, self._mask_overlay_qimage, source_rect)
+                elif self.refined_overlay and not self.refined_overlay.isNull() and self.refined_overlay.size() == self.base_pixmap.size():
+                    painter.drawPixmap(target_rect, self.refined_overlay, source_rect)
             if self.enable_masking and self.show_scribbles and self.scribble_pixmap and not self.scribble_pixmap.isNull():
                 painter.drawPixmap(target_rect, self.scribble_pixmap, source_rect)
             painter.restore()
@@ -2083,7 +2117,13 @@ class MaskCanvas(QWidget):
 
             # Overlay de máscara refinada
             if self.show_mask_overlay:
-                if self.refined_overlay and not self.refined_overlay.isNull() and self.refined_overlay.size() == self.base_pixmap.size():
+                if (
+                    self._mask_overlay_qimage is not None and 
+                    self._mask_overlay_buf is not None and 
+                    self._mask_overlay_buf.shape[:2] == (self.base_pixmap.height(), self.base_pixmap.width())
+                ):
+                    painter.drawImage(target_rect, self._mask_overlay_qimage, source_rect)
+                elif self.refined_overlay and not self.refined_overlay.isNull() and self.refined_overlay.size() == self.base_pixmap.size():
                     painter.drawPixmap(target_rect, self.refined_overlay, source_rect)
                 
             if self.enable_masking and self.show_scribbles and self.scribble_pixmap and not self.scribble_pixmap.isNull():
@@ -2783,16 +2823,24 @@ class MaskCanvas(QWidget):
         if self.last_mask_array is not None and self.show_mask_overlay:
             self.set_refined_mask(self.last_mask_array, mode=getattr(self, '_mask_overlay_mode', 'bicolor'))
 
-    def set_refined_mask(self, mask_float: Optional[np.ndarray], mode: str = "bicolor") -> None:
+    def set_refined_mask(
+        self, 
+        mask_float: Optional[np.ndarray], 
+        mode: str = "bicolor",
+        dirty_rect: Optional[Tuple[int, int, int, int]] = None
+    ) -> None:
         """
         Genera el overlay semitransparente coloreado para la máscara calculada.
         - mode 'bicolor': Rojo para suelo (0.0), Verde para cielo (1.0).
         - mode 'ruby': Tinte rubí/carmesí con opacidad modulada por el peso de la máscara.
+        - dirty_rect: (x0, y0, x1, y1) región delimitada para actualización instantánea in-place sin reasignar memoria.
         """
         self._mask_overlay_mode = mode
         if mask_float is None:
             self.last_mask_array = None
             self.refined_overlay = None
+            self._mask_overlay_buf = None
+            self._mask_overlay_qimage = None
             self.update()
             return
 
@@ -2822,6 +2870,7 @@ class MaskCanvas(QWidget):
                 if mx2 > mx1 and my2 > my1:
                     mask_f = mask_f[my1:my2, mx1:mx2]
                     h, w = mask_f.shape[:2]
+                    dirty_rect = None
 
         # Si hay una imagen base en el canvas, asegurar coincidencia exacta de resolución
         if self.base_pixmap and not self.base_pixmap.isNull():
@@ -2830,23 +2879,59 @@ class MaskCanvas(QWidget):
             if (w != bw or h != bh) and bw > 0 and bh > 0:
                 mask_f = cv2.resize(mask_f, (bw, bh), interpolation=cv2.INTER_LINEAR)
                 h, w = bh, bw
+                dirty_rect = None
 
-        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        # Actualización ultrarrápida por Dirty Rect in-place sobre el buffer persistente
+        can_use_dirty = (
+            dirty_rect is not None and
+            self._mask_overlay_buf is not None and
+            self._mask_overlay_buf.shape[:2] == (h, w) and
+            self._mask_overlay_qimage is not None
+        )
+
+        if can_use_dirty:
+            rx0, ry0, rx1, ry1 = dirty_rect
+            rx0 = max(0, min(w, rx0))
+            rx1 = max(0, min(w, rx1))
+            ry0 = max(0, min(h, ry0))
+            ry1 = max(0, min(h, ry1))
+            if rx0 < rx1 and ry0 < ry1:
+                sub_m = mask_f[ry0:ry1, rx0:rx1]
+                sub_b = self._mask_overlay_buf[ry0:ry1, rx0:rx1]
+                if mode == "ruby":
+                    sub_b[..., 0] = 235
+                    sub_b[..., 1] = 40
+                    sub_b[..., 2] = 40
+                    sub_b[..., 3] = (sub_m * 135).astype(np.uint8)
+                else:
+                    sub_b[..., 0] = ((1.0 - sub_m) * 220).astype(np.uint8)
+                    sub_b[..., 1] = (sub_m * 220).astype(np.uint8)
+                    sub_b[..., 2] = 30
+                    sub_b[..., 3] = 50
+                self.update()
+                return
+
+        # Ruta completa: crear o regenerar el buffer persistente y QImage
+        if self._mask_overlay_buf is None or self._mask_overlay_buf.shape[:2] != (h, w):
+            self._mask_overlay_buf = np.zeros((h, w, 4), dtype=np.uint8)
+            self._mask_overlay_qimage = QImage(
+                self._mask_overlay_buf.data, w, h, 4 * w, QImage.Format_RGBA8888
+            )
+
         if mode == "ruby":
-            rgba[..., 0] = 235
-            rgba[..., 1] = 40
-            rgba[..., 2] = 40
-            rgba[..., 3] = (mask_f * 135).astype(np.uint8)
+            self._mask_overlay_buf[..., 0] = 235
+            self._mask_overlay_buf[..., 1] = 40
+            self._mask_overlay_buf[..., 2] = 40
+            self._mask_overlay_buf[..., 3] = (mask_f * 135).astype(np.uint8)
         else:
-            # Tinte rojo para suelo, verde para cielo con opacidad suave
-            rgba[..., 0] = ((1.0 - mask_f) * 220).astype(np.uint8)
-            rgba[..., 1] = (mask_f * 220).astype(np.uint8)
-            rgba[..., 2] = 30
-            rgba[..., 3] = 50  # Opacidad semitransparente óptima
+            self._mask_overlay_buf[..., 0] = ((1.0 - mask_f) * 220).astype(np.uint8)
+            self._mask_overlay_buf[..., 1] = (mask_f * 220).astype(np.uint8)
+            self._mask_overlay_buf[..., 2] = 30
+            self._mask_overlay_buf[..., 3] = 50
 
-        rgba_contiguous = np.ascontiguousarray(rgba)
-        qimg = QImage(rgba_contiguous.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
-        self.refined_overlay = QPixmap.fromImage(qimg)
+        # Para compatibilidad con otras rutas que consulten refined_overlay
+        if not getattr(self, '_brush_drawing', False):
+            self.refined_overlay = QPixmap.fromImage(self._mask_overlay_qimage)
         self.update()
 
     def _create_mask_pixmap(self, mask_float: np.ndarray) -> Optional[QPixmap]:

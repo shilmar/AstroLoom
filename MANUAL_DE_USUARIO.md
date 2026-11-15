@@ -42,9 +42,12 @@ Para iniciar AstroLoom en Windows de la manera más cómoda y sin ventanas negra
 * Si no hay entorno virtual, recurre automáticamente a la instalación de Python del sistema.
 * En entornos Linux/macOS o desde la terminal, puedes iniciar la suite ejecutando directamente `python run_app.py`.
 
-### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.15.0)
-A partir de las versiones **v0.14.0** a **v0.15.0**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
+### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.15.1)
+A partir de las versiones **v0.14.0** a **v0.15.1**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
 * **Fluidez Total a 60-160+ FPS:** El renderizado del lienzo (`MaskCanvas`) vuelca directamente a búferes de memoria continua `BGRA8888` compatibles de forma nativa con `QImage(Format_RGB32)`. Las alertas de clipping (`J`) y el comparador Antes/Después con cortina (`Y`) se procesan en microsegundos sin crear copias intermedias en NumPy ni capas secundarias de `QPixmap`.
+* **Pincel Acelerado en Rust y Refresco por Dirty-Rects (v0.15.1):** Estampado continuo de trazos de pincel (`stamp_brush_stroke_rs`) con interpolación polinómica Hermite, cálculo analítico de región de interés (ROI) y actualización directa *in-place* sobre búferes compartidos sin reasignación de memoria de pantalla, permitiendo pintar máscaras a 60–144 FPS estables sin tirones ni latencia.
+* **Curvas Selectivas Hue/Luma Fusionadas en Registros (v0.15.1):** Bucle paralelo compilado en Rust (`apply_hue_luma_curves_fused_rs`) que procesa simultáneamente las curvas de Tono vs Saturación y Luminancia vs Saturación, eliminando las conversiones intermedias de espacio de color RGB $\leftrightarrow$ HSV y multiplicando por más de 10 la tasa de refresco.
+* **Pirámides de Mipmaps para Pincel y Gestión Ligera de Historial (v0.15.1):** Caché de máscaras de pincel multinivel (`brush_mask_preview` ≤1600 px y `brush_mask_draft` ≤800 px) e instantáneas ultraligeras de capas (`shallow_snapshot`) que excluyen arrays pesados de la pila de deshacer/rehacer, reduciendo drásticamente el consumo de memoria RAM.
 * **Máscaras Vectoriales y Gradientes Analíticos en Rust (v0.15.0):** Kernels Rayon paralelos (`compute_linear_gradient_rs`, `compute_radial_gradient_rs`) para evaluar degradados analíticos continuos (Hermite smoothstep, lineal, exponencial, reflejado) a más de 120 FPS sin consumo dinámico en el heap.
 * **Kernels Fused de Ajustes de Capa y Modos de Fusión (v0.15.0):** Evaluación conjunta en un solo ciclo multihilo (`apply_layer_adjustments_fused` y `apply_blend_mode_rs`) para exposición, contraste, altas luces, sombras, saturación, temperatura, tinte y curvas LUT con modos Normal, Screen, Luminosidad, Soft Light, Overlay y Multiply.
 * **Máscaras de Rango de Color y Luminancia Compiladas (v0.15.0):** Segmentación instantánea por tono angular y luminancia (`generate_luminance_range_mask_rs`, `generate_color_range_mask_rs`) acelerada en Rust.
@@ -428,8 +431,11 @@ El compositor multicapa de AstroLoom funciona de manera análoga a Adobe Photosh
   - El sistema calcula de forma instantánea el Matiz (Hue de 0° a 360°) y el umbral de saturación mínima a partir de la muestra en pantalla, activando automáticamente la previsualización de la máscara en rojo rubí.
   - También dispones de presets astronómicos rápidos: 🔴 H-Alfa (0°), 🔵 OIII (190°), 🟠 Sodio (38°) y 🟢 Airglow (115°).
 
-* **Herramientas de Pincel:**
-  - Pinta manualmente en pantalla para añadir o quitar zonas de ajuste local con control de tamaño y suavizado de borde (*feather*).
+* **Herramientas de Pincel (Acelerado en Rust y Dirty-Rects en v0.15.1):**
+  - **Pintado y Borrado Continuo sin Lag:** Pinta manualmente sobre la máscara de capa con respuesta instantánea a 60–144 FPS. El kernel nativo `stamp_brush_stroke_rs` calcula cápsulas continuas interpoladas (polinomio Hermite) entre muestras de ratón, acumulando opacidad por flujo (*flow*) de forma natural.
+  - **Actualización Selectiva por Rectángulos Sucios (*Dirty-Rects*):** El lienzo solo repinta el área modificada por la punta del pincel sobre un búfer RGBA persistente, eliminando la creación de imágenes completas en memoria y permitiendo trazos fluidos en imágenes 4K u 8K.
+  - **Caché Multinivel de Mipmaps:** Las máscaras de pincel generan representaciones de resolución intermedia (`preview` ≤1600 px y `draft` ≤800 px) de forma perezosa con control de versiones para evitar recalculaciones durante el arrastre de deslizadores.
+  - **Atajos Ergonómicos:** Ajusta el radio con `[` y `]`, varía el tamaño con la rueda del ratón manteniendo pulsado, o conmuta temporalmente a modo goma de borrar manteniendo pulsado `Shift`.
 * **Máscaras Vectoriales Analíticas en el Lienzo (Novedad v0.15.0):**
   - **Filtro Graduado Lineal (Lineal):** Diseñado para corregir o matizar gradientes de contaminación lumínica, viñeteo asimétrico o brillo crepuscular.
     - Se evalúa de manera continua y analítica mediante kernels Rust Rayon (`compute_linear_gradient_rs`).

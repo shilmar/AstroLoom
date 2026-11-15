@@ -4,7 +4,7 @@
 
 **Suite y Estación de Trabajo Integral para Astrofotografía de Paisaje, Cielo Profundo y Eventos Astronómicos**
 
-[![Version](https://img.shields.io/badge/version-v0.15.0-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
+[![Version](https://img.shields.io/badge/version-v0.15.1-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -46,10 +46,12 @@ Impulsada por una arquitectura híbrida que combina una interfaz gráfica reacti
 
 ---
 
-## 🎨 Compositor Multicapa, Máscaras Vectoriales y Transformación 2D (v0.15.0)
+## 🎨 Compositor Multicapa, Máscaras Vectoriales y Transformación 2D (v0.15.0 / v0.15.1)
 
 AstroLoom integra un sistema integral de composición profesional no destructiva con capas ráster y de ajuste:
 * **Máscaras Vectoriales Analíticas en Rust:** Filtros de **Gradiente Lineal** (polución lumínica, viñeteo) y **Gradiente Radial / Elíptico** (centro galáctico, nebulosas) con gizmos interactivos directos sobre el lienzo a 60 FPS y restricción espacial automática a Cielo o Suelo (*Edge-Snapping*).
+* **Pincel Acelerado en Rust y Dirty-Rects a 60–144 FPS (v0.15.1):** Estampado continuo interpolado mediante `stamp_brush_stroke_rs` y actualización selectiva *in-place* por rectángulos sucios (*dirty rects*) en el lienzo, eliminando lag y tirones de GPU/CPU al pintar sobre imágenes de alta resolución.
+* **Curvas Selectivas Hue/Luma Fusionadas en Rust (v0.15.1):** Evaluación en registros paralelos (`apply_hue_luma_curves_fused_rs`) más de $10\times$ más rápida al prescindir de conversiones de color intermedias.
 * **Transformación Espacial 2D de Capas Ráster:** Desplazamiento interactivo en el lienzo, escalado (con rueda de ratón o parámetros numéricos) y rotación libre para capas ráster importadas.
 * **Miniaturas Duales Estilo Pro:** Edición independiente de la imagen o de su máscara con un solo clic.
 * **Gestor Avanzado de Presets:** Modulación continua de intensidad (0% a 150%), previsualización en tiempo real y detección automática de dependencias (StarNet++ y máscara de horizonte).

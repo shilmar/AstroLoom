@@ -753,8 +753,7 @@ class DeveloperTab(QWidget):
         curves_layout.addLayout(row_crv_btn)
 
         self.sec_curves.set_content_widget(w_curves)
-        # Curva Tonal migrada directamente al Gestor de Capas (Columna 3) para Estrellas, Starless, Suelo y Base
-        self.sec_curves.setVisible(False)
+        left_layout.addWidget(self.sec_curves)
 
         # --- SECCIÓN 5: StarNet++ AI — Desacoplo de Estrellas (Módulo gui.developer.panels.StarNetPanel) ---
         self.panel_starnet = StarNetPanel(self, resettable_label_factory=self._make_resettable_label)

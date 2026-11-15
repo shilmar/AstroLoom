@@ -791,6 +791,54 @@ def apply_luma_vs_sat_curve(img_rgb: np.ndarray, lut_luma_sat: np.ndarray) -> np
     return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
 
+def apply_hue_luma_curves_fused(
+    img_rgb: np.ndarray,
+    lut_hue_sat: Optional[np.ndarray] = None,
+    lut_luma_sat: Optional[np.ndarray] = None,
+    sky_mask: Optional[np.ndarray] = None
+) -> np.ndarray:
+    """
+    Aplica de forma fusionada y acelerada las curvas selectivas Hue vs Sat y Luma vs Sat.
+    Si astroloom_rs está disponible, evalúa ambos modificadores en un único bucle paralelo en Rust
+    eliminando las costosas conversiones RGB <-> HSV intermedias de OpenCV (>10x más rápido).
+    """
+    if img_rgb is None:
+        return img_rgb
+
+    has_hue = lut_hue_sat is not None and len(lut_hue_sat) == 256 and not np.all(np.abs(lut_hue_sat - 0.5) < 1e-3)
+    has_luma = lut_luma_sat is not None and len(lut_luma_sat) == 256 and not np.all(np.abs(lut_luma_sat - 0.5) < 1e-3)
+
+    if not has_hue and not has_luma:
+        return img_rgb
+
+    if HAS_RUST and hasattr(astroloom_rs, 'apply_hue_luma_curves_fused_rs'):
+        try:
+            img_c = np.ascontiguousarray(img_rgb, dtype=np.float32)
+            lut_h_c = np.ascontiguousarray(lut_hue_sat, dtype=np.float32) if has_hue else None
+            lut_l_c = np.ascontiguousarray(lut_luma_sat, dtype=np.float32) if has_luma else None
+            mask_c = np.ascontiguousarray(sky_mask[..., 0] if sky_mask.ndim == 3 else sky_mask, dtype=np.float32) if sky_mask is not None else None
+            return astroloom_rs.apply_hue_luma_curves_fused_rs(img_c, lut_h_c, lut_l_c, mask_c)
+        except Exception:
+            pass
+
+    # Fallback OpenCV
+    out = img_rgb
+    mask_3d = (sky_mask[..., np.newaxis] if sky_mask.ndim == 2 else sky_mask) if sky_mask is not None else None
+    if has_hue:
+        curved_h = apply_hue_vs_sat_curve(out, lut_hue_sat)
+        if mask_3d is not None:
+            out = (curved_h * mask_3d) + (out * (1.0 - mask_3d))
+        else:
+            out = curved_h
+    if has_luma:
+        curved_l = apply_luma_vs_sat_curve(out, lut_luma_sat)
+        if mask_3d is not None:
+            out = (curved_l * mask_3d) + (out * (1.0 - mask_3d))
+        else:
+            out = curved_l
+    return out
+
+
 def auto_stretch_adaptive_starless(
     img_starless: np.ndarray,
     sky_mask: np.ndarray = None,

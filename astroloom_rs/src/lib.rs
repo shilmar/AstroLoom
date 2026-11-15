@@ -42,6 +42,8 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(developer::compute_radial_gradient_rs, m)?)?;
     m.add_function(wrap_pyfunction!(developer::generate_luminance_mask_rs, m)?)?;
     m.add_function(wrap_pyfunction!(developer::generate_color_range_mask_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(developer::apply_hue_luma_curves_fused_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(developer::stamp_brush_stroke_rs, m)?)?;
 
     // 4. Estirado Hiperbólico Generalizado y Efectos Ópticos - Prioridad 2 (core/ghs.py, core/orton.py, core/star_diffusion.py)
     m.add_function(wrap_pyfunction!(developer::compute_ghs_lut_rs, m)?)?;

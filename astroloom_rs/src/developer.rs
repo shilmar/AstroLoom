@@ -2,7 +2,7 @@ use crate::stacking::compute_median_in_place;
 use numpy::ndarray::{Array1, Array2, Array3};
 use numpy::{
     IntoPyArray, PyArray1, PyArray2, PyArray3, PyReadonlyArray1, PyReadonlyArray2,
-    PyReadonlyArray3, PyReadonlyArrayDyn,
+    PyReadonlyArray3, PyReadonlyArrayDyn, PyReadwriteArray2,
 };
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -1266,5 +1266,266 @@ pub fn generate_color_range_mask_rs<'py>(
     })?;
     Ok(arr.into_pyarray(py))
 }
+
+// ============================================================================
+// CURVAS SELECTIVAS HUE/LUMA FUSIONADAS EN REGISTROS (core/stretch.py)
+// ============================================================================
+
+#[pyfunction]
+#[pyo3(signature = (
+    img_rgb,
+    lut_hue_sat=None,
+    lut_luma_sat=None,
+    sky_mask=None
+))]
+pub fn apply_hue_luma_curves_fused_rs<'py>(
+    py: Python<'py>,
+    img_rgb: PyReadonlyArray3<'py, f32>,
+    lut_hue_sat: Option<PyReadonlyArray1<'py, f32>>,
+    lut_luma_sat: Option<PyReadonlyArray1<'py, f32>>,
+    sky_mask: Option<PyReadonlyArray2<'py, f32>>,
+) -> Bound<'py, PyArray3<f32>> {
+    let img_view = img_rgb.as_array();
+    let (h, w, c) = img_view.dim();
+
+    let hue_lut: Option<Vec<f32>> = lut_hue_sat.as_ref().and_then(|l| {
+        let s = l.as_slice().ok()?;
+        if s.len() == 256 && s.iter().any(|&v| (v - 0.5).abs() > 1e-3) {
+            Some(s.to_vec())
+        } else {
+            None
+        }
+    });
+
+    let luma_lut: Option<Vec<f32>> = lut_luma_sat.as_ref().and_then(|l| {
+        let s = l.as_slice().ok()?;
+        if s.len() == 256 && s.iter().any(|&v| (v - 0.5).abs() > 1e-3) {
+            Some(s.to_vec())
+        } else {
+            None
+        }
+    });
+
+    if hue_lut.is_none() && luma_lut.is_none() {
+        return img_view.to_owned().into_pyarray(py);
+    }
+
+    let mask_view = sky_mask.as_ref().map(|m| m.as_array());
+
+    let out_vec = py.allow_threads(|| {
+        let row_stride = w * c;
+        let mut buf = vec![0.0f32; h * row_stride];
+
+        buf.par_chunks_mut(row_stride)
+            .enumerate()
+            .for_each(|(y, row_slice)| {
+                for x in 0..w {
+                    let base_idx = x * c;
+                    let r0 = unsafe { *img_view.uget((y, x, 0)) };
+                    let g0 = unsafe { *img_view.uget((y, x, 1)) };
+                    let b0 = unsafe { *img_view.uget((y, x, 2)) };
+
+                    let v = r0.max(g0.max(b0));
+                    let min_c = r0.min(g0.min(b0));
+                    let chroma = v - min_c;
+
+                    if v <= 1e-7 || chroma <= 1e-7 {
+                        row_slice[base_idx] = r0;
+                        row_slice[base_idx + 1] = g0;
+                        row_slice[base_idx + 2] = b0;
+                        continue;
+                    }
+
+                    let (hue, _) = rgb_to_hue_sat(r0, g0, b0);
+                    let mut mult = 1.0f32;
+                    if let Some(ref hl) = hue_lut {
+                        let h_idx = ((hue / 360.0) * 255.0).clamp(0.0, 255.0) as usize;
+                        mult *= hl[h_idx] * 2.0;
+                    }
+                    if let Some(ref ll) = luma_lut {
+                        let luma = 0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0;
+                        let l_idx = (luma * 255.0).clamp(0.0, 255.0) as usize;
+                        mult *= ll[l_idx] * 2.0;
+                    }
+
+                    let c_new = (chroma * mult).min(v);
+                    let ratio = c_new / chroma;
+                    let mut r = (v - (v - r0) * ratio).clamp(0.0, 1.0);
+                    let mut g = (v - (v - g0) * ratio).clamp(0.0, 1.0);
+                    let mut b = (v - (v - b0) * ratio).clamp(0.0, 1.0);
+
+                    if let Some(ref m_view) = mask_view {
+                        let m = unsafe { *m_view.uget((y, x)) }.clamp(0.0, 1.0);
+                        r = r * m + r0 * (1.0 - m);
+                        g = g * m + g0 * (1.0 - m);
+                        b = b * m + b0 * (1.0 - m);
+                    }
+
+                    row_slice[base_idx] = r;
+                    row_slice[base_idx + 1] = g;
+                    row_slice[base_idx + 2] = b;
+                }
+            });
+
+        buf
+    });
+
+    let out_array = Array3::from_shape_vec((h, w, c), out_vec).unwrap();
+    out_array.into_pyarray(py)
+}
+
+// ============================================================================
+// ESTAMPADO CONTINUO DE PINCEL POR ROI (gui/canvas.py)
+// ============================================================================
+
+#[pyfunction]
+#[pyo3(signature = (
+    mask,
+    p0,
+    p1,
+    radius,
+    hardness=0.5,
+    flow=0.5,
+    erase=false,
+    stroke_buf=None,
+    stroke_orig=None
+))]
+pub fn stamp_brush_stroke_rs<'py>(
+    py: Python<'py>,
+    mut mask: PyReadwriteArray2<'py, f32>,
+    p0: (f32, f32),
+    p1: (f32, f32),
+    radius: f32,
+    hardness: f32,
+    flow: f32,
+    erase: bool,
+    mut stroke_buf: Option<PyReadwriteArray2<'py, f32>>,
+    stroke_orig: Option<PyReadonlyArray2<'py, f32>>,
+) -> PyResult<Option<(usize, usize, usize, usize)>> {
+    let (h, w) = mask.as_array().dim();
+    if h == 0 || w == 0 {
+        return Ok(None);
+    }
+
+    let r = radius.max(1.0);
+    let bx0 = ((p0.0.min(p1.0) - r).floor() as isize).clamp(0, w as isize) as usize;
+    let bx1 = ((p0.0.max(p1.0) + r + 1.0).ceil() as isize).clamp(0, w as isize) as usize;
+    let by0 = ((p0.1.min(p1.1) - r).floor() as isize).clamp(0, h as isize) as usize;
+    let by1 = ((p0.1.max(p1.1) + r + 1.0).ceil() as isize).clamp(0, h as isize) as usize;
+
+    if bx0 >= bx1 || by0 >= by1 {
+        return Ok(None);
+    }
+
+    let mask_slice = mask.as_slice_mut().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("mask must be C-contiguous: {:?}", e))
+    })?;
+
+    let mut buf_slice_opt = if let Some(ref mut sb) = stroke_buf {
+        Some(sb.as_slice_mut().map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("stroke_buf must be C-contiguous: {:?}", e))
+        })?)
+    } else {
+        None
+    };
+
+    let orig_slice_opt = if let Some(ref so) = stroke_orig {
+        Some(so.as_slice().map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("stroke_orig must be C-contiguous: {:?}", e))
+        })?)
+    } else {
+        None
+    };
+
+    py.allow_threads(|| {
+        let vx = p1.0 - p0.0;
+        let vy = p1.1 - p0.1;
+        let v_sq = vx * vx + vy * vy;
+        let h_val = hardness.clamp(0.0, 0.999);
+        let r_sq = r * r;
+        let inv_r = 1.0 / r;
+        let inv_feather = 1.0 / (1.0 - h_val).max(1e-4);
+        let f = flow.clamp(0.01, 1.0);
+
+        if let (Some(buf_sl), Some(orig_sl)) = (buf_slice_opt.as_deref_mut(), orig_slice_opt) {
+            for y in by0..by1 {
+                let row_offset = y * w;
+                let py_val = y as f32 - p0.1;
+                for x in bx0..bx1 {
+                    let px = x as f32 - p0.0;
+                    let t = if v_sq > 1e-6 {
+                        ((px * vx + py_val * vy) / v_sq).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let dx = px - t * vx;
+                    let dy = py_val - t * vy;
+                    let dist_sq = dx * dx + dy * dy;
+
+                    if dist_sq <= r_sq {
+                        let dist_norm = dist_sq.sqrt() * inv_r;
+                        let weight = if dist_norm <= h_val {
+                            1.0
+                        } else {
+                            let t_f = (dist_norm - h_val) * inv_feather;
+                            1.0 - (3.0 * t_f * t_f - 2.0 * t_f * t_f * t_f)
+                        };
+
+                        let idx = row_offset + x;
+                        let b_val = &mut buf_sl[idx];
+                        if weight > *b_val {
+                            *b_val = weight;
+                        }
+                        let eff = *b_val * f;
+                        let orig = orig_sl[idx];
+                        mask_slice[idx] = if erase {
+                            (orig - eff).clamp(0.0, 1.0)
+                        } else {
+                            (orig + eff * (1.0 - orig)).clamp(0.0, 1.0)
+                        };
+                    }
+                }
+            }
+        } else {
+            for y in by0..by1 {
+                let row_offset = y * w;
+                let py_val = y as f32 - p0.1;
+                for x in bx0..bx1 {
+                    let px = x as f32 - p0.0;
+                    let t = if v_sq > 1e-6 {
+                        ((px * vx + py_val * vy) / v_sq).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let dx = px - t * vx;
+                    let dy = py_val - t * vy;
+                    let dist_sq = dx * dx + dy * dy;
+
+                    if dist_sq <= r_sq {
+                        let dist_norm = dist_sq.sqrt() * inv_r;
+                        let weight = if dist_norm <= h_val {
+                            1.0
+                        } else {
+                            let t_f = (dist_norm - h_val) * inv_feather;
+                            1.0 - (3.0 * t_f * t_f - 2.0 * t_f * t_f * t_f)
+                        };
+
+                        let idx = row_offset + x;
+                        let eff = weight * f;
+                        let m = mask_slice[idx];
+                        mask_slice[idx] = if erase {
+                            (m - eff).clamp(0.0, 1.0)
+                        } else {
+                            (m + eff * (1.0 - m)).clamp(0.0, 1.0)
+                        };
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(Some((bx0, by0, bx1, by1)))
+}
+
 
 
