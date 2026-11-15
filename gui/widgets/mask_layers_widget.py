@@ -4391,9 +4391,9 @@ class MaskLayersWidget(QWidget):
             self.preview_mask_requested.emit(m)
 
     # Serialización y deserialización para proyectos y presets
-    def get_state(self) -> List[Dict[str, Any]]:
+    def get_state(self, encode_masks: bool = False) -> List[Dict[str, Any]]:
         """Devuelve una lista serializable de todas las capas configuradas."""
-        return [layer.to_dict() for layer in self.layers]
+        return [layer.to_dict(encode_mask=encode_masks) for layer in self.layers]
 
     def set_state(self, state: Optional[List[Dict[str, Any]]]) -> None:
         """Restaura las capas desde una lista serializada."""

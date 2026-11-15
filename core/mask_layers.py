@@ -7,7 +7,7 @@ locales paramétricos independientes y conciencia de capas StarNet (Compuesta, S
 import uuid
 import base64
 from dataclasses import dataclass, field, asdict
-from typing import Optional, List, Dict, Any, Tuple, Union
+from typing import Optional, List, Dict, Any, Tuple, Union, Callable
 import cv2
 import numpy as np
 from core.masking import (
@@ -348,8 +348,8 @@ class MaskLayer:
         """Indica si la capa es un filtro graduado analítico (lineal o radial)."""
         return self.mask_type in (MASK_TYPE_GRADIENT_LINEAR, MASK_TYPE_GRADIENT_RADIAL)
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Serializa la capa a un diccionario JSON preservando la máscara de pincel y curva."""
+    def to_dict(self, encode_mask: bool = False) -> Dict[str, Any]:
+        """Serializa la capa a un diccionario JSON preservando parámetros y curva."""
         d = asdict(self)
         d.pop("custom_mask", None)
         d.pop("image_data", None)
@@ -357,7 +357,7 @@ class MaskLayer:
         d.pop("proxy_draft", None)
         d.pop("brush_mask", None)
         d.pop("curve_lut", None)
-        if self.brush_mask is not None:
+        if encode_mask and self.brush_mask is not None:
             try:
                 u8 = (np.clip(self.brush_mask, 0.0, 1.0) * 255.0).astype(np.uint8)
                 ok, buf = cv2.imencode(".png", u8)
@@ -1146,7 +1146,7 @@ def apply_blend_mode(
 
 # --- Caché de Composición Incremental (Sub-composite Cache) ---
 _SUBCOMPOSITE_CACHE: Dict[Tuple, np.ndarray] = {}
-_MAX_SUBCOMPOSITE_CACHE = 16
+_MAX_SUBCOMPOSITE_CACHE = 64
 
 def clear_subcomposite_cache() -> None:
     """Vacía la caché de composiciones parciales de capas."""
@@ -1185,6 +1185,17 @@ def _compute_subcomposite_key(
             id(l.brush_mask),
             id(l.custom_mask),
             l.inverted,
+            getattr(l, "linear_p0", None),
+            getattr(l, "linear_p1", None),
+            getattr(l, "linear_span_b", None),
+            getattr(l, "linear_midpoint", None),
+            getattr(l, "linear_profile", None),
+            getattr(l, "linear_symmetric", None),
+            getattr(l, "radial_center", None),
+            getattr(l, "radial_radius_x", None),
+            getattr(l, "radial_radius_y", None),
+            getattr(l, "radial_angle", None),
+            getattr(l, "radial_feather", None),
         )
         for l in layers_below
     )
@@ -1208,13 +1219,16 @@ def apply_all_mask_layers(
     stars_image: Optional[np.ndarray] = None,
     crop_rect: Optional[Tuple[int, int, int, int]] = None,
     full_image_shape: Optional[Tuple[int, int]] = None,
-    fast_draft: bool = False
-) -> np.ndarray:
+    fast_draft: bool = False,
+    abort_flag: Optional[Callable[[], bool]] = None,
+) -> Optional[np.ndarray]:
     """
     Aplica secuencialmente la composición de capas (estilo Photoshop),
     integrando capas de imagen (Fondo Starless, Suelo, Estrellas) y capas de ajuste locales.
     Soporta modo Zoom 100% mediante crop_rect y full_image_shape para alineación exacta 1:1.
     """
+    if abort_flag and abort_flag():
+        return None
     if not mask_layers:
         return composite_image
 
@@ -1223,6 +1237,8 @@ def apply_all_mask_layers(
         # Modo clásico de solo máscaras de ajuste sobre la imagen compuesta
         img = composite_image.copy()
         for layer in mask_layers:
+            if abort_flag and abort_flag():
+                return None
             if not layer.enabled or layer.opacity <= 1e-4:
                 continue
             m_eff = compute_effective_layer_mask(
@@ -1244,6 +1260,8 @@ def apply_all_mask_layers(
     canvas = None
     if len(mask_layers) > 1 and not crop_rect:
         for cut in range(1, len(mask_layers)):
+            if abort_flag and abort_flag():
+                return None
             ck = _compute_subcomposite_key(
                 composite_image, mask_layers[cut:], master_sky_mask, starless_image, stars_image, crop_rect, fast_draft
             )
@@ -1283,6 +1301,8 @@ def apply_all_mask_layers(
 
     # Iterar de fondo a cima desde start_cut - 1 hasta la cima (índice 0)
     for i in range(start_cut - 1, -1, -1):
+        if abort_flag and abort_flag():
+            return None
         # Poblar la caché de subcomposición para consultas O(1) de capas superiores
         if i + 1 < len(mask_layers) and not crop_rect:
             ck = _compute_subcomposite_key(

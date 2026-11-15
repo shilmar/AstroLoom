@@ -331,6 +331,7 @@ class DeveloperTab(QWidget):
         self._is_scrubbing_layer_slider: bool = False
         self._is_slider_pressed: bool = False
         self._is_dragging_deconv: bool = False
+        self._is_dragging_gradient: bool = False
         self.async_pipeline = AsyncPipelineManager(self)
         self.async_pipeline.preview_ready.connect(self._on_async_preview_ready)
         self.async_pipeline.pipeline_failed.connect(self._on_async_pipeline_failed)
@@ -909,8 +910,9 @@ class DeveloperTab(QWidget):
         self.canvas.layer_move_scale_wheel.connect(self._on_canvas_layer_scale_wheel)
         self.canvas.layer_move_finished.connect(self._commit_action)
         self.mask_layers_widget.gradient_tool_toggled.connect(self._on_layer_gradient_toggled)
+        self.canvas.gradient_drag_started.connect(self._on_canvas_gradient_drag_started)
         self.canvas.gradient_changed.connect(self._on_canvas_gradient_changed)
-        self.canvas.gradient_drag_finished.connect(self._commit_action)
+        self.canvas.gradient_drag_finished.connect(self._on_canvas_gradient_drag_finished)
         if hasattr(self, 'panel_ground_sky') and self.panel_ground_sky is not None:
             self.panel_ground_sky.denoise_changed.connect(self.on_gnd_denoise_changed)
             self.panel_ground_sky.antihalo_changed.connect(self.on_gnd_antihalo_changed)
@@ -3970,12 +3972,31 @@ class DeveloperTab(QWidget):
         else:
             self.canvas.set_active_gradient_layer(None)
 
+    def _on_canvas_gradient_drag_started(self) -> None:
+        """Activa el modo de interacción ligera para gradientes en el visor."""
+        if hasattr(self, 'async_pipeline'):
+            self.async_pipeline.cancel_pending()
+        self._is_dragging_gradient = True
+        self._is_scrubbing_heavy_slider = True
+        self._is_scrubbing_layer_slider = True
+
+    def _on_canvas_gradient_drag_finished(self) -> None:
+        """Restaura la fidelidad completa al finalizar el arrastre del gradiente y guarda en historial."""
+        self._is_dragging_gradient = False
+        self._is_scrubbing_heavy_slider = False
+        self._is_scrubbing_layer_slider = False
+        layer = getattr(self.canvas, 'active_gradient_layer', None)
+        if layer is not None and hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.update_gradient_ui_from_layer(layer)
+            self.mask_layers_widget.invalidate_layer_thumbnail(layer.id, rebuild_now=True)
+        self.update_stretch_preview(immediate=True)
+        self._commit_action()
+
     def _on_canvas_gradient_changed(self) -> None:
         """Se invoca en tiempo real al arrastrar un manejador del gradiente en el lienzo."""
         layer = getattr(self.canvas, 'active_gradient_layer', None)
         if layer is not None and hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.update_gradient_ui_from_layer(layer)
-            self.mask_layers_widget.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
         self.update_stretch_preview()
 
     def open_image_file(self):
@@ -4697,7 +4718,11 @@ class DeveloperTab(QWidget):
                     self._refine_timer.start(350)
 
             if hasattr(self, '_preview_throttle_timer'):
-                self._preview_throttle_timer.start(16)
+                if getattr(self, '_is_dragging_gradient', False):
+                    if not self._preview_throttle_timer.isActive():
+                        self._preview_throttle_timer.start(40)
+                else:
+                    self._preview_throttle_timer.start(16)
             else:
                 self._do_update_stretch_preview(synchronous=False)
                 self._refresh_histograms_now()
@@ -4718,7 +4743,7 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'live_histogram') and self.live_histogram.isVisible():
             self.live_histogram.update_from_image(stretched)
         # Omitir widgets más pesados durante arrastre activo para garantizar 60 FPS
-        if getattr(self, '_is_scrubbing_heavy_slider', False) or getattr(self, '_is_slider_pressed', False):
+        if getattr(self, '_is_scrubbing_heavy_slider', False) or getattr(self, '_is_slider_pressed', False) or getattr(self, '_is_dragging_gradient', False):
             return
         if hasattr(self, 'curve_widget') and self.curve_widget.isVisible():
             self.curve_widget.set_histogram_from_image(stretched)

@@ -52,6 +52,7 @@ class MaskCanvas(QWidget):
     layer_move_scale_wheel = Signal(float)           # factor multiplicativo de escala
     layer_move_finished = Signal()
     gradient_changed = Signal()                      # Emite cuando se manipulan los gizmos de gradiente lineal/radial
+    gradient_drag_started = Signal()                 # Emite al iniciar la manipulación de un gradiente
     gradient_drag_finished = Signal()                # Emite al soltar el ratón tras manipular un gradiente
 
     def __init__(self, parent: Optional[QWidget] = None, enable_masking: bool = True):
@@ -401,9 +402,10 @@ class MaskCanvas(QWidget):
                 self.scribble_pixmap = QPixmap(w, h)
                 self.scribble_pixmap.fill(Qt.transparent)
 
-        # Si hay una máscara previa activa, regenerar el overlay ajustado a la nueva resolución
+        # Si hay una máscara previa activa, regenerar el overlay únicamente si la resolución ha cambiado
         if self.last_mask_array is not None and self.show_mask_overlay:
-            self.set_refined_mask(self.last_mask_array, mode=getattr(self, '_mask_overlay_mode', 'bicolor'))
+            if self.refined_overlay is None or self.refined_overlay.size() != self.base_pixmap.size():
+                self.set_refined_mask(self.last_mask_array, mode=getattr(self, '_mask_overlay_mode', 'bicolor'))
         elif self.refined_overlay and self.refined_overlay.size() != self.base_pixmap.size():
             self.refined_overlay = None
 
@@ -1060,6 +1062,7 @@ class MaskCanvas(QWidget):
                     self.setCursor(Qt.PointingHandCursor)
                 else:
                     self.setCursor(Qt.CrossCursor)
+                self.gradient_drag_started.emit()
                 self.update()
                 event.accept()
                 return
@@ -1397,8 +1400,8 @@ class MaskCanvas(QWidget):
 
                 self.gradient_changed.emit()
                 self.update()
-                event.accept()
-                return
+            event.accept()
+            return
 
         # Cursor reactivo al sobrevolar gizmos de gradiente cuando no se arrastra
         if self.gradient_gizmo_active and self._gradient_dragging_handle is None and self.active_gradient_layer is not None:
@@ -2767,6 +2770,12 @@ class MaskCanvas(QWidget):
         sensor_center: Optional[Tuple[float, float]] = None
     ) -> None:
         """Establece la geometría de recorte externa (Zoom 100%) para sincronizar overlays y centrado exacto."""
+        if (
+            self.external_crop_rect == crop_rect and
+            self.external_full_shape == full_shape and
+            self.external_sensor_center == sensor_center
+        ):
+            return
         self.external_crop_rect = crop_rect
         self.external_full_shape = full_shape
         self.external_sensor_center = sensor_center

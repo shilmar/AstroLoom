@@ -39,6 +39,9 @@ from core.pcc import apply_pcc_gains
 from gui.developer.developer_state import DeveloperState
 
 
+_MASK_3D_CACHE: Dict[Tuple[int, int, int], np.ndarray] = {}
+
+
 class ResolutionPyramid:
     """Multi-resolution image pyramid for high-performance interactive preview rendering.
 
@@ -176,7 +179,14 @@ def apply_developer_pipeline(
             precomputed_mask = cv2.resize(precomputed_mask, (tw, th), interpolation=cv2.INTER_LINEAR)
         if target_img.ndim == 3:
             if precomputed_mask.ndim == 2:
-                precomputed_mask = np.repeat(precomputed_mask[..., np.newaxis], 3, axis=2)
+                mk = (id(precomputed_mask), th, tw)
+                if mk in _MASK_3D_CACHE:
+                    precomputed_mask = _MASK_3D_CACHE[mk]
+                else:
+                    precomputed_mask = np.ascontiguousarray(np.repeat(precomputed_mask[..., np.newaxis], 3, axis=2))
+                    if len(_MASK_3D_CACHE) >= 16:
+                        _MASK_3D_CACHE.clear()
+                    _MASK_3D_CACHE[mk] = precomputed_mask
             elif precomputed_mask.ndim == 3 and precomputed_mask.shape[2] == 1:
                 precomputed_mask = np.repeat(precomputed_mask, 3, axis=2)
     edge_shift = getattr(state, "gnd_edge_shift_val", 0)
@@ -758,7 +768,7 @@ def apply_developer_pipeline(
 
     # 14. Aplicación de Capas y Máscaras Locales
     if mask_layers and len(mask_layers) > 0:
-        stretched = apply_all_mask_layers(
+        res_layers = apply_all_mask_layers(
             stretched,
             mask_layers,
             master_sky_mask=precomputed_mask,
@@ -767,7 +777,11 @@ def apply_developer_pipeline(
             crop_rect=crop_rect,
             full_image_shape=full_shape,
             fast_draft=is_scrubbing,
+            abort_flag=abort_flag,
         )
+        if res_layers is None:
+            return None
+        stretched = res_layers
 
     # 15. Supresión de Halos en Frontera de Horizonte (Anti-Halo Clamping)
     antihalo_strength = getattr(state, "gnd_antihalo_val", 0) / 100.0
