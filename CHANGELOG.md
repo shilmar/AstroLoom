@@ -5,6 +5,47 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-15
+
+### Añadido
+* **Máscaras Vectoriales Analíticas y Manipuladores Interactivos en el Lienzo (`core/mask_layers.py`, `gui/canvas.py`, `gui/widgets/mask_layers_widget.py`, `astroloom_rs/src/developer.rs`):**
+  - **Filtro Graduado Lineal Vectorial (`MASK_TYPE_GRADIENT_LINEAR`):** Generación de degradados analíticos continuos mediante kernels nativos compilados en Rust con Rayon (`compute_linear_gradient_rs`), ideales para neutralizar cúpulas de polución lumínica, viñeteo asimétrico y gradientes crepusculares sin aliasing. Admite perfiles de transición *Smoothstep (Hermite)*, *Lineal*, *Exponencial* y *Reflejado*.
+  - **Filtro Graduado Radial / Elíptico Vectorial (`MASK_TYPE_GRADIENT_RADIAL`):** Degradados elípticos con centros, radio X, radio Y, ángulo de rotación libre y factor de suavizado (*feather*) independientes, calculados analíticamente en Rust Rayon (`compute_radial_gradient_rs`) para realce selectivo del centro galáctico, nebulosas o galaxias.
+  - **Gizmos y Manipuladores Directos sobre el Lienzo (`gui/canvas.py`):** Controles visuales arrastrables directamente sobre la imagen a 60 FPS con cursores contextuales, permitiendo modificar posición, orientación, amplitud y transición de degradados en tiempo real.
+  - **Restricción Espacial Automática (Edge-Snapping al Suelo/Cielo):** Posibilidad de recortar de forma analítica cualquier máscara lineal o radial a la región exclusiva de **Cielo** (`LIMIT_MASK_SKY`) o de **Suelo** (`LIMIT_MASK_GROUND`) mediante la máscara semántica de horizonte de IA.
+
+* **Transformación Espacial 2D y Gestión Avanzada de Capas Ráster (`core/mask_layers.py`, `gui/canvas.py`, `gui/widgets/mask_layers_widget.py`, `core/psd_export.py`):**
+  - **Herramienta de Mover e Interacción 2D en Pantalla:** Desplazamiento interactivo (`offset_x`, `offset_y`), escalado proporcional mediante rueda del ratón o numérico (`scale_x`, `scale_y`) y rotación angular libre (`angle`) para capas ráster importadas.
+  - **Importación de Capas Ráster Externas:** Botón dedicado para cargar archivos externos (TIFF, FITS, PNG, JPG) directamente a la pila de capas del Revelador.
+  - **Miniatura Dual Interactiva (Estilo Photoshop):** Doble miniatura independiente en cada capa (miniatura de imagen a la izquierda y miniatura de máscara a la derecha) para alternar el foco de edición entre píxeles ráster y máscaras espaciales/vectoriales.
+  - **Exportación PSD Multicapa Completa:** Exportación nativa a Photoshop PSD de 16 bits preservando transformaciones afines espaciales (traslación, escala, rotación), modos de fusión nativos de Photoshop (`norm`, `scrn`, `lum `, `sLit`, `over`, `mul `), opacidades y máscaras recortadas.
+
+* **Gestor Avanzado de Presets de Revelado (`core/developer_presets.py`, `gui/dialog_presets.py`, `gui/developer/panels/panel_presets.py`):**
+  - **Control de Intensidad Porcentual (0% a 150%):** Deslizador de modulación continua mediante interpolación lineal (*lerp*) que escala los parámetros del preset respetando estrictamente los límites físicos de los controles.
+  - **Inferencia Automática de Dependencias:** Detección de requerimientos de *Máscara Cielo/Suelo* y de *Separación de Estrellas con StarNet++* con distintivos visuales en la galería de presets.
+  - **Ámbitos de Aplicación Selectivos:** Posibilidad de aplicar presets sobre parámetros globales, solo color/WB, solo contraste/tonos o solo detalle/reducción de ruido.
+  - **Interfaz Visual con Previsualización:** Nueva ventana modal ergonómica con tarjetas descriptivas y previsualización en vivo.
+
+* **AI Denoise NAFNet Multiescala y Preservación Lineal (`core/ai_denoise.py`, `core/denoise.py`):**
+  - **Reducción de Ruido Cromático Multiescala:** Procesamiento desacoplado en dos pasadas (resolución nativa 1.0x para luminancia/microestructura y 0.5x en espacio YCrCb para croma), eliminando manchas de color de baja frecuencia sin emborronar estrellas ni filamentos débiles.
+  - **Estirado Analítico MTF Dinámico Invertible:** Pre-estirado automático de imágenes lineales para situar las sombras en el rango óptimo de NAFNet, revertido analíticamente tras la inferencia (`_apply_inv_mtf`) con fidelidad fotométrica estricta.
+  - **Modulación por Máscara de Cielo y Microdetalles:** Fuerza modulada diferenciada entre cielo y suelo, con preservación de microestructuras de alta frecuencia ($>2.5\sigma$).
+  - **Caché Global de Sesiones ONNX y Modelos `width64`:** Reutilización de sesiones en memoria y soporte para variantes NAFNet de 64 canales.
+
+* **Nuevas Funciones Fotométricas y de Estirado (`core/stretch.py`):**
+  - `calculate_sky_neutral_wb`: Balance de blancos automático enfocado en el fondo celeste, descartando estrellas brillantes y núcleo galáctico.
+  - `calculate_sky_mtf_params`: Parámetros seguros de punto negro y medios tonos MTF con protección para sombras terrestres.
+  - `calculate_smart_ground_lift`: Compensación tonal adaptativa en tierra basada en SNR y luminancia para evitar ruido excesivo.
+
+* **Aceleración Nativa en Rust (`astroloom_rs` v0.15.0):**
+  - Kernels Rayon compilados: `compute_linear_gradient_rs`, `compute_radial_gradient_rs`, `generate_luminance_range_mask_rs`, `generate_color_range_mask_rs` y `apply_layer_adjustments_fused`.
+
+### Rendimiento y Optimización
+* **Caché Incremental de Subcomposición O(1) (`core/mask_layers.py`):** Acceso en <0.05 ms a las capas compuestas inferiores durante la manipulación de deslizadores o gizmos, eliminando recalculos redundantes de capas subyacentes.
+* **Pirámides de Mipmaps para Interacción a 60–144 FPS:** Generación de proxys interactivos (`proxy_preview` ≤1600 px y `proxy_draft` ≤1000 px) para un arrastre fluido sin bloqueo de CPU ni tirones en el lienzo.
+* **Carga de Proyectos `.devloom` Optimizada (`gui/tab_developer.py`):** Supresión de renders intermedios redundantes y eliminación de capas fantasma al deserializar archivos de proyecto.
+* **Supresión de Actualizaciones Pesadas durante Arrastre:** Inhibición del cálculo de histograma completo y renders pesados mientras se desplazan manipuladores vectoriales en pantalla.
+
 ## [0.14.3] - 2026-11-11
 
 ### Añadido

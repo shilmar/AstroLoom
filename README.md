@@ -4,7 +4,7 @@
 
 **Suite y Estación de Trabajo Integral para Astrofotografía de Paisaje, Cielo Profundo y Eventos Astronómicos**
 
-[![Version](https://img.shields.io/badge/version-v0.14.3-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
+[![Version](https://img.shields.io/badge/version-v0.15.0-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -46,13 +46,15 @@ Impulsada por una arquitectura híbrida que combina una interfaz gráfica reacti
 
 ---
 
-## 🎨 Compositor Multicapa y Modos de Fusión (Novedad v0.14.3)
+## 🎨 Compositor Multicapa, Máscaras Vectoriales y Transformación 2D (v0.15.0)
 
-AstroLoom integra un sistema completo de composición no destructiva con capas de ajuste y capas ráster de imagen:
-* **Transferencia Directa Eclipses $\to$ Revelador:** Exporta pilas completas de filtros coronales procesados al Revelador con un solo clic.
-* **Modos de Fusión Profesionales:** *Normal*, *Trama (Screen)*, *Luminosidad (Luminosity)*, *Luz Suave (Soft Light)*, *Superponer (Overlay)* y *Multiplicar (Multiply)* acelerados en paralelo con Rust Rayon.
-* **Máscaras de Pincel Espaciales:** Dibuja o borra sobre cualquier capa para aplicar filtros y ajustes de forma localizada.
-* **Persistencia Completa (.devloom):** Almacenamiento seguro en ZIP con máscaras y capas ráster en PNG de 16 bits sin pérdida.
+AstroLoom integra un sistema integral de composición profesional no destructiva con capas ráster y de ajuste:
+* **Máscaras Vectoriales Analíticas en Rust:** Filtros de **Gradiente Lineal** (polución lumínica, viñeteo) y **Gradiente Radial / Elíptico** (centro galáctico, nebulosas) con gizmos interactivos directos sobre el lienzo a 60 FPS y restricción espacial automática a Cielo o Suelo (*Edge-Snapping*).
+* **Transformación Espacial 2D de Capas Ráster:** Desplazamiento interactivo en el lienzo, escalado (con rueda de ratón o parámetros numéricos) y rotación libre para capas ráster importadas.
+* **Miniaturas Duales Estilo Pro:** Edición independiente de la imagen o de su máscara con un solo clic.
+* **Gestor Avanzado de Presets:** Modulación continua de intensidad (0% a 150%), previsualización en tiempo real y detección automática de dependencias (StarNet++ y máscara de horizonte).
+* **Reducción de Ruido IA Multiescala:** NAFNet optimizado con descomposición de croma en dos escalas (1.0x luminancia, 0.5x color YCrCb), pre-estirado analítico MTF invertible para preservar fotometría lineal y caché de sesiones ONNX.
+* **Modos de Fusión Profesionales y Exportación PSD:** *Normal*, *Trama (Screen)*, *Luminosidad*, *Luz Suave*, *Superponer* y *Multiplicar* en Rust Rayon; exportación completa a PSD de 16 bits preservando transformaciones espaciales y máscaras.
 
 ---
 

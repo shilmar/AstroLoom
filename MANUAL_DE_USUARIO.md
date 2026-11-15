@@ -42,10 +42,12 @@ Para iniciar AstroLoom en Windows de la manera más cómoda y sin ventanas negra
 * Si no hay entorno virtual, recurre automáticamente a la instalación de Python del sistema.
 * En entornos Linux/macOS o desde la terminal, puedes iniciar la suite ejecutando directamente `python run_app.py`.
 
-### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.14.3)
-A partir de las versiones **v0.14.0** a **v0.14.3**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
+### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.15.0)
+A partir de las versiones **v0.14.0** a **v0.15.0**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
 * **Fluidez Total a 60-160+ FPS:** El renderizado del lienzo (`MaskCanvas`) vuelca directamente a búferes de memoria continua `BGRA8888` compatibles de forma nativa con `QImage(Format_RGB32)`. Las alertas de clipping (`J`) y el comparador Antes/Después con cortina (`Y`) se procesan en microsegundos sin crear copias intermedias en NumPy ni capas secundarias de `QPixmap`.
-* **Kernels de Modos de Fusión SIMD con Rayon (v0.14.3):** Fusión de capas ráster en paralelo multihilo (`apply_blend_mode_rs`) para modos Normal, Screen, Luminosidad (ponderación CIE Rec.709 y corrección cromática), Soft Light, Overlay y Multiply con soporte de máscaras espaciales de pincel a más de 60 FPS sin asignaciones intermedias en el heap.
+* **Máscaras Vectoriales y Gradientes Analíticos en Rust (v0.15.0):** Kernels Rayon paralelos (`compute_linear_gradient_rs`, `compute_radial_gradient_rs`) para evaluar degradados analíticos continuos (Hermite smoothstep, lineal, exponencial, reflejado) a más de 120 FPS sin consumo dinámico en el heap.
+* **Kernels Fused de Ajustes de Capa y Modos de Fusión (v0.15.0):** Evaluación conjunta en un solo ciclo multihilo (`apply_layer_adjustments_fused` y `apply_blend_mode_rs`) para exposición, contraste, altas luces, sombras, saturación, temperatura, tinte y curvas LUT con modos Normal, Screen, Luminosidad, Soft Light, Overlay y Multiply.
+* **Máscaras de Rango de Color y Luminancia Compiladas (v0.15.0):** Segmentación instantánea por tono angular y luminancia (`generate_luminance_range_mask_rs`, `generate_color_range_mask_rs`) acelerada en Rust.
 * **Filtrado Coronal Multihilo Científico (Eclipses):** Kernels dedicados en Rust con Rayon para segundas derivadas orientables por tensor de estructura (`steerable_g2_rs`), convolución rotacional de Keys ($a = -0.5$, `compute_larson_sekanina_rs`), mediana circular polar (`polar_circular_median_filter_rs`), pasos à-trous B3 guiados (`paired_b3_step_rs`), máscaras de protuberancias (`compute_red_excess_mask_rs`) y mapeo anular concéntrico (`display_detail_rings_rs`).
 * **Ahorro Masivo de Memoria RAM:** La calibración de tomas RAW (Darks, Bias, Flats) opera *in-place* sobre la matriz nativa de fotodiodos sin copias en coma flotante (0 bytes de RAM adicional), y la extracción de gradientes RBF ahorra más de 1.3 GB de memoria en imágenes de 24 a 60 MP.
 * **Poda Integral de Dependencias Externas:** Eliminadas las dependencias pesadas de `pytoshop`, `astropy` y `psutil`. AstroLoom ahora incluye lectores/escritores nativos en Rust para FITS (`fits_io`), PSD multicapa de 16 bits (`psd_writer`) y monitoreo de memoria del sistema operativo (`system_info`).
@@ -428,18 +430,61 @@ El compositor multicapa de AstroLoom funciona de manera análoga a Adobe Photosh
 
 * **Herramientas de Pincel:**
   - Pinta manualmente en pantalla para añadir o quitar zonas de ajuste local con control de tamaño y suavizado de borde (*feather*).
+* **Máscaras Vectoriales Analíticas en el Lienzo (Novedad v0.15.0):**
+  - **Filtro Graduado Lineal (Lineal):** Diseñado para corregir o matizar gradientes de contaminación lumínica, viñeteo asimétrico o brillo crepuscular.
+    - Se evalúa de manera continua y analítica mediante kernels Rust Rayon (`compute_linear_gradient_rs`).
+    - **Manipulador Directo en Pantalla (Gizmo):** Haz clic y arrastra directamente sobre el lienzo para orientar la línea de inicio y fin, desplazar la posición o ajustar el punto medio de transición.
+    - **Perfiles de Degradado:** Permite alternar entre curva suave *Smoothstep (Hermite)*, respuesta *Lineal*, caída *Exponencial* o degradado simétrico *Reflejado*.
+  - **Filtro Graduado Radial / Elíptico (Radial):** Diseñado para centrarse en objetos celestes específicos (núcleo de la Vía Láctea, Galaxia de Andrómeda, nebulosas de emisión o cúmulos estelares).
+    - Permite definir de forma interactiva el centro, radio horizontal ($R_x$), radio vertical ($R_y$), ángulo de rotación libre y suavizado periférico (*feather*).
+    - Evaluado analíticamente en Rust Rayon (`compute_radial_gradient_rs`) con previsualización fluida a 60 FPS sin asignaciones de memoria intermedias.
+  - **Restricción Espacial Automática (Edge-Snapping al Suelo/Cielo):**
+    - En el panel de propiedades de cualquier máscara vectorial lineal o radial, puedes elegir la restricción espacial:
+      - `Sin restricción (Todo)`: Afecta a toda la escena de borde a borde.
+      - `Solo Cielo`: La máscara vectorial se intersecta automáticamente con la segmentación de horizonte de IA, afectando exclusivamente a la bóveda celeste sin tocar el terreno.
+      - `Solo Suelo`: La máscara vectorial se restringe exclusivamente al paisaje terrestre, evitando desbordarse hacia las estrellas.
+
+* **Transformación Espacial 2D y Capas Ráster Externas (Novedad v0.15.0):**
+  - **Importación de Capas Ráster:** Pulsa el botón **«+ Ráster»** para cargar cualquier imagen externa astronómica o procesada (TIFF, FITS, PNG o JPG) directamente como una nueva capa independiente en la pila.
+  - **Herramienta de Mover y Transformar (`M`):**
+    - Activa el modo de transformación para reposicionar capas ráster directamente en el lienzo.
+    - Arrastra con el ratón para desplazar la capa (`offset_x`, `offset_y`).
+    - Usa la rueda del ratón sobre la capa para ampliar o reducir su escala en incrementos suaves (`scale_x`, `scale_y`).
+    - Ajusta numéricamente la rotación angular libre (-180° a +180°) desde el panel de la capa.
+  - **Miniatura Dual Interactiva (Estilo Photoshop):**
+    - Las capas ráster presentan dos miniaturas diferenciadas: la miniatura de la **Imagen** (izquierda) y la miniatura de la **Máscara de Capa** (derecha).
+    - Haz clic en la miniatura de la imagen para ajustar parámetros tonales, curvas, traslación y escala.
+    - Haz clic en la miniatura de la máscara para pintar con el pincel espacial, invertirla o asociarle un degradado vectorial.
+  - **Fluidez y Modo Borrador (Draft Mipmaps):**
+    - Durante la manipulación y arrastre en el lienzo, AstroLoom conmuta de forma automática a pirámides de mipmaps de alta velocidad (≤1000 px) y activa una caché incremental de subcomposición $O(1)$, garantizando una tasa de refresco constante de 60 a 144 FPS sin congelamientos de la interfaz.
+
+* **Gestor Avanzado de Presets con Modulación de Intensidad (Novedad v0.15.0):**
+  - Abre el nuevo diálogo interactivo de presets de revelado (`DeveloperPreset v1.1`) desde el botón de la barra superior.
+  - **Deslizador de Intensidad (0% a 150%):** Permite modular la fuerza del preset de forma continua mediante interpolación lineal segura (*lerp*):
+    - Al `100%`: Aplica exactamente la receta fotométrica del preset.
+    - Al `50%`: Aplica una versión sutil y atenuada a la mitad del efecto sobre tu imagen actual.
+    - Al `150%`: Intensifica el efecto respetando estrictamente los límites físicos de los deslizadores.
+  - **Inferencia Automática de Requisitos:** El gestor detecta e indica mediante insignias si un preset requiere separación de estrellas con StarNet++ o máscara de horizonte cielo/suelo.
+  - **Filtro de Ámbito:** Selecciona si deseas aplicar la receta completa (`Todo`), únicamente el `Color y Balance de Blancos`, el `Contraste y Curvas` o los `Detalles y Reducción de Ruido`.
+
+* **AI Denoise NAFNet Multiescala y Preservación Lineal (Novedad v0.15.0):**
+  - **Reducción de Ruido Cromático Multiescala:** Ejecuta un pipeline desacoplado en dos pasadas (escala nativa 1.0x para luminancia y detalle fino; escala reducida 0.5x en espacio YCrCb para croma), erradicando manchas térmicas y grano de color sin destruir la microtextura estelar.
+  - **Estirado Analítico MTF Dinámico Invertible:** Para tomas en espacio lineal, AstroLoom calcula automáticamente una curva MTF óptima para situar la información en la zona de máxima respuesta de la red neuronal NAFNet, y posteriormente invierte analíticamente la curva (`_apply_inv_mtf`) preservando con rigor el 100% de la fotometría astronómica de partida.
+  - **Modulación por Máscara de Cielo y Microdetalles:** Ajusta la potencia del filtrado independientemente en cielo y suelo, e incorpora un paso de protección de altas frecuencias ($>2.5\sigma$) para evitar que los núcleos estelares o filamentos de nebulosas pierdan nitidez.
+  - **Caché de Sesiones ONNX y Soporte `width64`:** Reutiliza sesiones en memoria entre ejecuciones evitando retardos de carga y añade soporte nativo para pesos NAFNet de 64 canales de ancho.
+
 * **Capas Nativas:**
   - **🌌 Fondo Nebular:** Ajusta selectivamente el polvo de la Vía Láctea e integra los controles de Estirado Adaptativo RGB, Claridad, Dehaze, Ondículas y Reducción de Ruido multietapa.
   - **⭐ Estrellas:** Ajusta el brillo, nitidez o saturación de las estrellas y los efectos de difusión estelar.
   - **🏞️ Suelo:** Ajusta el paisaje terrestre (exposición, balance de blancos, contraste y curvas tonales locales).
-  - **🎨 Capa Ráster / Filtros Coronales (Novedad v0.14.3):** Aloja imágenes y filtros astronómicos procesados de forma independiente (como la pila multicapa de eclipses solares). Destacadas con temática ámbar (`#ff9800`) en la lista de capas.
+  - **🎨 Capa Ráster / Filtros Coronales:** Aloja imágenes y filtros astronómicos procesados de forma independiente (como la pila multicapa de eclipses solares o imágenes externas importadas). Destacadas con temática ámbar (`#ff9800`) en la lista de capas.
     - **Selector de Modo de Fusión (Blend Mode):** Permite elegir entre `Normal`, `Trama (Screen)`, `Luminosidad (Luminosity)`, `Luz Suave (Soft Light)`, `Superponer (Overlay)` y `Multiplicar (Multiply)`, acelerados en paralelo con Rust Rayon.
     - **Máscara de Pincel Espacial Integrada:** Puedes pintar o borrar sobre la capa ráster con el pincel interactivo (`[ / ]` para tamaño, `Shift` para borrar) para aplicar el filtro coronal exclusivamente en las regiones de interés (por ejemplo, protegiendo las protuberancias o aislando los streamers exteriores).
     - **Ajustes y Curvas Dedicadas:** Cada capa ráster cuenta con sus propios controles tonales (EV, contraste, sombras, luces, balance) y su propia curva spline LUT independiente.
 * **Capas de Ajuste Personalizadas:** Crea capas locales para iluminar un árbol, apagar una farola o dar volumen a una nube.
 * **Exportación Profesional:**
   - **TIFF 16-bit:** Para impresión o archivo maestro de máxima calidad.
-  - **PSD Multicapa (Photoshop):** Exporta el proyecto completo conservando cada capa separada (Cielo, Suelo, Estrellas, Fondo Nebular) y **con sus máscaras de capa reales y editables**, listas para continuar trabajando en Photoshop sin perder nada.
+  - **PSD Multicapa (Photoshop):** Exporta el proyecto completo conservando cada capa separada (Cielo, Suelo, Estrellas, Fondo Nebular, Capas Ráster con transformaciones afines espaciales 2D y Capas de Ajuste) y **con sus máscaras de capa reales y editables**, listas para continuar trabajando en Photoshop sin perder nada.
 
 ---
 
@@ -505,7 +550,7 @@ Durante un eclipse total de sol o de luna, el rango dinámico de la corona y el 
    * Pulsa el botón **"Exportar PSD Multicapa"** para generar automáticamente un proyecto `.psd` de 16 bits por canal listo para Photoshop, GIMP o PixInsight.
    * Incluye todas las capas maestras estandarizadas (`Fondo HDR Base`, `01 NRGF`, `02 WOW Edge-Aware`, `09 NAFE`, `11 Steerable G2`, `15 Larson-Sekanina`, `16 SWAP`) con sus modos de mezcla nativos (`Normal`, `Overlay`), permitiendo ajustar la opacidad de cada filtro de forma no destructiva.
 
-5. **Transferencia Directa de la Pila Coronal al Revelador (Novedad v0.14.3):**
+5. **Transferencia Directa de la Pila Coronal al Revelador:**
    * Pulsa el botón **«Transferir Pila Coronal al Revelador»** en la barra de acciones de la pestaña de Eclipses.
    * Se abrirá el diálogo interactivo de **Configuración de Pila Coronal Multicapa**, permitiéndote seleccionar qué filtros astronómicos computar (NRGF, SWAP, Larson-Sekanina, Steerable G2, NAFE, WOW Bilateral Guiado y MGN Multiescala).
    * Cada filtro viene preconfigurado con su modo de fusión óptimo (`Luminosidad`, `Trama`, `Luz Suave`, `Normal`) y su opacidad recomendada por defecto para un revelado físico equilibrado.
