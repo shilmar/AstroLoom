@@ -332,6 +332,7 @@ class DeveloperTab(QWidget):
         self._is_slider_pressed: bool = False
         self._is_dragging_deconv: bool = False
         self._is_dragging_gradient: bool = False
+        self._is_dragging_antihalo: bool = False
         self.async_pipeline = AsyncPipelineManager(self)
         self.async_pipeline.preview_ready.connect(self._on_async_preview_ready)
         self.async_pipeline.pipeline_failed.connect(self._on_async_pipeline_failed)
@@ -919,11 +920,12 @@ class DeveloperTab(QWidget):
             self.panel_ground_sky.edge_shift_changed.connect(self.on_gnd_edge_shift_changed)
         self.mask_layers_widget.ground_reset_requested.connect(self.reset_gnd_tone)
         self.mask_layers_widget.ground_slider_released.connect(self._commit_action)
+        self.mask_layers_widget.action_committed.connect(self._commit_action)
         self.mask_layers_widget.set_ground_tone_values(
             self.slider_gnd_ev.value(),
             self.slider_gnd_sh.value(),
             self.slider_gnd_bp.value(),
-            int(getattr(self, 'gnd_denoise_val', 0)),
+            int(round(getattr(self, 'gnd_denoise_val', 0.0) * 100.0)),
             int(getattr(self, 'gnd_antihalo_val', 0) * 100),
             int(getattr(self, 'gnd_edge_shift_val', 0))
         )
@@ -2603,7 +2605,10 @@ class DeveloperTab(QWidget):
         """Manejador ejecutado al soltar el clic izquierdo tras pintar con el pincel de capa."""
         layer = self.mask_layers_widget.get_selected_layer()
         if layer and (layer.mask_type == "brush" or layer.mask_type == MASK_TYPE_IMAGE_RASTER):
-            layer.brush_mask = stroke_mask.copy()
+            if hasattr(layer, "set_brush_mask"):
+                layer.set_brush_mask(stroke_mask.copy())
+            else:
+                layer.brush_mask = stroke_mask.copy()
             if hasattr(self, 'mask_layers_widget'):
                 self.mask_layers_widget.invalidate_layer_thumbnail(layer.id)
             # Si el botón de previsualización NO está activado expresamente, retirar el overlay temporal
@@ -4538,8 +4543,8 @@ class DeveloperTab(QWidget):
         pre_pre_lp = self._cache_ms_pre_lp_img if (is_preview and self._cache_ms_pre_lp_key == key_pre_lp and pre_spatial is None and pre_graded is None and pre_stretched is None and pre_linear is None and getattr(self._cache_ms_pre_lp_img, 'shape', None) and self._cache_ms_pre_lp_img.shape[:2] == t_shape) else None
         pre_stars = self._cache_ms_stars_img if (is_preview and getattr(self, '_cache_ms_stars_key', None) == key_stars and self._cache_ms_stars_img is not None and getattr(self._cache_ms_stars_img, 'shape', None) and self._cache_ms_stars_img.shape[:2] == t_shape) else None
 
-        # Build DeveloperState snapshot
-        state = DeveloperState.from_dict(self._capture_state())
+        # Build DeveloperState snapshot (omitiendo mask_layers para no serializar innecesariamente)
+        state = DeveloperState.from_dict(self._capture_state(include_mask_layers=False))
 
         # Collect tone curves
         curve_luts = {}
@@ -4554,10 +4559,12 @@ class DeveloperTab(QWidget):
         # Get PSF kernel
         psf_kernel = self._get_current_deconv_psf() if hasattr(self, '_get_current_deconv_psf') else None
 
-        # Mask layers
-        mask_layers = self.mask_layers_widget.layers if (apply_mask_layers and hasattr(self, 'mask_layers_widget')) else None
+        # Mask layers (instantánea superficial rápida para aislar el hilo de render)
+        raw_layers = self.mask_layers_widget.layers if (apply_mask_layers and hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers) else None
+        mask_layers = [l.shallow_snapshot() for l in raw_layers] if raw_layers else None
 
-        is_scrubbing = getattr(self, '_is_scrubbing_heavy_slider', False)
+        is_scrubbing = getattr(self, '_is_scrubbing_heavy_slider', False) or getattr(self, '_is_scrubbing_layer_slider', False)
+        is_dragging_antihalo = getattr(self, '_is_dragging_antihalo', False)
 
         cached_gnd_ai = self._cache_ground_ai if getattr(self, 'gnd_ai_denoise_enabled', False) else None
 
@@ -4588,6 +4595,7 @@ class DeveloperTab(QWidget):
                 precomputed_spatial_base=pre_spatial,
                 precomputed_stretched_stars=pre_stars,
                 is_dragging_deconv=getattr(self, '_is_dragging_deconv', False),
+                is_dragging_antihalo=is_dragging_antihalo,
             )
             return None
 
@@ -4613,6 +4621,7 @@ class DeveloperTab(QWidget):
             precomputed_stretched_stars=pre_stars,
             return_milestones=True,
             is_dragging_deconv=getattr(self, '_is_dragging_deconv', False),
+            is_dragging_antihalo=is_dragging_antihalo,
         )
 
         if is_preview:
@@ -4653,7 +4662,7 @@ class DeveloperTab(QWidget):
         meta = getattr(self, '_last_async_meta', None)
         if meta is not None:
             key_pre_lp, key_linear, key_stretch, key_graded, key_spatial, key_stars, is_zoomed, is_scrubbing, st_img, precomputed_mask = meta
-            if is_scrubbing and not getattr(self, '_is_slider_pressed', False) and not getattr(self, '_is_scrubbing_heavy_slider', False):
+            if is_scrubbing and not getattr(self, '_is_slider_pressed', False) and not getattr(self, '_is_scrubbing_heavy_slider', False) and not getattr(self, '_is_scrubbing_layer_slider', False):
                 # Descartar solicitud de borrador tardía si el usuario ya soltó el deslizador
                 return
             if not is_scrubbing:
@@ -4713,7 +4722,7 @@ class DeveloperTab(QWidget):
             if getattr(self, '_is_slider_pressed', False) and not getattr(self, '_is_scrubbing_lut_slider', False) and not getattr(self, '_is_scrubbing_layer_slider', False):
                 self._is_scrubbing_heavy_slider = True
 
-            if hasattr(self, '_refine_timer') and getattr(self, '_is_scrubbing_heavy_slider', False):
+            if hasattr(self, '_refine_timer') and (getattr(self, '_is_scrubbing_heavy_slider', False) or getattr(self, '_is_scrubbing_layer_slider', False)):
                 if not getattr(self, '_is_scrubbing_lut_slider', False):
                     self._refine_timer.start(350)
 
@@ -4729,8 +4738,9 @@ class DeveloperTab(QWidget):
 
     def _on_refine_preview_timeout(self):
         """Refina progresivamente la previsualización al nivel de alta calidad cuando cesa el arrastre."""
-        if getattr(self, '_is_scrubbing_heavy_slider', False):
+        if getattr(self, '_is_scrubbing_heavy_slider', False) or getattr(self, '_is_scrubbing_layer_slider', False):
             self._is_scrubbing_heavy_slider = False
+            self._is_scrubbing_layer_slider = False
             self.update_stretch_preview(immediate=True)
 
     def _refresh_histograms_now(self):
@@ -6678,7 +6688,7 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_ground_tone_values(
                 val, self.slider_gnd_sh.value(), self.slider_gnd_bp.value(),
-                int(getattr(self, 'gnd_denoise_val', 0)),
+                int(round(getattr(self, 'gnd_denoise_val', 0.0) * 100.0)),
                 int(getattr(self, 'gnd_antihalo_val', 0) * 100),
                 int(getattr(self, 'gnd_edge_shift_val', 0))
             )
@@ -6690,7 +6700,7 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_ground_tone_values(
                 self.slider_gnd_ev.value(), val, self.slider_gnd_bp.value(),
-                int(getattr(self, 'gnd_denoise_val', 0)),
+                int(round(getattr(self, 'gnd_denoise_val', 0.0) * 100.0)),
                 int(getattr(self, 'gnd_antihalo_val', 0) * 100),
                 int(getattr(self, 'gnd_edge_shift_val', 0))
             )
@@ -6703,7 +6713,7 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_ground_tone_values(
                 self.slider_gnd_ev.value(), self.slider_gnd_sh.value(), val,
-                int(getattr(self, 'gnd_denoise_val', 0)),
+                int(round(getattr(self, 'gnd_denoise_val', 0.0) * 100.0)),
                 int(getattr(self, 'gnd_antihalo_val', 0) * 100),
                 int(getattr(self, 'gnd_edge_shift_val', 0))
             )
@@ -6711,6 +6721,8 @@ class DeveloperTab(QWidget):
 
     def on_gnd_antihalo_changed(self, val: int):
         self.gnd_antihalo_val = val / 100.0
+        if getattr(self, '_is_slider_pressed', False):
+            self._is_dragging_antihalo = True
         if hasattr(self, 'panel_ground_sky') and self.panel_ground_sky is not None:
             if hasattr(self.panel_ground_sky, 'slider_gnd_antihalo') and self.panel_ground_sky.slider_gnd_antihalo.value() != val:
                 self.panel_ground_sky.slider_gnd_antihalo.setValue(val)
@@ -7361,6 +7373,11 @@ class DeveloperTab(QWidget):
 
         # 2. Conectar eventos del Gestor de Capas si existen
         if hasattr(self, 'mask_layers_widget'):
+            if hasattr(self.mask_layers_widget, 'action_committed'):
+                try:
+                    self.mask_layers_widget.action_committed.connect(self._commit_action)
+                except Exception:
+                    pass
             if hasattr(self.mask_layers_widget, 'interaction_started'):
                 self.mask_layers_widget.interaction_started.connect(self._on_layer_slider_pressed)
             if hasattr(self.mask_layers_widget, 'interaction_finished'):
@@ -7399,6 +7416,7 @@ class DeveloperTab(QWidget):
         self._is_scrubbing_lut_slider = False
         self._is_scrubbing_layer_slider = True
         self._is_dragging_deconv = False
+        self._is_dragging_antihalo = False
 
     def _on_deconv_slider_pressed(self):
         """Activa el modo de arrastre de deconvolución manteniendo fidelidad del filtro de PSF."""
@@ -7409,6 +7427,7 @@ class DeveloperTab(QWidget):
         self._is_scrubbing_lut_slider = False
         self._is_scrubbing_layer_slider = False
         self._is_dragging_deconv = True
+        self._is_dragging_antihalo = False
 
     def _on_slider_interaction_finished(self):
         """Finaliza inmediatamente el renderizado y los histogramas al soltar el ratón y consolida en historial."""
@@ -7419,6 +7438,7 @@ class DeveloperTab(QWidget):
         self._is_scrubbing_lut_slider = False
         self._is_scrubbing_layer_slider = False
         self._is_dragging_deconv = False
+        self._is_dragging_antihalo = False
         self.update_stretch_preview(immediate=True)
         self._commit_action()
 
@@ -7431,10 +7451,11 @@ class DeveloperTab(QWidget):
         self._is_scrubbing_lut_slider = False
         self._is_scrubbing_layer_slider = False
         self._is_dragging_deconv = False
+        self._is_dragging_antihalo = False
         self.update_stretch_preview(immediate=True)
         self._commit_action()
 
-    def _capture_state(self) -> dict:
+    def _capture_state(self, include_mask_layers: bool = True) -> dict:
         """Captura una instantánea paramétrica ligera delegando en los paneles modulares."""
         state = {}
         if hasattr(self, 'panel_stretch') and self.panel_stretch is not None:
@@ -7456,7 +7477,7 @@ class DeveloperTab(QWidget):
             state["dust_visualize"] = self.panel_dust.visualize
             state["dust_visualize_threshold"] = self.panel_dust.visualize_threshold
         state["curves"] = self.curve_widget.get_state() if hasattr(self, 'curve_widget') else None
-        state["mask_layers"] = self.mask_layers_widget.get_state() if hasattr(self, 'mask_layers_widget') else None
+        state["mask_layers"] = self.mask_layers_widget.get_state() if (include_mask_layers and hasattr(self, 'mask_layers_widget')) else None
         state["starless_is_stretched"] = getattr(self, "starless_is_stretched", False)
         return state
 
@@ -7559,7 +7580,7 @@ class DeveloperTab(QWidget):
                     "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
                     "starless_is_stretched": getattr(self, "starless_is_stretched", False),
                     "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
-                    "mask_layers": [l.to_dict() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
+                    "mask_layers": [l.shallow_snapshot() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
                 }
                 self.redo_stack.append(redo_item)
                 self.image_starless = target["image_starless"]
@@ -7640,7 +7661,7 @@ class DeveloperTab(QWidget):
                 current = self._capture_state()
                 self.redo_stack.append(current)
                 self._restore_state(target)
-                self._last_committed_state = target
+                self._last_committed_state = self._capture_state()
                 self.log_message(f"↺ Deshacer aplicado ({len(self.undo_stack)} pasos restantes)")
         finally:
             self._is_undoing_or_redoing = False
@@ -7709,7 +7730,7 @@ class DeveloperTab(QWidget):
                     "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
                     "starless_is_stretched": getattr(self, "starless_is_stretched", False),
                     "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
-                    "mask_layers": [l.to_dict() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
+                    "mask_layers": [l.shallow_snapshot() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
                 }
                 self.undo_stack.append(undo_item)
                 self.image_starless = target["image_starless"]
@@ -7790,7 +7811,7 @@ class DeveloperTab(QWidget):
                 current = self._capture_state()
                 self.undo_stack.append(current)
                 self._restore_state(target)
-                self._last_committed_state = target
+                self._last_committed_state = self._capture_state()
                 self.log_message(f"↻ Rehacer aplicado ({len(self.redo_stack)} pasos por rehacer)")
         finally:
             self._is_undoing_or_redoing = False
@@ -7952,12 +7973,17 @@ class DeveloperTab(QWidget):
                 self.mask_layers_widget.select_layer_by_id(current_id)
 
             sel_layer = self.mask_layers_widget.get_selected_layer()
-            if sel_layer and (sel_layer.mask_type == "brush" or sel_layer.mask_type == MASK_TYPE_IMAGE_RASTER) and sel_layer.enabled:
+            if sel_layer and getattr(sel_layer, 'is_gradient', False) and sel_layer.enabled:
+                self.canvas.set_active_gradient_layer(sel_layer)
+            elif sel_layer and (sel_layer.mask_type == "brush" or sel_layer.mask_type == MASK_TYPE_IMAGE_RASTER) and sel_layer.enabled:
+                self.canvas.set_active_gradient_layer(None)
                 show_overlay = self.mask_layers_widget.btn_preview_mask.isChecked()
                 self.canvas.set_active_layer_mask(sel_layer.brush_mask, show_overlay=show_overlay)
-            elif not self.mask_layers_widget.btn_preview_mask.isChecked():
-                self.canvas.set_refined_mask(None)
-                self.canvas.set_mask_visible(False)
+            else:
+                self.canvas.set_active_gradient_layer(None)
+                if not self.mask_layers_widget.btn_preview_mask.isChecked():
+                    self.canvas.set_refined_mask(None)
+                    self.canvas.set_mask_visible(False)
 
         if render_preview:
             self.update_stretch_preview(immediate=True)

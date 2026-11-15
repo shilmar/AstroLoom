@@ -162,6 +162,7 @@ def apply_developer_pipeline(
     return_milestones: bool = False,
     return_intermediate: bool = False,
     is_dragging_deconv: bool = False,
+    is_dragging_antihalo: bool = False,
     cached_ground_ai: Optional[np.ndarray] = None,
     abort_flag: Optional[Callable[[], bool]] = None,
 ) -> Union[np.ndarray, Tuple[Any, ...]]:
@@ -786,13 +787,15 @@ def apply_developer_pipeline(
     # 15. Supresión de Halos en Frontera de Horizonte (Anti-Halo Clamping)
     antihalo_strength = getattr(state, "gnd_antihalo_val", 0) / 100.0
     if antihalo_strength > 1e-4 and precomputed_mask is not None:
-        from core.masking import suppress_horizon_halos
-        stretched = suppress_horizon_halos(
-            stretched,
-            precomputed_mask,
-            radius=3,
-            strength=antihalo_strength
-        )
+        if not is_scrubbing or is_dragging_antihalo:
+            from core.masking import suppress_horizon_halos
+            radius = 2 if (is_scrubbing and is_dragging_antihalo) else 3
+            stretched = suppress_horizon_halos(
+                stretched,
+                precomputed_mask,
+                radius=radius,
+                strength=antihalo_strength
+            )
 
     # 16. Diagnóstico de Visualización de Manchas (Visualize Spots Overlay)
     if getattr(state, "dust_visualize", False):

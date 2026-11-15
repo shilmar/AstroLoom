@@ -141,6 +141,7 @@ class MaskLayersWidget(QWidget):
     ground_ai_denoise_requested = Signal()       # Solicitud de alternar o calcular Denoise IA para Suelo
     ground_reset_requested = Signal()            # reset tono suelo
     ground_slider_released = Signal()            # commit de deshacer tras soltar deslizador de suelo
+    action_committed = Signal()                  # commit de deshacer consolidado para historial
 
     # Sincronización contextual de Estrellas
     stars_intensity_changed = Signal(int)        # (val 0 a 200) sincronizar slider_stars
@@ -1978,6 +1979,7 @@ class MaskLayersWidget(QWidget):
         self.layers.insert(0, layer)
         self._rebuild_list_items(select_layer_id=layer.id)
         self.layers_changed.emit()
+        self._notify_action_committed()
         return layer
 
     def add_raster_layer(
@@ -2005,6 +2007,7 @@ class MaskLayersWidget(QWidget):
         self.layers.insert(pos, layer)
         self._rebuild_list_items(select_layer_id=layer.id)
         self.layers_changed.emit()
+        self._notify_action_committed()
         return layer
 
     def _delete_selected(self) -> None:
@@ -2025,6 +2028,7 @@ class MaskLayersWidget(QWidget):
             next_select = self.layers[idx].id if idx < len(self.layers) else (self.layers[-1].id if self.layers else None)
             self._rebuild_list_items(select_layer_id=next_select)
             self.layers_changed.emit()
+            self._notify_action_committed()
 
     def _duplicate_selected(self) -> None:
         """Duplica la capa seleccionada si no es de sistema."""
@@ -2034,7 +2038,7 @@ class MaskLayersWidget(QWidget):
             new_layer = MaskLayer.from_dict(d)
             new_layer.id = str(uuid.uuid4())[:8]
             if layer.brush_mask is not None:
-                new_layer.brush_mask = layer.brush_mask.copy()
+                new_layer.set_brush_mask(layer.brush_mask.copy())
             if getattr(layer, "image_data", None) is not None:
                 new_layer.set_image_data(layer.image_data.copy())
             new_layer.name = f"{layer.name} (Copia)"
@@ -2042,6 +2046,7 @@ class MaskLayersWidget(QWidget):
             self.layers.insert(idx + 1, new_layer)
             self._rebuild_list_items(select_layer_id=new_layer.id)
             self.layers_changed.emit()
+            self._notify_action_committed()
 
     def _move_selected_up(self) -> None:
         """Mueve la capa seleccionada hacia arriba."""
@@ -2050,6 +2055,7 @@ class MaskLayersWidget(QWidget):
             self.layers[idx - 1], self.layers[idx] = self.layers[idx], self.layers[idx - 1]
             self._rebuild_list_items(select_layer_id=self.layers[idx - 1].id)
             self.layers_changed.emit()
+            self._notify_action_committed()
 
     def _move_selected_down(self) -> None:
         """Mueve la capa seleccionada hacia abajo."""
@@ -2058,6 +2064,7 @@ class MaskLayersWidget(QWidget):
             self.layers[idx + 1], self.layers[idx] = self.layers[idx], self.layers[idx + 1]
             self._rebuild_list_items(select_layer_id=self.layers[idx + 1].id)
             self.layers_changed.emit()
+            self._notify_action_committed()
 
     def get_selected_layer(self) -> Optional[MaskLayer]:
         """Obtiene la instancia de MaskLayer actualmente seleccionada."""
@@ -2404,7 +2411,7 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if layer and layer.mask_type == MASK_TYPE_IMAGE_RASTER:
             h_m, w_m = self._get_layer_image_shape(layer)
-            layer.brush_mask = np.ones((h_m, w_m), dtype=np.float32)
+            layer.set_brush_mask(np.ones((h_m, w_m), dtype=np.float32))
             layer.active_target = "mask"
             layer.brush_mode = "erase"
             self._last_brush_mode = "erase"
@@ -2418,13 +2425,14 @@ class MaskLayersWidget(QWidget):
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
             self.layers_changed.emit()
+            self._notify_action_committed()
 
     def _add_raster_layer_mask_black(self) -> None:
         """Añade una máscara de capa negra completa (Ocultar Todo) a la capa ráster seleccionada."""
         layer = self.get_selected_layer()
         if layer and layer.mask_type == MASK_TYPE_IMAGE_RASTER:
             h_m, w_m = self._get_layer_image_shape(layer)
-            layer.brush_mask = np.zeros((h_m, w_m), dtype=np.float32)
+            layer.set_brush_mask(np.zeros((h_m, w_m), dtype=np.float32))
             layer.active_target = "mask"
             layer.brush_mode = "paint"
             self._last_brush_mode = "paint"
@@ -2438,6 +2446,7 @@ class MaskLayersWidget(QWidget):
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
             self.layers_changed.emit()
+            self._notify_action_committed()
 
     def _detect_horizon_from_image(self, img: np.ndarray) -> Tuple[Optional[np.ndarray], str]:
         """Ejecuta la detección de horizonte mediante IA U²-Net o algorítmico sobre una imagen."""
@@ -2556,7 +2565,7 @@ class MaskLayersWidget(QWidget):
             # 1.0 en cielo, 0.0 en suelo
             final_mask = sky_m
 
-        layer.brush_mask = final_mask
+        layer.set_brush_mask(final_mask)
         layer.active_target = "mask"
         layer.brush_mode = "erase"
         self._last_brush_mode = "erase"
@@ -2575,6 +2584,7 @@ class MaskLayersWidget(QWidget):
         if self.btn_preview_mask.isChecked():
             self._emit_mask_preview()
         self.layers_changed.emit()
+        self._notify_action_committed()
 
     def _add_raster_layer_mask_ground(self, source_choice: Optional[str] = None) -> None:
         """Añade una máscara de capa de suelo (ideal para tomas de hora azul en trípode) a la capa ráster seleccionada."""
@@ -2593,9 +2603,14 @@ class MaskLayersWidget(QWidget):
         h_m, w_m = self._get_layer_image_shape(layer)
         if layer.brush_mask is None:
             # Si no tenía máscara aún, arranca con máscara negra (oculta)
-            layer.brush_mask = np.zeros((h_m, w_m), dtype=np.float32)
+            new_m = np.zeros((h_m, w_m), dtype=np.float32)
         else:
-            layer.brush_mask = np.clip(1.0 - layer.brush_mask, 0.0, 1.0).astype(np.float32)
+            new_m = np.clip(1.0 - layer.brush_mask, 0.0, 1.0).astype(np.float32)
+
+        if hasattr(layer, "set_brush_mask"):
+            layer.set_brush_mask(new_m)
+        else:
+            layer.brush_mask = new_m
 
         # Intercambiar automáticamente el modo del pincel: pintar <-> borrar
         new_mode = "paint" if layer.brush_mode == "erase" else "erase"
@@ -2615,12 +2630,13 @@ class MaskLayersWidget(QWidget):
         if self.btn_preview_mask.isChecked():
             self._emit_mask_preview()
         self.layers_changed.emit()
+        self._notify_action_committed()
 
     def _remove_raster_layer_mask(self) -> None:
         """Elimina la máscara de capa de la capa ráster seleccionada volviendo a dejarla al 100% visible."""
         layer = self.get_selected_layer()
         if layer and layer.mask_type == MASK_TYPE_IMAGE_RASTER:
-            layer.brush_mask = None
+            layer.set_brush_mask(None)
             layer.active_target = "image"
             self.invalidate_layer_thumbnail(layer.id)
             self._update_list_and_props_state()
@@ -2628,6 +2644,8 @@ class MaskLayersWidget(QWidget):
             if self.btn_preview_mask.isChecked():
                 self.preview_mask_requested.emit(None)
             self.layers_changed.emit()
+            self._notify_action_committed()
+            self._notify_action_committed()
 
     def _rebuild_list_items(self, select_layer_id: Optional[str] = None) -> None:
         """Regenera los elementos de la lista QListWidget con miniaturas, iconos, botón de ojo y estilos acordes a su tipo."""
@@ -2910,6 +2928,7 @@ class MaskLayersWidget(QWidget):
             self._rebuild_list_items(select_layer_id=layer.id)
             self.update_active_layer_histogram()
             self.layers_changed.emit()
+            self._notify_action_committed()
 
     def _on_layer_selection_changed(self, row: int) -> None:
         """Manejador al cambiar la fila seleccionada."""
@@ -3367,6 +3386,7 @@ class MaskLayersWidget(QWidget):
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
             self.layers_changed.emit()
+            self._notify_action_committed()
 
     def _on_layer_refine_strength_changed(self, value: int) -> None:
         self.lbl_refine_val.setText(f"{value}%")
@@ -3389,6 +3409,7 @@ class MaskLayersWidget(QWidget):
             if self.btn_preview_mask.isChecked():
                 self._emit_mask_preview()
             self.layers_changed.emit()
+            self._notify_action_committed()
 
     def _on_blend_mode_changed(self, index: int) -> None:
         if self._updating_ui: return
@@ -3400,6 +3421,7 @@ class MaskLayersWidget(QWidget):
                 self.invalidate_layer_thumbnail(layer.id)
                 self._rebuild_list_items(select_layer_id=layer.id)
                 self.layers_changed.emit()
+                self._notify_action_committed()
 
     def _on_opacity_changed(self, val: int) -> None:
         if self._updating_ui: return
@@ -3545,6 +3567,7 @@ class MaskLayersWidget(QWidget):
         layer.limit_mask = self.combo_grad_limit.currentData()
         self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
         self.layers_changed.emit()
+        self._notify_action_committed()
 
     def _on_linear_profile_changed(self) -> None:
         if self._updating_ui: return
@@ -3558,6 +3581,7 @@ class MaskLayersWidget(QWidget):
         self.row_lin_span_b.setVisible(is_refl and not getattr(layer, 'linear_symmetric', True))
         self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
         self.layers_changed.emit()
+        self._notify_action_committed()
 
     def _on_linear_symmetric_toggled(self, checked: bool) -> None:
         if self._updating_ui: return
@@ -3568,6 +3592,7 @@ class MaskLayersWidget(QWidget):
         self.row_lin_span_b.setVisible(not checked)
         self.invalidate_layer_thumbnail(layer.id, rebuild_now=False)
         self.layers_changed.emit()
+        self._notify_action_committed()
 
     def _on_linear_span_b_changed(self) -> None:
         if self._updating_ui: return
@@ -3719,7 +3744,10 @@ class MaskLayersWidget(QWidget):
     def _clear_brush_mask(self) -> None:
         layer = self.get_selected_layer()
         if layer and getattr(layer, 'supports_brush', False):
-            layer.brush_mask = None
+            if hasattr(layer, "set_brush_mask"):
+                layer.set_brush_mask(None)
+            else:
+                layer.brush_mask = None
             if layer.mask_type == MASK_TYPE_IMAGE_RASTER:
                 layer.active_target = "image"
             self.invalidate_layer_thumbnail(layer.id)
@@ -3727,6 +3755,7 @@ class MaskLayersWidget(QWidget):
             self.set_preview_active(False)
             self.preview_mask_requested.emit(None)
             self.layers_changed.emit()
+            self._notify_action_committed()
 
     def set_brush_radius_from_canvas(self, radius: int) -> None:
         """Actualiza el control deslizante de radio cuando se redimensiona con la rueda del ratón."""
@@ -4390,18 +4419,28 @@ class MaskLayersWidget(QWidget):
         else:
             self.preview_mask_requested.emit(m)
 
-    # Serialización y deserialización para proyectos y presets
-    def get_state(self, encode_masks: bool = False) -> List[Dict[str, Any]]:
-        """Devuelve una lista serializable de todas las capas configuradas."""
-        return [layer.to_dict(encode_mask=encode_masks) for layer in self.layers]
+    def _notify_action_committed(self) -> None:
+        """Notifica la consolidación de un cambio estructural o de parámetro en las capas para el historial."""
+        self.action_committed.emit()
+        self.ground_slider_released.emit()
 
-    def set_state(self, state: Optional[List[Dict[str, Any]]]) -> None:
-        """Restaura las capas desde una lista serializada."""
+    # Serialización y deserialización para proyectos, historial y presets
+    def get_state(self, encode_masks: bool = False) -> List[Any]:
+        """Devuelve una lista de instantáneas de las capas para el historial o serialización."""
+        if encode_masks:
+            return [layer.to_dict(encode_mask=True) for layer in self.layers]
+        return [layer.shallow_snapshot() for layer in self.layers]
+
+    def set_state(self, state: Optional[List[Any]]) -> None:
+        """Restaura las capas desde una lista de capas o diccionarios serializados."""
         self.layers.clear()
         if state:
             for item in state:
                 try:
-                    self.layers.append(MaskLayer.from_dict(item))
+                    if isinstance(item, MaskLayer):
+                        self.layers.append(item.shallow_snapshot())
+                    elif isinstance(item, dict):
+                        self.layers.append(MaskLayer.from_dict(item))
                 except Exception:
                     pass
         self._rebuild_list_items(select_layer_id=self.layers[0].id if self.layers else None)

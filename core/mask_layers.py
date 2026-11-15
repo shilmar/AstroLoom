@@ -5,6 +5,7 @@ Permite apilar múltiples máscaras (Pincel, Suelo/Cielo, Luminancia, Rango de C
 locales paramétricos independientes y conciencia de capas StarNet (Compuesta, Suelo, Fondo Starless, Estrellas).
 """
 import uuid
+import copy
 import base64
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any, Tuple, Union, Callable
@@ -157,6 +158,19 @@ MASK_TYPE_IMAGE_GROUND = "image_ground"      # 🏞️ Capa de Suelo / Terreno (
 MASK_TYPE_IMAGE_RASTER = "image_raster"      # 🎨 Capa Ráster de Imagen (Filtros Eclipses / Composición)
 
 
+# Campos pesados o derivados que nunca deben clonarse al serializar a JSON
+_MASK_LAYER_EXCLUDED_FIELDS = frozenset({
+    "custom_mask",
+    "image_data",
+    "proxy_preview",
+    "proxy_draft",
+    "brush_mask",
+    "brush_mask_preview",
+    "brush_mask_draft",
+    "curve_lut",
+})
+
+
 @dataclass
 class MaskLayer:
     """Representa una capa (de ajuste o de imagen especial) con su propia máscara y parámetros."""
@@ -268,6 +282,67 @@ class MaskLayer:
     brush_flow: float = 0.8         # Flujo / opacidad por pasada (0.05 a 1.00)
     brush_mode: str = "paint"       # "paint" o "erase"
     brush_mask: Optional[np.ndarray] = None  # Float32 2D [0.0, 1.0]
+    brush_mask_preview: Optional[np.ndarray] = None  # Mipmap Nivel 1 (<= 1600 px)
+    brush_mask_draft: Optional[np.ndarray] = None    # Mipmap Nivel 2 (<= 800 px)
+    brush_mask_version: int = 0                      # Contador de versión para invalidación de cachés
+
+    def invalidate_brush_proxies(self) -> None:
+        """Invalida los mipmaps de la máscara de pincel e incrementa su versión."""
+        self.brush_mask_version += 1
+        self.brush_mask_preview = None
+        self.brush_mask_draft = None
+        self._cached_brush_id = None
+
+    def set_brush_mask(self, mask: Optional[np.ndarray]) -> None:
+        """Asigna una nueva máscara de pincel e invalida los proxies cacheados."""
+        self.brush_mask = mask
+        self.invalidate_brush_proxies()
+
+    def get_brush_proxy(self, level: str) -> Optional[np.ndarray]:
+        """Obtiene o genera de forma perezosa el proxy de pincel para 'draft' (<=800px) o 'preview' (<=1600px)."""
+        if self.brush_mask is None:
+            return None
+
+        # Si el array ha cambiado de identidad en memoria, auto-invalidar
+        current_id = id(self.brush_mask)
+        if getattr(self, "_cached_brush_id", None) != current_id:
+            self.brush_mask_preview = None
+            self.brush_mask_draft = None
+            self._cached_brush_id = current_id
+
+        h, w = self.brush_mask.shape[:2]
+        max_dim = max(h, w)
+
+        if level == "draft":
+            if self.brush_mask_draft is not None:
+                return self.brush_mask_draft
+            if max_dim <= 800:
+                self.brush_mask_draft = self.brush_mask
+            else:
+                scale_d = 800.0 / float(max_dim)
+                dw = max(4, (int(w * scale_d) // 4) * 4)
+                dh = max(4, (int(h * scale_d) // 4) * 4)
+                src = self.brush_mask_preview if self.brush_mask_preview is not None else self.brush_mask
+                self.brush_mask_draft = np.ascontiguousarray(
+                    cv2.resize(src, (dw, dh), interpolation=cv2.INTER_LINEAR),
+                    dtype=np.float32
+                )
+            return self.brush_mask_draft
+
+        # level == "preview"
+        if self.brush_mask_preview is not None:
+            return self.brush_mask_preview
+        if max_dim <= 1600:
+            self.brush_mask_preview = self.brush_mask
+        else:
+            scale_p = 1600.0 / float(max_dim)
+            pw = max(4, (int(w * scale_p) // 4) * 4)
+            ph = max(4, (int(h * scale_p) // 4) * 4)
+            self.brush_mask_preview = np.ascontiguousarray(
+                cv2.resize(self.brush_mask, (pw, ph), interpolation=cv2.INTER_LINEAR),
+                dtype=np.float32
+            )
+        return self.brush_mask_preview
 
     # Parámetros para máscara de rango de luminancia
     luma_min: float = 0.0
@@ -349,14 +424,16 @@ class MaskLayer:
         return self.mask_type in (MASK_TYPE_GRADIENT_LINEAR, MASK_TYPE_GRADIENT_RADIAL)
 
     def to_dict(self, encode_mask: bool = False) -> Dict[str, Any]:
-        """Serializa la capa a un diccionario JSON preservando parámetros y curva."""
-        d = asdict(self)
-        d.pop("custom_mask", None)
-        d.pop("image_data", None)
-        d.pop("proxy_preview", None)
-        d.pop("proxy_draft", None)
-        d.pop("brush_mask", None)
-        d.pop("curve_lut", None)
+        """Serializa la capa a un diccionario JSON preservando parámetros y curva sin deepcopy."""
+        d: Dict[str, Any] = {}
+        for k in self.__dataclass_fields__:
+            if k not in _MASK_LAYER_EXCLUDED_FIELDS and not k.startswith("_"):
+                val = getattr(self, k)
+                if k == "curve_points" and val is not None:
+                    d[k] = list(val)
+                else:
+                    d[k] = val
+
         if encode_mask and self.brush_mask is not None:
             try:
                 u8 = (np.clip(self.brush_mask, 0.0, 1.0) * 255.0).astype(np.uint8)
@@ -367,9 +444,34 @@ class MaskLayer:
                 pass
         return d
 
+    def shallow_snapshot(self) -> "MaskLayer":
+        """Crea una instantánea superficial rápida aislando escalares para el hilo de render."""
+        snap = copy.copy(self)
+        if snap.curve_points:
+            snap.curve_points = list(snap.curve_points)
+        return snap
+
+    def __eq__(self, other: object) -> bool:
+        """Comparación por valor de capas para detección precisa de cambios en historial sin ValueError en arrays."""
+        if not isinstance(other, MaskLayer):
+            return False
+        if self.id != other.id:
+            return False
+        if self.brush_mask_version != other.brush_mask_version:
+            return False
+        if (self.brush_mask is None) != (other.brush_mask is None):
+            return False
+        if (self.image_data is None) != (other.image_data is None):
+            return False
+        if self.image_data is not None and other.image_data is not None:
+            if self.image_data is not other.image_data and id(self.image_data) != id(other.image_data):
+                if self.image_data.shape != other.image_data.shape:
+                    return False
+        return self.to_dict() == other.to_dict()
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MaskLayer":
-        """Instancia una capa a partir de un diccionario JSON."""
+        """Instancia una capa a partir de un diccionario JSON o estructura en memoria."""
         data_clean = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         if "curve_points" in data_clean and data_clean["curve_points"]:
             data_clean["curve_points"] = [tuple(p) for p in data_clean["curve_points"]]
@@ -387,8 +489,16 @@ class MaskLayer:
                 dec = cv2.imdecode(buf, cv2.IMREAD_GRAYSCALE)
                 if dec is not None:
                     inst.brush_mask = dec.astype(np.float32) / 255.0
+                    inst.invalidate_brush_proxies()
             except Exception:
                 pass
+        elif "brush_mask" in data and isinstance(data["brush_mask"], np.ndarray):
+            inst.brush_mask = data["brush_mask"]
+            inst.invalidate_brush_proxies()
+
+        if "image_data" in data and isinstance(data["image_data"], np.ndarray):
+            inst.set_image_data(data["image_data"])
+
         if not inst.is_curve_identity() and inst.curve_lut is None:
             inst.curve_lut = compute_curve_lut_from_points(inst.curve_points)
         return inst
@@ -540,15 +650,29 @@ def compute_layer_mask(
             return m_sub.copy()
         return cv2.resize(m_src, (w, h), interpolation=cv2.INTER_LINEAR)
 
+    def _get_brush_source() -> Optional[np.ndarray]:
+        if layer.brush_mask is None:
+            return None
+        if crop_rect is not None and full_image_shape is not None:
+            return layer.brush_mask
+        max_dim = max(h, w)
+        if max_dim <= 800:
+            return layer.get_brush_proxy("draft")
+        elif max_dim <= 1600:
+            return layer.get_brush_proxy("preview")
+        return layer.brush_mask
+
     if layer.mask_type == MASK_TYPE_BRUSH:
-        if layer.brush_mask is not None:
-            m = _slice_or_resize_mask(layer.brush_mask)
+        brush_src = _get_brush_source()
+        if brush_src is not None:
+            m = _slice_or_resize_mask(brush_src)
         else:
             m = np.zeros((h, w), dtype=np.float32)
 
     elif layer.mask_type == MASK_TYPE_IMAGE_RASTER:
-        if layer.brush_mask is not None:
-            m = _slice_or_resize_mask(layer.brush_mask)
+        brush_src = _get_brush_source()
+        if brush_src is not None:
+            m = _slice_or_resize_mask(brush_src)
         else:
             m = np.ones((h, w), dtype=np.float32)
 
@@ -588,19 +712,42 @@ def compute_layer_mask(
 
     elif layer.mask_type == MASK_TYPE_GRADIENT_LINEAR:
         span_b = 1.0 if getattr(layer, "linear_symmetric", True) else float(getattr(layer, "linear_span_b", 1.0))
-        if HAS_RUST and hasattr(astroloom_rs, "compute_linear_gradient_rs"):
-            try:
-                m = astroloom_rs.compute_linear_gradient_rs(
-                    h, w,
-                    float(layer.linear_p0[0]), float(layer.linear_p0[1]),
-                    float(layer.linear_p1[0]), float(layer.linear_p1[1]),
-                    float(layer.linear_midpoint),
-                    str(layer.linear_profile),
-                    float(span_b),
-                    crop_rect,
-                    full_image_shape
-                )
-            except Exception:
+        grad_key = (
+            h, w, crop_rect, full_image_shape,
+            float(layer.linear_p0[0]), float(layer.linear_p0[1]),
+            float(layer.linear_p1[0]), float(layer.linear_p1[1]),
+            float(layer.linear_midpoint),
+            str(layer.linear_profile),
+            float(span_b),
+            bool(getattr(layer, "linear_symmetric", True))
+        )
+        if getattr(layer, "_cached_grad_key", None) == grad_key and getattr(layer, "_cached_grad_mask", None) is not None:
+            m = layer._cached_grad_mask.copy()
+        else:
+            if HAS_RUST and hasattr(astroloom_rs, "compute_linear_gradient_rs"):
+                try:
+                    m = astroloom_rs.compute_linear_gradient_rs(
+                        h, w,
+                        float(layer.linear_p0[0]), float(layer.linear_p0[1]),
+                        float(layer.linear_p1[0]), float(layer.linear_p1[1]),
+                        float(layer.linear_midpoint),
+                        str(layer.linear_profile),
+                        float(span_b),
+                        crop_rect,
+                        full_image_shape
+                    )
+                except Exception:
+                    m = compute_linear_gradient_py(
+                        h, w,
+                        layer.linear_p0[0], layer.linear_p0[1],
+                        layer.linear_p1[0], layer.linear_p1[1],
+                        layer.linear_midpoint,
+                        layer.linear_profile,
+                        span_b,
+                        crop_rect,
+                        full_image_shape
+                    )
+            else:
                 m = compute_linear_gradient_py(
                     h, w,
                     layer.linear_p0[0], layer.linear_p0[1],
@@ -611,31 +758,42 @@ def compute_layer_mask(
                     crop_rect,
                     full_image_shape
                 )
-        else:
-            m = compute_linear_gradient_py(
-                h, w,
-                layer.linear_p0[0], layer.linear_p0[1],
-                layer.linear_p1[0], layer.linear_p1[1],
-                layer.linear_midpoint,
-                layer.linear_profile,
-                span_b,
-                crop_rect,
-                full_image_shape
-            )
+            layer._cached_grad_key = grad_key
+            layer._cached_grad_mask = m
 
     elif layer.mask_type == MASK_TYPE_GRADIENT_RADIAL:
-        if HAS_RUST and hasattr(astroloom_rs, "compute_radial_gradient_rs"):
-            try:
-                m = astroloom_rs.compute_radial_gradient_rs(
-                    h, w,
-                    float(layer.radial_center[0]), float(layer.radial_center[1]),
-                    float(layer.radial_radius_x), float(layer.radial_radius_y),
-                    float(layer.radial_angle),
-                    float(layer.radial_feather),
-                    crop_rect,
-                    full_image_shape
-                )
-            except Exception:
+        grad_key = (
+            h, w, crop_rect, full_image_shape,
+            float(layer.radial_center[0]), float(layer.radial_center[1]),
+            float(layer.radial_radius_x), float(layer.radial_radius_y),
+            float(layer.radial_angle),
+            float(layer.radial_feather)
+        )
+        if getattr(layer, "_cached_grad_key", None) == grad_key and getattr(layer, "_cached_grad_mask", None) is not None:
+            m = layer._cached_grad_mask.copy()
+        else:
+            if HAS_RUST and hasattr(astroloom_rs, "compute_radial_gradient_rs"):
+                try:
+                    m = astroloom_rs.compute_radial_gradient_rs(
+                        h, w,
+                        float(layer.radial_center[0]), float(layer.radial_center[1]),
+                        float(layer.radial_radius_x), float(layer.radial_radius_y),
+                        float(layer.radial_angle),
+                        float(layer.radial_feather),
+                        crop_rect,
+                        full_image_shape
+                    )
+                except Exception:
+                    m = compute_radial_gradient_py(
+                        h, w,
+                        layer.radial_center[0], layer.radial_center[1],
+                        layer.radial_radius_x, layer.radial_radius_y,
+                        layer.radial_angle,
+                        layer.radial_feather,
+                        crop_rect,
+                        full_image_shape
+                    )
+            else:
                 m = compute_radial_gradient_py(
                     h, w,
                     layer.radial_center[0], layer.radial_center[1],
@@ -645,16 +803,8 @@ def compute_layer_mask(
                     crop_rect,
                     full_image_shape
                 )
-        else:
-            m = compute_radial_gradient_py(
-                h, w,
-                layer.radial_center[0], layer.radial_center[1],
-                layer.radial_radius_x, layer.radial_radius_y,
-                layer.radial_angle,
-                layer.radial_feather,
-                crop_rect,
-                full_image_shape
-            )
+            layer._cached_grad_key = grad_key
+            layer._cached_grad_mask = m
 
     elif layer.mask_type == MASK_TYPE_CUSTOM and layer.custom_mask is not None:
         m = _slice_or_resize_mask(layer.custom_mask)
@@ -787,12 +937,15 @@ def apply_local_adjustments_to_image(
         return image_rgb
 
     # Ponderación global de la máscara por opacidad
-    weight = np.clip(effective_mask * layer.opacity, 0.0, 1.0).astype(np.float32)
-    if np.max(weight) <= 1e-4:
+    # Comprobación ligera sin asignar buffers temporales
+    if float(layer.opacity) <= 1e-4 or float(np.max(effective_mask)) * float(layer.opacity) <= 1e-4:
         return image_rgb
 
     if HAS_RUST:
-        orig_c = np.ascontiguousarray(np.clip(image_rgb, 0.0, 1.0), dtype=np.float32)
+        if image_rgb.dtype == np.float32 and image_rgb.flags.c_contiguous:
+            orig_c = image_rgb
+        else:
+            orig_c = np.ascontiguousarray(image_rgb, dtype=np.float32)
         has_curve = not layer.is_curve_identity()
         has_contrast = abs(layer.contrast) > 1e-3
         if has_curve or has_contrast:
@@ -897,6 +1050,7 @@ def apply_local_adjustments_to_image(
     adj = np.clip(adj, 0.0, 1.0)
 
     # Fusión ponderada por canal
+    weight = np.clip(effective_mask * layer.opacity, 0.0, 1.0).astype(np.float32)
     w_3d = weight[..., np.newaxis] if weight.ndim == 2 else weight
     result = (adj * w_3d) + (image_rgb * (1.0 - w_3d))
     return np.clip(result, 0.0, 1.0).astype(np.float32)
@@ -1183,6 +1337,7 @@ def _compute_subcomposite_key(
             float(getattr(l, "angle", 0.0)),
             id(l.image_data),
             id(l.brush_mask),
+            getattr(l, "brush_mask_version", 0),
             id(l.custom_mask),
             l.inverted,
             getattr(l, "linear_p0", None),
@@ -1343,37 +1498,37 @@ def apply_all_mask_layers(
                 canvas = apply_local_adjustments_to_image(canvas, eff_m, layer, fast_draft=fast_draft)
 
         elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
-            # Capa ⭐ Estrellas
-            layer.temp = 0.0
-            layer.tint = 0.0
+            # Capa ⭐ Estrellas (ajustes locales preservan balance B-V espectral sin mutar layer)
             if stars_image is not None and layer.opacity > 1e-4:
-                st = stars_image.copy()
-                if st.shape[:2] != (img_h, img_w):
+                if stars_image.shape[:2] != (img_h, img_w):
                     if crop_rect is not None and full_image_shape is not None:
                         x1, y1, x2, y2 = crop_rect
                         h_f, w_f = full_image_shape
-                        h_s, w_s = st.shape[:2]
+                        h_s, w_s = stars_image.shape[:2]
                         sx = w_s / float(w_f)
                         sy = h_s / float(h_f)
                         sx1 = max(0, min(w_s, int(round(x1 * sx))))
                         sy1 = max(0, min(h_s, int(round(y1 * sy))))
                         sx2 = max(0, min(w_s, int(round(x2 * sx))))
                         sy2 = max(0, min(h_s, int(round(y2 * sy))))
-                        st_sub = st[sy1:sy2, sx1:sx2]
+                        st_sub = stars_image[sy1:sy2, sx1:sx2]
                         if st_sub.shape[:2] != (img_h, img_w):
                             st = cv2.resize(st_sub, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
                         else:
                             st = st_sub
                     else:
-                        st = cv2.resize(st, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
+                        st = cv2.resize(stars_image, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
+                else:
+                    st = stars_image
                 
                 # Ajustes cromáticos propios de la capa de estrellas (Temp y Tinte ignorados para preservar física espectral B-V)
                 has_adj = (abs(layer.exposure) > 1e-3 or abs(layer.contrast) > 1e-3 or 
                            abs(layer.saturation - 1.0) > 1e-3 or layer.has_curve())
                 if has_adj:
-                    layer.temp = 0.0
-                    layer.tint = 0.0
-                    st = apply_local_adjustments_to_image(st, np.ones((img_h, img_w), dtype=np.float32), layer, fast_draft=fast_draft)
+                    st_layer = layer.shallow_snapshot()
+                    st_layer.temp = 0.0
+                    st_layer.tint = 0.0
+                    st = apply_local_adjustments_to_image(st, np.ones((img_h, img_w), dtype=np.float32), st_layer, fast_draft=fast_draft)
 
                 # Mezcla Screen (Trama estilo Photoshop): 1 - (1 - canvas) * (1 - st * opacity)
                 # Garantiza que las estrellas no quemen núcleos y se fundan de forma natural

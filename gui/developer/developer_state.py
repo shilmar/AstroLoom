@@ -108,10 +108,19 @@ class DeveloperState:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert state into a dictionary compatible with history snapshots and presets."""
-        res = asdict(self)
-        # Ensure tuple conversion for custom tint
-        if isinstance(res.get("lp_custom_tint"), list):
-            res["lp_custom_tint"] = tuple(res["lp_custom_tint"])
+        res: Dict[str, Any] = {}
+        for k in self.__dataclass_fields__:
+            val = getattr(self, k)
+            if k == "dust_spots" and val:
+                res[k] = [dict(s) if isinstance(s, dict) else s for s in val]
+            elif k == "curves" and val:
+                res[k] = dict(val)
+            elif k == "mask_layers" and val:
+                res[k] = [dict(m) if isinstance(m, dict) else m for m in val] if isinstance(val, list) else val
+            elif k == "lp_custom_tint" and val is not None:
+                res[k] = tuple(val)
+            else:
+                res[k] = val
         return res
 
     @classmethod
@@ -127,14 +136,10 @@ class DeveloperState:
         """Check if this state differs significantly from another state or dict snapshot."""
         if other is None:
             return True
-        if isinstance(other, DeveloperState):
-            other_dict = other.to_dict()
-        else:
-            other_dict = other
-
-        current_dict = self.to_dict()
-        for k, v1 in current_dict.items():
-            v2 = other_dict.get(k)
+        is_dev_state = isinstance(other, DeveloperState)
+        for k in self.__dataclass_fields__:
+            v1 = getattr(self, k)
+            v2 = getattr(other, k) if is_dev_state else other.get(k)
             if k in ("curves", "mask_layers", "dust_spots"):
                 if v1 != v2:
                     return True
