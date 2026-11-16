@@ -120,6 +120,7 @@ from gui.developer.panels.panel_dust import DustPanel
 from gui.developer.developer_state import DeveloperState
 from gui.developer.pipeline import ResolutionPyramid, apply_developer_pipeline
 from gui.developer.async_worker import AsyncPipelineManager
+from core.buffer_cache import PipelineBufferCache
 from core.display_transfer import (
     compute_combined_stf_lut,
     apply_display_lut16_numba
@@ -305,7 +306,8 @@ class DeveloperTab(QWidget):
         self._cache_starless_pre_key: Optional[tuple] = None
         self._cache_starless_pre_img: Optional[np.ndarray] = None
 
-        # Cachés por hitos del pipeline (Milestone Caching)
+        # Cachés por hitos del pipeline (Milestone Caching con LRU y presupuesto de RAM)
+        self.buffer_cache = PipelineBufferCache()
         self._cache_ms_pre_lp_key: Optional[tuple] = None
         self._cache_ms_pre_lp_img: Optional[np.ndarray] = None
         self._cache_ms_linear_key: Optional[tuple] = None
@@ -3587,6 +3589,8 @@ class DeveloperTab(QWidget):
     def _invalidate_pipeline_caches(self):
         """Invalida todas las cachés intermedias del pipeline de procesado."""
         clear_subcomposite_cache()
+        if hasattr(self, 'buffer_cache'):
+            self.buffer_cache.clear()
         self._cache_starless_key = None
         self._cache_starless_linear = None
         self._cache_starless_pre_key = None
@@ -4543,14 +4547,17 @@ class DeveloperTab(QWidget):
             bool(mask_layers and len(mask_layers) > 0),
         )
 
-        # Determinar hitos en caché reutilizables (con comprobación dimensional estricta)
+        # Determinar hitos en caché reutilizables mediante caché LRU unificada por hash y dimensiones
         t_shape = target_img.shape[:2]
-        pre_spatial = self._cache_ms_spatial_img if (is_preview and self._cache_ms_spatial_key == key_spatial and getattr(self._cache_ms_spatial_img, 'shape', None) and self._cache_ms_spatial_img.shape[:2] == t_shape) else None
-        pre_graded = self._cache_ms_graded_img if (is_preview and self._cache_ms_graded_key == key_graded and pre_spatial is None and getattr(self._cache_ms_graded_img, 'shape', None) and self._cache_ms_graded_img.shape[:2] == t_shape) else None
-        pre_stretched = self._cache_ms_stretch_img if (is_preview and self._cache_ms_stretch_key == key_stretch and pre_spatial is None and pre_graded is None and getattr(self._cache_ms_stretch_img, 'shape', None) and self._cache_ms_stretch_img.shape[:2] == t_shape) else None
-        pre_linear = self._cache_ms_linear_img if (is_preview and self._cache_ms_linear_key == key_linear and pre_spatial is None and pre_graded is None and pre_stretched is None and getattr(self._cache_ms_linear_img, 'shape', None) and self._cache_ms_linear_img.shape[:2] == t_shape) else None
-        pre_pre_lp = self._cache_ms_pre_lp_img if (is_preview and self._cache_ms_pre_lp_key == key_pre_lp and pre_spatial is None and pre_graded is None and pre_stretched is None and pre_linear is None and getattr(self._cache_ms_pre_lp_img, 'shape', None) and self._cache_ms_pre_lp_img.shape[:2] == t_shape) else None
-        pre_stars = self._cache_ms_stars_img if (is_preview and getattr(self, '_cache_ms_stars_key', None) == key_stars and self._cache_ms_stars_img is not None and getattr(self._cache_ms_stars_img, 'shape', None) and self._cache_ms_stars_img.shape[:2] == t_shape) else None
+        if is_preview and hasattr(self, 'buffer_cache'):
+            pre_spatial = self.buffer_cache.get("spatial", key_spatial, t_shape)
+            pre_graded = self.buffer_cache.get("graded", key_graded, t_shape) if pre_spatial is None else None
+            pre_stretched = self.buffer_cache.get("stretch", key_stretch, t_shape) if (pre_spatial is None and pre_graded is None) else None
+            pre_linear = self.buffer_cache.get("linear", key_linear, t_shape) if (pre_spatial is None and pre_graded is None and pre_stretched is None) else None
+            pre_pre_lp = self.buffer_cache.get("pre_lp", key_pre_lp, t_shape) if (pre_spatial is None and pre_graded is None and pre_stretched is None and pre_linear is None) else None
+            pre_stars = self.buffer_cache.get("stars", key_stars, t_shape)
+        else:
+            pre_spatial = pre_graded = pre_stretched = pre_linear = pre_pre_lp = pre_stars = None
 
         # Build DeveloperState snapshot (omitiendo mask_layers para no serializar innecesariamente)
         state = DeveloperState.from_dict(self._capture_state(include_mask_layers=False))
@@ -4635,6 +4642,14 @@ class DeveloperTab(QWidget):
 
         if is_preview:
             if not is_scrubbing:
+                if hasattr(self, 'buffer_cache'):
+                    self.buffer_cache.put("pre_lp", key_pre_lp, t_shape, out_pre_lp)
+                    self.buffer_cache.put("linear", key_linear, t_shape, out_lin)
+                    self.buffer_cache.put("stretch", key_stretch, t_shape, out_str)
+                    self.buffer_cache.put("graded", key_graded, t_shape, out_grd)
+                    self.buffer_cache.put("spatial", key_spatial, t_shape, out_spt)
+                    self.buffer_cache.put("stars", key_stars, t_shape, out_stars)
+
                 self._cache_ms_pre_lp_key = key_pre_lp
                 self._cache_ms_pre_lp_img = out_pre_lp
                 self._cache_ms_linear_key = key_linear
@@ -4675,6 +4690,15 @@ class DeveloperTab(QWidget):
                 # Descartar solicitud de borrador tardía si el usuario ya soltó el deslizador
                 return
             if not is_scrubbing:
+                t_shape = final_img.shape[:2] if hasattr(final_img, 'shape') else ()
+                if hasattr(self, 'buffer_cache') and t_shape:
+                    self.buffer_cache.put("pre_lp", key_pre_lp, t_shape, out_pre_lp)
+                    self.buffer_cache.put("linear", key_linear, t_shape, out_lin)
+                    self.buffer_cache.put("stretch", key_stretch, t_shape, out_str)
+                    self.buffer_cache.put("graded", key_graded, t_shape, out_grd)
+                    self.buffer_cache.put("spatial", key_spatial, t_shape, out_spt)
+                    self.buffer_cache.put("stars", key_stars, t_shape, out_stars)
+
                 self._cache_ms_pre_lp_key = key_pre_lp
                 self._cache_ms_pre_lp_img = out_pre_lp
                 self._cache_ms_linear_key = key_linear
