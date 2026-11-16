@@ -4233,8 +4233,18 @@ class DeveloperTab(QWidget):
             self._zoom_crop_rect = None
         elif self.is_zoomed_100 and self.image_32bit is not None:
             h_f, w_f = self.image_32bit.shape[:2]
-            cw = min(w_f, max(100, self.canvas.width() + 100))
-            ch = min(h_f, max(100, self.canvas.height() + 100))
+
+            # Propagación de margen dinámico (Padding) guiado por filtros espaciales activos (Orton / Difusión)
+            active_radius = 0.0
+            if float(getattr(self, 'orton_strength', 0.0)) > 1e-4:
+                active_radius = max(active_radius, float(getattr(self, 'orton_radius', 40.0)))
+            if float(getattr(self, 'star_diff_strength', 0.0)) > 1e-4:
+                active_radius = max(active_radius, float(getattr(self, 'star_diff_radius', 20.0)))
+
+            # Margen perimetral: para filtros convolucionales (3-sigma). Acotado entre 64 px y 512 px
+            pad_margin = int(min(512, max(64, round(3.0 * active_radius)))) if active_radius > 0 else 64
+            cw = min(w_f, max(100, self.canvas.width() + pad_margin * 2))
+            ch = min(h_f, max(100, self.canvas.height() + pad_margin * 2))
             
             rx, ry = self.zoom_rel_coords
             cx = int(rx * w_f)

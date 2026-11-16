@@ -4,7 +4,7 @@ gui/main_window.py - Ventana principal contenedora de la aplicación AstroLoom.
 Coordina las pestañas principales (Apilador, Revelador, Eclipses, Startrails, Panorámicas y Ajustes).
 """
 from typing import Optional
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QStatusBar, QLabel, QWidget, QHBoxLayout, QComboBox
 
 from core.i18n import tr, get_i18n
@@ -23,7 +23,7 @@ class MainWindow(QMainWindow):
     """Ventana principal de la interfaz gráfica de AstroLoom."""
 
     BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.15.1)"
-
+    gpu_fallback_signal = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -36,9 +36,28 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._setup_status_bar()
 
+        # Conectar señal de degradación de hardware GPU a CPU
+        self.gpu_fallback_signal.connect(self._on_gpu_fallback)
+        try:
+            from core.starnet_onnx import add_gpu_fallback_listener as add_sn_listener
+            add_sn_listener(self.gpu_fallback_signal.emit)
+        except Exception:
+            pass
+        try:
+            from core.ai_denoise import add_gpu_fallback_listener as add_dn_listener
+            add_dn_listener(self.gpu_fallback_signal.emit)
+        except Exception:
+            pass
+
         # Conectar cambio reactivo de idioma global
         get_i18n().language_changed.connect(lambda _: self._retranslate_ui())
         self._retranslate_ui()
+
+    def _on_gpu_fallback(self, reason: str) -> None:
+        """Muestra la píldora naranja de aviso en la barra inferior al degradar de GPU a CPU."""
+        if hasattr(self, 'lbl_gpu_fallback'):
+            self.lbl_gpu_fallback.setVisible(True)
+            self.lbl_gpu_fallback.setToolTip(f"GPU/VRAM saturada: se continuó en CPU sin interrumpir la tarea.\n{reason}\n(Clic para ocultar)")
 
     def _setup_status_bar(self) -> None:
         """Configura la barra de estado moderna con monitor de memoria RAM y motor de procesado."""
@@ -53,6 +72,17 @@ class MainWindow(QMainWindow):
         self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.15.1")
         self.lbl_engine_badge.setStyleSheet(STYLE_STATUS_PILL)
         status_bar.addPermanentWidget(self.lbl_engine_badge)
+
+        # Píldora de aviso de Fallback GPU -> CPU (naranja/amarillo, junto al monitor de RAM)
+        self.lbl_gpu_fallback = QLabel("⚠️ Fallback CPU (VRAM)")
+        self.lbl_gpu_fallback.setStyleSheet(
+            "background-color: #3e2723; border: 1px solid #ff9800; border-radius: 4px; padding: 2px 8px; color: #ffb74d; font-weight: bold; font-size: 10px;"
+        )
+        self.lbl_gpu_fallback.setToolTip("La GPU se quedó sin memoria (VRAM). Se continuó en CPU de forma segura.")
+        self.lbl_gpu_fallback.setVisible(False)
+        self.lbl_gpu_fallback.setCursor(Qt.PointingHandCursor)
+        self.lbl_gpu_fallback.mousePressEvent = lambda _: self.lbl_gpu_fallback.setVisible(False)
+        status_bar.addPermanentWidget(self.lbl_gpu_fallback)
 
         # Píldora de Monitor de Memoria RAM en tiempo real
         self.lbl_ram_monitor = QLabel("RAM: --")

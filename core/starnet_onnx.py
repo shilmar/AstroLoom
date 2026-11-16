@@ -193,15 +193,63 @@ def _get_tile_coords(length: int, tile_size: int, stride: int) -> List[int]:
     return sorted(list(set(coords)))
 
 
-def _create_inference_session(model_path: str) -> "ort.InferenceSession":
-    """Inicializa la sesión ONNX con aceleración GPU (DirectML) y fallback a CPU."""
+_GPU_FALLBACK_LISTENERS: List[Callable[[str], None]] = []
+
+
+def add_gpu_fallback_listener(cb: Callable[[str], None]) -> None:
+    """Registra un callback que se invoca cuando la inferencia degrada de GPU a CPU."""
+    if cb not in _GPU_FALLBACK_LISTENERS:
+        _GPU_FALLBACK_LISTENERS.append(cb)
+
+
+def notify_gpu_fallback(reason: str) -> None:
+    """Notifica a todos los escuchas registrados de una degradación a CPU."""
+    for cb in _GPU_FALLBACK_LISTENERS:
+        try:
+            cb(reason)
+        except Exception:
+            pass
+
+
+def _get_cache_dir(model_path: str) -> str:
+    root = os.path.dirname(os.path.abspath(model_path))
+    cache_dir = os.path.join(root, ".cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    return cache_dir
+
+
+def _get_cached_graph_path(model_path: str, provider_tag: str) -> str:
+    cache_dir = _get_cache_dir(model_path)
+    stem = os.path.splitext(os.path.basename(model_path))[0]
+    return os.path.join(cache_dir, f"{stem}_{provider_tag}_opt.onnx")
+
+
+def _is_cache_valid(cache_path: str, original_path: str) -> bool:
+    try:
+        if not os.path.isfile(cache_path) or os.path.getsize(cache_path) == 0:
+            return False
+        return os.path.getmtime(cache_path) >= os.path.getmtime(original_path)
+    except Exception:
+        return False
+
+
+def _create_inference_session(model_path: str, force_cpu: bool = False) -> "ort.InferenceSession":
+    """
+    Inicializa la sesión ONNX con aceleración GPU (DirectML/CUDA) y fallback a CPU.
+    Reutiliza el grafo optimizado serializado en disco ('models/.cache/') si es válido.
+    """
     available_providers = ort.get_available_providers()
-    providers = []
-    if "CUDAExecutionProvider" in available_providers:
-        providers.append("CUDAExecutionProvider")
-    if "DmlExecutionProvider" in available_providers:
-        providers.append("DmlExecutionProvider")
-    providers.append("CPUExecutionProvider")
+    if force_cpu:
+        providers = ["CPUExecutionProvider"]
+        provider_tag = "cpu"
+    else:
+        providers = []
+        if "CUDAExecutionProvider" in available_providers:
+            providers.append("CUDAExecutionProvider")
+        if "DmlExecutionProvider" in available_providers:
+            providers.append("DmlExecutionProvider")
+        providers.append("CPUExecutionProvider")
+        provider_tag = "gpu" if len(providers) > 1 else "cpu"
 
     opts = ort.SessionOptions()
     opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -209,7 +257,31 @@ def _create_inference_session(model_path: str) -> "ort.InferenceSession":
     opts.intra_op_num_threads = min(16, max(1, cpu_cores))
     opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
 
-    return ort.InferenceSession(model_path, sess_options=opts, providers=providers)
+    cache_file = _get_cached_graph_path(model_path, provider_tag)
+
+    # 1. Cargar directamente desde caché si existe y no está desfasada
+    if _is_cache_valid(cache_file, model_path):
+        try:
+            return ort.InferenceSession(cache_file, sess_options=opts, providers=providers)
+        except Exception as e:
+            logger.warning(f"Error cargando grafo optimizado en caché ({cache_file}): {e}. Recompilando...")
+            try:
+                os.remove(cache_file)
+            except OSError:
+                pass
+
+    # 2. Configurar serialización del grafo optimizado para futuras sesiones
+    try:
+        opts.optimized_model_filepath = cache_file
+    except Exception:
+        pass
+
+    try:
+        return ort.InferenceSession(model_path, sess_options=opts, providers=providers)
+    except Exception:
+        # Fallback sin ruta de serialización si hubo fallo de I/O
+        opts.optimized_model_filepath = ""
+        return ort.InferenceSession(model_path, sess_options=opts, providers=providers)
 
 
 def _mtf_curve(x: np.ndarray, m: float) -> np.ndarray:
@@ -346,7 +418,22 @@ def run_starnet_onnx(
                 raise InterruptedError("Operación cancelada por el usuario.")
 
             in_batch = tiles_4d[tile_idx : tile_idx + 1]
-            out_batch = sess.run(None, {'x:0': in_batch})[0]
+            try:
+                out_batch = sess.run(None, {'x:0': in_batch})[0]
+            except Exception as run_err:
+                active_providers = sess.get_providers()
+                if active_providers and active_providers[0] != "CPUExecutionProvider":
+                    logger.warning(f"Error GPU en StarNet ({run_err}). Degradando a CPU...")
+                    log("⚠️ VRAM insuficiente. Continuando separación en CPU...", tile_idx + 1, total_tiles)
+                    notify_gpu_fallback(f"StarNet v2 AI: {run_err}")
+                    try:
+                        del sess
+                    except Exception:
+                        pass
+                    sess = _create_inference_session(path, force_cpu=True)
+                    out_batch = sess.run(None, {'x:0': in_batch})[0]
+                else:
+                    raise run_err
             out_tiles[tile_idx] = np.clip(out_batch[0], 0.0, 1.0)
 
             pct = int(((tile_idx + 1) / total_tiles) * 100)
@@ -408,7 +495,22 @@ def run_starnet_onnx(
                     )
 
                 in_batch = np.expand_dims(patch_in, axis=0)  # [1, 512, 512, 3]
-                out_batch = sess.run(None, {'x:0': in_batch})[0]
+                try:
+                    out_batch = sess.run(None, {'x:0': in_batch})[0]
+                except Exception as run_err:
+                    active_providers = sess.get_providers()
+                    if active_providers and active_providers[0] != "CPUExecutionProvider":
+                        logger.warning(f"Error GPU en StarNet ({run_err}). Degradando a CPU...")
+                        log("⚠️ VRAM insuficiente. Continuando separación en CPU...", tile_idx, total_tiles)
+                        notify_gpu_fallback(f"StarNet v2 AI: {run_err}")
+                        try:
+                            del sess
+                        except Exception:
+                            pass
+                        sess = _create_inference_session(path, force_cpu=True)
+                        out_batch = sess.run(None, {'x:0': in_batch})[0]
+                    else:
+                        raise run_err
                 tile_out = np.clip(out_batch[0], 0.0, 1.0)
 
                 # Conservar exclusivamente el núcleo central estable y descartar los bordes distorsionados

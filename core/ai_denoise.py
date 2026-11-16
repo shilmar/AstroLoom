@@ -207,6 +207,46 @@ def _get_tile_coords(length: int, tile_size: int, overlap: int) -> List[int]:
     return sorted(list(set(coords)))
 
 
+_GPU_FALLBACK_LISTENERS: List[Callable[[str], None]] = []
+
+
+def add_gpu_fallback_listener(cb: Callable[[str], None]) -> None:
+    """Registra un callback que se invoca cuando la inferencia degrada de GPU a CPU."""
+    if cb not in _GPU_FALLBACK_LISTENERS:
+        _GPU_FALLBACK_LISTENERS.append(cb)
+
+
+def notify_gpu_fallback(reason: str) -> None:
+    """Notifica a todos los escuchas registrados de una degradación a CPU."""
+    for cb in _GPU_FALLBACK_LISTENERS:
+        try:
+            cb(reason)
+        except Exception:
+            pass
+
+
+def _get_cache_dir(model_path: str) -> str:
+    root = os.path.dirname(os.path.abspath(model_path))
+    cache_dir = os.path.join(root, ".cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    return cache_dir
+
+
+def _get_cached_graph_path(model_path: str, provider_tag: str) -> str:
+    cache_dir = _get_cache_dir(model_path)
+    stem = os.path.splitext(os.path.basename(model_path))[0]
+    return os.path.join(cache_dir, f"{stem}_{provider_tag}_opt.onnx")
+
+
+def _is_cache_valid(cache_path: str, original_path: str) -> bool:
+    try:
+        if not os.path.isfile(cache_path) or os.path.getsize(cache_path) == 0:
+            return False
+        return os.path.getmtime(cache_path) >= os.path.getmtime(original_path)
+    except Exception:
+        return False
+
+
 _SESSION_CACHE: dict[str, "ort.InferenceSession"] = {}
 
 
@@ -216,19 +256,28 @@ def clear_nafnet_session_cache() -> None:
     _SESSION_CACHE.clear()
 
 
-def _create_inference_session(model_path: str, use_cache: bool = True) -> "ort.InferenceSession":
-    """Inicializa o recupera de caché la sesión ONNX con el proveedor de hardware más rápido disponible."""
+def _create_inference_session(model_path: str, use_cache: bool = True, force_cpu: bool = False) -> "ort.InferenceSession":
+    """
+    Inicializa o recupera de caché la sesión ONNX con el proveedor de hardware más rápido disponible.
+    Utiliza caché de grafos optimizados serializados en models/.cache/.
+    """
     abs_path = os.path.abspath(model_path)
-    if use_cache and abs_path in _SESSION_CACHE:
-        return _SESSION_CACHE[abs_path]
+    cache_key = f"{abs_path}_cpu" if force_cpu else abs_path
+    if use_cache and cache_key in _SESSION_CACHE:
+        return _SESSION_CACHE[cache_key]
 
     available_providers = ort.get_available_providers()
-    providers = []
-    if "CUDAExecutionProvider" in available_providers:
-        providers.append("CUDAExecutionProvider")
-    if "DmlExecutionProvider" in available_providers:
-        providers.append("DmlExecutionProvider")
-    providers.append("CPUExecutionProvider")
+    if force_cpu:
+        providers = ["CPUExecutionProvider"]
+        provider_tag = "cpu"
+    else:
+        providers = []
+        if "CUDAExecutionProvider" in available_providers:
+            providers.append("CUDAExecutionProvider")
+        if "DmlExecutionProvider" in available_providers:
+            providers.append("DmlExecutionProvider")
+        providers.append("CPUExecutionProvider")
+        provider_tag = "gpu" if len(providers) > 1 else "cpu"
 
     opts = ort.SessionOptions()
     opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -236,9 +285,34 @@ def _create_inference_session(model_path: str, use_cache: bool = True) -> "ort.I
     opts.intra_op_num_threads = min(16, max(1, cpu_cores))
     opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
 
-    sess = ort.InferenceSession(abs_path, sess_options=opts, providers=providers)
+    cache_file = _get_cached_graph_path(abs_path, provider_tag)
+
+    if _is_cache_valid(cache_file, abs_path):
+        try:
+            sess = ort.InferenceSession(cache_file, sess_options=opts, providers=providers)
+            if use_cache:
+                _SESSION_CACHE[cache_key] = sess
+            return sess
+        except Exception as e:
+            logger.warning(f"Error cargando grafo NAFNet optimizado ({cache_file}): {e}. Recompilando...")
+            try:
+                os.remove(cache_file)
+            except OSError:
+                pass
+
+    try:
+        opts.optimized_model_filepath = cache_file
+    except Exception:
+        pass
+
+    try:
+        sess = ort.InferenceSession(abs_path, sess_options=opts, providers=providers)
+    except Exception:
+        opts.optimized_model_filepath = ""
+        sess = ort.InferenceSession(abs_path, sess_options=opts, providers=providers)
+
     if use_cache:
-        _SESSION_CACHE[abs_path] = sess
+        _SESSION_CACHE[cache_key] = sess
     return sess
 
 
@@ -296,10 +370,12 @@ def _run_single_scale_tiled(
     progress_offset: int = 0,
     total_tiles_all: int = 0,
     progress_callback: Optional[Callable[[int, int], None]] = None,
-    cancel_check: Optional[Callable[[], bool]] = None
+    cancel_check: Optional[Callable[[], bool]] = None,
+    model_path: Optional[str] = None
 ) -> np.ndarray:
     """
     Ejecuta una pasada completa de inferencia NAFNet tesela por tesela con ventana Hann 2D.
+    Tolerante a fallos: degrada automáticamente a CPU si la GPU satura su memoria.
     """
     orig_h, orig_w = img_rgb.shape[:2]
 
@@ -328,7 +404,19 @@ def _run_single_scale_tiled(
             tile_in = padded_img[y:y + tile_size, x:x + tile_size]
             tensor_in = np.transpose(tile_in, (2, 0, 1))[np.newaxis, ...].astype(np.float32)
 
-            outputs = session.run([output_name], {input_name: tensor_in})
+            try:
+                outputs = session.run([output_name], {input_name: tensor_in})
+            except Exception as run_err:
+                active_providers = session.get_providers()
+                if active_providers and active_providers[0] != "CPUExecutionProvider" and model_path:
+                    logger.warning(f"Error GPU en NAFNet ({run_err}). Degradando a CPU...")
+                    notify_gpu_fallback(f"NAFNet AI Denoise: {run_err}")
+                    session = _create_inference_session(model_path, use_cache=True, force_cpu=True)
+                    input_name = session.get_inputs()[0].name
+                    output_name = session.get_outputs()[0].name
+                    outputs = session.run([output_name], {input_name: tensor_in})
+                else:
+                    raise run_err
             out_tile = outputs[0].squeeze(0)
             out_tile = np.transpose(out_tile, (1, 2, 0))
 
@@ -471,7 +559,8 @@ def run_nafnet_tiled_inference(
         base_stretched, session, input_name, output_name,
         tile_size=tile_size, overlap=overlap,
         progress_offset=0, total_tiles_all=total_tiles_all,
-        progress_callback=progress_callback, cancel_check=cancel_check
+        progress_callback=progress_callback, cancel_check=cancel_check,
+        model_path=path
     )
 
     # Pasada 2: Escala media (0.5x) para croma desacoplado
@@ -481,7 +570,8 @@ def run_nafnet_tiled_inference(
             small_in, session, input_name, output_name,
             tile_size=tile_size, overlap=overlap,
             progress_offset=tiles_1x, total_tiles_all=total_tiles_all,
-            progress_callback=progress_callback, cancel_check=cancel_check
+            progress_callback=progress_callback, cancel_check=cancel_check,
+            model_path=path
         )
         out_05x = cv2.resize(out_05x_small, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
 
