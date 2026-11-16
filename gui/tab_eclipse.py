@@ -17,6 +17,7 @@ Permite:
 """
 import os
 import tempfile
+from typing import Tuple, List, Optional
 import numpy as np
 import cv2
 import tifffile
@@ -184,6 +185,10 @@ class EclipseCanvas(QWidget):
         self.center_y: float = 0.0
         self.radius: float = 0.0
         self.pick_center_mode: bool = False
+
+    @property
+    def image(self) -> Optional[np.ndarray]:
+        return self.orig_f32
 
     def set_image(self, img_f32: np.ndarray):
         """Asigna y renderiza una imagen float32 en rango [0, 1]."""
@@ -463,84 +468,102 @@ class EclipseWorker(QThread):
                 asinh_factor = self.params.get("asinh_factor", 0.0)
                 mode = self.params.get("mode", "solar")
 
-                total = len(files)
-                loaded_images = [None] * total
-                final_centers = [None] * total
-                self.progress.emit(5, "Iniciando carga paralela de tomas de bracketing (1:1 nativo)...")
-
-                expected_r = None
-                if centers is not None:
-                    valid_rs = [c[2] for c in centers if c is not None and len(c) > 2 and c[2] > 10]
-                    if valid_rs:
-                        expected_r = float(np.median(valid_rs))
-
-                try:
-                    cpu_workers = int(get_config_val("cpu_workers", max(2, (os.cpu_count() or 4) - 2)))
-                except Exception:
-                    cpu_workers = max(2, (os.cpu_count() or 4) - 2)
-                eff_workers = max(1, min(cpu_workers, os.cpu_count() or 16, total))
-
-                crop_roi = self.params.get("crop_roi", False)
-                crop_size = int(self.params.get("crop_size", 3000))
-
-                def _load_and_detect_one(idx_path):
-                    idx, path = idx_path
-                    img = load_image_as_float32(path)
-                    if centers is not None and idx < len(centers) and centers[idx] is not None and centers[idx][2] > 5:
-                        c = centers[idx]
-                    else:
-                        cx, cy, r = detect_eclipse_disk(img, mode=mode, expected_radius=expected_r)
-                        c = (cx, cy, r)
-
-                    if crop_roi and c is not None and len(c) > 2 and c[2] > 5:
-                        img, c = crop_frame_roi(img, c[0], c[1], c[2], crop_size=crop_size)
-
-                    return idx, img, c, os.path.basename(path)
-
-                completed = 0
-                items = list(enumerate(files))
-                if eff_workers == 1 or total == 1:
-                    for item in items:
-                        if self.isInterruptionRequested():
-                            break
-                        idx, img, c, bname = _load_and_detect_one(item)
-                        loaded_images[idx] = img
-                        final_centers[idx] = c
-                        completed += 1
-                        self.progress.emit(
-                            int(5 + (completed / total) * 40),
-                            f"Cargando ({completed}/{total}): {bname}"
-                        )
+                cached_aligned = self.params.get("cached_aligned_images")
+                if cached_aligned is not None:
+                    self.progress.emit(20, "Reutilizando tomas alineadas en memoria caché (omitiendo lectura de disco y alineación)...")
+                    aligned_images = cached_aligned
+                    final_centers = self.params["cached_final_centers"]
+                    raw_centers = self.params.get("cached_raw_centers", final_centers)
+                    shifts = self.params["cached_shifts"]
+                    was_cached = True
                 else:
-                    with ThreadPoolExecutor(max_workers=eff_workers) as executor:
-                        future_to_item = {executor.submit(_load_and_detect_one, item): item for item in items}
-                        for future in as_completed(future_to_item):
+                    was_cached = False
+                    total = len(files)
+                    loaded_images = [None] * total
+                    final_centers = [None] * total
+                    raw_centers = [None] * total
+                    self.progress.emit(5, "Iniciando carga paralela de tomas de bracketing (1:1 nativo)...")
+
+                    expected_r = None
+                    if centers is not None:
+                        valid_rs = [c[2] for c in centers if c is not None and len(c) > 2 and c[2] > 10]
+                        if valid_rs:
+                            expected_r = float(np.median(valid_rs))
+
+                    try:
+                        cpu_workers = int(get_config_val("cpu_workers", max(2, (os.cpu_count() or 4) - 2)))
+                    except Exception:
+                        cpu_workers = max(2, (os.cpu_count() or 4) - 2)
+                    eff_workers = max(1, min(cpu_workers, os.cpu_count() or 16, total))
+
+                    crop_roi = self.params.get("crop_roi", False)
+                    crop_size = int(self.params.get("crop_size", 3000))
+
+                    def _load_and_detect_one(idx_path):
+                        idx, path = idx_path
+                        img = load_image_as_float32(path)
+                        if centers is not None and idx < len(centers) and centers[idx] is not None and centers[idx][2] > 5:
+                            raw_c = centers[idx]
+                        else:
+                            cx, cy, r = detect_eclipse_disk(img, mode=mode, expected_radius=expected_r)
+                            raw_c = (cx, cy, r)
+
+                        if crop_roi and raw_c is not None and len(raw_c) > 2 and raw_c[2] > 5:
+                            cropped_img, cropped_c = crop_frame_roi(img, raw_c[0], raw_c[1], raw_c[2], crop_size=crop_size)
+                        else:
+                            cropped_img, cropped_c = img, raw_c
+
+                        return idx, cropped_img, raw_c, cropped_c, os.path.basename(path)
+
+                    completed = 0
+                    items = list(enumerate(files))
+                    if eff_workers == 1 or total == 1:
+                        for item in items:
                             if self.isInterruptionRequested():
-                                try:
-                                    executor.shutdown(wait=False, cancel_futures=True)
-                                except Exception:
-                                    executor.shutdown(wait=False)
                                 break
-                            idx, img, c, bname = future.result()
+                            idx, img, raw_c, cropped_c, bname = _load_and_detect_one(item)
                             loaded_images[idx] = img
-                            final_centers[idx] = c
+                            raw_centers[idx] = raw_c
+                            final_centers[idx] = cropped_c
                             completed += 1
                             self.progress.emit(
                                 int(5 + (completed / total) * 40),
                                 f"Cargando ({completed}/{total}): {bname}"
                             )
+                    else:
+                        with ThreadPoolExecutor(max_workers=eff_workers) as executor:
+                            future_to_item = {executor.submit(_load_and_detect_one, item): item for item in items}
+                            for future in as_completed(future_to_item):
+                                if self.isInterruptionRequested():
+                                    try:
+                                        executor.shutdown(wait=False, cancel_futures=True)
+                                    except Exception:
+                                        executor.shutdown(wait=False)
+                                    break
+                                idx, img, raw_c, cropped_c, bname = future.result()
+                                loaded_images[idx] = img
+                                raw_centers[idx] = raw_c
+                                final_centers[idx] = cropped_c
+                                completed += 1
+                                self.progress.emit(
+                                    int(5 + (completed / total) * 40),
+                                    f"Cargando ({completed}/{total}): {bname}"
+                                )
 
-                if auto_align and len(final_centers) == len(loaded_images) and all(img is not None for img in loaded_images):
-                    self.progress.emit(50, "Alineando tomas por centro de limbo (interpolación Lanczos4)...")
-                    center_pts = [(c[0], c[1]) for c in final_centers]
-                    aligned_images, shifts = align_eclipse_bracketing(
-                        loaded_images,
-                        center_pts,
-                        ref_idx=ref_idx
-                    )
-                else:
-                    aligned_images = [img for img in loaded_images if img is not None]
-                    shifts = [(0.0, 0.0)] * len(aligned_images)
+                    if auto_align and len(final_centers) == len(loaded_images) and all(img is not None for img in loaded_images):
+                        self.progress.emit(50, "Alineando tomas por centro de limbo (interpolación Lanczos4)...")
+                        center_pts = [(c[0], c[1]) for c in final_centers]
+                        aligned_images, shifts = align_eclipse_bracketing(
+                            loaded_images,
+                            center_pts,
+                            ref_idx=ref_idx
+                        )
+                    else:
+                        aligned_images = [img for img in loaded_images if img is not None]
+                        shifts = [(0.0, 0.0)] * len(aligned_images)
+
+                    # shortcut: liberamos tomas originales antes de fusionar para reducir el pico de memoria a la mitad
+                    del loaded_images
 
                 ref_center_info = final_centers[ref_idx] if (ref_idx < len(final_centers) and final_centers[ref_idx] is not None) else None
                 lunar_mask = (ref_center_info[0], ref_center_info[1], ref_center_info[2]) if (ref_center_info is not None and len(ref_center_info) > 2 and ref_center_info[2] > 5) else None
@@ -569,8 +592,12 @@ class EclipseWorker(QThread):
                     "hdr_raw": hdr_raw,
                     "hdr_image": hdr_stretched,
                     "centers": final_centers,
+                    "raw_centers": raw_centers,
                     "shifts": shifts,
-                    "ref_idx": ref_idx
+                    "ref_idx": ref_idx,
+                    "aligned_images": aligned_images,
+                    "fused_geom": ref_center_info,
+                    "was_cached": was_cached
                 }, "hdr_fusion")
 
             elif self.task_type == "apply_filters":
@@ -811,8 +838,12 @@ class EclipseTab(QWidget):
         self.current_preview_img = None # Imagen float32 visible
         self.raw_fused_hdr = None       # Flujo puro HDR sin estirar
         self.fused_hdr_img = None       # Imagen HDR con estirado
+        self.fused_hdr_geom = None      # Geometría local (cx, cy, r) de la imagen fusionada/recortada
+        self._viewing_fused: bool = False
         self.final_filtered_img = None   # Imagen tras aplicar filtros de corona
         self.worker = None
+        self.cached_aligned_data = None   # Caché intermedia de tomas alineadas en memoria
+        self._current_hdr_cache_key = None
 
         self._setup_ui()
         self._apply_styles()
@@ -1631,6 +1662,21 @@ class EclipseTab(QWidget):
         show = self.chk_show_guide.isChecked()
         self.canvas.set_guide_params(cx, cy, r, show=show)
 
+    def _get_active_geometry_for_image(self, base_img: np.ndarray) -> Tuple[float, float, float]:
+        """Devuelve (cx, cy, r) de la imagen objetivo (fusión HDR recortada o toma individual)."""
+        is_fused = (self.fused_hdr_img is not None and 
+                    (base_img is self.fused_hdr_img or 
+                     (self.final_filtered_img is not None and base_img is self.final_filtered_img)))
+        if is_fused:
+            if getattr(self, "fused_hdr_geom", None) is not None:
+                return float(self.fused_hdr_geom[0]), float(self.fused_hdr_geom[1]), float(self.fused_hdr_geom[2])
+            return float(self.spin_cx.value()), float(self.spin_cy.value()), float(self.spin_radius.value())
+
+        ref_f = self.bracketing_files[self.ref_file_idx] if (self.bracketing_files and 0 <= self.ref_file_idx < len(self.bracketing_files)) else None
+        if ref_f and ref_f.get("cx") is not None:
+            return float(ref_f["cx"]), float(ref_f["cy"]), float(ref_f["radius"])
+        return float(self.spin_cx.value()), float(self.spin_cy.value()), float(self.spin_radius.value())
+
     # -------------------------------------------------------------
     # Lógica de Bracketing y Limbo Individual
     # -------------------------------------------------------------
@@ -1668,6 +1714,8 @@ class EclipseTab(QWidget):
             return
 
         total_new = len(new_paths)
+        self.cached_aligned_data = None
+        self._current_hdr_cache_key = None
         self.log(f"Cargando {total_new} ficheros de eclipse...")
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, total_new)
@@ -1729,10 +1777,14 @@ class EclipseTab(QWidget):
     def _on_clear_bracketing_clicked(self):
         self.bracketing_files.clear()
         self.ref_file_idx = 0
+        self.cached_aligned_data = None
+        self._current_hdr_cache_key = None
         self._refresh_table()
         self.current_preview_img = None
         self.raw_fused_hdr = None
         self.fused_hdr_img = None
+        self.fused_hdr_geom = None
+        self._viewing_fused = False
         self.final_filtered_img = None
         self.canvas.set_image(np.zeros((100, 100, 3), dtype=np.float32))
         self.log("Serie de bracketing vaciada.")
@@ -1817,6 +1869,8 @@ class EclipseTab(QWidget):
             self.ref_file_idx = idx
             for i, f in enumerate(self.bracketing_files):
                 f["is_ref"] = (i == idx)
+            self.cached_aligned_data = None
+            self._current_hdr_cache_key = None
             self._recalculate_shifts()
             self._refresh_table()
             self.table_brack.selectRow(idx)
@@ -1826,6 +1880,7 @@ class EclipseTab(QWidget):
         rows = self.table_brack.selectionModel().selectedRows()
         if not rows:
             return
+        self._viewing_fused = False
         idx = rows[0].row()
         if 0 <= idx < len(self.bracketing_files):
             item = self.bracketing_files[idx]
@@ -1873,6 +1928,8 @@ class EclipseTab(QWidget):
         self.bracketing_files[idx]["cx"] = cx
         self.bracketing_files[idx]["cy"] = cy
         self.bracketing_files[idx]["radius"] = r
+        self.cached_aligned_data = None
+        self._current_hdr_cache_key = None
 
         self._set_geom_spin_values(cx, cy, r)
         self._recalculate_shifts()
@@ -1898,6 +1955,8 @@ class EclipseTab(QWidget):
         self.bracketing_files[idx]["cx"] = fcx
         self.bracketing_files[idx]["cy"] = fcy
         self.bracketing_files[idx]["radius"] = fr
+        self.cached_aligned_data = None
+        self._current_hdr_cache_key = None
 
         self._set_geom_spin_values(fcx, fcy, fr)
         self._recalculate_shifts()
@@ -1943,12 +2002,22 @@ class EclipseTab(QWidget):
             self.canvas.setCursor(Qt.ArrowCursor)
 
     def _on_center_picked(self, cx: float, cy: float):
+        if getattr(self, "_viewing_fused", False):
+            r = self.spin_radius.value()
+            self.fused_hdr_geom = (float(cx), float(cy), float(r))
+            self._set_geom_spin_values(cx, cy, r)
+            self.btn_pick_center.setChecked(False)
+            self.log(f"Centro de imagen fusionada HDR establecido por clic en: ({cx:.1f}, {cy:.1f})")
+            return
+
         rows = self.table_brack.selectionModel().selectedRows()
         if rows:
             idx = rows[0].row()
             r = self.spin_radius.value()
             self.bracketing_files[idx]["cx"] = cx
             self.bracketing_files[idx]["cy"] = cy
+            self.cached_aligned_data = None
+            self._current_hdr_cache_key = None
             self._set_geom_spin_values(cx, cy, r)
             self._recalculate_shifts()
             self._refresh_table()
@@ -1957,23 +2026,29 @@ class EclipseTab(QWidget):
         self.log(f"Centro establecido por clic en: ({cx:.1f}, {cy:.1f})")
 
     def _on_geom_spin_changed(self):
-        rows = self.table_brack.selectionModel().selectedRows()
-        if rows:
-            idx = rows[0].row()
-            self.bracketing_files[idx]["cx"] = self.spin_cx.value()
-            self.bracketing_files[idx]["cy"] = self.spin_cy.value()
-            self.bracketing_files[idx]["radius"] = self.spin_radius.value()
-            self._recalculate_shifts()
+        self.cached_aligned_data = None
+        self._current_hdr_cache_key = None
 
-            cx_str = f"{self.spin_cx.value():.1f}, {self.spin_cy.value():.1f}"
-            if self.table_brack.item(idx, 4):
-                self.table_brack.item(idx, 4).setText(cx_str)
+        if getattr(self, "_viewing_fused", False):
+            self.fused_hdr_geom = (float(self.spin_cx.value()), float(self.spin_cy.value()), float(self.spin_radius.value()))
+        else:
+            rows = self.table_brack.selectionModel().selectedRows()
+            if rows:
+                idx = rows[0].row()
+                self.bracketing_files[idx]["cx"] = self.spin_cx.value()
+                self.bracketing_files[idx]["cy"] = self.spin_cy.value()
+                self.bracketing_files[idx]["radius"] = self.spin_radius.value()
+                self._recalculate_shifts()
 
-            for r in range(self.table_brack.rowCount()):
-                f = self.bracketing_files[r]
-                shift_str = "0.0, 0.0" if f.get("is_ref") else f"{f['shift_x']:+.1f}, {f['shift_y']:+.1f}"
-                if self.table_brack.item(r, 5):
-                    self.table_brack.item(r, 5).setText(shift_str)
+                cx_str = f"{self.spin_cx.value():.1f}, {self.spin_cy.value():.1f}"
+                if self.table_brack.item(idx, 4):
+                    self.table_brack.item(idx, 4).setText(cx_str)
+
+                for r in range(self.table_brack.rowCount()):
+                    f = self.bracketing_files[r]
+                    shift_str = "0.0, 0.0" if f.get("is_ref") else f"{f['shift_x']:+.1f}, {f['shift_y']:+.1f}"
+                    if self.table_brack.item(r, 5):
+                        self.table_brack.item(r, 5).setText(shift_str)
 
         self._update_canvas_guide()
 
@@ -1986,9 +2061,13 @@ class EclipseTab(QWidget):
         self.lbl_asinh_val.setText(f"{int(factor)}x" if factor > 0 else "Lineal (1x)")
 
         if self.raw_fused_hdr is not None:
+            self._viewing_fused = True
             self.fused_hdr_img = apply_asinh_stretch(self.raw_fused_hdr, stretch_factor=factor) if factor > 1.0 else self.raw_fused_hdr.copy()
             self.canvas.set_image(self.fused_hdr_img)
-            self._update_canvas_guide()
+            if getattr(self, "fused_hdr_geom", None) is not None:
+                self._set_geom_spin_values(*self.fused_hdr_geom)
+            else:
+                self._update_canvas_guide()
 
     def _on_fuse_hdr_clicked(self):
         if self.worker is not None and self.worker.isRunning():
@@ -2029,6 +2108,21 @@ class EclipseTab(QWidget):
         self.btn_apply_filters.setEnabled(False)
         self.btn_detect_all.setEnabled(False)
 
+        cache_centers_key = tuple(
+            (round(float(c[0]), 2), round(float(c[1]), 2), round(float(c[2]), 2))
+            if c is not None and len(c) >= 3 else None
+            for c in active_centers
+        )
+        current_cache_key = (
+            tuple(active_files),
+            cache_centers_key,
+            active_ref_idx,
+            auto_align,
+            crop_roi,
+            crop_size
+        )
+        self._current_hdr_cache_key = current_cache_key
+
         params = {
             "files": active_files,
             "exposures": active_exposures,
@@ -2044,6 +2138,13 @@ class EclipseTab(QWidget):
             "asinh_factor": asinh_factor,
             "mode": mode
         }
+
+        if (self.cached_aligned_data is not None and 
+            self.cached_aligned_data.get("key") == current_cache_key):
+            params["cached_aligned_images"] = self.cached_aligned_data["aligned_images"]
+            params["cached_final_centers"] = self.cached_aligned_data["final_centers"]
+            params["cached_raw_centers"] = self.cached_aligned_data.get("raw_centers", self.cached_aligned_data["final_centers"])
+            params["cached_shifts"] = self.cached_aligned_data["shifts"]
 
         self.worker = EclipseWorker("hdr_fusion", params)
         self.worker.progress.connect(self._on_worker_progress)
@@ -2070,13 +2171,7 @@ class EclipseTab(QWidget):
             QMessageBox.warning(self, "Atención", "No hay imagen cargada o fusionada sobre la cual aplicar filtros.")
             return
 
-        ref_f = self.bracketing_files[self.ref_file_idx] if self.bracketing_files else None
-        if ref_f and ref_f.get("cx") is not None:
-            cx, cy, r = ref_f["cx"], ref_f["cy"], ref_f["radius"]
-        else:
-            cx = self.spin_cx.value()
-            cy = self.spin_cy.value()
-            r = self.spin_radius.value()
+        cx, cy, r = self._get_active_geometry_for_image(base_img)
 
         if r <= 5:
             QMessageBox.warning(self, "Atención", "Define o auto-detecta el radio del limbo antes de aplicar los filtros.")
@@ -2167,13 +2262,7 @@ class EclipseTab(QWidget):
             QMessageBox.warning(self, "Atención", "No hay imagen cargada o fusionada para exportar como PSD.")
             return
 
-        ref_f = self.bracketing_files[self.ref_file_idx] if self.bracketing_files else None
-        if ref_f and ref_f.get("cx") is not None:
-            cx, cy, r = ref_f["cx"], ref_f["cy"], ref_f["radius"]
-        else:
-            cx = self.spin_cx.value()
-            cy = self.spin_cy.value()
-            r = self.spin_radius.value()
+        cx, cy, r = self._get_active_geometry_for_image(base_img)
 
         if r <= 5:
             QMessageBox.warning(self, "Atención", "Define o auto-detecta el radio del limbo antes de exportar el PSD multicapa.")
@@ -2218,6 +2307,8 @@ class EclipseTab(QWidget):
         self.btn_apply_filters.setEnabled(True)
 
         if task_type == "batch_detect":
+            self.cached_aligned_data = None
+            self._current_hdr_cache_key = None
             for i, (cx, cy, r) in enumerate(result):
                 if i < len(self.bracketing_files):
                     self.bracketing_files[i]["cx"] = cx
@@ -2247,29 +2338,71 @@ class EclipseTab(QWidget):
             self.log("Detección de limbo en lote completada. Desplazamientos calculados.")
 
         elif task_type == "hdr_fusion":
+            self._viewing_fused = True
             self.raw_fused_hdr = result["hdr_raw"]
             self.fused_hdr_img = result["hdr_image"]
             self.canvas.set_image(self.fused_hdr_img)
 
-            centers = result["centers"]
+            raw_centers = result.get("raw_centers", result["centers"])
+            final_centers = result["centers"]
             shifts = result["shifts"]
-            for i, c in enumerate(centers):
-                if i < len(self.bracketing_files):
-                    self.bracketing_files[i]["cx"] = c[0]
-                    self.bracketing_files[i]["cy"] = c[1]
-                    self.bracketing_files[i]["radius"] = c[2]
+            ref_idx = result.get("ref_idx", self.ref_file_idx)
+
+            for i, rc in enumerate(raw_centers):
+                if i < len(self.bracketing_files) and rc is not None and len(rc) >= 3:
+                    self.bracketing_files[i]["cx"] = rc[0]
+                    self.bracketing_files[i]["cy"] = rc[1]
+                    self.bracketing_files[i]["radius"] = rc[2]
                     self.bracketing_files[i]["shift_x"] = shifts[i][0]
                     self.bracketing_files[i]["shift_y"] = shifts[i][1]
 
             self._refresh_table()
 
-            ref_f = self.bracketing_files[self.ref_file_idx]
-            if ref_f.get("cx") is not None:
-                self._set_geom_spin_values(ref_f["cx"], ref_f["cy"], ref_f["radius"])
+            fused_geom = result.get("fused_geom")
+            if fused_geom is None and ref_idx < len(final_centers):
+                fused_geom = final_centers[ref_idx]
 
-            self.log("Fusión HDR finalizada con alineación subpíxel y estirado Asinh.")
+            if fused_geom is not None and len(fused_geom) >= 3:
+                self.fused_hdr_geom = (float(fused_geom[0]), float(fused_geom[1]), float(fused_geom[2]))
+                self._set_geom_spin_values(fused_geom[0], fused_geom[1], fused_geom[2])
+            else:
+                ref_f = self.bracketing_files[self.ref_file_idx] if (self.bracketing_files and 0 <= self.ref_file_idx < len(self.bracketing_files)) else None
+                if ref_f and ref_f.get("cx") is not None:
+                    self.fused_hdr_geom = (float(ref_f["cx"]), float(ref_f["cy"]), float(ref_f["radius"]))
+                    self._set_geom_spin_values(ref_f["cx"], ref_f["cy"], ref_f["radius"])
+
+            if "aligned_images" in result:
+                cache_raw_key = tuple(
+                    (round(float(c[0]), 2), round(float(c[1]), 2), round(float(c[2]), 2))
+                    if c is not None and len(c) >= 3 else None
+                    for c in raw_centers
+                )
+                worker_params = getattr(self.worker, "params", {}) if self.worker else {}
+                saved_cache_key = (
+                    tuple(worker_params.get("files", [])),
+                    cache_raw_key,
+                    worker_params.get("ref_idx", 0),
+                    worker_params.get("auto_align", True),
+                    worker_params.get("crop_roi", False),
+                    int(worker_params.get("crop_size", 3000))
+                )
+                self.cached_aligned_data = {
+                    "key": saved_cache_key,
+                    "aligned_images": result["aligned_images"],
+                    "final_centers": final_centers,
+                    "raw_centers": raw_centers,
+                    "fused_geom": self.fused_hdr_geom,
+                    "shifts": shifts
+                }
+                self._current_hdr_cache_key = saved_cache_key
+
+            if result.get("was_cached", False):
+                self.log("Fusión HDR finalizada instantáneamente (utilizando tomas alineadas en memoria caché).")
+            else:
+                self.log("Fusión HDR finalizada con alineación subpíxel y estirado Asinh.")
 
         elif task_type == "apply_filters":
+            self._viewing_fused = True
             self.final_filtered_img = result
             self.canvas.set_image(result)
             self._update_canvas_guide()
@@ -2374,13 +2507,7 @@ class EclipseTab(QWidget):
             QMessageBox.warning(self, "Atención", "No hay imagen cargada o fusionada para transferir.")
             return
 
-        ref_f = self.bracketing_files[self.ref_file_idx] if self.bracketing_files else None
-        if ref_f and ref_f.get("cx") is not None:
-            cx, cy, r = ref_f["cx"], ref_f["cy"], ref_f["radius"]
-        else:
-            cx = self.spin_cx.value()
-            cy = self.spin_cy.value()
-            r = self.spin_radius.value()
+        cx, cy, r = self._get_active_geometry_for_image(base_img)
 
         if r <= 5:
             QMessageBox.warning(self, "Atención", "Define o auto-detecta el centro y radio del limbo antes de generar la multicapa coronal.")

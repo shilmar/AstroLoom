@@ -247,6 +247,20 @@ def optimize_center_circular_flux(
       - Inmune a destellos potentes (anillo de diamante y perlas de Baily) que distorsionan medianas globales.
       - Acotado rígidamente dentro de los límites de la imagen y ventana de búsqueda máxima.
     """
+    if HAS_RUST and hasattr(astroloom_rs, "optimize_center_circular_flux_rs"):
+        try:
+            gray_f32 = np.ascontiguousarray(gray, dtype=np.float32)
+            return astroloom_rs.optimize_center_circular_flux_rs(
+                gray_f32,
+                float(init_cx),
+                float(init_cy),
+                float(radius),
+                mode,
+                float(max_search_dist) if max_search_dist is not None else None
+            )
+        except Exception:
+            pass
+
     h, w = gray.shape[:2]
     angles = np.linspace(0, 2 * np.pi, 180, endpoint=False)
     cos_a = np.cos(angles)
@@ -762,12 +776,22 @@ def apply_asinh_stretch(
     extremo de la corona solar: levanta la corona externa tenue sin empastar
     ni saturar protuberancias a blanco puro.
     """
-    if stretch_factor <= 1.0:
-        return np.clip(image - black_point, 0.0, 1.0).astype(np.float32)
+    img = np.ascontiguousarray(image, dtype=np.float32)
+    if HAS_RUST and hasattr(astroloom_rs, "apply_asinh_stretch_rs"):
+        return np.asarray(astroloom_rs.apply_asinh_stretch_rs(
+            img,
+            float(stretch_factor),
+            float(black_point),
+            float(shoulder_threshold),
+            float(highlight_ceiling)
+        ), dtype=np.float32)
 
-    img = np.maximum(image - black_point, 0.0).astype(np.float32)
+    if stretch_factor <= 1.0:
+        return np.clip(img - black_point, 0.0, 1.0).astype(np.float32)
+
+    img_sub = np.maximum(img - black_point, 0.0).astype(np.float32)
     denom = np.arcsinh(float(stretch_factor))
-    u = np.arcsinh(float(stretch_factor) * img) / denom
+    u = np.arcsinh(float(stretch_factor) * img_sub) / denom
 
     if img.ndim == 3:
         peak = np.max(u, axis=-1)
@@ -792,9 +816,20 @@ def balance_coronal_white_balance(
     en el anillo coronal medio (1.2 - 1.8 R), eliminando dominantes cálidas o del
     cielo crepuscular según las directrices de AEL (white_balance_on_corona).
     """
-    img = np.asarray(image, dtype=np.float32)
+    img = np.ascontiguousarray(image, dtype=np.float32)
+    if HAS_RUST and hasattr(astroloom_rs, "balance_coronal_white_balance_rs"):
+        bal, gains = astroloom_rs.balance_coronal_white_balance_rs(
+            img,
+            float(center_x),
+            float(center_y),
+            float(radius),
+            float(ring_range[0]),
+            float(ring_range[1])
+        )
+        return np.asarray(bal, dtype=np.float32), (float(gains[0]), float(gains[1]), float(gains[2]))
+
     if img.ndim != 3:
-        return img, (1.0, 1.0, 1.0)
+        return img.copy(), (1.0, 1.0, 1.0)
 
     h, w = img.shape[:2]
     y, x = np.ogrid[:h, :w]
@@ -804,7 +839,7 @@ def balance_coronal_white_balance(
     ring = (dist >= r_lo) & (dist <= r_hi)
 
     if np.sum(ring) < 100:
-        return img, (1.0, 1.0, 1.0)
+        return img.copy(), (1.0, 1.0, 1.0)
 
     med = np.median(img[ring], axis=0)
     g_val = float(med[1]) if med[1] > 1e-6 else float(np.mean(med))
@@ -867,6 +902,38 @@ def fuse_hdr_bracketing(
     order = np.argsort(exposures_s)
     sorted_images = [np.asarray(images[i], dtype=np.float32) for i in order]
     sorted_exp = [float(exposures_s[i]) for i in order]
+
+    # Pre-calcular pedestales de cielo si procede
+    bg_pedestals = []
+    if subtract_sky:
+        for img in sorted_images:
+            if img.ndim == 3:
+                bg_pedestals.append(np.percentile(img, 0.5, axis=(0, 1)).astype(np.float32).tolist())
+            else:
+                bg_pedestals.append([float(np.percentile(img, 0.5))])
+
+    if HAS_RUST and hasattr(astroloom_rs, "fuse_hdr_bracketing_solar_rs"):
+        try:
+            hdr_norm = astroloom_rs.fuse_hdr_bracketing_solar_rs(
+                sorted_images,
+                sorted_exp,
+                float(saturation_threshold),
+                float(noise_floor),
+                lunar_mask_params,
+                bool(gradual_handover),
+                bg_pedestals if subtract_sky else None
+            )
+            # Balance de blancos coronal automático (anillo 1.2 - 1.8 R) para eliminar dominantes de cielo
+            if auto_wb_corona and lunar_mask_params is not None and hdr_norm.ndim == 3:
+                mcx, mcy, mr = lunar_mask_params
+                hdr_norm, _ = balance_coronal_white_balance(hdr_norm, mcx, mcy, mr, ring_range=(1.2, 1.8))
+
+            if asinh_stretch > 1.0:
+                hdr_norm = apply_asinh_stretch(hdr_norm, stretch_factor=asinh_stretch)
+
+            return hdr_norm
+        except Exception:
+            pass
 
     shape = sorted_images[0].shape
     weighted_flux = np.zeros(shape, dtype=np.float64)
