@@ -38,7 +38,8 @@ PARAM_KEYS_COLOR = {
 
 PARAM_KEYS_DETAILS = {
     "stars_val", "contrast_starless_val", "clarity_val", "dehaze_val",
-    "ond_est_val", "ond_bg_val", "denoise_val", "layer_idx", "lp_val"
+    "ond_est_val", "ond_bg_val", "denoise_val", "layer_idx", "lp_val",
+    "sharp_amount", "sharp_radius", "sharp_detail", "sharp_masking", "sharp_scope_idx"
 }
 
 # Límites físicos de los deslizadores para interpolación y escalado de presets
@@ -62,12 +63,22 @@ PARAM_BOUNDS: Dict[str, Tuple[int, int]] = {
     "ond_bg_val": (0, 100),
     "denoise_val": (0, 100),
     "lp_val": (0, 100),
+    "sharp_amount": (0, 150),
+    "sharp_radius": (5, 30),
+    "sharp_detail": (0, 100),
+    "sharp_masking": (0, 100),
+    "sharp_scope_idx": (0, 2),
 }
 
 DEFAULT_NEUTRAL_PARAMS: Dict[str, Any] = {
     "lp_val": 0,
     "layer_idx": 0,
     "stars_val": 100,
+    "sharp_amount": 0,
+    "sharp_radius": 10,
+    "sharp_detail": 25,
+    "sharp_masking": 0,
+    "sharp_scope_idx": 0,
     "contrast_starless_val": 0,
     "clarity_val": 0,
     "dehaze_val": 0,

@@ -1,5 +1,7 @@
 use numpy::ndarray::{ArrayView2, ArrayView3};
-use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3};
+use numpy::{
+    PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyReadonlyArrayDyn, PyReadwriteArrayDyn,
+};
 use pyo3::prelude::*;
 use pyo3::types::PyByteArray;
 use rayon::prelude::*;
@@ -351,4 +353,110 @@ pub fn render_canvas_frame_rs<'py>(
     };
 
     Ok(byte_array)
+}
+
+// ============================================================================
+// FASE 12b: MAPEO Y FUSIÓN DISPLAY LUT 1D UINT16 (core/display_transfer.py)
+// Mapeo ultrarrápido multihilo con Rayon para arrastre interactivo a > 500 FPS.
+// ============================================================================
+
+#[pyfunction]
+pub fn apply_display_lut16_rs<'py>(
+    py: Python<'py>,
+    img_u16: PyReadonlyArrayDyn<'py, u16>,
+    lut_u8: PyReadonlyArray1<'py, u8>,
+    mut out_u8: PyReadwriteArrayDyn<'py, u8>,
+) -> PyResult<()> {
+    let in_slice = img_u16.as_slice().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("img_u16 must be C-contiguous: {:?}", e))
+    })?;
+    let lut_slice = lut_u8.as_slice().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("lut_u8 must be C-contiguous: {:?}", e))
+    })?;
+    let out_slice = out_u8.as_slice_mut().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("out_u8 must be C-contiguous: {:?}", e))
+    })?;
+
+    if in_slice.len() != out_slice.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Input and output arrays must have the same number of elements",
+        ));
+    }
+    if lut_slice.len() < 65536 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "LUT must have at least 65536 elements",
+        ));
+    }
+
+    py.allow_threads(|| {
+        const CHUNK_SIZE: usize = 32768;
+        out_slice
+            .par_chunks_mut(CHUNK_SIZE)
+            .zip(in_slice.par_chunks(CHUNK_SIZE))
+            .for_each(|(out_chunk, in_chunk)| {
+                for (o, &i) in out_chunk.iter_mut().zip(in_chunk.iter()) {
+                    *o = unsafe { *lut_slice.get_unchecked(i as usize) };
+                }
+            });
+    });
+
+    Ok(())
+}
+
+#[pyfunction]
+#[pyo3(signature = (sl_u16, st_u16, lut_sl, lut_st, star_intensity, out_u8))]
+pub fn apply_display_lut16_dual_rs<'py>(
+    py: Python<'py>,
+    sl_u16: PyReadonlyArrayDyn<'py, u16>,
+    st_u16: PyReadonlyArrayDyn<'py, u16>,
+    lut_sl: PyReadonlyArray1<'py, u8>,
+    lut_st: PyReadonlyArray1<'py, u8>,
+    star_intensity: f32,
+    mut out_u8: PyReadwriteArrayDyn<'py, u8>,
+) -> PyResult<()> {
+    let sl_slice = sl_u16.as_slice().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("sl_u16 must be C-contiguous: {:?}", e))
+    })?;
+    let st_slice = st_u16.as_slice().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("st_u16 must be C-contiguous: {:?}", e))
+    })?;
+    let l_sl = lut_sl.as_slice().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("lut_sl must be C-contiguous: {:?}", e))
+    })?;
+    let l_st = lut_st.as_slice().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("lut_st must be C-contiguous: {:?}", e))
+    })?;
+    let out_slice = out_u8.as_slice_mut().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("out_u8 must be C-contiguous: {:?}", e))
+    })?;
+
+    let len = sl_slice.len();
+    if st_slice.len() != len || out_slice.len() != len {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "sl_u16, st_u16 and out_u8 must have the same number of elements",
+        ));
+    }
+    if l_sl.len() < 65536 || l_st.len() < 65536 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "LUTs must have at least 65536 elements",
+        ));
+    }
+
+    py.allow_threads(|| {
+        const CHUNK_SIZE: usize = 32768;
+        out_slice
+            .par_chunks_mut(CHUNK_SIZE)
+            .zip(sl_slice.par_chunks(CHUNK_SIZE))
+            .zip(st_slice.par_chunks(CHUNK_SIZE))
+            .for_each(|((out_chunk, sl_chunk), st_chunk)| {
+                for i in 0..out_chunk.len() {
+                    let v_sl = unsafe { *l_sl.get_unchecked(sl_chunk[i] as usize) } as f32;
+                    let v_st = (unsafe { *l_st.get_unchecked(st_chunk[i] as usize) } as f32) * star_intensity;
+                    let tot = v_sl + v_st;
+                    out_chunk[i] = tot.clamp(0.0, 255.0) as u8;
+                }
+            });
+    });
+
+    Ok(())
 }

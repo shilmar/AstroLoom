@@ -1181,6 +1181,82 @@ class MaskLayersWidget(QWidget):
         self.sec_layer_curve.toggled.connect(lambda exp: self.update_active_layer_histogram() if exp else None)
         adj_layout.addWidget(self.sec_layer_curve)
 
+        # Máscara de Enfoque y Nitidez (Detección de bordes / Lightroom Style)
+        self.sec_layer_sharp = CollapsibleSection(
+            "Máscara de Enfoque y Nitidez",
+            is_expanded=False,
+            icon_name="zap",
+            on_reset=self._reset_layer_sharpening
+        )
+        w_sharp = QWidget()
+        sharp_layout = QVBoxLayout(w_sharp)
+        sharp_layout.setContentsMargins(4, 6, 4, 6)
+        sharp_layout.setSpacing(6)
+
+        # Cantidad: 0 a 150 %
+        self.row_sharp_amount = PrecisionSliderRow("Cantidad:", 0, 150, 0, scale=1.0, decimals=0, unit="%", label_width=95)
+        self.slider_adj_sharp_amount = self.row_sharp_amount.slider
+        self.lbl_adj_sharp_amount = self.row_sharp_amount.lbl_value
+        self.slider_adj_sharp_amount.valueChanged.connect(self._on_adj_sharp_amount_changed)
+        self.row_sharp_amount.sliderReleased.connect(self.ground_slider_released.emit)
+        sharp_layout.addWidget(self.row_sharp_amount)
+
+        # Radio: 0.5 a 3.0 px (step 0.1)
+        self.row_sharp_radius = PrecisionSliderRow("Radio:", 5, 30, 10, scale=10.0, decimals=1, unit=" px", label_width=95)
+        self.slider_adj_sharp_radius = self.row_sharp_radius.slider
+        self.lbl_adj_sharp_radius = self.row_sharp_radius.lbl_value
+        self.slider_adj_sharp_radius.valueChanged.connect(self._on_adj_sharp_radius_changed)
+        self.row_sharp_radius.sliderReleased.connect(self.ground_slider_released.emit)
+        sharp_layout.addWidget(self.row_sharp_radius)
+
+        # Detalle: 0 a 100 %
+        self.row_sharp_detail = PrecisionSliderRow("Detalle:", 0, 100, 25, scale=1.0, decimals=0, unit="%", label_width=95)
+        self.slider_adj_sharp_detail = self.row_sharp_detail.slider
+        self.lbl_adj_sharp_detail = self.row_sharp_detail.lbl_value
+        self.slider_adj_sharp_detail.valueChanged.connect(self._on_adj_sharp_detail_changed)
+        self.row_sharp_detail.sliderReleased.connect(self.ground_slider_released.emit)
+        sharp_layout.addWidget(self.row_sharp_detail)
+
+        # Botón Ver Máscara de Bordes en B&W (estilo Lightroom)
+        self.btn_sharp_mask_preview = QPushButton()
+        self.btn_sharp_mask_preview.setIcon(get_icon("eye", color="#94a3b8", active_color="#38bdf8", size=13))
+        self.btn_sharp_mask_preview.setCheckable(True)
+        self.btn_sharp_mask_preview.setFixedSize(20, 20)
+        self.btn_sharp_mask_preview.setCursor(Qt.PointingHandCursor)
+        self.btn_sharp_mask_preview.setToolTip("Ver máscara de bordes en blanco y negro (o mantén pulsado Alt mientras arrastras el deslizador)")
+        self.btn_sharp_mask_preview.setStyleSheet("""
+            QPushButton {
+                background-color: #1e2430;
+                border: 1px solid #334155;
+                border-radius: 3px;
+                padding: 1px;
+            }
+            QPushButton:hover {
+                border-color: #38bdf8;
+                background-color: #242c3d;
+            }
+            QPushButton:checked {
+                background-color: #0284c7;
+                border-color: #38bdf8;
+            }
+        """)
+        self.btn_sharp_mask_preview.toggled.connect(self._on_sharp_mask_preview_toggled)
+
+        # Máscara: 0 a 100 % + Botón de máscara en blanco y negro
+        self.row_sharp_masking = PrecisionSliderRow(
+            "Máscara:", 0, 100, 0, scale=1.0, decimals=0, unit="%", label_width=95,
+            action_button=self.btn_sharp_mask_preview
+        )
+        self.slider_adj_sharp_masking = self.row_sharp_masking.slider
+        self.lbl_adj_sharp_masking = self.row_sharp_masking.lbl_value
+        self.slider_adj_sharp_masking.valueChanged.connect(self._on_adj_sharp_masking_changed)
+        self.slider_adj_sharp_masking.sliderPressed.connect(self._on_sharp_masking_slider_pressed)
+        self.row_sharp_masking.sliderReleased.connect(self._on_sharp_masking_slider_released)
+        sharp_layout.addWidget(self.row_sharp_masking)
+
+        self.sec_layer_sharp.set_content_widget(w_sharp)
+        adj_layout.addWidget(self.sec_layer_sharp)
+
         # Botón restablecer ajustes de la capa
         btn_reset_local = QPushButton("Restablecer Ajustes Locales")
         btn_reset_local.setIcon(get_icon("rotate_ccw", color="#94a3b8", size=13))
@@ -1742,6 +1818,7 @@ class MaskLayersWidget(QWidget):
             'slider_opacity', 'slider_b_radius', 'slider_b_hardness', 'slider_b_flow',
             'slider_hue', 'slider_adj_ev', 'slider_adj_contrast', 'slider_adj_shadows',
             'slider_adj_highlights', 'slider_adj_sat', 'slider_adj_temp', 'slider_adj_tint',
+            'slider_adj_sharp_amount', 'slider_adj_sharp_radius', 'slider_adj_sharp_detail', 'slider_adj_sharp_masking',
             'slider_gnd_special_ev', 'slider_gnd_special_sh', 'slider_gnd_special_bp',
             'slider_gnd_special_dn', 'slider_gnd_special_antihalo', 'slider_gnd_special_edge_shift',
             'slider_stars_special', 'slider_sl_star_diff_strength', 'slider_sl_star_diff_radius',
@@ -3147,6 +3224,30 @@ class MaskLayersWidget(QWidget):
             self.spin_adj_tint.setValue(layer.tint)
             self.slider_adj_tint.setValue(int(round(layer.tint * 10000.0)))
 
+            # Ocultar Enfoque en Capa de Estrellas para evitar halos oscuros en PSF
+            if hasattr(self, 'sec_layer_sharp'):
+                self.sec_layer_sharp.setVisible(not is_stars)
+
+            # Máscara de Enfoque y Nitidez de capa
+            if hasattr(self, 'slider_adj_sharp_amount'):
+                s_amt = int(round(getattr(layer, 'sharp_amount', 0.0)))
+                s_rad = float(getattr(layer, 'sharp_radius', 1.0))
+                s_det = int(round(getattr(layer, 'sharp_detail', 25.0)))
+                s_msk = int(round(getattr(layer, 'sharp_masking', 0.0)))
+                self.slider_adj_sharp_amount.setValue(s_amt)
+                self.lbl_adj_sharp_amount.setText(f"{s_amt}%")
+                self.slider_adj_sharp_radius.setValue(int(round(s_rad * 10.0)))
+                self.lbl_adj_sharp_radius.setText(f"{s_rad:.1f} px")
+                self.slider_adj_sharp_detail.setValue(s_det)
+                self.lbl_adj_sharp_detail.setText(f"{s_det}%")
+                self.slider_adj_sharp_masking.setValue(s_msk)
+                self.lbl_adj_sharp_masking.setText(f"{s_msk}%")
+                if hasattr(self, 'btn_sharp_mask_preview') and self.btn_sharp_mask_preview.isChecked():
+                    self.btn_sharp_mask_preview.blockSignals(True)
+                    self.btn_sharp_mask_preview.setChecked(False)
+                    self.btn_sharp_mask_preview.blockSignals(False)
+                    self.preview_mask_requested.emit(None)
+
             # Curva tonal interactiva de capa
             if hasattr(self, 'layer_curve_widget'):
                 pts = getattr(layer, 'curve_points', None)
@@ -3950,6 +4051,151 @@ class MaskLayersWidget(QWidget):
             self.update_active_layer_histogram()
             self.layers_changed.emit()
 
+    def _on_adj_sharp_amount_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if layer:
+            layer.sharp_amount = float(val)
+            self.lbl_adj_sharp_amount.setText(f"{val}%")
+            self.layers_changed.emit()
+
+    def _on_adj_sharp_radius_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if layer:
+            layer.sharp_radius = val / 10.0
+            self.lbl_adj_sharp_radius.setText(f"{layer.sharp_radius:.1f} px")
+            self.layers_changed.emit()
+
+    def _on_adj_sharp_detail_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if layer:
+            layer.sharp_detail = float(val)
+            self.lbl_adj_sharp_detail.setText(f"{val}%")
+            self.layers_changed.emit()
+
+    def _on_adj_sharp_masking_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if layer:
+            layer.sharp_masking = float(val)
+            self.lbl_adj_sharp_masking.setText(f"{val}%")
+            if getattr(self, '_alt_scrubbing_sharp', False) or (hasattr(self, 'btn_sharp_mask_preview') and self.btn_sharp_mask_preview.isChecked()):
+                self._emit_sharp_edge_mask_preview()
+            else:
+                self.layers_changed.emit()
+
+    def _on_sharp_masking_slider_pressed(self) -> None:
+        mods = QApplication.keyboardModifiers()
+        if mods & Qt.AltModifier:
+            self._alt_scrubbing_sharp = True
+            self._emit_sharp_edge_mask_preview()
+        self._on_slider_interaction_started()
+
+    def _on_sharp_masking_slider_released(self) -> None:
+        if getattr(self, '_alt_scrubbing_sharp', False):
+            self._alt_scrubbing_sharp = False
+            if not (hasattr(self, 'btn_sharp_mask_preview') and self.btn_sharp_mask_preview.isChecked()):
+                self.preview_mask_requested.emit(None)
+                self.layers_changed.emit()
+        self.ground_slider_released.emit()
+        self._on_slider_interaction_ended()
+
+    def _on_sharp_mask_preview_toggled(self, checked: bool) -> None:
+        if checked:
+            if hasattr(self, 'btn_preview_mask') and self.btn_preview_mask.isChecked():
+                self.btn_preview_mask.blockSignals(True)
+                self.btn_preview_mask.setChecked(False)
+                self.btn_preview_mask.blockSignals(False)
+            self._emit_sharp_edge_mask_preview()
+        else:
+            self.preview_mask_requested.emit(None)
+            self.layers_changed.emit()
+
+    def _emit_sharp_edge_mask_preview(self) -> None:
+        """Calcula y envía la máscara de bordes en blanco y negro para renderizado interactivo en el lienzo."""
+        layer = self.get_selected_layer()
+        if not layer or not layer.enabled or not self._image_reference_getter:
+            self.preview_mask_requested.emit(None)
+            return
+
+        base_img = self._image_reference_getter()
+        if base_img is None:
+            self.preview_mask_requested.emit(None)
+            return
+
+        master_mask = self._master_mask_getter() if self._master_mask_getter else None
+        stars_img = self._stars_getter() if self._stars_getter else None
+        starless_img = self._starless_getter() if self._starless_getter else None
+
+        canvas_below = get_canvas_below_layer(
+            base_img,
+            self.layers,
+            layer.id,
+            master_sky_mask=master_mask,
+            starless_image=starless_img,
+            stars_image=stars_img
+        )
+
+        from core.sharpening import compute_edge_mask
+        masking_val = float(getattr(layer, "sharp_masking", 0.0))
+
+        # Para capas ráster, calcular los bordes sobre la imagen de la propia capa si está disponible
+        if getattr(layer, 'is_raster_image', False) and layer.image_data is not None:
+            flt_img = layer.image_data
+            if flt_img.shape[:2] != canvas_below.shape[:2]:
+                flt_img = cv2.resize(flt_img, (canvas_below.shape[1], canvas_below.shape[0]), interpolation=cv2.INTER_LINEAR)
+            edge_m = compute_edge_mask(flt_img, masking=masking_val, scope="global")
+        else:
+            scope = "ground" if layer.mask_type == MASK_TYPE_IMAGE_GROUND else "global"
+            edge_m = compute_edge_mask(
+                canvas_below,
+                masking=masking_val,
+                sky_mask=master_mask,
+                scope=scope
+            )
+
+        # Si es una capa de ajuste local (con máscara de pincel, degradado, luma, etc.), recortar la visualización
+        if layer.mask_type not in (MASK_TYPE_IMAGE_BASE, MASK_TYPE_IMAGE_GROUND, MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_STARS):
+            eff_m = compute_effective_layer_mask(
+                layer, canvas_below,
+                master_sky_mask=master_mask,
+                starless_image=starless_img,
+                stars_image=stars_img
+            )
+            if eff_m is not None:
+                if eff_m.shape[:2] != edge_m.shape[:2]:
+                    eff_m = cv2.resize(eff_m, (edge_m.shape[1], edge_m.shape[0]), interpolation=cv2.INTER_LINEAR)
+                edge_m = edge_m * eff_m
+
+        self.preview_mask_requested.emit((edge_m, "bw"))
+
+    def _reset_layer_sharpening(self) -> None:
+        """Restablece los parámetros de nitidez y enfoque de la capa a valores neutros."""
+        layer = self.get_selected_layer()
+        if not layer: return
+        layer.sharp_amount = 0.0
+        layer.sharp_radius = 1.0
+        layer.sharp_detail = 25.0
+        layer.sharp_masking = 0.0
+        self._updating_ui = True
+        if hasattr(self, 'slider_adj_sharp_amount'):
+            self.slider_adj_sharp_amount.setValue(0)
+            self.lbl_adj_sharp_amount.setText("0%")
+            self.slider_adj_sharp_radius.setValue(10)
+            self.lbl_adj_sharp_radius.setText("1.0 px")
+            self.slider_adj_sharp_detail.setValue(25)
+            self.lbl_adj_sharp_detail.setText("25%")
+            self.slider_adj_sharp_masking.setValue(0)
+            self.lbl_adj_sharp_masking.setText("0%")
+        if hasattr(self, 'btn_sharp_mask_preview') and self.btn_sharp_mask_preview.isChecked():
+            self.btn_sharp_mask_preview.setChecked(False)
+            self.preview_mask_requested.emit(None)
+        self._updating_ui = False
+        self.ground_slider_released.emit()
+        self.layers_changed.emit()
+
     def _reset_local_adjustments(self) -> None:
         """Restablece los controles de revelado local de la capa actual a valores neutros."""
         layer = self.get_selected_layer()
@@ -3961,12 +4207,30 @@ class MaskLayersWidget(QWidget):
         layer.saturation = 1.0
         layer.temp = 0.0
         layer.tint = 0.0
+        layer.sharp_amount = 0.0
+        layer.sharp_radius = 1.0
+        layer.sharp_detail = 25.0
+        layer.sharp_masking = 0.0
         layer.curve_points = [(0.0, 0.0), (1.0, 1.0)]
         layer.curve_lut = np.linspace(0.0, 1.0, 256, dtype=np.float32)
         if hasattr(self, 'layer_curve_widget'):
             self._updating_ui = True
             self.layer_curve_widget.reset_curve("rgb")
             self._updating_ui = False
+        if hasattr(self, 'slider_adj_sharp_amount'):
+            self._updating_ui = True
+            self.slider_adj_sharp_amount.setValue(0)
+            self.lbl_adj_sharp_amount.setText("0%")
+            self.slider_adj_sharp_radius.setValue(10)
+            self.lbl_adj_sharp_radius.setText("1.0 px")
+            self.slider_adj_sharp_detail.setValue(25)
+            self.lbl_adj_sharp_detail.setText("25%")
+            self.slider_adj_sharp_masking.setValue(0)
+            self.lbl_adj_sharp_masking.setText("0%")
+            self._updating_ui = False
+        if hasattr(self, 'btn_sharp_mask_preview') and self.btn_sharp_mask_preview.isChecked():
+            self.btn_sharp_mask_preview.setChecked(False)
+            self.preview_mask_requested.emit(None)
         self._update_list_and_props_state()
         self.update_active_layer_histogram()
         self.ground_slider_released.emit()
@@ -4373,6 +4637,10 @@ class MaskLayersWidget(QWidget):
     # Previsualización interactiva de la máscara en el lienzo
     def _on_preview_mask_toggled(self, checked: bool) -> None:
         if checked:
+            if hasattr(self, 'btn_sharp_mask_preview') and self.btn_sharp_mask_preview.isChecked():
+                self.btn_sharp_mask_preview.blockSignals(True)
+                self.btn_sharp_mask_preview.setChecked(False)
+                self.btn_sharp_mask_preview.blockSignals(False)
             self._emit_mask_preview()
         else:
             self.preview_mask_requested.emit(None)

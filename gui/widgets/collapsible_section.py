@@ -112,7 +112,7 @@ class CollapsibleSection(QWidget):
         main_layout.setSpacing(0)
 
         # 1. Cabecera interactiva
-        self.header = QFrame()
+        self.header = QFrame(self)
         self.header.setFixedHeight(34)
         self.header.setCursor(Qt.PointingHandCursor)
         self.header.setObjectName("CollapsibleHeader")
@@ -122,22 +122,23 @@ class CollapsibleSection(QWidget):
         header_layout.setSpacing(7)
 
         # Flecha indicadora vectorial SVG
-        self.lbl_arrow = QLabel()
+        self.lbl_arrow = QLabel(self.header)
         self.lbl_arrow.setFixedSize(14, 14)
         self.lbl_arrow.setAlignment(Qt.AlignCenter)
         self._update_arrow_pixmap()
         header_layout.addWidget(self.lbl_arrow)
 
         # Icono temático de sección vectorial SVG
-        self.lbl_icon = QLabel()
+        self.lbl_icon = QLabel(self.header)
         self.lbl_icon.setFixedSize(16, 16)
         self.lbl_icon.setAlignment(Qt.AlignCenter)
+        header_layout.addWidget(self.lbl_icon)
+
         if self._icon_name:
             self.lbl_icon.setPixmap(get_svg_pixmap(self._icon_name, color="#38bdf8", size=15))
             self.lbl_icon.setVisible(True)
         else:
             self.lbl_icon.setVisible(False)
-        header_layout.addWidget(self.lbl_icon)
 
         # Título de la sección
         self.lbl_title = QLabel(self._title_text)

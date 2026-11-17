@@ -117,13 +117,14 @@ from gui.developer.panels.panel_ground_sky import GroundSkyPanel
 from gui.developer.panels.panel_starnet import StarNetPanel
 from gui.developer.panels.panel_crop import CropToolbar
 from gui.developer.panels.panel_dust import DustPanel
+from gui.developer.panels.panel_sharpening import SharpeningPanel
 from gui.developer.developer_state import DeveloperState
 from gui.developer.pipeline import ResolutionPyramid, apply_developer_pipeline
 from gui.developer.async_worker import AsyncPipelineManager
 from core.buffer_cache import PipelineBufferCache
 from core.display_transfer import (
     compute_combined_stf_lut,
-    apply_display_lut16_numba
+    apply_display_lut16
 )
 
 
@@ -878,6 +879,7 @@ class DeveloperTab(QWidget):
         self.panel_deconv.action_committed.connect(self._commit_action)
 
         left_layout.addWidget(self.panel_deconv)
+        self.panel_sharpening = None
 
         # --- SECCIÓN 9: Máscaras y Capas de Ajuste Local ---
         self.sec_masks = CollapsibleSection("Máscaras y Capas de Ajuste Local", is_expanded=False, icon_name="layers")
@@ -2545,10 +2547,16 @@ class DeveloperTab(QWidget):
         self.redo_stack.clear()
         self._update_undo_redo_buttons()
 
-    def _on_layer_mask_preview_requested(self, mask_array: Optional[np.ndarray]) -> None:
-        """Muestra u oculta la máscara de la capa seleccionada sobre el visor interactivo."""
-        if mask_array is not None and np.max(mask_array) > 1e-4:
-            self.canvas.set_refined_mask(mask_array, mode="ruby")
+    def _on_layer_mask_preview_requested(self, mask_data: Any) -> None:
+        """Muestra u oculta la máscara de la capa seleccionada sobre el visor interactivo (modo ruby o bw)."""
+        mode = "ruby"
+        if isinstance(mask_data, tuple) and len(mask_data) == 2:
+            mask_array, mode = mask_data
+        else:
+            mask_array = mask_data
+
+        if mask_array is not None and (mode == "bw" or np.max(mask_array) > 1e-4):
+            self.canvas.set_refined_mask(mask_array, mode=mode)
             self.canvas.set_mask_visible(True)
         else:
             self.canvas.set_mask_visible(False)
@@ -4849,7 +4857,7 @@ class DeveloperTab(QWidget):
                 if getattr(self, '_scrub_display_buf', None) is None or self._scrub_display_buf.shape[:2] != (h, w):
                     self._scrub_display_buf = np.empty((h, w, 3), dtype=np.uint8)
 
-                apply_display_lut16_numba(src_u16, lut, self._scrub_display_buf)
+                apply_display_lut16(src_u16, lut, self._scrub_display_buf)
 
                 before_u8 = None
                 if self.canvas.split_view_enabled:
@@ -4863,7 +4871,7 @@ class DeveloperTab(QWidget):
                     )
                     if getattr(self, '_scrub_before_buf', None) is None or self._scrub_before_buf.shape[:2] != (h, w):
                         self._scrub_before_buf = np.empty((h, w, 3), dtype=np.uint8)
-                    apply_display_lut16_numba(src_u16, lut_before, self._scrub_before_buf)
+                    apply_display_lut16(src_u16, lut_before, self._scrub_before_buf)
                     before_u8 = self._scrub_before_buf
 
                 self.canvas.update_display_u8(self._scrub_display_buf, before_u8=before_u8)
@@ -5687,6 +5695,14 @@ class DeveloperTab(QWidget):
             self._cached_psf_key = ()
         if self.deconv_iterations > 0:
             self.update_stretch_preview()
+
+    def _on_sharpening_parameter_changed(self):
+        """Sincroniza el panel de enfoque y actualiza la previsualización interactiva."""
+        self.update_stretch_preview()
+
+    def _on_sharpening_mask_preview_toggled(self, checked: bool):
+        """Alterna la visualización de la máscara de bordes en blanco y negro en el lienzo."""
+        self.update_stretch_preview()
 
 
     def _on_mask_widget_stars_diff_strength(self, val: int):
@@ -7070,6 +7086,14 @@ class DeveloperTab(QWidget):
         if hasattr(self, 'panel_deconv') and self.panel_deconv is not None:
             self.panel_deconv.reset_deconv()
 
+        if hasattr(self, 'panel_sharpening') and self.panel_sharpening is not None:
+            self.panel_sharpening.reset_sharpening()
+
+    def reset_sharpening(self):
+        """Restablece los controles de máscara de enfoque delegando en el panel."""
+        if hasattr(self, 'panel_sharpening') and self.panel_sharpening is not None:
+            self.panel_sharpening.reset_sharpening()
+
     def reset_gradients(self):
         """Restablece los controles de contaminación lumínica delegando en el panel."""
         if hasattr(self, 'panel_lp') and self.panel_lp is not None:
@@ -7104,6 +7128,9 @@ class DeveloperTab(QWidget):
             
         if hasattr(self, 'panel_deconv') and self.panel_deconv is not None:
             self.panel_deconv.reset_deconv()
+
+        if hasattr(self, 'panel_sharpening') and self.panel_sharpening is not None:
+            self.panel_sharpening.reset_sharpening()
             
         if hasattr(self, 'panel_color_wb') and self.panel_color_wb is not None:
             self.panel_color_wb.reset_all()
@@ -7383,6 +7410,7 @@ class DeveloperTab(QWidget):
             (getattr(self, 'panel_stretch', None), self._on_lut_slider_pressed),
             (getattr(self, 'panel_lp', None), self._on_heavy_slider_pressed),
             (getattr(self, 'panel_deconv', None), self._on_deconv_slider_pressed),
+            (getattr(self, 'panel_sharpening', None), self._on_heavy_slider_pressed),
             (getattr(self, 'panel_color_wb', None), self._on_heavy_slider_pressed),
             (getattr(self, 'panel_effects', None), self._on_heavy_slider_pressed),
         )
@@ -7497,6 +7525,8 @@ class DeveloperTab(QWidget):
             state.update(self.panel_lp.get_state())
         if hasattr(self, 'panel_deconv') and self.panel_deconv is not None:
             state.update(self.panel_deconv.get_state())
+        if hasattr(self, 'panel_sharpening') and self.panel_sharpening is not None:
+            state.update(self.panel_sharpening.get_state())
         if hasattr(self, 'panel_color_wb') and self.panel_color_wb is not None:
             state.update(self.panel_color_wb.get_state())
         if hasattr(self, 'panel_starnet') and self.panel_starnet is not None:
@@ -7894,6 +7924,9 @@ class DeveloperTab(QWidget):
             self.deconv_model = self.panel_deconv.deconv_model
             self.deconv_scope = self.panel_deconv.deconv_scope
             self.deconv_luma_only = self.panel_deconv.deconv_luma_only
+
+        if hasattr(self, 'panel_sharpening') and self.panel_sharpening is not None:
+            self.panel_sharpening.set_state(state)
 
         if hasattr(self, 'panel_color_wb'):
             self.panel_color_wb.set_state(state)

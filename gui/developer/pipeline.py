@@ -784,6 +784,42 @@ def apply_developer_pipeline(
             return None
         stretched = res_layers
 
+    # 14b. Máscara de Enfoque con Detección de Bordes (USM Paramétrico)
+    sharp_amt = getattr(state, "sharp_amount", 0)
+    sharp_preview = getattr(state, "sharp_mask_preview", False)
+    if sharp_amt > 0 or sharp_preview:
+        from core.sharpening import compute_edge_mask, apply_unsharp_mask
+        scope_names = ["ground", "sky_starless", "global"]
+        scope_idx = getattr(state, "sharp_scope_idx", 0)
+        scope = scope_names[scope_idx] if 0 <= scope_idx < len(scope_names) else "ground"
+        masking_val = float(getattr(state, "sharp_masking", 0))
+        radius_val = float(getattr(state, "sharp_radius", 10)) / 10.0
+        detail_val = float(getattr(state, "sharp_detail", 25))
+
+        star_mask_ref = None
+        if scope == "sky_starless" and image_stars is not None:
+            star_mask_ref = (np.mean(image_stars, axis=2) > 0.05).astype(np.float32)
+
+        edge_mask = compute_edge_mask(
+            stretched,
+            masking=masking_val,
+            sky_mask=precomputed_mask,
+            stars_mask=star_mask_ref,
+            scope=scope,
+        )
+
+        if sharp_preview:
+            # Previsualización monocroma de alto contraste estilo Lightroom (Alt-drag)
+            stretched = np.repeat(edge_mask[..., np.newaxis], 3, axis=2)
+        else:
+            stretched = apply_unsharp_mask(
+                stretched,
+                amount=float(sharp_amt),
+                radius=radius_val,
+                detail=detail_val,
+                edge_mask=edge_mask,
+            )
+
     # 15. Supresión de Halos en Frontera de Horizonte (Anti-Halo Clamping)
     antihalo_strength = getattr(state, "gnd_antihalo_val", 0) / 100.0
     if antihalo_strength > 1e-4 and precomputed_mask is not None:

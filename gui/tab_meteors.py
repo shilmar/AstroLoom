@@ -120,8 +120,8 @@ class MeteorWorker(QThread):
             feats_ref, quads_ref = build_star_asterisms(pts_ref)
         ref_asterisms = (feats_ref, quads_ref, pts_ref) if (feats_ref is not None) else None
 
-        # Configuración de hilos concurrentes optimizada
-        cfg_threads = get_config_val("performance.max_cpu_threads", None)
+        # Configuración de hilos concurrentes optimizada (lee Ajustes -> cpu_workers)
+        cfg_threads = get_config_val("cpu_workers", get_config_val("performance.max_cpu_threads", None))
         if cfg_threads and isinstance(cfg_threads, int) and cfg_threads > 0:
             eff_workers = min(cfg_threads, total)
         else:
@@ -173,7 +173,7 @@ class MeteorWorker(QThread):
 
             return idx, cands, H_res
 
-        self.progress.emit(10, f"Iniciando escaneo paralelo ({eff_workers} hilos CPU con Numba)...")
+        self.progress.emit(10, f"Iniciando escaneo paralelo ({eff_workers} hilos CPU)...")
         completed_tasks: List[Tuple[int, List[MeteorCandidate], Optional[np.ndarray]]] = []
 
         with ThreadPoolExecutor(max_workers=eff_workers) as executor:

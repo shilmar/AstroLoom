@@ -126,6 +126,8 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // 14. Puente de Renderizado Directo a Qt - Prioridad 12 (gui/canvas.py)
     m.add_function(wrap_pyfunction!(renderer::render_canvas_frame_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(renderer::apply_display_lut16_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(renderer::apply_display_lut16_dual_rs, m)?)?;
 
     // 15. Tiling ONNX y Filtro Guiado - Prioridad 13 / Fase 16 (core/starnet_onnx.py, core/ai_horizon.py, core/ai_denoise.py)
     m.add_function(wrap_pyfunction!(ai_preprocessing::fast_guided_filter_rs, m)?)?;

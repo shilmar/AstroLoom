@@ -424,25 +424,26 @@ class SettingsTab(QWidget):
         row_storage.addWidget(self.combo_storage, stretch=1)
         perf_layout.addLayout(row_storage)
 
-        # Estado de Aceleración Numba JIT
-        row_numba = QHBoxLayout()
-        lbl_numba_title = QLabel("Aceleración JIT (Numba LLVM):")
-        lbl_numba_title.setStyleSheet("color: #94a3b8; font-size: 11px;")
-        lbl_numba_title.setFixedWidth(170)
-        row_numba.addWidget(lbl_numba_title)
+        # Estado de Aceleración Nativa Rust / Rayon
+        row_rust = QHBoxLayout()
+        lbl_rust_title = QLabel("Aceleración Nativa (Rust Rayon):")
+        lbl_rust_title.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        lbl_rust_title.setFixedWidth(180)
+        row_rust.addWidget(lbl_rust_title)
 
         try:
-            from core.stacking import HAS_NUMBA
+            import astroloom_rs
+            HAS_RUST = True
         except Exception:
-            HAS_NUMBA = False
+            HAS_RUST = False
 
-        status_txt = "● Activa (Kernels compilados en caché L1/L2)" if HAS_NUMBA else "● Inactiva (Fallback a NumPy estándar)"
-        status_color = "#4ade80" if HAS_NUMBA else "#94a3b8"
-        lbl_numba_status = QLabel(status_txt)
-        lbl_numba_status.setStyleSheet(f"color: {status_color}; font-weight: 600; font-size: 11px;")
-        row_numba.addWidget(lbl_numba_status)
-        row_numba.addStretch()
-        perf_layout.addLayout(row_numba)
+        status_txt = "● Activa (Kernels nativos multihilo Rayon SIMD)" if HAS_RUST else "● Inactiva (Fallback a NumPy estándar)"
+        status_color = "#4ade80" if HAS_RUST else "#94a3b8"
+        lbl_rust_status = QLabel(status_txt)
+        lbl_rust_status.setStyleSheet(f"color: {status_color}; font-weight: 600; font-size: 11px;")
+        row_rust.addWidget(lbl_rust_status)
+        row_rust.addStretch()
+        perf_layout.addLayout(row_rust)
 
         self.sec_perf.setContentLayout(perf_layout)
         self.grp_perf = self.sec_perf

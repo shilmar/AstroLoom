@@ -86,6 +86,14 @@ class DeveloperState:
     deconv_scope_idx: int = 0
     deconv_luma_only: bool = True
 
+    # Sharpening & Edge Mask (USM estilo Lightroom)
+    sharp_amount: int = 0
+    sharp_radius: int = 10
+    sharp_detail: int = 25
+    sharp_masking: int = 0
+    sharp_scope_idx: int = 0
+    sharp_mask_preview: bool = False
+
     # Ground Tone
     gnd_ev_val: int = 0
     gnd_sh_val: int = 0

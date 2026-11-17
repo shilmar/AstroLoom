@@ -2903,6 +2903,12 @@ class MaskCanvas(QWidget):
                     sub_b[..., 1] = 40
                     sub_b[..., 2] = 40
                     sub_b[..., 3] = (sub_m * 135).astype(np.uint8)
+                elif mode == "bw":
+                    val_sub = (np.clip(sub_m, 0.0, 1.0) * 255.0).astype(np.uint8)
+                    sub_b[..., 0] = val_sub
+                    sub_b[..., 1] = val_sub
+                    sub_b[..., 2] = val_sub
+                    sub_b[..., 3] = 255
                 else:
                     sub_b[..., 0] = ((1.0 - sub_m) * 220).astype(np.uint8)
                     sub_b[..., 1] = (sub_m * 220).astype(np.uint8)
@@ -2923,6 +2929,12 @@ class MaskCanvas(QWidget):
             self._mask_overlay_buf[..., 1] = 40
             self._mask_overlay_buf[..., 2] = 40
             self._mask_overlay_buf[..., 3] = (mask_f * 135).astype(np.uint8)
+        elif mode == "bw":
+            val_u8 = (np.clip(mask_f, 0.0, 1.0) * 255.0).astype(np.uint8)
+            self._mask_overlay_buf[..., 0] = val_u8
+            self._mask_overlay_buf[..., 1] = val_u8
+            self._mask_overlay_buf[..., 2] = val_u8
+            self._mask_overlay_buf[..., 3] = 255
         else:
             self._mask_overlay_buf[..., 0] = ((1.0 - mask_f) * 220).astype(np.uint8)
             self._mask_overlay_buf[..., 1] = (mask_f * 220).astype(np.uint8)

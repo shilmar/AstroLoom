@@ -31,15 +31,7 @@ try:
 except ImportError:
     HAS_RUST = False
 
-try:
-    from numba import njit
-    HAS_NUMBA = True
-except ImportError:
-    HAS_NUMBA = False
-    def njit(*args, **kwargs):
-        def decorator(func):
-            return func
-        return decorator
+
 
 from core.stacking import load_image_as_float32, get_image_dimensions
 from core.panorama import extract_bright_stars, build_star_asterisms, match_star_asterisms
@@ -143,39 +135,11 @@ def extract_frame_timestamp(filepath: str) -> float:
 
 
 # =============================================================================
-# 3. KERNEL NUMBA DE DIFERENCIA POSITIVA Y CARGA ULTRA-RÁPIDA
+# 3. KERNEL RUST / NUMPY DE DIFERENCIA POSITIVA Y CARGA ULTRA-RÁPIDA
 # =============================================================================
 
-@njit(fastmath=True, nogil=True)
-def _numba_positive_diff_and_stats(arr_curr: np.ndarray, arr_bg: np.ndarray) -> Tuple[np.ndarray, float, float]:
-    """
-    Kernel Numba compilado sin GIL que calcula en una pasada continua de memoria:
-    1. La diferencia diferencial positiva max(0, curr - bg).
-    2. La media y varianza estocástica de los residuos para el umbral adaptativo.
-    """
-    h = arr_curr.shape[0]
-    w = arr_curr.shape[1]
-    total_pixels = float(h * w)
-    out_diff = np.zeros((h, w), dtype=np.float32)
-    sum_diff = 0.0
-    sum_sq = 0.0
-    for i in range(h):
-        for j in range(w):
-            d = arr_curr[i, j] - arr_bg[i, j]
-            if d > 0.0:
-                out_diff[i, j] = d
-                sum_diff += d
-                sum_sq += d * d
-    mean_val = sum_diff / total_pixels
-    var_val = (sum_sq / total_pixels) - (mean_val * mean_val)
-    if var_val < 0.0:
-        var_val = 0.0
-    std_val = np.sqrt(var_val)
-    return out_diff, mean_val, std_val
-
-
 def _numpy_positive_diff_and_stats(arr_curr: np.ndarray, arr_bg: np.ndarray) -> Tuple[np.ndarray, float, float]:
-    """Fallback vectorial en NumPy si Numba no está disponible."""
+    """Fallback vectorial en NumPy si Rust no está disponible."""
     diff = np.maximum(0.0, arr_curr - arr_bg)
     mean_val = float(np.mean(diff))
     std_val = float(np.std(diff))
@@ -183,24 +147,14 @@ def _numpy_positive_diff_and_stats(arr_curr: np.ndarray, arr_bg: np.ndarray) -> 
 
 
 def compute_positive_diff_stats(arr_curr: np.ndarray, arr_bg: np.ndarray) -> Tuple[np.ndarray, float, float]:
-    """Despachador acelerado con Rust, Numba (nogil) o NumPy según disponibilidad."""
+    """Despachador acelerado con Rust o NumPy (vectorizado) según disponibilidad."""
     if HAS_RUST and hasattr(astroloom_rs, "meteor_positive_diff_and_stats_rs") and arr_curr.ndim == 2 and arr_bg.ndim == 2:
         diff, mean_val, std_val, _, _ = astroloom_rs.meteor_positive_diff_and_stats_rs(
             np.ascontiguousarray(arr_curr, dtype=np.float32),
             np.ascontiguousarray(arr_bg, dtype=np.float32)
         )
         return diff, mean_val, std_val
-    if HAS_NUMBA:
-        return _numba_positive_diff_and_stats(arr_curr, arr_bg)
     return _numpy_positive_diff_and_stats(arr_curr, arr_bg)
-
-
-if HAS_NUMBA:
-    try:
-        _dummy = np.zeros((10, 10), dtype=np.float32)
-        _numba_positive_diff_and_stats(_dummy, _dummy)
-    except Exception:
-        pass
 
 
 def load_fast_meteor_frame(filepath: str, max_dim: int = 2400) -> Tuple[np.ndarray, float]:

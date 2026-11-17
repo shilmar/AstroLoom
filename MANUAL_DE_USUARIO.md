@@ -56,7 +56,7 @@ A partir de las versiones **v0.14.0** a **v0.15.1**, AstroLoom incorpora un moto
 * **Poda Integral de Dependencias Externas:** Eliminadas las dependencias pesadas de `pytoshop`, `astropy` y `psutil`. AstroLoom ahora incluye lectores/escritores nativos en Rust para FITS (`fits_io`), PSD multicapa de 16 bits (`psd_writer`) y monitoreo de memoria del sistema operativo (`system_info`).
 * **Ingesta Concurrente de Lotes:** Escaneo multihilo en paralelo de metadatos EXIF, dimensiones y niveles negros de cientos de archivos RAW en décimas de segundo al arrastrar carpetas al Apilador o Startrails.
 * **Tiling ONNX y Filtro Guiado O(1):** Pre y post-procesado acelerado para StarNet++ v2 y NAFNet con ventanas 2D de Hann continuas, y refinado de bordes de horizonte con imágenes integrales (SAT) en ~21 ms.
-* **Resiliencia Automática (*Drop-in Fallback*):** Si en algún entorno el módulo binario no estuviera presente, AstroLoom conmuta de forma transparente y automática a su motor de reserva en Python/NumPy/Numba sin que el usuario experimente errores.
+* **Resiliencia Automática (*Drop-in Fallback*):** Si en algún entorno el módulo binario no estuviera presente, AstroLoom conmuta de forma transparente y automática a su motor de reserva en Python/NumPy sin que el usuario experimente errores.
 
 ---
 
@@ -596,8 +596,8 @@ El módulo de **Lluvias de Meteoros** está diseñado específicamente para capt
 
 ### 7.1 Filosofía y Arquitectura Híbrida
 
-* **Escaneo Ultrarrápido en Binning 2:1 (Numba C-Level):**
-  * Analizar 100 a 200 fotos RAW de 24 a 45 megapíxeles a resolución nativa requeriría decenas de minutos. AstroLoom implementa un escaneo previo en submuestreo 2:1 optimizado con kernels paralelos en Rust (`meteor_positive_diff_and_stats_rs`), detectando todas las trazas de la sesión en pocos segundos (~20 s para 160 tomas RAW).
+* **Escaneo Ultrarrápido en Binning 2:1 (Rust Rayon / C-Level):**
+  * Analizar 100 a 200 fotos RAW de 24 a 45 megapíxeles a resolución nativa requeriría decenas de minutos. AstroLoom implementa un escaneo previo en submuestreo 2:1 optimizado con kernels paralelos en Rust (`meteor_positive_diff_and_stats_rs`), detectando todas las trazas de la sesión en pocos segundos (~8 a 18 s para 160 tomas RAW).
 * **Fusión Fotométrica Garantizada en Resolución Nativa 1:1:**
   * Una vez curadas y seleccionadas las trazas en la tabla, el motor lee exclusivamente los archivos originales al 100% de su resolución nativa (por ejemplo, $6064 \times 4040$). El escalado de coordenadas y el recorte vectorial se realizan con precisión subpíxel, garantizando la máxima nitidez de los detalles del bólido sin artefactos ni pérdida de resolución.
 * **Alineación Astrométrica y Reproyección al Radiante:**
@@ -614,7 +614,7 @@ El módulo de **Lluvias de Meteoros** está diseñado específicamente para capt
 flowchart TD
     A["1. Cargar Tomas de la Sesión y Toma de Referencia"] --> B["2. Definir Máscara de Suelo (Proteger Paisaje)"]
     B --> C["3. Configurar Parámetros y Filtros de Detección"]
-    C --> D["4. Escanear Sesión (Detección Rápida Numba)"]
+    C --> D["4. Escanear Sesión (Detección Rápida Rust/OpenCV)"]
     D --> E["5. Curación en Galería de Culling (Aceptar/Descartar Trazas)"]
     E --> F["6. Fusión 1:1 de Meteoros en el Lienzo"]
     F --> G["7. Exportar Imagen Final (TIFF / PSD Multicapa / Revelador)"]

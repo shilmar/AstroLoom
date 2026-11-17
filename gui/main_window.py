@@ -25,7 +25,7 @@ class MainWindow(QMainWindow):
     BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.15.1)"
     gpu_fallback_signal = Signal(str)
 
-    def __init__(self):
+    def __init__(self, splash: Optional[object] = None):
         super().__init__()
         self.setWindowTitle(self.BASE_TITLE)
         self.resize(1360, 880)
@@ -33,7 +33,7 @@ class MainWindow(QMainWindow):
         # Aplicar el sistema de diseño global
         apply_theme(self)
 
-        self._setup_ui()
+        self._setup_ui(splash=splash)
         self._setup_status_bar()
 
         # Conectar señal de degradación de hardware GPU a CPU
@@ -202,17 +202,31 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText(text)
 
 
-    def _setup_ui(self) -> None:
+    def _setup_ui(self, splash: Optional[object] = None) -> None:
         """Inicializa las pestañas de navegación y enlaza las señales entre módulos."""
         self.tab_widget = QTabWidget()
 
         # Instanciar pestañas del flujo de trabajo
+        if splash and hasattr(splash, "set_status"):
+            splash.set_status(tr("splash.stacker", "Cargando Apilador y motor CFA..."), 20)
         self.tab_stacker = StackerTab()
+
+        if splash and hasattr(splash, "set_status"):
+            splash.set_status(tr("splash.developer", "Cargando Revelador y capas de ajuste..."), 45)
         self.tab_developer = DeveloperTab()
+
+        if splash and hasattr(splash, "set_status"):
+            splash.set_status(tr("splash.eclipse", "Cargando módulos de Eclipses (HDR y Collage)..."), 65)
         self.tab_eclipse = EclipseTab()
         self.tab_eclipse_collage = EclipseCollageTab()
+
+        if splash and hasattr(splash, "set_status"):
+            splash.set_status(tr("splash.star_meteor", "Cargando Trazas de Estrellas y Meteoros..."), 80)
         self.tab_startrails = StartrailsTab()
         self.tab_meteors = MeteorTab()
+
+        if splash and hasattr(splash, "set_status"):
+            splash.set_status(tr("splash.pano_settings", "Cargando Panorámicas y Ajustes..."), 95)
         self.tab_panorama = PanoramaTab()
         self.tab_settings = SettingsTab()
 

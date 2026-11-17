@@ -56,7 +56,7 @@ def run_test():
 
     print("Table columns verified: NOT blank!")
 
-    # 2. Test Parallel Scanning with Numba and ThreadPoolExecutor
+    # 2. Test Parallel Scanning with Rust/ThreadPoolExecutor
     worker = MeteorWorker("scan_meteors", {
         "files": [f1, f2, f3],
         "ref_idx": 0,

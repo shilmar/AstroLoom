@@ -12,7 +12,6 @@ if ROOT_DIR not in sys.path:
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
-from gui.main_window import MainWindow
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
@@ -28,6 +27,15 @@ if __name__ == "__main__":
     from gui.theme import apply_theme
     apply_theme(app)
 
-    win = MainWindow()
+    # Pantalla de carga visual inmediata (< 80 ms)
+    from gui.splash import AstroSplashScreen
+    splash = AstroSplashScreen()
+    splash.show()
+    splash.set_status("Iniciando módulos y motor de procesado...", 10)
+
+    from gui.main_window import MainWindow
+    win = MainWindow(splash=splash)
+    splash.set_status("Listo", 100)
     win.show()
+    splash.finish(win)
     sys.exit(app.exec())

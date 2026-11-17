@@ -22,168 +22,8 @@ try:
 except ImportError:
     HAS_RUST = False
 
-# Aceleración nativa de CPU con Numba (fallback transparente a NumPy si no está disponible)
-try:
-    import numba
-    from numba import njit, prange
-    HAS_NUMBA = True
-except ImportError:
-    HAS_NUMBA = False
-
-if HAS_NUMBA:
-    @njit(fastmath=True)
-    def _sort_inplace(arr):
-        """Ordenamiento por inserción in-place ultrarrápido para vectores locales pequeños (N <= 100)."""
-        n = len(arr)
-        for i in range(1, n):
-            key = arr[i]
-            j = i - 1
-            while j >= 0 and arr[j] > key:
-                arr[j + 1] = arr[j]
-                j -= 1
-            arr[j + 1] = key
-
-    @njit(parallel=True, fastmath=True, nogil=True)
-    def _kappa_sigma_kernel_numba(data, kappa, weights):
-        """
-        Kernel compilado en LLVM para integración Kappa-Sigma con MAD en una sola pasada.
-        Excluye valores inválidos (< 0.0) de suelo desplazado o bordes geométricos (Sequator freeze ground).
-        data: shape (n_frames, total_items)
-        """
-        n_frames, total_items = data.shape
-        out = np.empty(total_items, dtype=np.float32)
-
-        for p in prange(total_items):
-            cnt_val = 0
-            for i in range(n_frames):
-                if data[i, p] > -0.5:
-                    cnt_val += 1
-
-            if cnt_val == 0:
-                out[p] = 0.0
-                continue
-
-            v = np.empty(cnt_val, dtype=np.float32)
-            idx = 0
-            for i in range(n_frames):
-                val = data[i, p]
-                if val > -0.5:
-                    v[idx] = val
-                    idx += 1
-
-            # 2. Mediana local
-            _sort_inplace(v)
-            if cnt_val % 2 == 1:
-                med = v[cnt_val // 2]
-            else:
-                med = 0.5 * (v[cnt_val // 2 - 1] + v[cnt_val // 2])
-
-            # 3. Desviaciones absolutas respecto a la mediana
-            d = np.empty(cnt_val, dtype=np.float32)
-            for i in range(cnt_val):
-                d[i] = abs(v[i] - med)
-
-            # 4. MAD (Median Absolute Deviation)
-            _sort_inplace(d)
-            if cnt_val % 2 == 1:
-                mad = d[cnt_val // 2]
-            else:
-                mad = 0.5 * (d[cnt_val // 2 - 1] + d[cnt_val // 2])
-
-            sigma = 1.4826 * mad + 1e-6
-            low = med - kappa * sigma
-            high = med + kappa * sigma
-
-            # 5. Promedio ponderado de valores válidos
-            s = 0.0
-            w_sum = 0.0
-            for i in range(n_frames):
-                val = data[i, p]
-                if val > -0.5 and low <= val <= high:
-                    w = weights[i]
-                    s += val * w
-                    w_sum += w
-
-            if w_sum > 0.0:
-                out[p] = s / w_sum
-            else:
-                out[p] = med
-
-        return out
-
-    @njit(parallel=True, fastmath=True, nogil=True)
-    def _percentile_kernel_numba(data, target_p):
-        """Kernel compilado para cálculo exacto de percentil con exclusión de píxeles inválidos (< 0.0)."""
-        n_frames, total_items = data.shape
-        out = np.empty(total_items, dtype=np.float32)
-
-        for p in prange(total_items):
-            cnt_val = 0
-            for i in range(n_frames):
-                if data[i, p] > -0.5:
-                    cnt_val += 1
-
-            if cnt_val == 0:
-                out[p] = 0.0
-                continue
-
-            v = np.empty(cnt_val, dtype=np.float32)
-            idx = 0
-            for i in range(n_frames):
-                val = data[i, p]
-                if val > -0.5:
-                    v[idx] = val
-                    idx += 1
-
-            _sort_inplace(v)
-            rank = (target_p / 100.0) * (cnt_val - 1)
-            i0 = int(rank)
-            i1 = min(i0 + 1, cnt_val - 1)
-            frac = float(rank - i0)
-            out[p] = v[i0] + frac * (v[i1] - v[i0])
-
-        return out
-
-    @njit(parallel=True, fastmath=True, nogil=True)
-    def _median_kernel_numba(data):
-        """Kernel compilado para cálculo rápido de mediana con exclusión de píxeles inválidos (< 0.0)."""
-        n_frames, total_items = data.shape
-        out = np.empty(total_items, dtype=np.float32)
-
-        for p in prange(total_items):
-            cnt_val = 0
-            for i in range(n_frames):
-                if data[i, p] > -0.5:
-                    cnt_val += 1
-
-            if cnt_val == 0:
-                out[p] = 0.0
-                continue
-
-            v = np.empty(cnt_val, dtype=np.float32)
-            idx = 0
-            for i in range(n_frames):
-                val = data[i, p]
-                if val > -0.5:
-                    v[idx] = val
-                    idx += 1
-
-            _sort_inplace(v)
-            if cnt_val % 2 == 1:
-                out[p] = v[cnt_val // 2]
-            else:
-                out[p] = 0.5 * (v[cnt_val // 2 - 1] + v[cnt_val // 2])
-
-        return out
-
-    # Calentamiento JIT anticipado con arrays mínimos de prueba
-    try:
-        _dummy = np.zeros((2, 2), dtype=np.float32)
-        _kappa_sigma_kernel_numba(_dummy, 2.2, np.ones(2, dtype=np.float32))
-        _percentile_kernel_numba(_dummy, 50.0)
-        _median_kernel_numba(_dummy)
-    except Exception:
-        pass
+# Indicador de compatibilidad (Numba purgado en favor de astroloom_rs en Rust)
+HAS_NUMBA = False
 
 
 def _is_raw_file(filepath: str) -> bool:
@@ -547,9 +387,9 @@ def _median_stack_chunked(file_paths: list, chunk_size: int = 500, temp_dir: str
                     for f_idx, mm in enumerate(mms):
                         chunk_buf[f_idx] = mm[y1:y2]
 
-                    if HAS_NUMBA:
-                        flat_chunk = chunk_buf.reshape(n_frames, -1)
-                        master[y1:y2] = _median_kernel_numba(flat_chunk).reshape((chunk_rows, w))
+                    flat_chunk = np.ascontiguousarray(chunk_buf.reshape(n_frames, -1), dtype=np.float32)
+                    if HAS_RUST:
+                        master[y1:y2] = np.asarray(astroloom_rs.median_kernel(flat_chunk)).reshape((chunk_rows, w))
                     else:
                         master[y1:y2] = np.median(chunk_buf, axis=0).astype(np.float32)
                 else:
@@ -557,9 +397,9 @@ def _median_stack_chunked(file_paths: list, chunk_size: int = 500, temp_dir: str
                     for f_idx, mm in enumerate(mms):
                         chunk_buf[f_idx] = mm[y1:y2]
 
-                    if HAS_NUMBA:
-                        flat_chunk = chunk_buf.reshape(n_frames, -1)
-                        master[y1:y2] = _median_kernel_numba(flat_chunk).reshape((chunk_rows, w, c))
+                    flat_chunk = np.ascontiguousarray(chunk_buf.reshape(n_frames, -1), dtype=np.float32)
+                    if HAS_RUST:
+                        master[y1:y2] = np.asarray(astroloom_rs.median_kernel(flat_chunk)).reshape((chunk_rows, w, c))
                     else:
                         master[y1:y2] = np.median(chunk_buf, axis=0).astype(np.float32)
                 del chunk_buf
@@ -1307,13 +1147,11 @@ def _process_single_chunk_cpu(args):
                 chunk_result = None
 
         if chunk_result is None:
-            if HAS_NUMBA:
-                chunk_result = _percentile_kernel_numba(flat_data, target_p).reshape((actual_rows, w, c))
-            else:
-                for ch in range(c):
-                    channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
-                    res = np.percentile(channel_data, target_p, axis=0)
-                    chunk_result[:, :, ch] = res.reshape((actual_rows, w))
+            chunk_result = np.empty((actual_rows, w, c), dtype=np.float32)
+            for ch in range(c):
+                channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
+                res = np.percentile(channel_data, target_p, axis=0)
+                chunk_result[:, :, ch] = res.reshape((actual_rows, w))
         del sub_stack
         return y_start, y_end, chunk_result
 
@@ -1327,14 +1165,12 @@ def _process_single_chunk_cpu(args):
                 chunk_result = None
 
         if chunk_result is None:
-            if HAS_NUMBA:
-                chunk_result = _median_kernel_numba(flat_data).reshape((actual_rows, w, c))
-            else:
-                for ch in range(c):
-                    channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
-                    valid_mask = channel_data > -0.5
-                    ch_masked = np.where(valid_mask, channel_data, np.nan)
-                    chunk_result[:, :, ch] = np.nan_to_num(np.nanmedian(ch_masked, axis=0), nan=0.0).reshape((actual_rows, w))
+            chunk_result = np.empty((actual_rows, w, c), dtype=np.float32)
+            for ch in range(c):
+                channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
+                valid_mask = channel_data > -0.5
+                ch_masked = np.where(valid_mask, channel_data, np.nan)
+                chunk_result[:, :, ch] = np.nan_to_num(np.nanmedian(ch_masked, axis=0), nan=0.0).reshape((actual_rows, w))
         del sub_stack
         return y_start, y_end, chunk_result
 
@@ -1349,14 +1185,12 @@ def _process_single_chunk_cpu(args):
                 chunk_result = None
 
         if chunk_result is None:
-            if HAS_NUMBA:
-                chunk_result = _percentile_kernel_numba(flat_data, target_p).reshape((actual_rows, w, c))
-            else:
-                for ch in range(c):
-                    channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
-                    valid_mask = channel_data > -0.5
-                    ch_masked = np.where(valid_mask, channel_data, np.nan)
-                    chunk_result[:, :, ch] = np.nan_to_num(np.nanpercentile(ch_masked, target_p, axis=0), nan=0.0).reshape((actual_rows, w))
+            chunk_result = np.empty((actual_rows, w, c), dtype=np.float32)
+            for ch in range(c):
+                channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
+                valid_mask = channel_data > -0.5
+                ch_masked = np.where(valid_mask, channel_data, np.nan)
+                chunk_result[:, :, ch] = np.nan_to_num(np.nanpercentile(ch_masked, target_p, axis=0), nan=0.0).reshape((actual_rows, w))
         del sub_stack
         return y_start, y_end, chunk_result
 
@@ -1371,10 +1205,8 @@ def _process_single_chunk_cpu(args):
             chunk_result = None
 
     if chunk_result is None:
-        if HAS_NUMBA:
-            chunk_result = _kappa_sigma_kernel_numba(flat_data, kappa, weights).reshape((actual_rows, w, c))
-        else:
-            for ch in range(c):
+        chunk_result = np.empty((actual_rows, w, c), dtype=np.float32)
+        for ch in range(c):
                 channel_data = sub_stack[:, :, :, ch].reshape((n_frames, -1))
                 valid_mask = channel_data > -0.5
                 ch_masked = np.where(valid_mask, channel_data, np.nan)

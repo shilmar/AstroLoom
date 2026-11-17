@@ -25,87 +25,46 @@ try:
 except ImportError:
     HAS_RUST = False
 
-try:
-    from numba import njit, prange
-    HAS_NUMBA = True
-except ImportError:
-    HAS_NUMBA = False
+# Fallback vectorizado puro en NumPy/OpenCV con paridad matemática exacta a Rust
+def _numpy_fused_layer_adjust(
+    orig_img: np.ndarray,
+    adj_source: np.ndarray,
+    mask: np.ndarray,
+    weight_scale: float,
+    gain_r: float,
+    gain_g: float,
+    gain_b: float,
+    shadows: float,
+    highlights: float,
+    has_curve: bool,
+    curve_lut: np.ndarray
+) -> np.ndarray:
+    adj = adj_source.copy()
+    if abs(gain_r - 1.0) > 1e-4 or abs(gain_g - 1.0) > 1e-4 or abs(gain_b - 1.0) > 1e-4:
+        adj[..., 0] *= gain_r
+        adj[..., 1] *= gain_g
+        adj[..., 2] *= gain_b
+        adj = np.clip(adj, 0.0, 1.0)
 
-if HAS_NUMBA:
-    @njit(parallel=True, fastmath=True)
-    def _numba_fused_layer_adjust(
-        orig_img, adj_source, mask, weight_scale,
-        gain_r, gain_g, gain_b,
-        shadows, highlights,
-        has_curve, curve_lut
-    ):
-        h, w, c = orig_img.shape
-        out = np.empty_like(orig_img)
-        lut_len = len(curve_lut) - 1 if has_curve else 0
+    if abs(shadows) > 1e-3:
+        lift = (1.0 - adj) ** 2
+        adj = adj * (1.0 + shadows * lift)
 
-        for i in prange(h):
-            for j in range(w):
-                m = mask[i, j] * weight_scale
-                if m <= 1e-4:
-                    out[i, j, 0] = orig_img[i, j, 0]
-                    out[i, j, 1] = orig_img[i, j, 1]
-                    out[i, j, 2] = orig_img[i, j, 2]
-                    continue
+    if abs(highlights) > 1e-3:
+        hi = adj ** 2
+        adj = adj + (highlights * hi * 0.4)
 
-                for k in range(3):
-                    val = adj_source[i, j, k]
-                    if k == 0:
-                        val *= gain_r
-                    elif k == 1:
-                        val *= gain_g
-                    else:
-                        val *= gain_b
+    adj = np.clip(adj, 0.0, 1.0)
 
-                    if val < 0.0:
-                        val = 0.0
-                    elif val > 1.0:
-                        val = 1.0
+    if has_curve:
+        lut_len = len(curve_lut) - 1
+        idx = np.clip((adj * lut_len).astype(np.int32), 0, lut_len)
+        adj = curve_lut[idx]
 
-                    if abs(shadows) > 1e-3:
-                        lift = (1.0 - val) * (1.0 - val)
-                        val = val * (1.0 + shadows * lift)
-
-                    if abs(highlights) > 1e-3:
-                        hi = val * val
-                        val = val + (highlights * hi * 0.4)
-
-                    if val < 0.0:
-                        val = 0.0
-                    elif val > 1.0:
-                        val = 1.0
-
-                    if has_curve:
-                        idx = int(val * lut_len)
-                        if idx < 0:
-                            idx = 0
-                        elif idx > lut_len:
-                            idx = lut_len
-                        val = curve_lut[idx]
-
-                    out[i, j, k] = val * m + orig_img[i, j, k] * (1.0 - m)
-
-        return out
-
-    @njit(parallel=True, fastmath=True)
-    def _numba_screen_blend(canvas, stars, opacity):
-        h, w, c = canvas.shape
-        out = np.empty_like(canvas)
-        for i in prange(h):
-            for j in range(w):
-                for k in range(c):
-                    s = stars[i, j, k] * opacity
-                    if s < 0.0:
-                        s = 0.0
-                    elif s > 1.0:
-                        s = 1.0
-                    cv = canvas[i, j, k]
-                    out[i, j, k] = cv + s - cv * s
-        return out
+    m = mask * weight_scale
+    if m.ndim == 2:
+        m = m[..., np.newaxis]
+    return np.clip(adj * m + orig_img * (1.0 - m), 0.0, 1.0).astype(np.float32)
 
 
 # Ámbitos de aplicación (Target Scope)
@@ -385,6 +344,12 @@ class MaskLayer:
     saturation: float = 1.0         # 0.00x a 2.50x
     temp: float = 0.0               # -1.0000 a +1.0000 (factor de balance cálido/frío)
     tint: float = 0.0               # -1.0000 a +1.0000 (factor de balance verde/magenta)
+
+    # Máscara de Enfoque y Nitidez (USM con detección de bordes)
+    sharp_amount: float = 0.0       # 0.0 a 150.0 (0 = desactivado)
+    sharp_radius: float = 1.0       # 0.5 a 3.0 px
+    sharp_detail: float = 25.0      # 0.0 a 100.0 (amortiguación de micro-ruido)
+    sharp_masking: float = 0.0      # 0.0 a 100.0 (umbral de bordes)
 
     # Curva tonal interactiva de capa
     curve_points: List[Tuple[float, float]] = field(default_factory=lambda: [(0.0, 0.0), (1.0, 1.0)])
@@ -932,7 +897,8 @@ def apply_local_adjustments_to_image(
     has_adj = (abs(layer.temp) > 1e-4 or abs(layer.tint) > 1e-4 or 
                abs(layer.exposure) > 1e-3 or abs(layer.shadows) > 1e-3 or 
                abs(layer.highlights) > 1e-3 or abs(layer.contrast) > 1e-3 or 
-               abs(layer.saturation - 1.0) > 1e-3 or not layer.is_curve_identity())
+               abs(layer.saturation - 1.0) > 1e-3 or not layer.is_curve_identity() or
+               getattr(layer, 'sharp_amount', 0.0) > 1e-4)
     if not has_adj:
         return image_rgb
 
@@ -965,7 +931,7 @@ def apply_local_adjustments_to_image(
         mask_2d = effective_mask[..., 0] if effective_mask.ndim == 3 else effective_mask
         mask_c = np.ascontiguousarray(mask_2d, dtype=np.float32)
 
-        return astroloom_rs.apply_layer_adjustments_fused(
+        res = astroloom_rs.apply_layer_adjustments_fused(
             orig_c,
             mask_c,
             lut_c,
@@ -979,63 +945,89 @@ def apply_local_adjustments_to_image(
             temp=float(layer.temp),
             tint=float(layer.tint)
         )
+        if getattr(layer, 'sharp_amount', 0.0) > 1e-3:
+            from core.sharpening import compute_edge_mask, apply_unsharp_mask
+            edge_m = compute_edge_mask(res, masking=float(layer.sharp_masking), scope="global")
+            sharp_res = apply_unsharp_mask(
+                res,
+                amount=float(layer.sharp_amount),
+                radius=float(layer.sharp_radius),
+                detail=float(layer.sharp_detail),
+                edge_mask=edge_m
+            )
+            w_3d = (np.clip(mask_2d * layer.opacity, 0.0, 1.0))[..., np.newaxis]
+            res = np.clip((sharp_res * w_3d) + (res * (1.0 - w_3d)), 0.0, 1.0).astype(np.float32)
+        return res
 
-    if HAS_NUMBA:
-        orig_c = np.ascontiguousarray(np.clip(image_rgb, 0.0, 1.0), dtype=np.float32)
-        has_sat = abs(layer.saturation - 1.0) > 1e-3
-        if has_sat:
-            hsv = cv2.cvtColor(orig_c, cv2.COLOR_RGB2HSV)
-            hsv[..., 1] = np.clip(hsv[..., 1] * layer.saturation, 0.0, 1.0)
-            adj_source = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+    # Fallback vectorizado puro en NumPy/OpenCV con paridad matemática exacta a Rust
+    orig_c = np.ascontiguousarray(np.clip(image_rgb, 0.0, 1.0), dtype=np.float32)
+    has_sat = abs(layer.saturation - 1.0) > 1e-3
+    if has_sat:
+        hsv = cv2.cvtColor(orig_c, cv2.COLOR_RGB2HSV)
+        hsv[..., 1] = np.clip(hsv[..., 1] * layer.saturation, 0.0, 1.0)
+        adj_source = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+    else:
+        adj_source = orig_c
+
+    temp_factor = layer.temp
+    tint_factor = layer.tint
+    if abs(temp_factor) > 1e-4 or abs(tint_factor) > 1e-4:
+        r_gain = 1.0 + (temp_factor * 0.5) + (tint_factor * 0.25)
+        g_gain = 1.0 - (tint_factor * 0.5)
+        b_gain = 1.0 - (temp_factor * 0.5) + (tint_factor * 0.25)
+        mean_gain = (r_gain + g_gain + b_gain) / 3.0
+        r_gain /= mean_gain
+        g_gain /= mean_gain
+        b_gain /= mean_gain
+    else:
+        r_gain = g_gain = b_gain = 1.0
+
+    if abs(layer.exposure) > 1e-3:
+        ev_factor = 2.0 ** layer.exposure
+        r_gain *= ev_factor
+        g_gain *= ev_factor
+        b_gain *= ev_factor
+
+    has_curve = not layer.is_curve_identity()
+    has_contrast = abs(layer.contrast) > 1e-3
+    if has_curve or has_contrast:
+        if has_curve:
+            if layer.curve_lut is None:
+                layer.curve_lut = compute_curve_lut_from_points(layer.curve_points)
+            lut = layer.curve_lut.copy()
         else:
-            adj_source = orig_c
+            lut = np.linspace(0.0, 1.0, 256, dtype=np.float32)
 
-        temp_factor = layer.temp
-        tint_factor = layer.tint
-        if abs(temp_factor) > 1e-4 or abs(tint_factor) > 1e-4:
-            r_gain = 1.0 + (temp_factor * 0.5) + (tint_factor * 0.25)
-            g_gain = 1.0 - (tint_factor * 0.5)
-            b_gain = 1.0 - (temp_factor * 0.5) + (tint_factor * 0.25)
-            mean_gain = (r_gain + g_gain + b_gain) / 3.0
-            r_gain /= mean_gain
-            g_gain /= mean_gain
-            b_gain /= mean_gain
-        else:
-            r_gain = g_gain = b_gain = 1.0
+        if has_contrast:
+            lut = adjust_contrast(lut, layer.contrast, fast_draft=False)
+        lut = np.ascontiguousarray(np.clip(lut, 0.0, 1.0), dtype=np.float32)
+        use_lut = True
+    else:
+        lut = np.empty(1, dtype=np.float32)
+        use_lut = False
 
-        if abs(layer.exposure) > 1e-3:
-            ev_factor = 2.0 ** layer.exposure
-            r_gain *= ev_factor
-            g_gain *= ev_factor
-            b_gain *= ev_factor
+    mask_2d = effective_mask[..., 0] if effective_mask.ndim == 3 else effective_mask
+    mask_c = np.ascontiguousarray(mask_2d, dtype=np.float32)
 
-        has_curve = not layer.is_curve_identity()
-        has_contrast = abs(layer.contrast) > 1e-3
-        if has_curve or has_contrast:
-            if has_curve:
-                if layer.curve_lut is None:
-                    layer.curve_lut = compute_curve_lut_from_points(layer.curve_points)
-                lut = layer.curve_lut.copy()
-            else:
-                lut = np.linspace(0.0, 1.0, 256, dtype=np.float32)
-
-            if has_contrast:
-                lut = adjust_contrast(lut, layer.contrast, fast_draft=False)
-            lut = np.ascontiguousarray(np.clip(lut, 0.0, 1.0), dtype=np.float32)
-            use_lut = True
-        else:
-            lut = np.empty(1, dtype=np.float32)
-            use_lut = False
-
-        mask_2d = effective_mask[..., 0] if effective_mask.ndim == 3 else effective_mask
-        mask_c = np.ascontiguousarray(mask_2d, dtype=np.float32)
-
-        return _numba_fused_layer_adjust(
-            orig_c, adj_source, mask_c, float(layer.opacity),
-            float(r_gain), float(g_gain), float(b_gain),
-            float(layer.shadows), float(layer.highlights),
-            use_lut, lut
+    res = _numpy_fused_layer_adjust(
+        orig_c, adj_source, mask_c, float(layer.opacity),
+        float(r_gain), float(g_gain), float(b_gain),
+        float(layer.shadows), float(layer.highlights),
+        use_lut, lut
+    )
+    if getattr(layer, 'sharp_amount', 0.0) > 1e-3:
+        from core.sharpening import compute_edge_mask, apply_unsharp_mask
+        edge_m = compute_edge_mask(res, masking=float(layer.sharp_masking), scope="global")
+        sharp_res = apply_unsharp_mask(
+            res,
+            amount=float(layer.sharp_amount),
+            radius=float(layer.sharp_radius),
+            detail=float(layer.sharp_detail),
+            edge_mask=edge_m
         )
+        w_3d = (np.clip(mask_2d * layer.opacity, 0.0, 1.0))[..., np.newaxis]
+        res = np.clip((sharp_res * w_3d) + (res * (1.0 - w_3d)), 0.0, 1.0).astype(np.float32)
+    return res
 
     adj = apply_pre_curve_adjustments(image_rgb, layer, fast_draft=fast_draft)
 
@@ -1046,6 +1038,18 @@ def apply_local_adjustments_to_image(
         u8 = (np.clip(adj, 0.0, 1.0) * 255.0).astype(np.uint8)
         lut_u8 = (np.clip(layer.curve_lut, 0.0, 1.0) * 255.0).astype(np.uint8)
         adj = (cv2.LUT(u8, lut_u8).astype(np.float32) / 255.0)
+
+    # 8. Máscara de Enfoque y Nitidez local de capa si está activa
+    if getattr(layer, 'sharp_amount', 0.0) > 1e-3:
+        from core.sharpening import compute_edge_mask, apply_unsharp_mask
+        edge_m = compute_edge_mask(adj, masking=float(layer.sharp_masking), scope="global")
+        adj = apply_unsharp_mask(
+            adj,
+            amount=float(layer.sharp_amount),
+            radius=float(layer.sharp_radius),
+            detail=float(layer.sharp_detail),
+            edge_mask=edge_m
+        )
 
     adj = np.clip(adj, 0.0, 1.0)
 
@@ -1329,6 +1333,10 @@ def _compute_subcomposite_key(
             float(l.highlights),
             float(l.shadows),
             float(l.saturation),
+            float(getattr(l, "sharp_amount", 0.0)),
+            float(getattr(l, "sharp_radius", 1.0)),
+            float(getattr(l, "sharp_detail", 25.0)),
+            float(getattr(l, "sharp_masking", 0.0)),
             tuple(l.curve_points) if l.curve_points else (),
             float(getattr(l, "offset_x", 0.0)),
             float(getattr(l, "offset_y", 0.0)),
@@ -1535,11 +1543,8 @@ def apply_all_mask_layers(
                 if HAS_RUST:
                     st_c = np.ascontiguousarray(st, dtype=np.float32)
                     canvas = astroloom_rs.screen_blend(canvas, st_c, float(layer.opacity))
-                elif HAS_NUMBA:
-                    st_c = np.ascontiguousarray(st, dtype=np.float32)
-                    canvas = _numba_screen_blend(canvas, st_c, float(layer.opacity))
                 else:
-                    st_weighted = np.clip(st * layer.opacity, 0.0, 1.0)
+                    st_weighted = np.clip(st * float(layer.opacity), 0.0, 1.0)
                     canvas = 1.0 - (1.0 - canvas) * (1.0 - st_weighted)
 
         elif layer.mask_type == MASK_TYPE_IMAGE_RASTER:
@@ -1680,6 +1685,18 @@ def apply_all_mask_layers(
                             u8 = (np.clip(flt_img, 0.0, 1.0) * 255.0).astype(np.uint8)
                             lut_u8 = (np.clip(layer.curve_lut, 0.0, 1.0) * 255.0).astype(np.uint8)
                             flt_img = (cv2.LUT(u8, lut_u8).astype(np.float32) / 255.0)
+
+                # Máscara de Enfoque y Nitidez de la capa ráster si está activa
+                if getattr(layer, 'sharp_amount', 0.0) > 1e-3:
+                    from core.sharpening import compute_edge_mask, apply_unsharp_mask
+                    edge_m = compute_edge_mask(flt_img, masking=float(layer.sharp_masking), scope="global")
+                    flt_img = apply_unsharp_mask(
+                        flt_img,
+                        amount=float(layer.sharp_amount),
+                        radius=float(layer.sharp_radius),
+                        detail=float(layer.sharp_detail),
+                        edge_mask=edge_m
+                    )
 
                 # Ponderación por máscara si está presente o invertida
                 has_mask = (layer.brush_mask is not None or layer.inverted or layer.custom_mask is not None)
