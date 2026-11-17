@@ -5,10 +5,10 @@ Coordina las pestañas principales (Apilador, Revelador, Eclipses, Startrails, P
 """
 from typing import Optional
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QMainWindow, QTabWidget, QStatusBar, QLabel, QWidget, QHBoxLayout, QComboBox
+from PySide6.QtWidgets import QMainWindow, QTabWidget, QLabel, QWidget, QHBoxLayout
 
 from core.i18n import tr, get_i18n
-from gui.theme import apply_theme, STYLE_STATUS_PILL, CHEVRON_DOWN_PATH, CHEVRON_DOWN_HOVER_PATH
+from gui.theme import apply_theme, STYLE_STATUS_PILL
 from gui.tab_stacker import StackerTab
 from gui.tab_developer import DeveloperTab
 from gui.tab_eclipse import EclipseTab
@@ -34,7 +34,8 @@ class MainWindow(QMainWindow):
         apply_theme(self)
 
         self._setup_ui(splash=splash)
-        self._setup_status_bar()
+        self._setup_tab_bar_corner()
+        self.setStatusBar(None)
 
         # Conectar señal de degradación de hardware GPU a CPU
         self.gpu_fallback_signal.connect(self._on_gpu_fallback)
@@ -54,26 +55,26 @@ class MainWindow(QMainWindow):
         self._retranslate_ui()
 
     def _on_gpu_fallback(self, reason: str) -> None:
-        """Muestra la píldora naranja de aviso en la barra inferior al degradar de GPU a CPU."""
+        """Muestra la píldora naranja de aviso en la cabecera superior al degradar de GPU a CPU."""
         if hasattr(self, 'lbl_gpu_fallback'):
             self.lbl_gpu_fallback.setVisible(True)
             self.lbl_gpu_fallback.setToolTip(f"GPU/VRAM saturada: se continuó en CPU sin interrumpir la tarea.\n{reason}\n(Clic para ocultar)")
 
-    def _setup_status_bar(self) -> None:
-        """Configura la barra de estado moderna con monitor de memoria RAM y motor de procesado."""
-        status_bar = self.statusBar()
-        status_bar.setSizeGripEnabled(False)
+    def _setup_tab_bar_corner(self) -> None:
+        """Configura los indicadores de estado (versión de motor, RAM y alertas de hardware) en la esquina superior de las pestañas."""
+        corner_widget = QWidget()
+        corner_widget.setStyleSheet("background: transparent;")
+        corner_layout = QHBoxLayout(corner_widget)
+        corner_layout.setContentsMargins(0, 0, 10, 0)
+        corner_layout.setSpacing(6)
+        corner_layout.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
 
-        # Mensaje de estado contextual
-        self.lbl_status = QLabel("Listo para procesar")
-        status_bar.addWidget(self.lbl_status, 1)
-
-        # Píldora del Motor AstroLoom
+        # 1. Píldora del Motor AstroLoom (versión)
         self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.15.1")
         self.lbl_engine_badge.setStyleSheet(STYLE_STATUS_PILL)
-        status_bar.addPermanentWidget(self.lbl_engine_badge)
+        corner_layout.addWidget(self.lbl_engine_badge)
 
-        # Píldora de aviso de Fallback GPU -> CPU (naranja/amarillo, junto al monitor de RAM)
+        # 2. Píldora de aviso de Fallback GPU -> CPU (naranja/amarillo, junto al monitor de RAM)
         self.lbl_gpu_fallback = QLabel("⚠️ Fallback CPU (VRAM)")
         self.lbl_gpu_fallback.setStyleSheet(
             "background-color: #3e2723; border: 1px solid #ff9800; border-radius: 4px; padding: 2px 8px; color: #ffb74d; font-weight: bold; font-size: 10px;"
@@ -82,62 +83,16 @@ class MainWindow(QMainWindow):
         self.lbl_gpu_fallback.setVisible(False)
         self.lbl_gpu_fallback.setCursor(Qt.PointingHandCursor)
         self.lbl_gpu_fallback.mousePressEvent = lambda _: self.lbl_gpu_fallback.setVisible(False)
-        status_bar.addPermanentWidget(self.lbl_gpu_fallback)
+        corner_layout.addWidget(self.lbl_gpu_fallback)
 
-        # Píldora de Monitor de Memoria RAM en tiempo real
+        # 3. Píldora de Monitor de Memoria RAM en tiempo real
         self.lbl_ram_monitor = QLabel("RAM: --")
         self.lbl_ram_monitor.setStyleSheet(
             "background-color: #141724; border: 1px solid #232738; border-radius: 4px; padding: 2px 8px; color: #ffd54f; font-weight: bold; font-size: 10px;"
         )
-        status_bar.addPermanentWidget(self.lbl_ram_monitor)
+        corner_layout.addWidget(self.lbl_ram_monitor)
 
-        # Selector de Idioma en tiempo real
-        self.combo_lang_bar = QComboBox()
-        self.combo_lang_bar.setStyleSheet(f"""
-            QComboBox {{
-                background-color: #141724;
-                border: 1px solid #232738;
-                border-radius: 4px;
-                padding: 1px 18px 1px 6px;
-                color: #80d8ff;
-                font-weight: bold;
-                font-size: 11px;
-            }}
-            QComboBox:hover {{
-                border-color: #38bdf8;
-            }}
-            QComboBox::drop-down {{
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 16px;
-                border: none;
-                background: transparent;
-            }}
-            QComboBox::down-arrow {{
-                image: url({CHEVRON_DOWN_PATH});
-                width: 9px;
-                height: 9px;
-            }}
-            QComboBox::down-arrow:hover {{
-                image: url({CHEVRON_DOWN_HOVER_PATH});
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: #1a1e2e;
-                color: #e0e0e0;
-                selection-background-color: #28334a;
-            }}
-        """)
-        avail_langs = get_i18n().get_available_languages()
-        for code, name in avail_langs:
-            self.combo_lang_bar.addItem(f"{code.upper()} ({name})", code)
-
-        curr_lang = get_i18n().get_current_language()
-        idx_lang = self.combo_lang_bar.findData(curr_lang)
-        if idx_lang >= 0:
-            self.combo_lang_bar.setCurrentIndex(idx_lang)
-
-        self.combo_lang_bar.currentIndexChanged.connect(self._on_lang_bar_changed)
-        status_bar.addPermanentWidget(self.combo_lang_bar)
+        self.tab_widget.setCornerWidget(corner_widget, Qt.TopRightCorner)
 
         # Temporizador para actualizar métricas de hardware cada 2.5 segundos
         self._timer_ram = QTimer(self)
@@ -145,17 +100,11 @@ class MainWindow(QMainWindow):
         self._timer_ram.start(2500)
         self._update_system_stats()
 
-    def _on_lang_bar_changed(self, index: int) -> None:
-        """Manejador al seleccionar un nuevo idioma desde la barra de estado."""
-        code = self.combo_lang_bar.currentData()
-        if code and code != get_i18n().get_current_language():
-            get_i18n().set_language(code)
-
     def _retranslate_ui(self) -> None:
         """Actualiza todos los textos estáticos principales al cambiar de idioma."""
         self.setWindowTitle(tr("app.title", self.BASE_TITLE))
-        self.lbl_status.setText(tr("app.ready", "Listo para procesar"))
-        self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.15.1"))
+        if hasattr(self, 'lbl_engine_badge'):
+            self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.15.1"))
 
         if hasattr(self, 'tab_widget'):
             self.tab_widget.setTabText(0, tr("app.tabs.stacker", "1. Apilador (Stacker)"))
@@ -166,13 +115,6 @@ class MainWindow(QMainWindow):
             self.tab_widget.setTabText(5, tr("app.tabs.meteors", "6. Lluvias de Meteoros"))
             self.tab_widget.setTabText(6, tr("app.tabs.panorama", "7. Panorámicas (Mosaicos)"))
             self.tab_widget.setTabText(7, tr("app.tabs.settings", "8. Configuración / Ajustes"))
-
-        if hasattr(self, 'combo_lang_bar'):
-            idx = self.combo_lang_bar.findData(get_i18n().get_current_language())
-            if idx >= 0 and self.combo_lang_bar.currentIndex() != idx:
-                self.combo_lang_bar.blockSignals(True)
-                self.combo_lang_bar.setCurrentIndex(idx)
-                self.combo_lang_bar.blockSignals(False)
 
         if hasattr(self, 'tab_developer') and hasattr(self.tab_developer, "retranslate_ui"):
             self.tab_developer.retranslate_ui()
@@ -198,8 +140,8 @@ class MainWindow(QMainWindow):
             self.lbl_ram_monitor.setText("RAM: N/D")
 
     def set_status(self, text: str) -> None:
-        """Actualiza el mensaje principal de la barra de estado."""
-        self.lbl_status.setText(text)
+        """Actualiza el mensaje principal de estado (compatibilidad)."""
+        pass
 
 
     def _setup_ui(self, splash: Optional[object] = None) -> None:

@@ -231,7 +231,7 @@ def get_application_stylesheet() -> str:
         QTabBar::tab {{
             background-color: #10121a;
             color: {TEXT_SECONDARY};
-            padding: 8px 16px;
+            padding: 7px 12px;
             border: 1px solid #1e2230;
             border-bottom: 2px solid transparent;
             font-weight: bold;
