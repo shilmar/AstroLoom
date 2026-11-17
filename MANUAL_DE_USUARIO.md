@@ -19,6 +19,7 @@ Este manual ha sido redactado pensando en fotógrafos y aficionados: **sin fórm
    - [Sección 4: Curvas Tonales (Contraste S-Curve)](#sección-4-curvas-tonales)
    - [Sección 5: StarNet++ y Fondo Nebular (Claridad, Ondículas, Denoise y Banding CMOS)](#sección-5-starnet-y-fondo-nebular)
    - [Sección 5b: Deconvolución Óptica y Enfoque (Richardson-Lucy)](#sección-5b-deconvolución-óptica-y-enfoque-richardson-lucy)
+   - [Sección 5c: Máscara de Enfoque y Nitidez (Sharpening / USM)](#sección-5c-máscara-de-enfoque-y-nitidez-sharpening--usm)
    - [Sección 6: Balance de Blancos, Calibración Fotométrica (PCC) y Filtros Dual-Band](#sección-6-balance-de-blancos-y-calibración)
    - [Sección 7: Color, Saturación e Intensidad de Nebulosa](#sección-7-color-saturación-e-intensidad-de-nebulosa)
    - [Sección 8: Tono y Exposición del Suelo](#sección-8-tono-y-exposición-del-suelo)
@@ -42,9 +43,13 @@ Para iniciar AstroLoom en Windows de la manera más cómoda y sin ventanas negra
 * Si no hay entorno virtual, recurre automáticamente a la instalación de Python del sistema.
 * En entornos Linux/macOS o desde la terminal, puedes iniciar la suite ejecutando directamente `python run_app.py`.
 
-### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.15.1)
-A partir de las versiones **v0.14.0** a **v0.15.1**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
+### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.16.0)
+A partir de las versiones **v0.14.0** a **v0.16.0**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
 * **Fluidez Total a 60-160+ FPS:** El renderizado del lienzo (`MaskCanvas`) vuelca directamente a búferes de memoria continua `BGRA8888` compatibles de forma nativa con `QImage(Format_RGB32)`. Las alertas de clipping (`J`) y el comparador Antes/Después con cortina (`Y`) se procesan en microsegundos sin crear copias intermedias en NumPy ni capas secundarias de `QPixmap`.
+* **Purga Integral de Numba y Mapeo LUT 16 a 8 Bits en Rust (v0.16.0):** Eliminación total de dependencias LLVM/Numba, reduciendo 2.36 s en el arranque en frío. El estirado interactivo MTF, GHS y curvas tonales se evalúa en Rust Rayon (`apply_display_lut16_rs`, `apply_display_lut16_dual_rs`) a más de 4.000 FPS (0.24 ms por frame de 2 MP), con cálculo de histograma multihilo en OpenCV C++ AVX2/SSE.
+* **Aceleración Nativa para Eclipses Solares (v0.16.0):** Centrado solar automático de sub-milisegundo por momentos (`center_solar_disc_rs`), estirado Asinh Luma preservando el color (`asinh_stretch_luma_rs`) y fusión coronal HDR adaptativa multiescala (`coronal_hdr_fusion_rs`) ejecutados en registros paralelos de CPU.
+* **Caché LRU de Búferes con Presupuesto de RAM (v0.16.0):** Gestor inteligente de memoria para hitos del pipeline con cuota máxima configurable en MB/GB, purgando búferes antiguos y manteniendo el consumo de memoria acotado incluso en proyectos de alta densidad.
+* **Resiliencia de Hardware y Fallback GPU a CPU en IA (v0.16.0):** StarNet++ v2 y AI Denoise detectan automáticamente desbordamientos de memoria de GPU (VRAM OOM) y conmutan en caliente a inferencia CPU sin bloquear el proceso ni perder el trabajo, alertando al usuario mediante una píldora visual en la barra superior.
 * **Pincel Acelerado en Rust y Refresco por Dirty-Rects (v0.15.1):** Estampado continuo de trazos de pincel (`stamp_brush_stroke_rs`) con interpolación polinómica Hermite, cálculo analítico de región de interés (ROI) y actualización directa *in-place* sobre búferes compartidos sin reasignación de memoria de pantalla, permitiendo pintar máscaras a 60–144 FPS estables sin tirones ni latencia.
 * **Curvas Selectivas Hue/Luma Fusionadas en Registros (v0.15.1):** Bucle paralelo compilado en Rust (`apply_hue_luma_curves_fused_rs`) que procesa simultáneamente las curvas de Tono vs Saturación y Luminancia vs Saturación, eliminando las conversiones intermedias de espacio de color RGB $\leftrightarrow$ HSV y multiplicando por más de 10 la tasa de refresco.
 * **Pirámides de Mipmaps para Pincel y Gestión Ligera de Historial (v0.15.1):** Caché de máscaras de pincel multinivel (`brush_mask_preview` ≤1600 px y `brush_mask_draft` ≤800 px) e instantáneas ultraligeras de capas (`shallow_snapshot`) que excluyen arrays pesados de la pila de deshacer/rehacer, reduciendo drásticamente el consumo de memoria RAM.
@@ -57,6 +62,13 @@ A partir de las versiones **v0.14.0** a **v0.15.1**, AstroLoom incorpora un moto
 * **Ingesta Concurrente de Lotes:** Escaneo multihilo en paralelo de metadatos EXIF, dimensiones y niveles negros de cientos de archivos RAW en décimas de segundo al arrastrar carpetas al Apilador o Startrails.
 * **Tiling ONNX y Filtro Guiado O(1):** Pre y post-procesado acelerado para StarNet++ v2 y NAFNet con ventanas 2D de Hann continuas, y refinado de bordes de horizonte con imágenes integrales (SAT) en ~21 ms.
 * **Resiliencia Automática (*Drop-in Fallback*):** Si en algún entorno el módulo binario no estuviera presente, AstroLoom conmuta de forma transparente y automática a su motor de reserva en Python/NumPy sin que el usuario experimente errores.
+
+### 🖥️ Cabecera de Telemetría Superior y Espacio Útil (v0.16.0)
+Para maximizar el área de trabajo vertical dedicada al lienzo de revelado y apilado, en **v0.16.0** se ha suprimido la barra de estado inferior (*status bar*), reubicando toda la información de diagnóstico y monitorización en la esquina superior derecha de la barra de pestañas:
+* **Insignia del Motor:** Identifica en todo momento la versión activa de la suite (`● AstroLoom Engine v0.16.0`).
+* **Píldora de Alerta Fallback GPU $\rightarrow$ CPU:** Si tu tarjeta gráfica se satura de memoria (VRAM) durante la ejecución de StarNet++ o AI Denoise, se enciende una píldora ámbar (`⚠️ Fallback CPU (VRAM)`) indicando que el proceso continuó en CPU de forma segura. Puedes pinchar en ella para ocultarla.
+* **Monitor de RAM en Tiempo Real:** Muestra el porcentaje y los gigabytes de memoria en uso del sistema operativo (`RAM: XX% (used / total GB)`), actualizado mediante telemetría cada 2.5 segundos.
+* **Botón de Registro de Actividad:** Abre una ventana flotante con el histórico cronológico de operaciones, advertencias, tiempos de ejecución y telemetría de depuración.
 
 ---
 
@@ -158,14 +170,10 @@ A continuación se detalla qué hace cada sección y cada uno de sus parámetros
 ---
 
 ### Sección 1: Presets y Estilos de Revelado
-Permite aplicar recetas rápidas o guardar tus ajustes favoritos para usarlos en futuras sesiones.
-* **Presets Predefinidos:**
-  * *Vía Láctea Profunda:* Potencia el contraste del canal central y satura el polvo cálido.
-  * *Dorado Sagitario:* Realza las tonalidades ocres y doradas del centro galáctico.
-  * *Frío Nórdico:* Estilo limpio y azulado para cielos puros de alta montaña.
-  * *H-Alfa Intenso:* Resalta la emisión rojiza/magenta de nebulosas de hidrógeno.
-  * *Suave Natural:* Revelado fiel y orgánico para principiantes.
-* **Guardar Preset:** Almacena todos los valores actuales de los deslizadores con un nombre personalizado.
+Permite aplicar recetas rápidas, explorar la galería gráfica o guardar tus ajustes favoritos para usarlos en futuras sesiones.
+* **Galería Visual de Tarjetas (*Cards*, Novedad v0.16.0):** Al pulsar sobre la galería de presets se abre un diálogo interactivo estilizado con tarjetas visuales, miniaturas y descripción de cada receta fotométrica (*Vía Láctea Profunda*, *Dorado Sagitario*, *Frío Nórdico*, *H-Alfa Intenso*, *Suave Natural*).
+* **Modulación de Intensidad (0% a 150%):** Permite atenuar o potenciar la fuerza del preset sobre la imagen de forma continua mediante interpolación segura.
+* **Guardado Seguro sin Colisión de Máscaras (v0.16.0):** Al guardar un preset personalizado, AstroLoom excluye deliberadamente las máscaras vectoriales o de pincel locales para garantizar que aplicar el preset en otra fotografía no sobreescriba ni altere las máscaras específicas del nuevo encuadre.
 
 ---
 
@@ -352,6 +360,23 @@ Restaura la resolución óptica y nitidez perdida debido a la difracción de la 
 
 ---
 
+### Sección 5c: Máscara de Enfoque y Nitidez (Sharpening / USM, Novedad v0.16.0)
+Diseñada con un flujo de trabajo profesional idéntico al motor de detalle de Lightroom/Camera Raw, esta sección restituye microcontraste y acentuación espacial en texturas del suelo (rocas, árboles, montañas) y estructuras astronómicas contrastadas:
+
+* **Cantidad (Amount, 0% a 150%):** Determina la fuerza del afilado aplicado sobre las altas frecuencias espaciales. Al `0%` el módulo permanece desactivado (`0 (Off)`).
+* **Radio (Radius, 0.5 a 3.0 px):** Controla el grosor en píxeles del halo de acentuación de bordes. Para fotografía de paisaje nocturno se recomiendan valores entre `0.8 px` y `1.2 px` para obtener definición nítida sin engrosar la textura.
+* **Detalle (Detail, 0% a 100%):** Regula la cantidad de altas frecuencias enfatizadas. Valores altos realzan texturas finas pero pueden amplificar el grano del sensor; valores bajos suprimen el ruido manteniendo el microcontraste en contornos limpios.
+* **Máscara (Masking, 0% a 100%):** Umbralización adaptativa de gradiente de bordes. Al `0%`, el enfoque se aplica uniformemente a toda la superficie; a medida que aumentas el valor hacia `50-80%`, el enfoque se retira de áreas lisas (como el cielo oscuro homogéneo o zonas en sombra) y se concentra exclusivamente en los bordes nítidos y líneas de contraste.
+* **👁️ Previsualización Interactiva Monocroma:**
+  * Pulsa el botón de ojo junto al deslizador de Máscara para conmutar la visualización del lienzo a **blanco y negro puro**: las zonas blancas reciben enfoque y las zonas negras quedan completamente protegidas del grano.
+  * **Atajo Ergonómico `Alt`:** Puedes mantener pulsada la tecla `Alt` mientras arrastras el deslizador de Máscara; el lienzo cambiará automáticamente a la vista de máscara de bordes en tiempo real y regresará al renderizado en color al soltar el ratón.
+* **Ámbito (Scope):**
+  * `Solo Suelo (Recomendado)`: Utiliza la máscara de horizonte de IA para confinar el afilado exclusivamente al paisaje terrestre, evitando que el cielo o las estrellas sufran incremento de ruido.
+  * `Cielo sin Estrellas`: Aplica el enfoque a las nebulosas y polvo interestelar respetando las estrellas.
+  * `Todo el Fotograma (Global)`: Aplica el afilado uniformemente a lo largo de todo el encuadre.
+
+---
+
 ### Sección 6: Balance de Blancos, Calibración Fotométrica (PCC) y Filtros Dual-Band
 * **Temperatura (Azul ↔ Ámbar):** Corrige si la noche se ve demasiado anaranjada o excesivamente gélida.
 * **Tinte (Verde ↔ Magenta):** Corrige dominantes verdosas del sensor o del *airglow* atmosférico.
@@ -464,8 +489,10 @@ El compositor multicapa de AstroLoom funciona de manera análoga a Adobe Photosh
   - **Fluidez y Modo Borrador (Draft Mipmaps):**
     - Durante la manipulación y arrastre en el lienzo, AstroLoom conmuta de forma automática a pirámides de mipmaps de alta velocidad (≤1000 px) y activa una caché incremental de subcomposición $O(1)$, garantizando una tasa de refresco constante de 60 a 144 FPS sin congelamientos de la interfaz.
 
-* **Gestor Avanzado de Presets con Modulación de Intensidad (Novedad v0.15.0):**
-  - Abre el nuevo diálogo interactivo de presets de revelado (`DeveloperPreset v1.1`) desde el botón de la barra superior.
+* **Gestor Avanzado de Presets con Modulación de Intensidad (v0.15.0 / Galería de Tarjetas en v0.16.0):**
+  - Abre el diálogo interactivo de presets de revelado (`DeveloperPreset v1.1`) desde el botón de la barra superior.
+  - **Galería Visual de Tarjetas (*Cards*, v0.16.0):** Visualización interactiva y limpia mediante tarjetas gráficas estilizadas con previsualización para una selección intuitiva.
+  - **Guardado Seguro sin Máscaras (v0.16.0):** Los presets guardados omiten automáticamente las máscaras locales de pincel o vectoriales de usuario para no alterar ni sobreescribir las máscaras propias de la fotografía receptora.
   - **Deslizador de Intensidad (0% a 150%):** Permite modular la fuerza del preset de forma continua mediante interpolación lineal segura (*lerp*):
     - Al `100%`: Aplica exactamente la receta fotométrica del preset.
     - Al `50%`: Aplica una versión sutil y atenuada a la mitad del efecto sobre tu imagen actual.
@@ -524,12 +551,12 @@ AstroLoom permite congelar y reanudar todo tu flujo de trabajo en cualquier mome
 ### Módulo 3: Eclipses (HDR)
 Durante un eclipse total de sol o de luna, el rango dinámico de la corona y el limbo solar/lunar excede con creces la capacidad lineal de cualquier sensor:
 
-1. **Carga y Alineación Automática con Recorte ROI:**
+1. **Carga y Alineación Automática con Recorte ROI (Acelerado en Rust en v0.16.0):**
    * Carga la serie de exposiciones (desde tomas ultracortas de $1/4000\text{ s}$ para las protuberancias cromosféricas hasta $2\text{ s}$ o más para los tenues filamentos de la corona lejana).
-   * El algoritmo detecta automáticamente el centro y el radio del limbo mediante detección circular y delimita dinámicamente una **Región de Interés (ROI)** optimizada, acelerando el filtrado multiescala ~3x y reduciendo drásticamente el consumo de memoria RAM.
+   * El algoritmo calcula el centro y el radio del limbo mediante el kernel nativo multihilo en Rust `center_solar_disc_rs` con momentos espaciales en menos de 3 ms por toma, y delimita dinámicamente una **Región de Interés (ROI)** optimizada, acelerando el filtrado multiescala ~3x y reduciendo drásticamente el consumo de memoria RAM.
 
-2. **Fusión HDR Adaptativa con Traspaso Gradual (Gradual Handover):**
-   * Fusión de exposiciones en coma flotante de 32 bits con estirado no lineal Asinh (Solar) o ponderación multiescala Mertens (Lunar).
+2. **Fusión HDR Adaptativa y Estirado Asinh Luma (Acelerados en Rust en v0.16.0):**
+   * Fusión de exposiciones en coma flotante de 32 bits acelerada con Rayon (`coronal_hdr_fusion_rs`) y estirado Asinh no lineal sobre el canal de luminancia (`asinh_stretch_luma_rs`) para proteger el color cromático de las llamaradas cromosféricas.
    * **Casilla "Traspaso gradual de exposición (anti-anillos de grano)":** En fusiones HDR convencionales, el corte brusco de tomas largas en el límite de saturación provoca un salto repentino en la varianza del grano local. Esta opción modula la ponderación suavemente mediante la relación de tiempos $t_i / t_{i-1}$, erradicando por completo los falsos anillos o halos anulares en las isófotas de bracketing al aplicar filtros de microcontraste posteriores.
 
 3. **Arsenal de Filtros Coronales Avanzados (Acelerados en Rust con Rayon):**

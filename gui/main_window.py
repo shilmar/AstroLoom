@@ -5,10 +5,11 @@ Coordina las pestañas principales (Apilador, Revelador, Eclipses, Startrails, P
 """
 from typing import Optional
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QMainWindow, QTabWidget, QLabel, QWidget, QHBoxLayout
+from PySide6.QtWidgets import QMainWindow, QTabWidget, QLabel, QWidget, QHBoxLayout, QPushButton
 
 from core.i18n import tr, get_i18n
 from gui.theme import apply_theme, STYLE_STATUS_PILL
+from gui.icons import get_icon
 from gui.tab_stacker import StackerTab
 from gui.tab_developer import DeveloperTab
 from gui.tab_eclipse import EclipseTab
@@ -22,7 +23,7 @@ from gui.tab_settings import SettingsTab
 class MainWindow(QMainWindow):
     """Ventana principal de la interfaz gráfica de AstroLoom."""
 
-    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.15.1)"
+    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.16.0)"
     gpu_fallback_signal = Signal(str)
 
     def __init__(self, splash: Optional[object] = None):
@@ -70,7 +71,7 @@ class MainWindow(QMainWindow):
         corner_layout.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
 
         # 1. Píldora del Motor AstroLoom (versión)
-        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.15.1")
+        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.16.0")
         self.lbl_engine_badge.setStyleSheet(STYLE_STATUS_PILL)
         corner_layout.addWidget(self.lbl_engine_badge)
 
@@ -92,6 +93,26 @@ class MainWindow(QMainWindow):
         )
         corner_layout.addWidget(self.lbl_ram_monitor)
 
+        # 4. Botón de Registro de Actividad y Telemetría
+        self.btn_activity_log = QPushButton(tr("app.log_btn", " Registro"))
+        self.btn_activity_log.setIcon(get_icon("activity", size=13, color="#00e5ff"))
+        self.btn_activity_log.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #141724; border: 1px solid #232738; border-radius: 4px;"
+            "  padding: 2px 8px; color: #80d8ff; font-weight: bold; font-size: 10px;"
+            "}"
+            "QPushButton:hover {"
+            "  background-color: #1c2032; border-color: #00e5ff; color: #ffffff;"
+            "}"
+            "QPushButton:pressed {"
+            "  background-color: #0d101a;"
+            "}"
+        )
+        self.btn_activity_log.setCursor(Qt.PointingHandCursor)
+        self.btn_activity_log.setToolTip(tr("app.log_btn_tooltip", "Abrir Registro de Actividad y Telemetría"))
+        self.btn_activity_log.clicked.connect(self._open_activity_log)
+        corner_layout.addWidget(self.btn_activity_log)
+
         self.tab_widget.setCornerWidget(corner_widget, Qt.TopRightCorner)
 
         # Temporizador para actualizar métricas de hardware cada 2.5 segundos
@@ -100,11 +121,23 @@ class MainWindow(QMainWindow):
         self._timer_ram.start(2500)
         self._update_system_stats()
 
+    def _open_activity_log(self) -> None:
+        """Abre o enfoca la ventana flotante del Registro de Actividad."""
+        if not hasattr(self, '_dialog_activity_log') or self._dialog_activity_log is None:
+            from gui.dialog_activity_log import ActivityLogDialog
+            self._dialog_activity_log = ActivityLogDialog(self)
+        self._dialog_activity_log.show()
+        self._dialog_activity_log.raise_()
+        self._dialog_activity_log.activateWindow()
+
     def _retranslate_ui(self) -> None:
         """Actualiza todos los textos estáticos principales al cambiar de idioma."""
         self.setWindowTitle(tr("app.title", self.BASE_TITLE))
         if hasattr(self, 'lbl_engine_badge'):
-            self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.15.1"))
+            self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.16.0"))
+        if hasattr(self, 'btn_activity_log'):
+            self.btn_activity_log.setText(tr("app.log_btn", " Registro"))
+            self.btn_activity_log.setToolTip(tr("app.log_btn_tooltip", "Abrir Registro de Actividad y Telemetría"))
 
         if hasattr(self, 'tab_widget'):
             self.tab_widget.setTabText(0, tr("app.tabs.stacker", "1. Apilador (Stacker)"))

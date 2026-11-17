@@ -26,11 +26,13 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
     QProgressBar, QMessageBox, QGroupBox, QRadioButton, QSlider,
-    QDoubleSpinBox, QSpinBox, QSplitter, QTextEdit, QScrollArea, QCheckBox,
+    QDoubleSpinBox, QSpinBox, QSplitter, QScrollArea, QCheckBox,
     QSizePolicy, QAbstractItemView, QApplication, QButtonGroup, QComboBox, QDialog
 )
 from PySide6.QtCore import Qt, Signal, QThread, QPoint, QPointF, QRectF
-from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QImage, QCursor, QFont, QTextCursor, QBrush
+from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QImage, QCursor, QFont, QBrush
+
+from core.log_hub import log_hub
 
 from gui.dialog_coronal_stack import CoronalStackDialog
 
@@ -1566,15 +1568,6 @@ class EclipseTab(QWidget):
         self.progress_bar.setVisible(False)
         left_panel_layout.addWidget(self.progress_bar)
 
-        lbl_log = QLabel("Registro de Actividad:")
-        lbl_log.setStyleSheet("color: #a0a0a0; font-size: 11px; font-weight: bold;")
-        left_panel_layout.addWidget(lbl_log)
-
-        self.txt_log = QTextEdit()
-        self.txt_log.setReadOnly(True)
-        self.txt_log.setFixedHeight(100)
-        left_panel_layout.addWidget(self.txt_log)
-
         splitter.addWidget(left_panel)
 
         # -------------------------------------------------------------
@@ -1620,8 +1613,7 @@ class EclipseTab(QWidget):
         pass
 
     def log(self, message: str):
-        self.txt_log.append(f"• {message}")
-        self.txt_log.moveCursor(QTextCursor.End)
+        log_hub.log("Eclipses", message)
         self.lbl_canvas_status.setText(message)
 
     # -------------------------------------------------------------

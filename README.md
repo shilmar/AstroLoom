@@ -4,7 +4,7 @@
 
 **Suite y Estación de Trabajo Integral para Astrofotografía de Paisaje, Cielo Profundo y Eventos Astronómicos**
 
-[![Version](https://img.shields.io/badge/version-v0.15.1-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
+[![Version](https://img.shields.io/badge/version-v0.16.0-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -43,6 +43,17 @@ Impulsada por una arquitectura híbrida que combina una interfaz gráfica reacti
 | **5. Startrails** | Circumpolares continuas o efecto cometa en streaming $O(1)$, supresión automática de satélites y aviones, relleno de pausas (*gap filling*), recuperación cromática de estrellas y exportación de vídeo 4K. |
 | **6. Lluvias de Meteoros** | Detección algorítmica de bólidos, cribado en galería interactiva, filtros anti-aviones/satélites y reproyección al radiante celeste con flujo neto. |
 | **7. Panorámicas (Mosaicos)** | Cosido 2D multifila de ultra-alta resolución, alineación por asterismos en Rust (<2 ms), fusión híbrida *Dual-Zone* (árboles nítidos sin efecto fantasma) y auto-recorte rectangular $O(H \times W)$. |
+
+---
+
+## 🚀 Novedades de la Versión v0.16.0
+
+* **Máscara de Enfoque y Nitidez (Sharpening / USM):** Nuevo motor de microcontraste y altas frecuencias espaciales en el Revelador con controles de *Cantidad*, *Radio*, *Detalle* y *Máscara* de bordes estilo Lightroom, incluyendo previsualización monocroma interactiva (`Alt`-drag) y restricción por ámbito (`Solo Suelo`, `Cielo sin Estrellas` o `Global`).
+* **Purga Integral de Numba y Unificación en Rust Rayon:** Eliminación definitiva de dependencias LLVM/Numba con reducción neta de 2.36 s en el arranque en frío, LUT display mapping a >4.000 FPS en Rust y cálculo de histograma multihilo en OpenCV C++.
+* **Aceleración Nativa en Rust para Eclipses:** Centrado de disco solar (`center_solar_disc_rs`), estirado Asinh Luma preservando color y fusión coronal HDR adaptativa multiescala en paralelo.
+* **Resiliencia de Hardware y Caché de Búferes LRU:** Fallback en caliente GPU $\rightarrow$ CPU ante saturación de VRAM, caché persistente de grafos ONNX y presupuesto estricto de memoria RAM en el pipeline para evitar fugas al procesar archivos 4K/8K.
+* **Cabecera de Telemetría y Supresión de Barra de Estado:** Monitor de RAM en tiempo real (% y GB), alerta de degradación de hardware y acceso al Registro de Actividad ubicados directamente en la esquina superior de pestañas, ganando valiosa superficie vertical de lienzo.
+* **Galería Visual de Presets:** Panel rediseñado por tarjetas interactivas y guardado seguro que excluye máscaras locales de usuario para prevenir colisiones.
 
 ---
 

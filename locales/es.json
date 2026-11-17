@@ -5,11 +5,13 @@
     "version": "1.0"
   },
   "app": {
-    "title": "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.15.1)",
+    "title": "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.16.0)",
     "ready": "Listo para procesar",
-    "engine_badge": "● AstroLoom Engine v0.15.1",
+    "engine_badge": "● AstroLoom Engine v0.16.0",
     "ram_monitor": "RAM: {pct}% ({used:.1f} / {total:.1f} GB)",
     "language": "Idioma",
+    "log_btn": " Registro",
+    "log_btn_tooltip": "Abrir Registro de Actividad y Telemetría",
     "tabs": {
       "stacker": "1. Apilador (Stacker)",
       "developer": "2. Revelador / Editor",
@@ -103,17 +105,17 @@
       "reset": "Restablecer Tono Suelo"
     },
     "toolbar": {
-      "undo": "Deshacer",
-      "redo": "Rehacer",
-      "before_after": "Antes / Después (Y)",
+      "undo": "",
+      "redo": "",
+      "before_after": "Comparar",
       "vertical": "Vertical",
       "horizontal": "Horizontal",
-      "set_as_before": "Fijar como Antes",
-      "clipping": "Recorte Sombras/Luces (J)",
-      "zoom_100": "Zoom 100% (Clic Der.)",
-      "loupe": "Lupa (Z)",
-      "crop": "Recortar (C)",
-      "ground_mask": "Máscara Suelo (M)"
+      "set_as_before": "Fijar ref.",
+      "clipping": "Aviso recorte",
+      "zoom_100": "1:1",
+      "loupe": "",
+      "crop": "",
+      "ground_mask": "Máscara"
     }
   },
   "settings": {
@@ -122,5 +124,24 @@
     "lang_es": "Español (ES)",
     "lang_en": "English (EN)",
     "btn_save": "Guardar Cambios de Configuración"
+  },
+  "dialog": {
+    "activity_log": {
+      "title": "AstroLoom - Registro de Actividad y Telemetría",
+      "search_placeholder": "Buscar (texto, archivo, ONNX, error, tiempo)...",
+      "mod_all": "Todos los módulos",
+      "lvl_all": "Todos los niveles",
+      "lvl_errors": "Solo Errores / Avisos",
+      "lvl_perf": "Solo Tiempos / Métricas",
+      "copy": "Copiar",
+      "copy_tip": "Copia el contenido filtrado actual al portapapeles",
+      "copied": "¡Copiado!",
+      "export": "Exportar...",
+      "export_tip": "Guarda el registro filtrado en un archivo .log o .txt",
+      "export_title": "Exportar Registro de Actividad",
+      "clear": "Limpiar",
+      "clear_tip": "Vacía la memoria del registro",
+      "autoscroll": "Autodesplazamiento"
+    }
   }
 }

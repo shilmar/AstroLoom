@@ -8,11 +8,13 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QFileDialog, QTabWidget, QListWidget, QListWidgetItem, QProgressBar,
     QMessageBox, QGroupBox, QRadioButton, QSlider, QDoubleSpinBox,
-    QComboBox, QSplitter, QTextEdit, QSizePolicy, QCheckBox, QSpinBox,
+    QComboBox, QSplitter, QSizePolicy, QCheckBox, QSpinBox,
     QScrollArea, QProgressDialog, QFrame
 )
 from PySide6.QtCore import Qt, Signal, QCoreApplication
-from PySide6.QtGui import QTextCursor, QCursor
+from PySide6.QtGui import QCursor
+
+from core.log_hub import log_hub
 
 from core.project_manager import ProjectManager
 from core.masking import refine_mask_guided, apply_direct_brush_to_mask
@@ -877,16 +879,7 @@ class StackerTab(QWidget):
         scroll_area.setWidget(panel_content)
         left_panel_layout.addWidget(scroll_area, stretch=1)
 
-        # SECCIÓN INFERIOR FIJA: Progreso, Registro de Actividad y Ejecución
-        lbl_log = QLabel("Registro de Actividad:")
-        lbl_log.setStyleSheet("color: #a0a0a0; font-size: 11px; font-weight: bold;")
-        left_panel_layout.addWidget(lbl_log)
-
-        self.txt_log = QTextEdit()
-        self.txt_log.setReadOnly(True)
-        self.txt_log.setFixedHeight(100)
-        left_panel_layout.addWidget(self.txt_log)
-
+        # SECCIÓN INFERIOR FIJA: Progreso y Ejecución
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(16)
         self.progress_bar.setTextVisible(True)
@@ -913,8 +906,7 @@ class StackerTab(QWidget):
         pass
 
     def log_message(self, text: str):
-        self.txt_log.append(text)
-        self.txt_log.moveCursor(QTextCursor.End)
+        log_hub.log("Apilador", text)
 
     def _on_capture_mode_changed(self, idx: int):
         """Si es star tracker, inhabilita el modo de apilar suelo de ráfaga y anti-ghosting."""
@@ -1718,7 +1710,7 @@ class StackerTab(QWidget):
 
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("%p%")
-        self.txt_log.clear()
+        log_hub.log("Apilador", "--- Restablecido para nuevo proceso de apilado ---")
 
     def start_stacking(self):
         active_lights = [p for p in self.lights_list if p not in self.excluded_lights]

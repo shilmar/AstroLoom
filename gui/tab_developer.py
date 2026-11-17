@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QCoreApplication, QTimer, QEvent, QPoint
 from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap, QColor, QFont, QCursor
+from core.log_hub import log_hub
 from core.stacking import load_image_as_float32
 from core.background_extraction import generate_sky_sample_points, extract_background_rbf
 from core.stretch import (
@@ -504,7 +505,6 @@ class DeveloperTab(QWidget):
         self.btn_edit_ground_mask = self.panel_ground_sky.btn_edit_ground_mask
         self.card_gnd_info = self.panel_ground_sky.card_gnd_info
         self.lbl_gnd_info = self.panel_ground_sky.lbl_gnd_info
-        self.btn_go_to_ground_layer = self.panel_ground_sky.btn_go_to_ground_layer
         self._hidden_gnd_container = self.panel_ground_sky._hidden_gnd_container
         self.lbl_gnd_ev = self.panel_ground_sky.lbl_gnd_ev
         self.slider_gnd_ev = self.panel_ground_sky.slider_gnd_ev
@@ -517,7 +517,6 @@ class DeveloperTab(QWidget):
         self.panel_ground_sky.ai_mask_requested.connect(self._detect_mask_ai_from_toolbar)
         self.panel_ground_sky.overlay_toggled.connect(self._on_top_mask_overlay_toggled)
         self.panel_ground_sky.delete_mask_requested.connect(self._delete_mask)
-        self.panel_ground_sky.go_to_layer_requested.connect(lambda: self._jump_to_mask_layers(MASK_TYPE_IMAGE_GROUND))
         self.panel_ground_sky.reset_requested.connect(self.reset_gnd_tone)
         self.slider_gnd_ev.valueChanged.connect(self.on_gnd_ev_changed)
         self.slider_gnd_sh.valueChanged.connect(self.on_gnd_shadows_changed)
@@ -1023,16 +1022,6 @@ class DeveloperTab(QWidget):
         self.btn_export.clicked.connect(self.export_image)
         left_container_layout.addWidget(self.btn_export, 0)
 
-        # Registro de Actividad compacto
-        self.lbl_log_title = QLabel(tr("developer.activity_log", "Registro de Actividad:"))
-        self.lbl_log_title.setStyleSheet("color: #a0a0a0; font-size: 11px; font-weight: bold;")
-        left_container_layout.addWidget(self.lbl_log_title, 0)
-
-        self.txt_log = QTextEdit()
-        self.txt_log.setReadOnly(True)
-        self.txt_log.setFixedHeight(85)
-        left_container_layout.addWidget(self.txt_log, 0)
-
         # 3. Contenedor central (Visor y Lienzo interactivo)
         self.center_container = QWidget()
         self.center_container.setMinimumWidth(260)
@@ -1261,7 +1250,7 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep_left)
 
         # 0a. Botón Deshacer (Undo)
-        self.btn_undo = QPushButton("Deshacer")
+        self.btn_undo = QPushButton()
         self.btn_undo.setIcon(get_icon("undo", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_undo.setCursor(Qt.PointingHandCursor)
         self.btn_undo.setEnabled(False)
@@ -1270,7 +1259,7 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.btn_undo)
 
         # 0b. Botón Rehacer (Redo)
-        self.btn_redo = QPushButton("Rehacer")
+        self.btn_redo = QPushButton()
         self.btn_redo.setIcon(get_icon("redo", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_redo.setCursor(Qt.PointingHandCursor)
         self.btn_redo.setEnabled(False)
@@ -1286,7 +1275,7 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep_undo)
 
         # 1. Botón Comparador Antes / Después
-        self.btn_split_view = QPushButton("Antes / Después (Y)")
+        self.btn_split_view = QPushButton("Comparar")
         self.btn_split_view.setIcon(get_icon("split", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_split_view.setCheckable(True)
         self.btn_split_view.setCursor(Qt.PointingHandCursor)
@@ -1313,7 +1302,7 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.btn_split_orientation)
 
         # 2. Botón Fijar como Antes (Snapshot)
-        self.btn_set_before = QPushButton("Fijar como Antes")
+        self.btn_set_before = QPushButton("Fijar ref.")
         self.btn_set_before.setIcon(get_icon("camera", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_set_before.setCursor(Qt.PointingHandCursor)
         self.btn_set_before.setToolTip(
@@ -1331,7 +1320,7 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep1)
 
         # 3. Botón Indicador de Recorte (Clipping)
-        self.btn_toggle_clipping = QPushButton("Recorte (J)")
+        self.btn_toggle_clipping = QPushButton("Aviso recorte")
         self.btn_toggle_clipping.setIcon(get_icon("alert", color="#94a3b8", hover_color="#ffffff", active_color="#f87171", size=13))
         self.btn_toggle_clipping.setCheckable(True)
         self.btn_toggle_clipping.setCursor(Qt.PointingHandCursor)
@@ -1351,7 +1340,7 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep2)
 
         # 4. Botón Zoom 1:1
-        self.btn_toggle_zoom = QPushButton("Zoom 100%")
+        self.btn_toggle_zoom = QPushButton("1:1")
         self.btn_toggle_zoom.setIcon(get_icon("zoom_in", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_toggle_zoom.setCheckable(True)
         self.btn_toggle_zoom.setCursor(Qt.PointingHandCursor)
@@ -1370,7 +1359,7 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep3)
 
         # 5. Lupa de Inspección Flotante
-        self.btn_magnifier = QPushButton("Lupa (Z)")
+        self.btn_magnifier = QPushButton()
         self.btn_magnifier.setIcon(get_icon("search", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_magnifier.setCheckable(True)
         self.btn_magnifier.setCursor(Qt.PointingHandCursor)
@@ -1390,7 +1379,7 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep4)
 
         # 7. Botón Recorte Interactivo (Crop)
-        self.btn_crop = QPushButton("Recortar (C)")
+        self.btn_crop = QPushButton()
         self.btn_crop.setIcon(get_icon("crop", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_crop.setCheckable(True)
         self.btn_crop.setCursor(Qt.PointingHandCursor)
@@ -1410,7 +1399,7 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(sep5)
 
         # 8. Botón Máscara Suelo Interactivo
-        self.btn_mask_tool = QPushButton("Máscara Suelo (M)")
+        self.btn_mask_tool = QPushButton("Máscara")
         self.btn_mask_tool.setIcon(get_icon("brush", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_mask_tool.setCheckable(True)
         self.btn_mask_tool.setCursor(Qt.PointingHandCursor)
@@ -1487,8 +1476,7 @@ class DeveloperTab(QWidget):
             self.btn_open_img.setText(tr("developer.btn_open", "Abrir Imagen (TIFF / FITS / RAW)..."))
         if hasattr(self, 'btn_export'):
             self.btn_export.setText(tr("developer.btn_export", "EXPORTAR IMAGEN REVELADA..."))
-        if hasattr(self, 'lbl_log_title'):
-            self.lbl_log_title.setText(tr("developer.activity_log", "Registro de Actividad:"))
+
 
         # Secciones del acordeón
         if hasattr(self, 'sec_presets'):
@@ -1522,23 +1510,23 @@ class DeveloperTab(QWidget):
 
         # Barra superior del visor (iconos gestionados por setIcon)
         if hasattr(self, 'btn_undo'):
-            self.btn_undo.setText(tr("developer.toolbar.undo", "Deshacer"))
+            self.btn_undo.setText(tr("developer.toolbar.undo", ""))
         if hasattr(self, 'btn_redo'):
-            self.btn_redo.setText(tr("developer.toolbar.redo", "Rehacer"))
+            self.btn_redo.setText(tr("developer.toolbar.redo", ""))
         if hasattr(self, 'btn_split_view'):
-            self.btn_split_view.setText(tr("developer.toolbar.before_after", "Antes / Después (Y)"))
+            self.btn_split_view.setText(tr("developer.toolbar.before_after", "Comparar"))
         if hasattr(self, 'btn_set_before'):
-            self.btn_set_before.setText(tr("developer.toolbar.set_as_before", "Fijar como Antes"))
+            self.btn_set_before.setText(tr("developer.toolbar.set_as_before", "Fijar ref."))
         if hasattr(self, 'btn_toggle_clipping'):
-            self.btn_toggle_clipping.setText(tr("developer.toolbar.clipping", "Recorte (J)"))
+            self.btn_toggle_clipping.setText(tr("developer.toolbar.clipping", "Aviso recorte"))
         if hasattr(self, 'btn_toggle_zoom'):
-            self.btn_toggle_zoom.setText(tr("developer.toolbar.zoom_100", "Zoom 100%"))
+            self.btn_toggle_zoom.setText(tr("developer.toolbar.zoom_100", "1:1"))
         if hasattr(self, 'btn_magnifier'):
-            self.btn_magnifier.setText(tr("developer.toolbar.loupe", "Lupa (Z)"))
+            self.btn_magnifier.setText(tr("developer.toolbar.loupe", ""))
         if hasattr(self, 'btn_crop'):
-            self.btn_crop.setText(tr("developer.toolbar.crop", "Recortar (C)"))
+            self.btn_crop.setText(tr("developer.toolbar.crop", ""))
         if hasattr(self, 'btn_mask_tool'):
-            self.btn_mask_tool.setText(tr("developer.toolbar.ground_mask", "Máscara Suelo (M)"))
+            self.btn_mask_tool.setText(tr("developer.toolbar.ground_mask", "Máscara"))
         if hasattr(self, 'btn_toggle_left_panel'):
             self.btn_toggle_left_panel.setToolTip(tr("developer.toolbar.toggle_left", "Ocultar / Mostrar panel lateral izquierdo de ajustes (Atajo: F7 o [)"))
         if hasattr(self, 'btn_toggle_right_panel'):
@@ -1774,12 +1762,12 @@ class DeveloperTab(QWidget):
         tb_layout.setSpacing(8)
 
         # 1. Título / Icono
-        lbl_title = QLabel("Máscara Suelo:")
-        lbl_title.setStyleSheet("font-weight: bold; color: #80d8ff; font-size: 11px;")
-        tb_layout.addWidget(lbl_title)
+        self.lbl_mask_tb_title = QLabel("Máscara:")
+        self.lbl_mask_tb_title.setStyleSheet("font-weight: bold; color: #80d8ff; font-size: 11px;")
+        tb_layout.addWidget(self.lbl_mask_tb_title)
 
         # 2. Selector de Clase de Pincel (Cielo vs Suelo)
-        self.btn_brush_sky = QPushButton("● Cielo (Verde)")
+        self.btn_brush_sky = QPushButton("● Cielo")
         self.btn_brush_sky.setCheckable(True)
         self.btn_brush_sky.setChecked(True)
         self.btn_brush_sky.setCursor(Qt.PointingHandCursor)
@@ -1802,7 +1790,7 @@ class DeveloperTab(QWidget):
         self.btn_brush_sky.setToolTip("Pinta semillas de CIELO (trazo verde)")
         tb_layout.addWidget(self.btn_brush_sky)
 
-        self.btn_brush_gnd = QPushButton("● Suelo (Rojo)")
+        self.btn_brush_gnd = QPushButton("● Suelo")
         self.btn_brush_gnd.setCheckable(True)
         self.btn_brush_gnd.setCursor(Qt.PointingHandCursor)
         self.btn_brush_gnd.setStyleSheet("""
@@ -1929,7 +1917,7 @@ class DeveloperTab(QWidget):
         tb_layout.addWidget(self.btn_ai_mask)
 
         # 5b. Generar Máscara desde trazos
-        self.btn_generate_mask = QPushButton("Generar (Intro)")
+        self.btn_generate_mask = QPushButton("Generar")
         self.btn_generate_mask.setIcon(get_icon("check", color="#ffffff", size=13))
         self.btn_generate_mask.setCursor(Qt.PointingHandCursor)
         self.btn_generate_mask.setStyleSheet("""
@@ -2030,7 +2018,7 @@ class DeveloperTab(QWidget):
         tb_layout.addStretch()
 
         # 9. Botón Finalizar / Cerrar
-        self.btn_mask_done = QPushButton("Listo (Esc)")
+        self.btn_mask_done = QPushButton("Listo")
         self.btn_mask_done.setIcon(get_icon("check", color="#ffffff", size=13))
         self.btn_mask_done.setCursor(Qt.PointingHandCursor)
         self.btn_mask_done.setStyleSheet("""
@@ -3571,8 +3559,7 @@ class DeveloperTab(QWidget):
         """)
 
     def log_message(self, text: str):
-        self.txt_log.append(text)
-        self.txt_log.moveCursor(QTextCursor.End)
+        log_hub.log("Revelador", text)
 
     def _invalidate_pipeline_caches(self):
         """Invalida todas las cachés intermedias del pipeline de procesado."""
@@ -7301,7 +7288,7 @@ class DeveloperTab(QWidget):
             self.btn_toggle_zoom.blockSignals(False)
 
         self._update_canvas_info_label()
-        self.txt_log.clear()
+        log_hub.log("Revelador", "--- Sesión restablecida ---")
         gc.collect()
         
     def _set_starnet_tools_enabled(self, enabled: bool):

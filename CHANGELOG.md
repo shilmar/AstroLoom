@@ -3,9 +3,32 @@
 Todas las novedades, mejoras y correcciones notables de **AstroLoom** (anteriormente *Apilator*) se documentan en este archivo.
 El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
-## [Unreleased]
+## [0.16.0] - 2026-11-17
 
 ### Añadido
+* **Módulo y Panel de Máscara de Enfoque y Nitidez (*Sharpening / USM*, `core/sharpening.py`, `gui/developer/panels/panel_sharpening.py`, `gui/developer/pipeline.py`):**
+  - **Motor Matemático de Realce de Altas Frecuencias:** Implementación de *Unsharp Masking* clásico y multiescala para restituir microcontraste en texturas del terreno, polvo interestelar y estructuras de cielo profundo sin generar halos agresivos.
+  - **Controles de Precisión Estilo Lightroom:** Deslizadores de *Cantidad* (0% a 150%), *Radio* (0.5 a 3.0 px) y *Detalle* (0% a 100% con supresión adaptativa de sobreimpulso y ruido).
+  - **Máscara de Bordes con Previsualización Interactiva Monocroma:** Deslizador de *Máscara* (0% a 100%) que restringe el afilado exclusivamente a contornos y bordes contrastados; incluye botón de inspección visual en blanco y negro y soporte ergonómico para visualizar la máscara en tiempo real manteniendo pulsada la tecla `Alt` mientras se arrastra el deslizador.
+  - **Selector de Ámbito Espacial:** Posibilidad de confinar el enfoque a `Solo Suelo (Recomendado)` mediante la máscara semántica de IA, `Cielo sin Estrellas` (protegiendo los centros estelares) o `Todo el Fotograma (Global)`.
+  - **Integración No Destructiva en Pipeline:** Incorporado al árbol de renderizado reactivo del Revelador y serializado automáticamente en proyectos `.devloom`.
+
+* **Aceleración Nativa en Rust para Eclipses Solares (`astroloom_rs/src/eclipse.rs`, `core/eclipse.py`, `gui/tab_eclipse.py`):**
+  - **Centrado Solar Automático en Rust (`center_solar_disc_rs`):** Detección ultra-rápida del centroide del disco solar mediante umbralizado multihilo, filtrado estadístico de outliers y cálculo de momentos de orden cero y uno, ejecutado en menos de 3 ms por fotograma.
+  - **Estirado Arcsinh Basado en Luminancia en Registros (`asinh_stretch_luma_rs`):** Kernel Rayon paralelo que aplica estirado no lineal sobre la señal de luminancia manteniendo intacta la fotometría de color cromático y previniendo quemaduras cromosféricas en el limbo.
+  - **Fusión HDR Coronal Multiescala en Rust (`coronal_hdr_fusion_rs`):** Combinación ponderada de series de bracketing coronal ejecutada directamente en memoria contigua en paralelo, acelerando la fusión de series densas de exposiciones y optimizando la respuesta visual.
+
+* **Resiliencia de Hardware: Fallback Dinámico GPU $\rightarrow$ CPU en IA (`core/ai_denoise.py`, `core/starnet_onnx.py`, `gui/main_window.py`):**
+  - **Recuperación Automática sin Pérdida de Trabajo:** Detección de agotamiento de memoria gráfica (*CUDA Out of Memory* o excepciones en backends DirectML/TensorRT), conmutando en caliente y de forma transparente a ejecución por CPU sin abortar la tarea ni desestabilizar la aplicación.
+  - **Píldora de Telemetría Superior:** Indicador visual `⚠️ Fallback CPU (VRAM)` en la esquina superior de la ventana principal con tooltip diagnóstico y descarte interactivo por clic.
+  - **Caché Persistente de Grafos ONNX y Padding Dinámico:** Reutilización de sesiones ONNX pre-compiladas en memoria y ajuste dinámico de dimensiones sin artefactos perimetrales.
+
+* **Caché LRU Unificada de Pipeline con Presupuesto de RAM (`core/buffer_cache.py`, `gui/tab_developer.py`):**
+  - Gestor inteligente de memoria para hitos del pipeline multicapa del Revelador con cuota estricta configurable en MB/GB, purgando ordenadamente los estados menos recientemente utilizados (*Least Recently Used*) para erradicar fugas de memoria al procesar composiciones densas en 4K/8K.
+
+* **Registro de Actividad y Telemetría Centralizada (`core/log_hub.py`, `gui/dialog_activity_log.py`, `gui/main_window.py`):**
+  - Nueva ventana flotante e interactiva de telemetría y diagnósticos, accesible mediante botón dedicado en la cabecera, para inspección en tiempo real de operaciones de fondo, tiempos de cómputo y consumo de hardware.
+
 * **Pantalla de Carga y Bienvenida Inmediata (*Splash Screen*, `gui/splash.py`, `run_app.py`):**
   - **Aparición Instantánea en Frío (< 80 ms):** Despliegue inmediato de una ventana frameless moderna con diseño Slate espacial, bordes redondeados y renderizado vectorial de iconografía astrofotográfica mientras Python carga las librerías pesadas en RAM.
   - **Monitoreo de Arranque y Estado en Tiempo Real:** Barra de progreso reactiva con mensajes informativos paso a paso durante la inicialización de cada pestaña del flujo de trabajo (Apilador, Revelador, Eclipses, Trazas de Estrellas, Meteoros, etc.), garantizando una experiencia fluida y profesional desde el primer milisegundo de ejecución.
@@ -18,12 +41,25 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/
   - **Cálculo de Histograma de 4 Canales en OpenCV C++ Multihilo (`_compute_histogram_cv`):** Sustitución de los kernels JIT por `cv2.calcHist` acelerado con instrucciones SIMD AVX2/SSE (~1.0 ms para 130.000 muestras) sin consumo extra de memoria.
   - **Conexión Multihilo Configurable en Detección de Meteoros:** Vinculación directa con el parámetro `"cpu_workers"` de Ajustes, alcanzando entre 8.7 y 10 fotogramas RAW Nikon NEF decodificados y analizados por segundo con 14–16 hilos.
 
+### Modificado
+* **Integración de Versión y Monitor de RAM en Cabecera de Pestañas (`gui/main_window.py`, `gui/theme.py`):**
+  - **Eliminación de la Barra de Estado Inferior:** Supresión de la barra inferior permanente (`QStatusBar`) para maximizar la altura útil de pantalla dedicada al lienzo interactivo y las herramientas de procesado.
+  - **Cabecera Multifunción en Esquina Superior:** Reubicación de la píldora de versión del motor (`● AstroLoom Engine v0.16.0`), alerta reactiva de degradación de hardware, monitor continuo de memoria RAM (% y GB utilizados) con refresco por temporizador, y acceso directo al Registro de Actividad en la barra de pestañas (`QTabWidget.setCornerWidget`).
+* **Rediseño del Gestor de Presets con Galería Visual de Tarjetas (`gui/developer/panels/panel_presets.py`, `gui/dialog_presets.py`, `core/developer_presets.py`):**
+  - Simplificación del panel lateral de presets sustituyendo listas técnicas densas por una galería visual exclusiva basada en tarjetas interactivas (*cards*) con previsualizaciones gráficas.
+  - **Guardado Seguro sin Colisión de Máscaras:** El serializador de presets omite automáticamente máscaras vectoriales o de pincel locales de usuario para evitar sobreescritura indeseada en proyectos receptores.
+* **Armonización y Alineación Ergonómica en Pestañas (`gui/tab_developer.py`, `gui/tab_eclipse.py`, `gui/tab_stacker.py`, `gui/tab_meteors.py`, `gui/tab_startrails.py`):**
+  - Estandarización visual de cabeceras, botones de acción rápida, márgenes y separación en todas las pestañas de la suite.
+  - Limpieza exhaustiva de máscaras superpuestas en el lienzo (`gui/canvas.py`), evitando artefactos residuales o desincronización de trazado al alternar herramientas.
+
 ### Corregido
 * **Robustez en el Fallback Puro NumPy de Apilado (`core/stacking.py`):**
   - Subsanada la excepción latente `TypeError: 'NoneType' object does not support item assignment` en el procesamiento de franjas por CPU cuando no se dispone de aceleradores binarios.
   - Conexión nativa multihilo `astroloom_rs.median_kernel` en la generación de tomas maestras de calibración (`generate_master_calibration`), eliminando la degradación de rendimiento previa en Darks, Flats y Bias.
 * **Monitor de Rendimiento en Ajustes (`gui/tab_settings.py`):**
   - Actualizado el indicador de hardware para reportar formalmente el estado de `Aceleración Nativa (Rust Rayon)`.
+* **Sincronización Global de Versión:**
+  - Actualizada la versión a `v0.16.0` en ventana principal, pantalla splash, diálogos, archivos de configuración de Rust (`Cargo.toml`, `Cargo.lock`, `pyproject.toml`) y localizaciones multilingües (`es.json`, `en.json`).
 
 ## [0.15.1] - 2026-11-15
 

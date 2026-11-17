@@ -17,14 +17,16 @@ import numpy as np
 import cv2
 
 from PySide6.QtCore import Qt, QThread, Signal, QCoreApplication
-from PySide6.QtGui import QTextCursor, QColor
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QPushButton, QFileDialog, QMessageBox, QSlider, QRadioButton,
     QButtonGroup, QComboBox, QCheckBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView, QProgressBar, QTextEdit, QScrollArea,
+    QHeaderView, QAbstractItemView, QProgressBar, QScrollArea,
     QSplitter, QFrame, QSizePolicy, QProgressDialog
 )
+
+from core.log_hub import log_hub
 
 from core.stacking import load_image_as_float32, scan_raw_batch_metadata
 from core.startrails import generate_startrail, enhance_star_trails_color
@@ -663,15 +665,6 @@ class StartrailsTab(QWidget):
         self.progress_bar.setVisible(False)
         left_container_layout.addWidget(self.progress_bar)
 
-        lbl_log = QLabel("Registro de Actividad:")
-        lbl_log.setStyleSheet("color: #a0a0a0; font-size: 11px; font-weight: bold;")
-        left_container_layout.addWidget(lbl_log)
-
-        self.txt_log = QTextEdit()
-        self.txt_log.setReadOnly(True)
-        self.txt_log.setFixedHeight(100)
-        left_container_layout.addWidget(self.txt_log)
-
         self.btn_run = QPushButton()
         self.btn_run.setFixedHeight(42)
         self.btn_run.setCursor(Qt.PointingHandCursor)
@@ -698,9 +691,8 @@ class StartrailsTab(QWidget):
         pass
 
     def log(self, message: str) -> None:
-        """Registra un mensaje en la consola inferior con autoscroll."""
-        self.txt_log.append(message)
-        self.txt_log.moveCursor(QTextCursor.End)
+        """Registra un mensaje en el registro de actividad central."""
+        log_hub.log("Startrails", message)
 
     # -------------------------------------------------------------
     # GESTIÓN DE EVENTOS Y ACCIONES

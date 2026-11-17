@@ -21,13 +21,15 @@ import numpy as np
 import cv2
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QTextCursor, QColor
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QPushButton, QFileDialog, QMessageBox, QComboBox, QCheckBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QProgressBar, QTextEdit, QScrollArea, QSplitter, QFrame, QSizePolicy
+    QProgressBar, QScrollArea, QSplitter, QFrame, QSizePolicy
 )
+
+from core.log_hub import log_hub
 
 from core.stacking import load_image_as_float32
 from core.meteors import (
@@ -536,16 +538,11 @@ class MeteorTab(QWidget):
         scroll.setWidget(scroll_content)
         left_layout.addWidget(scroll)
 
-        # Barra de progreso y consola inferior izquierda
+        # Barra de progreso inferior izquierda
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(14)
         self.progress_bar.setVisible(False)
         left_layout.addWidget(self.progress_bar)
-
-        self.txt_log = QTextEdit()
-        self.txt_log.setReadOnly(True)
-        self.txt_log.setFixedHeight(85)
-        left_layout.addWidget(self.txt_log)
 
         # -------------------------------------------------------------
         # PANEL DERECHO: Canvas Interactivo y Galería de Culling
@@ -704,8 +701,7 @@ class MeteorTab(QWidget):
         main_layout.addWidget(splitter_h)
 
     def log(self, msg: str) -> None:
-        self.txt_log.append(msg)
-        self.txt_log.moveCursor(QTextCursor.End)
+        log_hub.log("Meteoros", msg)
 
     # -------------------------------------------------------------
     # EVENTOS DE CARGA Y TABLA DE ARCHIVOS

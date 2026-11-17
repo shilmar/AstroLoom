@@ -5,11 +5,13 @@
     "version": "1.0"
   },
   "app": {
-    "title": "AstroLoom - Astrophotography & Nightscape Suite (v0.15.1)",
+    "title": "AstroLoom - Astrophotography & Nightscape Suite (v0.16.0)",
     "ready": "Ready to process",
-    "engine_badge": "● AstroLoom Engine v0.15.1",
+    "engine_badge": "● AstroLoom Engine v0.16.0",
     "ram_monitor": "RAM: {pct}% ({used:.1f} / {total:.1f} GB)",
     "language": "Language",
+    "log_btn": " Log",
+    "log_btn_tooltip": "Open Activity Log and Telemetry",
     "tabs": {
       "stacker": "1. Stacker",
       "developer": "2. Developer / Editor",
@@ -103,17 +105,17 @@
       "reset": "Reset Ground Tone"
     },
     "toolbar": {
-      "undo": "Undo",
-      "redo": "Redo",
-      "before_after": "Before / After (Y)",
+      "undo": "",
+      "redo": "",
+      "before_after": "Compare",
       "vertical": "Vertical",
       "horizontal": "Horizontal",
-      "set_as_before": "Set as Before",
-      "clipping": "Shadow/Highlight Clipping (J)",
-      "zoom_100": "100% Zoom (Right Click)",
-      "loupe": "Loupe (Z)",
-      "crop": "Crop (C)",
-      "ground_mask": "Ground Mask (M)"
+      "set_as_before": "Set Ref.",
+      "clipping": "Clipping Alert",
+      "zoom_100": "1:1",
+      "loupe": "",
+      "crop": "",
+      "ground_mask": "Mask"
     }
   },
   "settings": {
@@ -122,5 +124,24 @@
     "lang_es": "Español (ES)",
     "lang_en": "English (EN)",
     "btn_save": "Save Configuration Changes"
+  },
+  "dialog": {
+    "activity_log": {
+      "title": "AstroLoom - Activity Log & Telemetry",
+      "search_placeholder": "Search (text, file, ONNX, error, time)...",
+      "mod_all": "All modules",
+      "lvl_all": "All levels",
+      "lvl_errors": "Only Errors / Warnings",
+      "lvl_perf": "Only Times / Metrics",
+      "copy": "Copy",
+      "copy_tip": "Copy filtered content to clipboard",
+      "copied": "Copied!",
+      "export": "Export...",
+      "export_tip": "Save filtered log to a .log or .txt file",
+      "export_title": "Export Activity Log",
+      "clear": "Clear",
+      "clear_tip": "Clear in-memory log buffer",
+      "autoscroll": "Autoscroll"
+    }
   }
 }

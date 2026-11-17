@@ -22,7 +22,6 @@ class GroundSkyPanel(QWidget):
     ai_mask_requested = Signal()
     overlay_toggled = Signal(bool)
     delete_mask_requested = Signal()
-    go_to_layer_requested = Signal()
     reset_requested = Signal()
     ev_changed = Signal(int)
     shadows_changed = Signal(int)
@@ -176,7 +175,7 @@ class GroundSkyPanel(QWidget):
         self.lbl_gnd_tip.setStyleSheet("color: #78909c; font-size: 10px; line-height: 1.3;")
         gnd_tone_layout.addWidget(self.lbl_gnd_tip)
 
-        # 5. Tarjeta informativa y acceso directo a la Capa de Suelo en el gestor
+        # 5. Tarjeta informativa de la Capa de Suelo en el gestor
         self.card_gnd_info = QFrame()
         self.card_gnd_info.setStyleSheet("""
             QFrame {
@@ -197,28 +196,6 @@ class GroundSkyPanel(QWidget):
         self.lbl_gnd_info.setWordWrap(True)
         self.lbl_gnd_info.setStyleSheet("color: #c8e6c9; font-size: 10px; line-height: 1.3;")
         layout_card_gnd.addWidget(self.lbl_gnd_info)
-
-        self.btn_go_to_ground_layer = QPushButton("Ajustar Exposición del Suelo en Capas")
-        self.btn_go_to_ground_layer.setIcon(get_icon("mountain", color="#a5d6a7", size=13))
-        self.btn_go_to_ground_layer.setCursor(Qt.PointingHandCursor)
-        self.btn_go_to_ground_layer.setStyleSheet("""
-            QPushButton {
-                background-color: #1b3822;
-                color: #a5d6a7;
-                border: 1px solid #43a047;
-                border-radius: 4px;
-                padding: 4px 10px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #254d2f;
-                border-color: #81c784;
-                color: #ffffff;
-            }
-        """)
-        self.btn_go_to_ground_layer.clicked.connect(self.go_to_layer_requested.emit)
-        layout_card_gnd.addWidget(self.btn_go_to_ground_layer)
 
         gnd_tone_layout.addWidget(self.card_gnd_info)
 

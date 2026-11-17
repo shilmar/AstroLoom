@@ -568,7 +568,7 @@ def get_application_stylesheet() -> str:
         /* --- CONSOLAS DE TEXTO Y LOGS (QTextEdit) --- */
         QTextEdit, QPlainTextEdit {{
             background-color: {BG_CONSOLE};
-            color: #81c784;
+            color: #d4d4d8;
             border: 1px solid {BORDER_BASE};
             border-radius: 4px;
             font-family: "Consolas", "Cascadia Code", "Courier New", monospace;
