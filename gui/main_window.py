@@ -254,24 +254,21 @@ class MainWindow(QMainWindow):
         self.tab_eclipse.export_to_developer.connect(self._on_eclipse_exported)
         self.tab_eclipse.export_coronal_stack_to_developer.connect(self._on_eclipse_coronal_stack_exported)
 
-        # 5. Transferencia de serie desde Eclipses (HDR) al Diseñador de Collage
-        self.tab_eclipse.open_collage_requested.connect(self._on_open_collage_requested)
-
-        # 6. Transferencia de imagen desde el Collage de Eclipses al Revelador
+        # 5. Transferencia de imagen desde el Collage de Eclipses al Revelador
         self.tab_eclipse_collage.export_to_developer.connect(self._on_eclipse_exported)
 
-        # 7. Transferencia de imagen desde el módulo de Startrails al Revelador
+        # 6. Transferencia de imagen desde el módulo de Startrails al Revelador
         self.tab_startrails.export_to_developer.connect(self._on_startrail_exported)
 
-        # 8. Proveedor de máscara de horizonte del Apilador para Startrails
+        # 7. Proveedor de máscara de horizonte del Apilador para Startrails
         self.tab_startrails.set_stacker_mask_provider(
             lambda: getattr(self.tab_stacker, "computed_mask", None)
         )
 
-        # 9. Transferencia de imagen desde el módulo de Panorámicas al Revelador
+        # 8. Transferencia de imagen desde el módulo de Panorámicas al Revelador
         self.tab_panorama.export_to_developer.connect(self._on_panorama_exported)
 
-        # 10. Transferencia de imagen desde el módulo de Meteoros al Revelador
+        # 9. Transferencia de imagen desde el módulo de Meteoros al Revelador
         self.tab_meteors.export_to_developer.connect(self._on_meteor_exported)
         self.tab_meteors.set_stacker_mask_provider(
             lambda: getattr(self.tab_stacker, "computed_mask", None)
@@ -308,17 +305,6 @@ class MainWindow(QMainWindow):
         """
         self.tab_developer.load_coronal_stack(base_path, raster_layers)
         self.tab_widget.setCurrentIndex(1)
-
-    def _on_open_collage_requested(self, filepaths: list, mode: str) -> None:
-        """
-        Carga las tomas en la pestaña 4 (Collage de Eclipses) y conmuta
-        automáticamente a ella.
-        """
-        if mode:
-            self.tab_eclipse_collage.set_mode(mode)
-        if filepaths:
-            self.tab_eclipse_collage.load_filepaths(filepaths)
-        self.tab_widget.setCurrentIndex(3)
 
     def _on_startrail_exported(self, output_path: str) -> None:
         """

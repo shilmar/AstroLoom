@@ -829,7 +829,6 @@ class EclipseTab(QWidget):
     """Pestaña interactiva de Eclipses (Solar y Lunar)."""
     export_to_developer = Signal(str)
     export_coronal_stack_to_developer = Signal(str, list)
-    open_collage_requested = Signal(list, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1506,33 +1505,31 @@ class EclipseTab(QWidget):
         self.sec_export = CollapsibleSection("5. Exportación y Acabado", is_expanded=True, icon_name="save")
         export_layout = self.sec_export.content_layout
 
-        btn_tiff_row = QHBoxLayout()
-        self.btn_save_tiff_16 = QPushButton("Guardar TIFF 16-bit...")
-        self.btn_save_tiff_16.setIcon(get_icon("save", color="#80cbc4"))
-        self.btn_save_tiff_16.setStyleSheet("font-weight: bold; color: #80cbc4;")
-        self.btn_save_tiff_16.setToolTip("Exporta en TIFF 16-bit entero compatible directamente con Photoshop, Lightroom y editores estándar sin conversiones extrañas.")
-        self.btn_save_tiff_16.clicked.connect(lambda: self._on_save_tiff_clicked(bit_depth=16))
+        self.btn_save_image = QPushButton("Guardar Imagen...")
+        self.btn_save_image.setIcon(get_icon("save", color="#80cbc4"))
+        self.btn_save_image.setFixedHeight(38)
+        self.btn_save_image.setCursor(Qt.PointingHandCursor)
+        self.btn_save_image.setStyleSheet(
+            "QPushButton { font-weight: bold; background: #162624; color: #80cbc4; "
+            "border: 1px solid #00897b; padding: 6px; border-radius: 4px; }"
+            "QPushButton:hover { background: #1f3633; color: #b2dfdb; }"
+        )
+        self.btn_save_image.setToolTip(
+            "Guarda la imagen procesada en disco.\n"
+            "Formatos soportados según filtro o extensión:\n"
+            "• TIFF 16-bit (*.tif, *.tiff): Compatible con Photoshop / Lightroom\n"
+            "• TIFF 32-bit Float (*.tif, *.tiff): Rango dinámico lineal completo\n"
+            "• Photoshop Multicapa (*.psd): 16-bit con capas científicas de corona (NRGF, WOW, MGN, etc.)\n"
+            "• JPEG (*.jpg, *.jpeg): 8-bit comprimido de alta calidad"
+        )
+        self.btn_save_image.clicked.connect(self._on_save_image_clicked)
+        export_layout.addWidget(self.btn_save_image)
 
-        self.btn_save_tiff_32 = QPushButton("Guardar TIFF 32-bit...")
-        self.btn_save_tiff_32.setIcon(get_icon("save", color="#90caf9"))
-        self.btn_save_tiff_32.setStyleSheet("font-weight: bold; color: #90caf9;")
-        self.btn_save_tiff_32.setToolTip("Exporta en TIFF 32-bit float con el rango dinámico HDR lineal completo.")
-        self.btn_save_tiff_32.clicked.connect(lambda: self._on_save_tiff_clicked(bit_depth=32))
-
-        self.btn_save_tiff = self.btn_save_tiff_32  # Compatibilidad
-
-        btn_tiff_row.addWidget(self.btn_save_tiff_16)
-        btn_tiff_row.addWidget(self.btn_save_tiff_32)
-        export_layout.addLayout(btn_tiff_row)
-
-        self.btn_export_psd = QPushButton("Exportar PSD Multicapa de Corona...")
-        self.btn_export_psd.setIcon(get_icon("layers", color="#ce93d8"))
-        self.btn_export_psd.setFixedHeight(38)
-        self.btn_export_psd.setCursor(Qt.PointingHandCursor)
-        self.btn_export_psd.setStyleSheet("font-weight: bold; background: #2a1835; color: #ce93d8; border: 1px solid #ab47bc; padding: 6px; border-radius: 4px;")
-        self.btn_export_psd.setToolTip("Exporta archivo PSD 16-bit de Photoshop con todas las capas científicas de corona (NRGF, WOW, MGN, NAFE, Steerable G2, Larson-Sekanina, SWAP).")
-        self.btn_export_psd.clicked.connect(self._on_export_psd_clicked)
-        export_layout.addWidget(self.btn_export_psd)
+        # Aliases para compatibilidad interna
+        self.btn_save_tiff = self.btn_save_image
+        self.btn_save_tiff_16 = self.btn_save_image
+        self.btn_save_tiff_32 = self.btn_save_image
+        self.btn_export_psd = self.btn_save_image
 
         self.btn_send_coronal_stack_to_dev = QPushButton("Enviar Multicapa Coronal al Revelador...")
         self.btn_send_coronal_stack_to_dev.setIcon(get_icon("layers", color="#ffe082"))
@@ -1556,15 +1553,6 @@ class EclipseTab(QWidget):
         self.btn_send_to_dev.setStyleSheet(STYLE_TRANSFER_BTN)
         self.btn_send_to_dev.clicked.connect(self._on_send_to_developer_clicked)
         export_layout.addWidget(self.btn_send_to_dev)
-
-        self.btn_open_collage = QPushButton("Diseñar Secuencia / Collage")
-        self.btn_open_collage.setIcon(get_icon("grid", color="#e1bee7"))
-        self.btn_open_collage.setFixedHeight(38)
-        self.btn_open_collage.setCursor(Qt.PointingHandCursor)
-        self.btn_open_collage.setStyleSheet("font-weight: bold; background: #2e1c4e; color: #e1bee7; border: 1px solid #ba68c8; padding: 6px; border-radius: 4px;")
-        self.btn_open_collage.setToolTip("Cambia a la pestaña dedicada de Collage de Eclipses transfiriendo la serie de fotos")
-        self.btn_open_collage.clicked.connect(self._on_open_collage_clicked)
-        export_layout.addWidget(self.btn_open_collage)
 
         left_layout.addWidget(self.sec_export)
 
@@ -2256,7 +2244,7 @@ class EclipseTab(QWidget):
         self.worker.error.connect(self._on_worker_error)
         self.worker.start()
 
-    def _on_export_psd_clicked(self):
+    def _on_export_psd_clicked(self, out_path: Optional[str] = None):
         base_img = self.fused_hdr_img if self.fused_hdr_img is not None else self.current_preview_img
         if base_img is None:
             QMessageBox.warning(self, "Atención", "No hay imagen cargada o fusionada para exportar como PSD.")
@@ -2268,14 +2256,32 @@ class EclipseTab(QWidget):
             QMessageBox.warning(self, "Atención", "Define o auto-detecta el radio del limbo antes de exportar el PSD multicapa.")
             return
 
-        out_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Exportar PSD Multicapa de Corona Solar",
-            "eclipse_coronal_layers.psd",
-            "Archivos PSD de Photoshop (*.psd)"
-        )
         if not out_path:
-            return
+            default_dir = get_config_val("export_dir", os.getcwd())
+            os.makedirs(default_dir, exist_ok=True)
+            default_path = os.path.join(default_dir, "eclipse_coronal_layers.psd")
+            out_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Exportar PSD Multicapa de Corona Solar",
+                default_path,
+                "Archivos PSD de Photoshop (*.psd)"
+            )
+            if not out_path:
+                return
+
+        out_path = os.path.abspath(os.path.normpath(str(out_path).strip()))
+        if not out_path.lower().endswith(".psd"):
+            out_path += ".psd"
+
+        if os.path.exists(out_path):
+            try:
+                os.remove(out_path)
+            except OSError as err:
+                QMessageBox.critical(
+                    self, "Error de Exportación",
+                    f"No se puede sobreescribir el archivo destino porque está abierto en otro programa:\n{out_path}\n\nDetalle: {err}"
+                )
+                return
 
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(10)
@@ -2442,45 +2448,92 @@ class EclipseTab(QWidget):
             return self.fused_hdr_img
         return self.current_preview_img
 
-    def _on_save_tiff_clicked(self, bit_depth: int = 16):
+    def _on_save_image_clicked(self):
+        """Abre el diálogo unificado de guardado permitiendo elegir formato por filtro o extensión."""
         img = self._get_best_current_image()
         if img is None:
             QMessageBox.warning(self, "Atención", "No hay imagen disponible para guardar.")
             return
 
-        default_name = f"eclipse_procesado_{bit_depth}bit.tif"
-        if bit_depth == 16:
-            filters = "TIFF 16-bit (*.tif *.tiff);;TIFF 32-bit (*.tif *.tiff);;Todos (*.*)"
-            title = "Guardar Imagen de Eclipse (TIFF 16-bit)"
-        else:
-            filters = "TIFF 32-bit (*.tif *.tiff);;TIFF 16-bit (*.tif *.tiff);;Todos (*.*)"
-            title = "Guardar Imagen de Eclipse (TIFF 32-bit Float)"
+        filtros = (
+            "TIFF 16-bit (*.tif *.tiff);;"
+            "TIFF 32-bit Float (*.tif *.tiff);;"
+            "Photoshop Multicapa Coronal (*.psd);;"
+            "JPEG (*.jpg *.jpeg)"
+        )
+        default_dir = get_config_val("export_dir", os.getcwd())
+        os.makedirs(default_dir, exist_ok=True)
+        default_path = os.path.join(default_dir, "eclipse_procesado.tif")
 
-        path, selected_filter = QFileDialog.getSaveFileName(self, title, default_name, filters)
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Guardar Imagen de Eclipse",
+            default_path,
+            filtros,
+            selectedFilter="TIFF 16-bit (*.tif *.tiff)"
+        )
         if not path:
             return
 
-        # Si el usuario seleccionó un filtro diferente en el diálogo, respetar su elección
-        is_32 = ("32-bit" in selected_filter) if selected_filter else (bit_depth == 32)
+        path = os.path.abspath(os.path.normpath(str(path).strip()))
+        ext = os.path.splitext(path)[1].lower()
+        if not ext:
+            if "Photoshop" in selected_filter or "*.psd" in selected_filter:
+                ext = ".psd"
+            elif "JPEG" in selected_filter or "*.jpg" in selected_filter:
+                ext = ".jpg"
+            else:
+                ext = ".tif"
+            path += ext
+
+        # PSD Multicapa coronal
+        if ext == ".psd" or ("Photoshop" in selected_filter and ext not in ['.tif', '.tiff', '.jpg', '.jpeg']):
+            self._on_export_psd_clicked(out_path=path)
+            return
+
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError as err:
+                QMessageBox.critical(
+                    self, "Error de Exportación",
+                    f"No se puede sobreescribir el archivo destino porque está abierto en otro programa:\n{path}\n\nDetalle: {err}"
+                )
+                return
+
         photometric = 'minisblack' if img.ndim == 2 else 'rgb'
 
         try:
-            if is_32:
+            if ext in ['.jpg', '.jpeg'] or "JPEG" in selected_filter:
+                if img.ndim == 2:
+                    u8 = (np.clip(img, 0.0, 1.0) * 255.0).astype(np.uint8)
+                    bgr8 = cv2.cvtColor(u8, cv2.COLOR_GRAY2BGR)
+                else:
+                    rgb_u8 = (np.clip(img, 0.0, 1.0) * 255.0).astype(np.uint8)
+                    bgr8 = cv2.cvtColor(rgb_u8, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(path, bgr8, [cv2.IMWRITE_JPEG_QUALITY, 96])
+                desc = "JPEG 8-bit (Calidad 96)"
+            elif "32-bit" in selected_filter:
                 out_img = np.ascontiguousarray(np.clip(img, 0.0, 1.0), dtype=np.float32)
                 desc = "TIFF 32-bit float (HDR)"
+                save_tiff_with_icc(path, out_img, compression='zlib', photometric=photometric)
             else:
                 out_img = np.ascontiguousarray(np.clip(img * 65535.0 + 0.5, 0.0, 65535.0), dtype=np.uint16)
                 desc = "TIFF 16-bit entero (Photoshop / Lightroom)"
+                save_tiff_with_icc(path, out_img, compression='zlib', photometric=photometric)
 
-            save_tiff_with_icc(path, out_img, compression='zlib', photometric=photometric)
             self.log(f"Imagen guardada exitosamente ({desc} con perfil ICC): {path}")
             QMessageBox.information(
                 self, "Exportación Completada",
-                f"Imagen guardada con éxito en:\n{path}\n\nFormato: {desc} ({out_img.shape[1]}x{out_img.shape[0]} px)"
+                f"Imagen guardada con éxito en:\n{path}\n\nFormato: {desc} ({img.shape[1]}x{img.shape[0]} px)"
             )
         except Exception as e:
             self.log(f"ERROR al guardar imagen: {e}")
             QMessageBox.critical(self, "Error de Exportación", f"No se pudo guardar la imagen:\n{e}")
+
+    def _on_save_tiff_clicked(self, bit_depth: int = 16):
+        """Compatibilidad hacia atrás con llamadas directas."""
+        self._on_save_image_clicked()
 
     def _on_send_to_developer_clicked(self):
         img = self._get_best_current_image()
@@ -2557,11 +2610,6 @@ class EclipseTab(QWidget):
         if hasattr(self, 'rb_solar') and self.rb_solar is not None:
             return "solar" if self.rb_solar.isChecked() else "lunar"
         return "solar"
-
-    def _on_open_collage_clicked(self):
-        """Transfiere los archivos a la pestaña dedicada de Collage y cambia a ella."""
-        initial_fps = [item["filepath"] for item in self.bracketing_files] if hasattr(self, 'bracketing_files') and self.bracketing_files else []
-        self.open_collage_requested.emit(initial_fps, self.mode)
 
 
 

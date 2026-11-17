@@ -442,6 +442,10 @@ class StackerTab(QWidget):
         set_layout.setContentsMargins(10, 8, 10, 10)
         set_layout.setSpacing(8)
 
+        # Ancho base unificado para alineación en cuadrícula de 2 columnas (Labels / Controles)
+        lbl_w = 150
+        slider_lbl_w = lbl_w - 4  # 146 px para alinear milimétricamente el slider con los comboboxes
+
         # Selector de Tipo de Salida: Imagen Fija vs Vídeo Time-Lapse
         row_out_type = QHBoxLayout()
         row_out_type.setSpacing(10)
@@ -459,21 +463,23 @@ class StackerTab(QWidget):
         self.row_mode_widget = QWidget()
         row_mode = QHBoxLayout(self.row_mode_widget)
         row_mode.setContentsMargins(0, 0, 0, 0)
+        row_mode.setSpacing(6)
         lbl_mode = QLabel("Modo de Captura:")
-        lbl_mode.setMinimumWidth(140)
+        lbl_mode.setFixedWidth(lbl_w)
         self.combo_mode = QComboBox()
         self.combo_mode.addItems(["Trípode Fijo (Suelo Estático)", "Star Tracker (Seguimiento)"])
         self.combo_mode.currentIndexChanged.connect(self._on_capture_mode_changed)
         row_mode.addWidget(lbl_mode)
-        row_mode.addWidget(self.combo_mode)
+        row_mode.addWidget(self.combo_mode, stretch=1)
         set_layout.addWidget(self.row_mode_widget)
 
         # Tratamiento del Suelo (Imagen Fija)
         self.row_ground_widget = QWidget()
         row_ground = QHBoxLayout(self.row_ground_widget)
         row_ground.setContentsMargins(0, 0, 0, 0)
+        row_ground.setSpacing(6)
         lbl_ground = QLabel("Tratamiento del Suelo:")
-        lbl_ground.setMinimumWidth(140)
+        lbl_ground.setFixedWidth(lbl_w)
         self.combo_ground = QComboBox()
         self.combo_ground.addItems([
             "Apilar Suelo Completo (Dual)",
@@ -481,15 +487,16 @@ class StackerTab(QWidget):
             "Usar Toma de Pestaña Suelo"
         ])
         row_ground.addWidget(lbl_ground)
-        row_ground.addWidget(self.combo_ground)
+        row_ground.addWidget(self.combo_ground, stretch=1)
         set_layout.addWidget(self.row_ground_widget)
 
         # Selector de Algoritmo de Suelo (Dual)
         self.row_ground_algo_widget = QWidget()
         row_ground_algo = QHBoxLayout(self.row_ground_algo_widget)
         row_ground_algo.setContentsMargins(0, 0, 0, 0)
+        row_ground_algo.setSpacing(6)
         lbl_ground_algo = QLabel("Algoritmo de Suelo:")
-        lbl_ground_algo.setMinimumWidth(140)
+        lbl_ground_algo.setFixedWidth(lbl_w)
         self.combo_ground_algo = QComboBox()
         self.combo_ground_algo.addItem("Promedio Kappa-Sigma (Dual)", "kappa_sigma")
         self.combo_ground_algo.addItem("Mediana Estricta (Robusto)", "median")
@@ -501,7 +508,7 @@ class StackerTab(QWidget):
             "• Fusión Mínima (Min-Stack): Elimina automáticamente faros de coches, estelas de tráfico, linternas y luces parásitas."
         )
         row_ground_algo.addWidget(lbl_ground_algo)
-        row_ground_algo.addWidget(self.combo_ground_algo)
+        row_ground_algo.addWidget(self.combo_ground_algo, stretch=1)
         set_layout.addWidget(self.row_ground_algo_widget)
         self.combo_ground.currentIndexChanged.connect(self._on_ground_treatment_changed)
 
@@ -518,7 +525,8 @@ class StackerTab(QWidget):
             max_val=15,
             default_val=5,
             step=2,
-            unit=" tomas"
+            unit=" tomas",
+            label_width=slider_lbl_w
         )
         self.lbl_sub_w_val = QLabel("5 tomas (+2.2x SNR, +1.2 EV)")
         self.lbl_sub_w_val.setStyleSheet("color: #ffd54f; font-weight: bold; font-size: 11px; margin-left: 4px;")
@@ -531,6 +539,7 @@ class StackerTab(QWidget):
         row_sp.setSpacing(6)
         lbl_stride = QLabel("Paso:")
         lbl_stride.setStyleSheet("color: #90a4ae; font-size: 11px;")
+        lbl_stride.setFixedWidth(lbl_w)
         self.combo_sub_stride = QComboBox()
         self.combo_sub_stride.addItem("1 toma (Vídeo fluido 24/30 fps)", 1)
         self.combo_sub_stride.addItem("W tomas (Bloques acelerados)", 0)
@@ -540,8 +549,10 @@ class StackerTab(QWidget):
         sub_layout.addLayout(row_sp)
 
         row_wmode = QHBoxLayout()
+        row_wmode.setSpacing(6)
         lbl_wmode = QLabel("Ponderación:")
         lbl_wmode.setStyleSheet("color: #90a4ae; font-size: 11px;")
+        lbl_wmode.setFixedWidth(lbl_w)
         self.combo_sub_weight = QComboBox()
         self.combo_sub_weight.addItem("Gaussiana (Máxima Nitidez Temporal)", "gaussian")
         self.combo_sub_weight.addItem("Uniforme (Media Aritmética)", "uniform")
@@ -553,8 +564,10 @@ class StackerTab(QWidget):
 
         # 3. Tratamiento de Suelo en Vídeo
         row_s_gnd = QHBoxLayout()
+        row_s_gnd.setSpacing(6)
         lbl_s_gnd = QLabel("Suelo en Vídeo:")
         lbl_s_gnd.setStyleSheet("color: #90a4ae; font-size: 11px;")
+        lbl_s_gnd.setFixedWidth(lbl_w)
         self.combo_sub_ground = QComboBox()
         self.combo_sub_ground.addItem("Suelo Limpio Apilado (Trípode fijo)", "temporal_average")
         self.combo_sub_ground.addItem("Suelo Toma Central (Slider / Movimiento)", "static_anchor")
@@ -568,6 +581,7 @@ class StackerTab(QWidget):
         row_vid.setSpacing(6)
         lbl_res = QLabel("Resolución:")
         lbl_res.setStyleSheet("color: #90a4ae; font-size: 11px;")
+        lbl_res.setFixedWidth(lbl_w)
         self.combo_sub_res = QComboBox()
         self.combo_sub_res.addItem("1080p Full HD", "1080p")
         self.combo_sub_res.addItem("4K UHD", "4k")
@@ -580,7 +594,7 @@ class StackerTab(QWidget):
         self.combo_sub_fps.setCurrentText("24")
 
         row_vid.addWidget(lbl_res)
-        row_vid.addWidget(self.combo_sub_res)
+        row_vid.addWidget(self.combo_sub_res, stretch=1)
         row_vid.addWidget(lbl_fps)
         row_vid.addWidget(self.combo_sub_fps)
         sub_layout.addLayout(row_vid)
@@ -609,8 +623,15 @@ class StackerTab(QWidget):
         ag_layout.addWidget(self.chk_anti_ghosting)
 
         row_ag_params = QHBoxLayout()
-        row_ag_params.setContentsMargins(18, 0, 0, 0)
-        row_ag_params.setSpacing(8)
+        row_ag_params.setContentsMargins(0, 0, 0, 0)
+        row_ag_params.setSpacing(6)
+
+        # Columna 1: Radio frontera (ancho uniforme lbl_w)
+        col1_ag = QWidget()
+        col1_ag.setFixedWidth(lbl_w)
+        row_col1 = QHBoxLayout(col1_ag)
+        row_col1.setContentsMargins(0, 0, 0, 0)
+        row_col1.setSpacing(4)
 
         lbl_ag_rad = QLabel("Radio Frontera:")
         lbl_ag_rad.setStyleSheet("font-size: 11px; color: #90a4ae;")
@@ -618,8 +639,13 @@ class StackerTab(QWidget):
         self.spin_ag_radius.setRange(5, 60)
         self.spin_ag_radius.setValue(25)
         self.spin_ag_radius.setSuffix(" px")
+        self.spin_ag_radius.setFixedWidth(56)
         self.spin_ag_radius.setToolTip("Ancho de la banda perimétrica de seguridad alrededor del contorno del suelo")
+        row_col1.addWidget(lbl_ag_rad)
+        row_col1.addWidget(self.spin_ag_radius)
+        row_col1.addStretch()
 
+        # Columna 2: Follaje (alineado con los dropdowns superiores)
         lbl_ag_sens = QLabel("Follaje:")
         lbl_ag_sens.setStyleSheet("font-size: 11px; color: #90a4ae;")
         self.combo_ag_sens = QComboBox()
@@ -628,11 +654,9 @@ class StackerTab(QWidget):
         self.combo_ag_sens.addItem("Bordes Gruesos / Roca", 0.3)
         self.combo_ag_sens.setToolTip("Sensibilidad de opacidad para ramas finas y hojas")
 
-        row_ag_params.addWidget(lbl_ag_rad)
-        row_ag_params.addWidget(self.spin_ag_radius)
+        row_ag_params.addWidget(col1_ag)
         row_ag_params.addWidget(lbl_ag_sens)
-        row_ag_params.addWidget(self.combo_ag_sens)
-        row_ag_params.addStretch()
+        row_ag_params.addWidget(self.combo_ag_sens, stretch=1)
         ag_layout.addLayout(row_ag_params)
 
         self.chk_anti_ghosting.toggled.connect(
@@ -644,12 +668,15 @@ class StackerTab(QWidget):
         self.row_kappa_widget = QWidget()
         row_kappa = QHBoxLayout(self.row_kappa_widget)
         row_kappa.setContentsMargins(0, 0, 0, 0)
-        row_kappa.addWidget(QLabel("Factor Kappa (MAD Rejection):"))
+        row_kappa.setSpacing(6)
+        lbl_kappa = QLabel("Factor Kappa (MAD Rejection):")
         self.spin_kappa = QDoubleSpinBox()
         self.spin_kappa.setRange(0.5, 5.0)
         self.spin_kappa.setValue(2.2)
         self.spin_kappa.setSingleStep(0.1)
         self.spin_kappa.setFixedWidth(75)
+        row_kappa.addWidget(lbl_kappa)
+        row_kappa.addStretch(1)
         row_kappa.addWidget(self.spin_kappa)
         set_layout.addWidget(self.row_kappa_widget)
 
@@ -681,7 +708,10 @@ class StackerTab(QWidget):
         layout_stack_lp.setSpacing(8)
 
         row_lp_algo = QHBoxLayout()
-        row_lp_algo.addWidget(QLabel("Algoritmo:"))
+        row_lp_algo.setContentsMargins(0, 0, 0, 0)
+        row_lp_algo.setSpacing(6)
+        lbl_lp_algo = QLabel("Algoritmo:")
+        lbl_lp_algo.setFixedWidth(lbl_w)
         self.combo_lp_algo = QComboBox()
         self.combo_lp_algo.addItems([
             "Estándar (Sin filtro)",
@@ -689,7 +719,8 @@ class StackerTab(QWidget):
             "Rechazo Asimétrico (Min-Sigma)",
             "Normalización Local"
         ])
-        row_lp_algo.addWidget(self.combo_lp_algo)
+        row_lp_algo.addWidget(lbl_lp_algo)
+        row_lp_algo.addWidget(self.combo_lp_algo, stretch=1)
         layout_stack_lp.addLayout(row_lp_algo)
 
         # Precision Slider para fuerza antipolución
@@ -699,7 +730,8 @@ class StackerTab(QWidget):
             max_val=100,
             default_val=50,
             step=1,
-            unit="%"
+            unit="%",
+            label_width=slider_lbl_w
         )
         self.slider_stack_lp.valueChanged.connect(self._on_stack_lp_changed)
         layout_stack_lp.addWidget(self.slider_stack_lp)
@@ -1472,10 +1504,10 @@ class StackerTab(QWidget):
         self.computed_mask = None
         if hasattr(self.canvas, 'clear_all_masking'):
             self.canvas.clear_all_masking()
-        else:
-            if self.canvas.scribble_pixmap:
-                self.canvas.scribble_pixmap.fill(Qt.transparent)
+        if hasattr(self.canvas, 'set_refined_mask'):
             self.canvas.set_refined_mask(None)
+        elif self.canvas.scribble_pixmap:
+            self.canvas.scribble_pixmap.fill(Qt.transparent)
         self.canvas.update()
         self.log_message("Máscara y trazos eliminados por completo.")
 

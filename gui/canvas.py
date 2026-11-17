@@ -318,12 +318,17 @@ class MaskCanvas(QWidget):
         """Borra la máscara calculada y elimina el overlay de visualización."""
         self.last_mask_array = None
         self.refined_overlay = None
+        self._mask_overlay_buf = None
+        self._mask_overlay_qimage = None
         self.update()
 
     def clear_all_masking(self) -> None:
         """Elimina la máscara calculada y todos los trazos dibujados."""
         self.clear_scribbles()
         self.clear_mask()
+        self.layer_brush_mask = None
+        self._stroke_start_mask = None
+        self._stroke_buffer = None
 
     def clear_image(self) -> None:
         """Limpia la imagen del lienzo, liberando pixmaps y overlays asociados."""
@@ -410,8 +415,10 @@ class MaskCanvas(QWidget):
         if self.last_mask_array is not None and self.show_mask_overlay:
             if self.refined_overlay is None or self.refined_overlay.size() != self.base_pixmap.size():
                 self.set_refined_mask(self.last_mask_array, mode=getattr(self, '_mask_overlay_mode', 'bicolor'))
+        elif self.last_mask_array is None:
+            self.clear_mask()
         elif self.refined_overlay and self.refined_overlay.size() != self.base_pixmap.size():
-            self.refined_overlay = None
+            self.clear_mask()
 
         # Resetear centro de zoom si la nueva resolución es diferente
         if self.zoom_center_img:
@@ -1985,7 +1992,7 @@ class MaskCanvas(QWidget):
             painter.drawPixmap(target_rect, self.base_pixmap, source_rect)
             if self.clipping_overlay and not self.clipping_overlay.isNull():
                 painter.drawPixmap(target_rect, self.clipping_overlay, source_rect)
-            if self.show_mask_overlay:
+            if self.show_mask_overlay and self.last_mask_array is not None:
                 if (
                     self._mask_overlay_qimage is not None and 
                     self._mask_overlay_buf is not None and 
@@ -2116,7 +2123,7 @@ class MaskCanvas(QWidget):
                 painter.drawPixmap(target_rect, self.clipping_overlay, source_rect)
 
             # Overlay de máscara refinada
-            if self.show_mask_overlay:
+            if self.show_mask_overlay and self.last_mask_array is not None:
                 if (
                     self._mask_overlay_qimage is not None and 
                     self._mask_overlay_buf is not None and 

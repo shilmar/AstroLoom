@@ -1007,43 +1007,21 @@ class DeveloperTab(QWidget):
         self.left_scroll_area.setWidget(left_panel)
         left_container_layout.addWidget(self.left_scroll_area, 1)
 
-        # Botón Exportar siempre fijado al pie del panel izquierdo
+        # Botón Exportar siempre fijado al pie del panel izquierdo (soporta TIFF, PSD multicapa 16-bit y JPEG)
         self.btn_export = QPushButton("EXPORTAR IMAGEN REVELADA...")
         self.btn_export.setIcon(get_icon("save", color="#ffffff", size=16))
         self.btn_export.setFixedHeight(40)
         self.btn_export.setCursor(Qt.PointingHandCursor)
         self.btn_export.setStyleSheet(STYLE_RUN_IDLE)
+        self.btn_export.setToolTip(
+            "Exporta la imagen revelada a disco.\n"
+            "Formatos soportados según filtro o extensión:\n"
+            "• TIFF (*.tif, *.tiff): 16-bit o 32-bit float con perfil ICC incrustado\n"
+            "• Photoshop (*.psd): 16-bit nativo por capas y máscaras editables\n"
+            "• JPEG (*.jpg, *.jpeg): 8-bit comprimido de alta calidad"
+        )
         self.btn_export.clicked.connect(self.export_image)
         left_container_layout.addWidget(self.btn_export, 0)
-
-        self.btn_export_psd = QPushButton("EXPORTAR A PHOTOSHOP (PSD)...")
-        self.btn_export_psd.setIcon(get_icon("layers", color="#82b1ff", size=15))
-        self.btn_export_psd.setFixedHeight(34)
-        self.btn_export_psd.setCursor(Qt.PointingHandCursor)
-        self.btn_export_psd.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1a237e, stop:1 #283593);
-                color: #82b1ff;
-                font-weight: bold;
-                border: 1px solid #3d5afe;
-                border-radius: 4px;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #283593, stop:1 #3949ab);
-                color: #ffffff;
-                border-color: #536dfe;
-            }
-            QPushButton:pressed {
-                background-color: #0d47a1;
-            }
-        """)
-        self.btn_export_psd.setToolTip(
-            "Exporta el proyecto como archivo nativo de Adobe Photoshop (.psd) de 16 bits.\n"
-            "Incluye por separado las capas de Imagen Base, Fondo Starless, Estrellas (Add), Suelo y Máscara de Horizonte."
-        )
-        self.btn_export_psd.clicked.connect(self.export_psd_dialog)
-        left_container_layout.addWidget(self.btn_export_psd, 0)
 
         # Registro de Actividad compacto
         self.lbl_log_title = QLabel(tr("developer.activity_log", "Registro de Actividad:"))
@@ -6869,6 +6847,17 @@ class DeveloperTab(QWidget):
 
         p = os.path.abspath(os.path.normpath(str(p).strip()))
 
+        # Asegurar extensión adecuada según lo introducido por el usuario o el filtro seleccionado
+        ext = os.path.splitext(p)[1].lower()
+        if not ext:
+            if "Photoshop" in selected_filter or "*.psd" in selected_filter:
+                ext = ".psd"
+            elif "JPEG" in selected_filter or "*.jpg" in selected_filter:
+                ext = ".jpg"
+            else:
+                ext = ".tif"
+            p += ext
+
         if os.path.exists(p):
             try:
                 os.remove(p)
@@ -6906,8 +6895,8 @@ class DeveloperTab(QWidget):
 
             processed = self._apply_pipeline_on_image(full_base, precomputed_mask=full_mask, is_preview=False)
 
-            ext = os.path.splitext(p)[1].lower()
-            if ext == '.psd' or "Photoshop" in selected_filter:
+            is_psd = (ext == '.psd') or ("Photoshop" in selected_filter and ext not in ['.tif', '.tiff', '.jpg', '.jpeg'])
+            if is_psd:
                 from core.psd_export import export_developer_psd
                 from core.config_manager import get_config_val
                 from core.icc_manager import get_icc_profile_bytes, normalize_colorspace_name
