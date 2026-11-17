@@ -25,8 +25,8 @@ SCOPE_TONE = "tone"
 SCOPE_COLOR = "color"
 SCOPE_DETAILS = "details"
 
-# Claves de estirado tonal que son únicas para cada imagen y NO deben ser alteradas por los presets
-KEYS_EXCLUDED_FROM_PRESETS = {"bp_val", "mtf_val"}
+# Claves de estirado tonal o específicas de sesión/imagen que NO deben ser alteradas ni guardadas en presets
+KEYS_EXCLUDED_FROM_PRESETS = {"bp_val", "mtf_val", "mask_layers", "dust_spots"}
 
 PARAM_KEYS_TONE = {
     "contrast_val", "gnd_ev_val", "gnd_sh_val", "gnd_bp_val", "gnd_antihalo_val", "gnd_edge_shift_val", "curves"
@@ -495,7 +495,17 @@ def save_user_preset(
     file_path = target_dir / filename
 
     # Excluir parámetros de estirado tonal específicos de cada imagen (punto negro y MTF)
-    clean_params = {k: v for k, v in params.items() if k not in KEYS_EXCLUDED_FROM_PRESETS}
+    # y datos específicos de capas de máscara o motas de polvo
+    clean_params: Dict[str, Any] = {}
+    for k, v in params.items():
+        if k in KEYS_EXCLUDED_FROM_PRESETS:
+            continue
+        # Asegurar serializabilidad JSON estricta (descarta MaskLayer u objetos no serializables)
+        try:
+            json.dumps(v)
+            clean_params[k] = v
+        except (TypeError, OverflowError, ValueError):
+            continue
 
     preset = DeveloperPreset(
         id=clean_id,

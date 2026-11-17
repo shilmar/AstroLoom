@@ -13,10 +13,10 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPixmap, QPainter
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit,
-    QComboBox, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
+    QComboBox, QPushButton,
     QMessageBox, QFileDialog, QRadioButton, QButtonGroup,
     QSplitter, QWidget, QFrame, QSizePolicy, QScrollArea, QGridLayout,
-    QSlider, QCheckBox, QStackedWidget
+    QSlider, QCheckBox
 )
 
 from core.developer_presets import (
@@ -41,7 +41,7 @@ class SavePresetDialog(QDialog):
 
     def __init__(self, current_params: Dict[str, Any], existing_categories: List[str], parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.current_params = current_params
+        self.current_params = {k: v for k, v in current_params.items() if k not in ("mask_layers", "dust_spots")}
         self.existing_categories = existing_categories
         self.created_preset: Optional[DeveloperPreset] = None
 
@@ -584,49 +584,9 @@ class PresetManagerDialog(QDialog):
         self.combo_cat_filter.currentTextChanged.connect(self._apply_filter)
         filter_layout.addWidget(self.combo_cat_filter)
 
-        # Selector de Vista: Tarjetas vs Tabla
-        self.btn_view_cards = QPushButton("Tarjetas")
-        self.btn_view_cards.setIcon(get_icon("sliders", color="#38bdf8", size=13))
-        self.btn_view_cards.setCheckable(True)
-        self.btn_view_cards.setChecked(True)
-
-        self.btn_view_table = QPushButton("Lista Pro")
-        self.btn_view_table.setIcon(get_icon("file", color="#94a3b8", size=13))
-        self.btn_view_table.setCheckable(True)
-        self.btn_view_table.setChecked(False)
-
-        view_btn_style = """
-            QPushButton {
-                background-color: #131724;
-                border: 1px solid #242c3e;
-                border-radius: 5px;
-                padding: 6px 10px;
-                color: #cbd5e1;
-                font-size: 11px;
-                font-weight: 600;
-            }
-            QPushButton:checked {
-                background-color: #1e293b;
-                border-color: #38bdf8;
-                color: #38bdf8;
-            }
-        """
-        self.btn_view_cards.setStyleSheet(view_btn_style)
-        self.btn_view_table.setStyleSheet(view_btn_style)
-
-        view_grp = QButtonGroup(self)
-        view_grp.addButton(self.btn_view_cards, 0)
-        view_grp.addButton(self.btn_view_table, 1)
-        view_grp.idClicked.connect(self._on_view_mode_changed)
-
-        filter_layout.addWidget(self.btn_view_cards)
-        filter_layout.addWidget(self.btn_view_table)
         left_layout.addLayout(filter_layout)
 
-        # Contenedor Apilado de Vistas
-        self.stack_views = QStackedWidget()
-
-        # Vista 1: Cuadrícula de Tarjetas con Miniaturas
+        # Galería de Tarjetas con Miniaturas
         self.scroll_cards = QScrollArea()
         self.scroll_cards.setWidgetResizable(True)
         self.scroll_cards.setStyleSheet("""
@@ -642,53 +602,7 @@ class PresetManagerDialog(QDialog):
         self.grid_cards.setContentsMargins(10, 10, 10, 10)
         self.grid_cards.setSpacing(12)
         self.scroll_cards.setWidget(self.w_cards_container)
-        self.stack_views.addWidget(self.scroll_cards)
-
-        # Vista 2: Tabla Pro
-        self.table = QTableWidget()
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["Nombre del Preset", "Categoría", "Origen"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(32)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SingleSelection)
-        self.table.setShowGrid(False)
-        self.table.setStyleSheet("""
-            QTableWidget {
-                background-color: #121520;
-                border: 1px solid #222738;
-                border-radius: 6px;
-                color: #e2e8f0;
-                selection-background-color: rgba(56, 189, 248, 0.15);
-                selection-color: #38bdf8;
-                outline: none;
-            }
-            QTableWidget::item {
-                padding: 5px 8px;
-                border-bottom: 1px solid #181d2a;
-            }
-            QTableWidget::item:selected {
-                background-color: rgba(56, 189, 248, 0.15);
-                color: #38bdf8;
-            }
-            QHeaderView::section {
-                background-color: #161a27;
-                color: #94a3b8;
-                font-weight: 600;
-                font-size: 11px;
-                padding: 6px 8px;
-                border: none;
-                border-bottom: 1px solid #242c3f;
-            }
-        """)
-        self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
-        self.table.doubleClicked.connect(self._on_table_double_clicked)
-        self.stack_views.addWidget(self.table)
-
-        left_layout.addWidget(self.stack_views, 1)
+        left_layout.addWidget(self.scroll_cards, 1)
 
         # Botones bajo el catálogo
         tbl_btn_layout = QHBoxLayout()
@@ -989,9 +903,6 @@ class PresetManagerDialog(QDialog):
         close_layout.addWidget(self.btn_close)
         layout.addLayout(close_layout)
 
-    def _on_view_mode_changed(self, mode_id: int):
-        self.stack_views.setCurrentIndex(mode_id)
-
     def _refresh_presets(self):
         """Recarga la lista de presets, genera miniaturas y sincroniza las vistas."""
         builtins = get_builtin_presets()
@@ -1029,12 +940,12 @@ class PresetManagerDialog(QDialog):
         self._apply_filter()
 
     def _apply_filter(self):
-        """Filtra tanto las tarjetas visuales como la tabla según búsqueda y categoría."""
+        """Filtra las tarjetas visuales según búsqueda y categoría."""
         search = self.txt_filter.text().strip().lower()
         cat_filter = self.combo_cat_filter.currentText()
 
-        # Filtrar tarjetas
         cols = 2
+        visible_cards = []
         visible_idx = 0
         for card in self.card_widgets:
             p = card.preset
@@ -1050,34 +961,14 @@ class PresetManagerDialog(QDialog):
                 r, c = divmod(visible_idx, cols)
                 self.grid_cards.addWidget(card, r, c)
                 visible_idx += 1
+                visible_cards.append(card)
 
-        # Filtrar tabla
-        filtered = [
-            c.preset for c in self.card_widgets if c.isVisible()
-        ]
-        self.table.blockSignals(True)
-        self.table.setRowCount(len(filtered))
-        for row, p in enumerate(filtered):
-            item_name = QTableWidgetItem(p.name)
-            item_name.setIcon(get_icon("sliders" if p.is_builtin else "file", color="#38bdf8" if p.is_builtin else "#fbbf24", size=13))
-            item_name.setData(Qt.UserRole, p)
-
-            item_cat = QTableWidgetItem(p.category)
-            item_cat.setForeground(QColor("#94a3b8"))
-
-            origin_str = "Fábrica" if p.is_builtin else "Usuario"
-            item_origin = QTableWidgetItem(origin_str)
-            item_origin.setTextAlignment(Qt.AlignCenter)
-            item_origin.setForeground(QColor("#38bdf8" if p.is_builtin else "#fbbf24"))
-
-            self.table.setItem(row, 0, item_name)
-            self.table.setItem(row, 1, item_cat)
-            self.table.setItem(row, 2, item_origin)
-        self.table.blockSignals(False)
-
-        # Seleccionar el primer preset visible si no hay selección
-        if filtered:
-            self._select_preset(filtered[0])
+        # Seleccionar el preset actualmente seleccionado si sigue visible, o el primero visible
+        if visible_cards:
+            if self.selected_preset and any(c.preset.id == self.selected_preset.id for c in visible_cards):
+                self._select_preset(self.selected_preset)
+            else:
+                self._select_preset(visible_cards[0].preset)
         else:
             self._clear_selection()
 
@@ -1088,35 +979,12 @@ class PresetManagerDialog(QDialog):
         self._select_preset(preset)
         self._on_apply_clicked()
 
-    def _on_table_selection_changed(self):
-        selected_items = self.table.selectedItems()
-        if not selected_items:
-            return
-        row = self.table.currentRow()
-        item = self.table.item(row, 0)
-        if item:
-            preset: DeveloperPreset = item.data(Qt.UserRole)
-            self._select_preset(preset, sync_table=False)
-
-    def _on_table_double_clicked(self):
-        self._on_apply_clicked()
-
     def _select_preset(self, preset: DeveloperPreset, sync_table: bool = True):
         self.selected_preset = preset
 
         # Sincronizar tarjetas
         for card in self.card_widgets:
             card.set_selected(card.preset.id == preset.id)
-
-        # Sincronizar tabla si es necesario
-        if sync_table:
-            self.table.blockSignals(True)
-            for r in range(self.table.rowCount()):
-                it = self.table.item(r, 0)
-                if it and it.data(Qt.UserRole).id == preset.id:
-                    self.table.selectRow(r)
-                    break
-            self.table.blockSignals(False)
 
         # Actualizar panel de detalles
         self.lbl_detail_name.setText(preset.name)

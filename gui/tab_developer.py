@@ -481,15 +481,17 @@ class DeveloperTab(QWidget):
         # --- SECCIÓN 1: Estilos y Presets de Revelado (Módulo gui.developer.panels.PresetsPanel) ---
         self.panel_presets = PresetsPanel()
         self.sec_presets = self.panel_presets.sec_presets
-        self.combo_presets = self.panel_presets.combo_presets
-        self.lbl_preset_desc = self.panel_presets.lbl_preset_desc
-        self.combo_preset_scope = self.panel_presets.combo_preset_scope
-        self.btn_apply_preset = self.panel_presets.btn_apply_preset
+        self.combo_presets = getattr(self.panel_presets, 'combo_presets', None)
+        self.lbl_preset_desc = getattr(self.panel_presets, 'lbl_preset_desc', None)
+        self.combo_preset_scope = getattr(self.panel_presets, 'combo_preset_scope', None)
+        self.btn_apply_preset = getattr(self.panel_presets, 'btn_apply_preset', None)
         self.btn_save_preset = self.panel_presets.btn_save_preset
         self.btn_manage_presets = self.panel_presets.btn_manage_presets
 
-        self.panel_presets.preset_changed.connect(self._on_preset_combo_changed)
-        self.panel_presets.apply_requested.connect(self.apply_selected_preset)
+        if hasattr(self.panel_presets, 'preset_changed'):
+            self.panel_presets.preset_changed.connect(self._on_preset_combo_changed)
+        if hasattr(self.panel_presets, 'apply_requested'):
+            self.panel_presets.apply_requested.connect(self.apply_selected_preset)
         self.panel_presets.save_requested.connect(self.open_save_preset_dialog)
         self.panel_presets.manage_requested.connect(self.open_preset_manager_dialog)
 
@@ -8081,7 +8083,7 @@ class DeveloperTab(QWidget):
     # -------------------------------------------------------------
     def _populate_presets_combo(self, select_preset_id: Optional[str] = None):
         """Carga y categoriza los presets en el desplegable con separadores elegantes."""
-        if not hasattr(self, "combo_presets"):
+        if not getattr(self, "combo_presets", None):
             return
         self.combo_presets.blockSignals(True)
         self.combo_presets.clear()
@@ -8136,20 +8138,28 @@ class DeveloperTab(QWidget):
 
     def _on_preset_combo_changed(self, index: int):
         """Actualiza la descripción al cambiar de preset en el desplegable."""
+        if not getattr(self, "combo_presets", None):
+            return
         preset = self.combo_presets.itemData(index, Qt.UserRole)
         if isinstance(preset, DeveloperPreset):
-            self.lbl_preset_desc.setText(preset.description or "")
-            self.btn_apply_preset.setEnabled(True)
+            if self.lbl_preset_desc:
+                self.lbl_preset_desc.setText(preset.description or "")
+            if self.btn_apply_preset:
+                self.btn_apply_preset.setEnabled(True)
         else:
-            self.lbl_preset_desc.setText("")
-            self.btn_apply_preset.setEnabled(False)
+            if self.lbl_preset_desc:
+                self.lbl_preset_desc.setText("")
+            if self.btn_apply_preset:
+                self.btn_apply_preset.setEnabled(False)
 
     def apply_selected_preset(self):
         """Aplica el preset actualmente seleccionado en el desplegable."""
+        if not getattr(self, "combo_presets", None):
+            return
         preset = self.combo_presets.currentData(Qt.UserRole)
         if not isinstance(preset, DeveloperPreset):
             return
-        scope = self.combo_preset_scope.currentData() or SCOPE_ALL
+        scope = self.combo_preset_scope.currentData() if self.combo_preset_scope else SCOPE_ALL
         intensity = getattr(self.panel_presets, 'spin_intensity', None)
         intensity_val = float(intensity.value()) if intensity is not None else 100.0
         self.apply_preset(preset, scope=scope, intensity_pct=intensity_val)
@@ -8301,14 +8311,15 @@ class DeveloperTab(QWidget):
 
     def open_save_preset_dialog(self):
         """Abre el diálogo para guardar los ajustes actuales como un preset."""
-        current_params = self._capture_state()
+        current_params = self._capture_state(include_mask_layers=False)
         builtins = get_builtin_presets()
         users = load_user_presets()
         categories = list(set(p.category for p in builtins + users))
 
         dlg = SavePresetDialog(current_params, categories, self)
         if dlg.exec() == QDialog.Accepted and dlg.created_preset:
-            self._populate_presets_combo(select_preset_id=dlg.created_preset.id)
+            if hasattr(self, '_populate_presets_combo'):
+                self._populate_presets_combo(select_preset_id=dlg.created_preset.id)
             self.log_message(f"[PRESET] Nuevo preset guardado con éxito: '{dlg.created_preset.name}' ({dlg.created_preset.category})")
 
     def open_preset_manager_dialog(self):
@@ -8341,9 +8352,10 @@ class DeveloperTab(QWidget):
             if hasattr(self, '_undo_debounce_timer'):
                 self._undo_debounce_timer.stop()
 
-        curr_preset = self.combo_presets.currentData(Qt.UserRole)
-        curr_id = curr_preset.id if isinstance(curr_preset, DeveloperPreset) else None
-        self._populate_presets_combo(select_preset_id=curr_id)
+        if hasattr(self, "combo_presets") and self.combo_presets is not None:
+            curr_preset = self.combo_presets.currentData(Qt.UserRole)
+            curr_id = curr_preset.id if isinstance(curr_preset, DeveloperPreset) else None
+            self._populate_presets_combo(select_preset_id=curr_id)
 
     def _on_preset_dialog_preview(self, preset: DeveloperPreset, scope: str, intensity_pct: float):
         """Previsualiza un preset temporalmente en el lienzo principal sin guardarlo en el historial."""
