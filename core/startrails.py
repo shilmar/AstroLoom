@@ -156,21 +156,24 @@ def clean_frame_streaks(
     if prev_img is None and next_img is None:
         return current_img, 0
 
+    h, w = current_img.shape[:2]
+    curr_lum = cv2.cvtColor(current_img, cv2.COLOR_RGB2GRAY) if current_img.ndim == 3 else current_img
+
+    # 1. Comparación diferencial temporal en luminancia monocanal (ahorro drástico de RAM y tiempo)
     if prev_img is not None and next_img is not None:
         # shortcut: Comparación diferencial temporal con fotogramas vecinos (k-1, k+1); actualizar a estimación de vector de velocidad si se integran trazas con seguimiento sideral.
-        ref_bg = np.minimum(prev_img, next_img)
+        prev_lum = cv2.cvtColor(prev_img, cv2.COLOR_RGB2GRAY) if prev_img.ndim == 3 else prev_img
+        next_lum = cv2.cvtColor(next_img, cv2.COLOR_RGB2GRAY) if next_img.ndim == 3 else next_img
+        ref_bg_lum = np.minimum(prev_lum, next_lum)
     elif prev_img is not None:
-        ref_bg = prev_img
+        ref_bg_lum = cv2.cvtColor(prev_img, cv2.COLOR_RGB2GRAY) if prev_img.ndim == 3 else prev_img
     else:
-        ref_bg = next_img
+        ref_bg_lum = cv2.cvtColor(next_img, cv2.COLOR_RGB2GRAY) if next_img.ndim == 3 else next_img
 
-    # 1. Diferencia positiva de luminancia respecto a los fotogramas vecinos
-    diff = np.maximum(0.0, current_img - ref_bg)
-    diff_lum = cv2.cvtColor(diff, cv2.COLOR_RGB2GRAY)
+    diff_lum = np.maximum(0.0, curr_lum - ref_bg_lum)
 
     # 2. Si se proporciona máscara de horizonte, enfocar exclusivamente en el cielo
     # Ignora el movimiento de copas de árboles, follaje o hierba que se muevan con el viento
-    h, w = diff_lum.shape
     sky_mask_bool = None
     if sky_mask is not None:
         if isinstance(sky_mask, np.ndarray) and sky_mask.dtype == bool:
@@ -193,37 +196,64 @@ def clean_frame_streaks(
     else:
         diff_lum_analysis = diff_lum
 
-    # 3. Umbral adaptativo sobre el ruido del cielo (submuestreo optimizado)
-    if sky_mask_bool is not None and np.any(sky_mask_bool):
-        sub_mask = sky_mask_bool[::8, ::8]
-        sub_diff = diff_lum[::8, ::8]
-        sample_vals = sub_diff[sub_mask] if np.any(sub_mask) else sub_diff
-    else:
-        sample_vals = diff_lum[::8, ::8]
+    # 3. Escala Proxy para análisis rápido y cancelación de ruido térmico/gaussiano
+    max_dim = max(h, w)
+    proxy_max = 1600
+    scale = proxy_max / float(max_dim) if max_dim > proxy_max else 1.0
 
+    if scale < 1.0:
+        pw, ph = int(round(w * scale)), int(round(h * scale))
+        diff_proc = cv2.resize(diff_lum_analysis, (pw, ph), interpolation=cv2.INTER_AREA)
+    else:
+        pw, ph = w, h
+        diff_proc = diff_lum_analysis
+
+    # 4. Umbral adaptativo sobre el ruido del cielo
+    sample_vals = diff_proc[::8, ::8]
     bg_val = float(np.median(sample_vals))
     mad_noise = float(1.4826 * np.median(np.abs(sample_vals - bg_val)))
     sens_f = float(np.clip(sensitivity, 0.1, 1.0))
-    sigma_factor = max(2.0, 5.5 - (sens_f * 3.5))
+    sigma_factor = max(2.5, 6.0 - (sens_f * 3.5))
     thresh_val = bg_val + max(mad_noise * sigma_factor, 0.015)
 
-    binary = (diff_lum_analysis > thresh_val).astype(np.uint8) * 255
+    binary = (diff_proc > thresh_val).astype(np.uint8) * 255
 
-    # 4. Detección de trazas lineales por Hough y/o Morfología
-    min_dim = min(h, w)
+    # 5. Filtrado vectorial rápido de ruido puntual y estrellas aisladas (<10 px)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    if num_labels <= 1:
+        return current_img, 0
+
+    cw = stats[1:, cv2.CC_STAT_WIDTH]
+    ch = stats[1:, cv2.CC_STAT_HEIGHT]
+    min_diag_sq = max(16, int((12 * scale) ** 2)) if scale < 1.0 else 25
+    keep_indices = np.where((cw * cw + ch * ch) >= min_diag_sq)[0]
+    if len(keep_indices) == 0:
+        return current_img, 0
+
+    lut = np.zeros(num_labels, dtype=np.uint8)
+    lut[keep_indices + 1] = 255
+    clean_bin = lut[labels]
+
+    if not np.any(clean_bin):
+        return current_img, 0
+
+    # 6. Detección de trazas lineales por Hough y/o Morfología
+    min_dim = min(ph, pw)
     mask_hough = np.zeros((h, w), dtype=np.uint8)
     hough_streak_count = 0
+    inv_scale = 1.0 / scale
 
     if method in ("hough", "hybrid"):
         hough_thresh = max(15, int(45 - sens_f * 25))
         if min_line_length is not None:
-            calc_min_len = max(10, min(int(min_line_length), int(min_dim * 0.5)))
+            calc_min_len = max(10, min(int(min_line_length * scale), int(min_dim * 0.5)))
         else:
-            calc_min_len = max(15, min(int(60 - sens_f * 25), int(min_dim * 0.35)))
-        max_line_gap = max(4, int(8 + sens_f * 8))
+            base_len = 65.0 - sens_f * 25.0
+            calc_min_len = max(15, min(int(base_len * scale), int(min_dim * 0.35)))
+        max_line_gap = max(3, int((8 + sens_f * 8) * scale))
 
         lines = cv2.HoughLinesP(
-            binary,
+            clean_bin,
             rho=1,
             theta=np.pi / 180,
             threshold=hough_thresh,
@@ -231,10 +261,15 @@ def clean_frame_streaks(
             maxLineGap=max_line_gap
         )
         if lines is not None and len(lines) > 0:
-            thick = max(1, int(line_thickness))
+            thick = max(2, int(line_thickness * (1.5 if scale < 1.0 else 1.0)))
             for line in lines:
                 x1, y1, x2, y2 = line.ravel()[:4]
-                cv2.line(mask_hough, (int(x1), int(y1)), (int(x2), int(y2)), 255, thickness=thick)
+                if scale < 1.0:
+                    fx1, fy1 = int(round(x1 * inv_scale)), int(round(y1 * inv_scale))
+                    fx2, fy2 = int(round(x2 * inv_scale)), int(round(y2 * inv_scale))
+                else:
+                    fx1, fy1, fx2, fy2 = int(x1), int(y1), int(x2), int(y2)
+                cv2.line(mask_hough, (fx1, fy1), (fx2, fy2), 255, thickness=thick)
             hough_streak_count = len(lines)
 
     mask_morph = np.zeros((h, w), dtype=np.uint8)
@@ -242,19 +277,19 @@ def clean_frame_streaks(
 
     if method in ("morphological", "hybrid"):
         k_close = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k_close)
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(closed, connectivity=8)
-        if num_labels > 1:
-            min_length_m = max(8.0, 24.0 - (sens_f * 18.0))
+        closed = cv2.morphologyEx(clean_bin, cv2.MORPH_CLOSE, k_close)
+        num_labels_m, labels_m, stats_m, _ = cv2.connectedComponentsWithStats(closed, connectivity=8)
+        if num_labels_m > 1:
+            min_length_m = max(8.0, (24.0 - (sens_f * 18.0)) * scale)
             min_elongation_m = max(2.3, 3.6 - (sens_f * 1.5))
-            for lbl in range(1, num_labels):
-                cw = stats[lbl, cv2.CC_STAT_WIDTH]
-                ch = stats[lbl, cv2.CC_STAT_HEIGHT]
-                diag = np.sqrt(float(cw * cw + ch * ch))
-                if diag >= min_length_m:
-                    x = stats[lbl, cv2.CC_STAT_LEFT]
-                    y = stats[lbl, cv2.CC_STAT_TOP]
-                    patch_lbl = labels[y:y+ch, x:x+cw]
+            for lbl in range(1, num_labels_m):
+                cw_m = stats_m[lbl, cv2.CC_STAT_WIDTH]
+                ch_m = stats_m[lbl, cv2.CC_STAT_HEIGHT]
+                diag_m = np.sqrt(float(cw_m * cw_m + ch_m * ch_m))
+                if diag_m >= min_length_m:
+                    x = stats_m[lbl, cv2.CC_STAT_LEFT]
+                    y = stats_m[lbl, cv2.CC_STAT_TOP]
+                    patch_lbl = labels_m[y:y+ch_m, x:x+cw_m]
                     pts = np.argwhere(patch_lbl == lbl)
                     if len(pts) >= 4:
                         pts_xy = np.fliplr(pts).reshape(-1, 1, 2)
@@ -264,7 +299,12 @@ def clean_frame_streaks(
                         width = min(rw, rh)
                         elongation = length / max(width, 0.5)
                         if elongation >= min_elongation_m and length >= min_length_m:
-                            mask_morph[y:y+ch, x:x+cw][patch_lbl == lbl] = 255
+                            if scale < 1.0:
+                                box = cv2.boxPoints(rect)
+                                box_full = np.round(box * inv_scale).astype(np.int32)
+                                cv2.fillPoly(mask_morph, [box_full], 255)
+                            else:
+                                mask_morph[y:y+ch_m, x:x+cw_m][patch_lbl == lbl] = 255
                             morph_streak_count += 1
 
     if method == "hough":
@@ -278,14 +318,22 @@ def clean_frame_streaks(
         return current_img, 0
 
     # Contar componentes conexas independientes para métricas y logs limpios
-    num_labels, _, _, _ = cv2.connectedComponentsWithStats(final_mask, connectivity=8)
-    found_streaks = max(1, num_labels - 1)
+    num_labels_final, _, _, _ = cv2.connectedComponentsWithStats(final_mask, connectivity=8)
+    found_streaks = max(1, num_labels_final - 1)
 
-    # 5. Dilatar ligeramente la máscara para cubrir el halo óptico difuso (bloom)
-    k_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    # 7. Dilatar para cubrir el halo óptico difuso (bloom)
+    k_size = (7, 7) if scale < 1.0 else (5, 5)
+    k_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, k_size)
     streak_mask_dilated = cv2.dilate(final_mask, k_dilate)
 
-    # 6. Inpainting / Sustitución de los píxeles de la traza por el fondo limpio
+    # 8. Inpainting / Sustitución de los píxeles de la traza por el fondo limpio en RGB
+    if prev_img is not None and next_img is not None:
+        ref_bg = np.minimum(prev_img, next_img)
+    elif prev_img is not None:
+        ref_bg = prev_img
+    else:
+        ref_bg = next_img
+
     cleaned_img = current_img.copy()
     cleaned_img[streak_mask_dilated > 0] = ref_bg[streak_mask_dilated > 0]
 
