@@ -778,25 +778,6 @@ class PresetManagerDialog(QDialog):
         self.slider_intensity = QSlider(Qt.Horizontal)
         self.slider_intensity.setRange(0, 150)
         self.slider_intensity.setValue(100)
-        self.slider_intensity.setStyleSheet("""
-            QSlider::groove:horizontal {
-                height: 4px;
-                background: #1e2638;
-                border-radius: 2px;
-            }
-            QSlider::sub-page:horizontal {
-                background: #0ea5e9;
-                border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: #f8fafc;
-                border: 1px solid #38bdf8;
-                width: 14px;
-                margin-top: -5px;
-                margin-bottom: -5px;
-                border-radius: 7px;
-            }
-        """)
         self.slider_intensity.valueChanged.connect(self._on_intensity_slider_changed)
         int_layout.addWidget(self.slider_intensity)
 

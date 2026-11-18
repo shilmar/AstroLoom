@@ -961,6 +961,32 @@ class MaskCanvas(QWidget):
                 self.zoom_center_img = QPoint(ix, iy)
         self.update()
 
+    def set_zoom_100(self, active: bool = True, center: Optional[QPoint] = None) -> None:
+        """Activa o desactiva la visualización con aumento 1:1 (píxel nativo)."""
+        if self.is_zoomed == active:
+            return
+        if active:
+            if not self.base_pixmap or self.base_pixmap.isNull():
+                return
+            w_i = self.base_pixmap.width()
+            h_i = self.base_pixmap.height()
+            pt = (float(center.x()), float(center.y())) if center else (w_i / 2.0, h_i / 2.0)
+            self.center_on_image_point(pt, zoom_in=True)
+        else:
+            self.is_zoomed = False
+            self.zoom_center_img = None
+            self._zoom_background_pixmap = None
+            self._pan_visual_offset = QPoint(0, 0)
+            self.is_panning = False
+            self.setCursor(Qt.ArrowCursor)
+            self.zoom_toggled.emit(False, 0.5, 0.5)
+            if not self.external_zoom_handler:
+                self.update()
+
+    def fit_view(self) -> None:
+        """Ajusta la vista para que la imagen completa encaje en el lienzo."""
+        self.set_zoom_100(False)
+
     def _get_split_screen_coord(self) -> Optional[float]:
         """Calcula la coordenada en pantalla de la cortina (x para vertical, y para horizontal)."""
         if not self.split_view_enabled:

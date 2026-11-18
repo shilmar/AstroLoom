@@ -4375,6 +4375,7 @@ class DeveloperTab(QWidget):
             int(col_st.get("dualband_oiii_boost", 100)),
             int(col_st.get("unclip_stars_val", 0)),
             int(col_st.get("unpurple_val", 0)),
+            int(col_st.get("scnr_green_val", 0)),
             round(float(col_st.get("pcc_kr", 1.0)), 4),
             round(float(col_st.get("pcc_kb", 1.0)), 4),
             round(float(self.temp_val), 4),
@@ -5841,6 +5842,7 @@ class DeveloperTab(QWidget):
             self.dualband_oiii_boost = getattr(self.panel_color_wb, 'dualband_oiii_boost', 100)
             self.unclip_stars_val = getattr(self.panel_color_wb, 'unclip_stars_val', 0)
             self.unpurple_val = getattr(self.panel_color_wb, 'unpurple_val', 0)
+            self.scnr_green_val = getattr(self.panel_color_wb, 'scnr_green_val', 0)
         self.update_stretch_preview()
 
     def apply_pcc_calibration(self):

@@ -401,6 +401,26 @@ class StackerTab(QWidget):
         self.btn_cull_best_ref.clicked.connect(self.auto_select_best_reference)
         row_cull_btns.addWidget(self.btn_cull_best_ref)
 
+        self.btn_blink = QPushButton("Visor Blink")
+        self.btn_blink.setIcon(get_icon("eye", size=13, color="#a78bfa"))
+        self.btn_blink.setCursor(Qt.PointingHandCursor)
+        self.btn_blink.setStyleSheet("""
+            QPushButton {
+                background-color: #1e1b4b;
+                color: #a78bfa;
+                font-weight: 600;
+                border: 1px solid #6366f1;
+                border-radius: 4px;
+                padding: 5px 10px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: #6366f1; color: #ffffff; }
+            QPushButton:disabled { background-color: #111827; color: #475569; border-color: #1f2937; }
+        """)
+        self.btn_blink.setToolTip("Abre el visor interactivo Blink para revisar tomas en bucle, estirar al vuelo y descartar con teclado (X/P)")
+        self.btn_blink.clicked.connect(self.open_blink_viewer)
+        row_cull_btns.addWidget(self.btn_blink)
+
         culling_vbox.addLayout(row_cull_btns)
 
         # Fila 2: Criterio óptico y balance de tomas aptas
@@ -1269,11 +1289,68 @@ class StackerTab(QWidget):
         row = self.list_lights.row(item)
         if 0 <= row < len(self.lights_list):
             selected_path = self.lights_list[row]
-            self.lights_list.remove(selected_path)
-            self.lights_list.insert(0, selected_path)
             self.load_frame_to_canvas(selected_path)
-            self._refresh_list_view("Lights")
-            self.log_message(f"[REFERENCIA] Toma fijada como base: {os.path.basename(selected_path)}")
+            self.open_blink_viewer()
+
+    def open_blink_viewer(self):
+        """Abre el visor interactivo Blink para revisar tomas a alta velocidad y cribar con teclado."""
+        lights = self.lights_list
+        if not lights:
+            QMessageBox.information(
+                self,
+                "Visor Blink",
+                "No hay tomas cargadas para inspeccionar.\n\n"
+                "Añade primero tomas de luz (Lights) en la lista antes de abrir el visor Blink."
+            )
+            return
+
+        from gui.dialog_blink import BlinkDialog
+        curr_idx = 0
+        cur_item = self.list_lights.currentItem()
+        if cur_item:
+            row_w = self.list_lights.itemWidget(cur_item)
+            if row_w and hasattr(row_w, "filepath") and row_w.filepath in lights:
+                curr_idx = lights.index(row_w.filepath)
+        elif 0 <= self.list_lights.currentRow() < len(lights):
+            curr_idx = self.list_lights.currentRow()
+        elif self.current_ref_path and self.current_ref_path in lights:
+            curr_idx = lights.index(self.current_ref_path)
+
+        dlg = BlinkDialog(
+            file_list=lights,
+            excluded_files=self.excluded_lights,
+            culling_results=self.culling_results,
+            current_index=curr_idx,
+            parent=self
+        )
+        dlg.exclusion_changed.connect(self._on_blink_exclusion_changed)
+        dlg.selection_applied.connect(self._on_blink_selection_applied)
+        dlg.exec()
+
+    def _on_blink_exclusion_changed(self, filepath: str, is_included: bool):
+        if is_included:
+            self.excluded_lights.discard(filepath)
+        else:
+            self.excluded_lights.add(filepath)
+        self._sync_row_inclusion_checkbox(filepath, is_included)
+        self._update_culling_summary_label()
+
+    def _on_blink_selection_applied(self, excluded_set: set):
+        self.excluded_lights = set(excluded_set)
+        for path in self.lights_list:
+            self._sync_row_inclusion_checkbox(path, path not in self.excluded_lights)
+        self._update_culling_summary_label()
+
+    def _sync_row_inclusion_checkbox(self, filepath: str, is_included: bool):
+        list_widget = self.list_lights
+        if not list_widget:
+            return
+        for i in range(list_widget.count()):
+            item = list_widget.item(i)
+            row_w = list_widget.itemWidget(item)
+            if row_w and getattr(row_w, "filepath", None) == filepath:
+                row_w.set_included(is_included)
+                break
 
     def load_frame_to_canvas(self, path: str):
         self.current_ref_path = path

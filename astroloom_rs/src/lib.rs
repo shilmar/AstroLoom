@@ -44,6 +44,7 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(developer::generate_color_range_mask_rs, m)?)?;
     m.add_function(wrap_pyfunction!(developer::apply_hue_luma_curves_fused_rs, m)?)?;
     m.add_function(wrap_pyfunction!(developer::stamp_brush_stroke_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(developer::eval_developer_proxy_fused_rs, m)?)?;
 
     // 4. Estirado Hiperbólico Generalizado y Efectos Ópticos - Prioridad 2 (core/ghs.py, core/orton.py, core/star_diffusion.py)
     m.add_function(wrap_pyfunction!(developer::compute_ghs_lut_rs, m)?)?;
@@ -96,6 +97,7 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(photometry::unpurple_rs, m)?)?;
     m.add_function(wrap_pyfunction!(photometry::unclip_stars_rs, m)?)?;
     m.add_function(wrap_pyfunction!(photometry::apply_dualband_pipeline_fused, m)?)?;
+    m.add_function(wrap_pyfunction!(photometry::apply_scnr_green_rs, m)?)?;
 
     // 10. Supresión Banding CMOS, SDF Anti-Ghosting y Anti-Halo - Prioridad 8 (core/banding.py, core/masking.py y core/stacking.py)
     m.add_function(wrap_pyfunction!(spatial_filters::suppress_cmos_banding_rs, m)?)?;

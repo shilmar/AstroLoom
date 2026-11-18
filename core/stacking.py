@@ -12,7 +12,7 @@ import tifffile
 import tempfile
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Any
 from core.banding import suppress_cmos_banding
 
 # Aceleración nativa en Rust vía PyO3 / Rayon (máxima prioridad)
@@ -143,7 +143,8 @@ def load_image_as_float32(
     color_space: str = None,
     master_dark: np.ndarray = None,
     master_flat: np.ndarray = None,
-    master_bias: np.ndarray = None
+    master_bias: np.ndarray = None,
+    demosaic_algorithm: Any = None
 ) -> np.ndarray:
     """
     Carga imágenes optimizando memoria con operaciones in-place y espacio de color configurado.
@@ -216,7 +217,7 @@ def load_image_as_float32(
                 output_bps=16,
                 use_camera_wb=True,
                 output_color=raw_cs,
-                demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD,
+                demosaic_algorithm=(demosaic_algorithm if demosaic_algorithm is not None else rawpy.DemosaicAlgorithm.AHD),
                 fbdd_noise_reduction=rawpy.FBDDNoiseReductionMode.Off,
                 median_filter_passes=0,
                 adjust_maximum_thr=0.0

@@ -15,11 +15,15 @@ Hoja de Ruta (Futuras funcionalidades anotadas):
 """
 import os
 import gc
+import time
+import logging
 from typing import Optional, Callable, Dict, Any, List, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
 from core.stacking import load_image_as_float32, scan_raw_batch_metadata
+
+logger = logging.getLogger("AstroLoom.Startrails")
 
 # Aceleración nativa en Rust vía PyO3 / Rayon
 try:
@@ -522,8 +526,9 @@ def generate_startrail(
     timelapse_params: Optional[Dict[str, Any]] = None,
     color_boost_params: Optional[Dict[str, Any]] = None,
     progress_callback: Optional[Callable[[int, str], None]] = None,
-    abort_flag: Optional[Callable[[], bool]] = None
-) -> Tuple[np.ndarray, Optional[str]]:
+    abort_flag: Optional[Callable[[], bool]] = None,
+    return_metrics: bool = False
+) -> Tuple[Any, ...]:
     """
     Genera una imagen compuesta de trazas de estrellas (Startrails) con streaming eficiente de memoria.
 
@@ -549,15 +554,21 @@ def generate_startrail(
     if not files:
         raise ValueError("No se han proporcionado archivos para generar trazas.")
 
+    t_start = time.perf_counter()
+    n_files = len(files)
+
     # Validación concurrente multihilo de cabeceras de lote en Rust (Fase 17)
+    t0_meta = time.perf_counter()
     meta_batch = scan_raw_batch_metadata(files)
     invalid = [f for f in files if meta_batch.get(f) and not meta_batch[f].get("is_valid", True)]
     if invalid:
         files = [f for f in files if f not in invalid]
         if not files:
             raise ValueError(f"Ninguno de los archivos proporcionados es válido o legible (fallaron {len(invalid)} tomas).")
+        n_files = len(files)
+    t_meta = time.perf_counter() - t0_meta
+    logger.info(f"[STARTRAILS] {n_files} tomas validadas en {t_meta:.3f}s")
 
-    n_files = len(files)
     ref_idx = max(0, min(n_files - 1, int(ref_idx)))
 
     if progress_callback:
@@ -565,10 +576,14 @@ def generate_startrail(
 
     # 1. Master Dark si se han especificado tomas oscuras
     master_dark = None
+    t_dark = 0.0
     if dark_files and len(dark_files) > 0:
         if progress_callback:
             progress_callback(5, "Calculando Master Dark...")
+        t0_dark = time.perf_counter()
         master_dark = build_master_dark(dark_files, progress_callback, abort_flag)
+        t_dark = time.perf_counter() - t0_dark
+        logger.info(f"[STARTRAILS] Master Dark completado en {t_dark:.2f}s ({len(dark_files)} tomas)")
 
     # 2. Ponderación para efecto cometa
     comet_weights = None
@@ -714,26 +729,71 @@ def generate_startrail(
             frame_path = os.path.join(frames_dir, f"frame_{idx:05d}.jpg")
             cv2.imwrite(frame_path, bgr_u8, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
-    # 6. Acumulación progresiva streaming
+    # 6. Acumulación progresiva streaming con precarga concurrente multihilo
     sky_acc = None
     ground_sum = None
     ref_frame = None
 
+    t_io = 0.0
+    t_streak_detection = 0.0
+    total_streaks = 0
+    t_gap_fill = 0.0
+    t_accum = 0.0
+    t_timelapse = 0.0
+    t_ground = 0.0
+
+    # Algoritmo de demosaicing optimizado para astrofotografía (PPG rápido sin pérdida)
+    demosaic_algo = None
+    try:
+        import rawpy
+        demosaic_algo = rawpy.DemosaicAlgorithm.PPG
+    except Exception:
+        demosaic_algo = None
+
+    # Pipeline de precarga multihilo desacoplado (escalado multi-core en C++/LibRaw)
+    max_workers = min(6, max(2, (os.cpu_count() or 4) - 1))
+    prefetch_window = max_workers + 1
+    prefetch_exec = ThreadPoolExecutor(max_workers=max_workers)
+
+    futures: Dict[int, Any] = {}
+    loaded_frames: Dict[int, np.ndarray] = {}
+
+    def _worker_load_frame(idx: int) -> np.ndarray:
+        img = load_image_as_float32(files[idx], demosaic_algorithm=demosaic_algo)
+        if master_dark is not None and master_dark.shape == img.shape:
+            img = np.maximum(0.0, img - master_dark)
+        return img
+
+    def _enqueue(idx: int):
+        if idx < n_files and idx not in futures and idx not in loaded_frames:
+            futures[idx] = prefetch_exec.submit(_worker_load_frame, idx)
+
+    # Encolar la ventana inicial de fotogramas
+    for j in range(min(n_files, prefetch_window)):
+        _enqueue(j)
+
+    def get_frame(idx: int) -> np.ndarray:
+        nonlocal t_io
+        if abort_flag and abort_flag():
+            raise InterruptedError("Procesamiento de trazas cancelado por el usuario.")
+        if idx not in loaded_frames:
+            if idx not in futures:
+                _enqueue(idx)
+            t0_wait = time.perf_counter()
+            loaded_frames[idx] = futures[idx].result()
+            t_io += time.perf_counter() - t0_wait
+            del futures[idx]
+
+            # Mantener la ventana de precarga llena hacia adelante
+            furthest = max(futures.keys()) if futures else idx
+            while len(futures) < prefetch_window and (furthest + 1) < n_files:
+                furthest += 1
+                _enqueue(furthest)
+
+        return loaded_frames[idx]
+
     try:
         if suppress_streaks:
-            # Búfer deslizante inteligente O(1) con 2 referencias simultáneas para cada fotograma
-            loaded_frames: Dict[int, np.ndarray] = {}
-
-            def get_frame(idx: int) -> np.ndarray:
-                if abort_flag and abort_flag():
-                    raise InterruptedError("Procesamiento de trazas cancelado por el usuario.")
-                if idx not in loaded_frames:
-                    img = load_image_as_float32(files[idx])
-                    if master_dark is not None and master_dark.shape == img.shape:
-                        img = np.maximum(0.0, img - master_dark)
-                    loaded_frames[idx] = img
-                return loaded_frames[idx]
-
             prev_clean: Optional[np.ndarray] = None
             prev_weight: float = 1.0
             prev_dilated_stars: Optional[np.ndarray] = None
@@ -767,11 +827,15 @@ def generate_startrail(
                     ref_B = None
 
                 # Detección y supresión de satélites / aviones
+                t0_detect = time.perf_counter()
                 cleaned_img, num_streaks = clean_frame_streaks(
                     curr, ref_A, ref_B,
                     sky_mask=sky_mask_bool,
                     sensitivity=streak_sensitivity
                 )
+                dt_detect = time.perf_counter() - t0_detect
+                t_streak_detection += dt_detect
+                total_streaks += num_streaks
 
                 # Liberar memoria de fotogramas pasados que ya no se utilizarán
                 keys_to_del = [k for k in list(loaded_frames.keys()) if k < i - 1]
@@ -779,8 +843,16 @@ def generate_startrail(
                     del loaded_frames[k]
 
                 tl_tag = " [Time-Lapse]" if timelapse_enabled else ""
-                if num_streaks > 0 and progress_callback:
-                    progress_callback(pct, f"Toma ({i+1}/{n_files}): suprimidas {num_streaks} trazas de satélite/avión en {fname}{tl_tag}")
+                if num_streaks > 0:
+                    logger.info(
+                        f"[DETECCIÓN TRAZAS] Toma {i+1}/{n_files} ({fname}): "
+                        f"{num_streaks} trazas suprimidas en {dt_detect*1000:.1f}ms"
+                    )
+                    if progress_callback:
+                        progress_callback(
+                            pct,
+                            f"Toma ({i+1}/{n_files}): suprimidas {num_streaks} trazas ({dt_detect*1000:.1f}ms) en {fname}{tl_tag}"
+                        )
                 elif progress_callback:
                     progress_callback(pct, f"Integrando toma ({i+1}/{n_files}): {fname}{tl_tag}")
 
@@ -793,11 +865,13 @@ def generate_startrail(
                 else:
                     frame_sky = cleaned_img
 
+                t0_step_acc = time.perf_counter()
                 if sky_acc is None:
                     sky_acc = frame_sky.copy()
                 elif HAS_RUST and hasattr(astroloom_rs, "accumulate_startrail_step_rs"):
                     curr_dilated_stars = None
                     if fill_gaps:
+                        t0_gap = time.perf_counter()
                         curr_dilated_stars = extract_dilated_stars(
                             cleaned_img,
                             radius=gap_fill_radius,
@@ -805,6 +879,7 @@ def generate_startrail(
                             sky_mask_bool=sky_mask_bool,
                             kernel=gap_kernel
                         )
+                        t_gap_fill += time.perf_counter() - t0_gap
                     w_bridge = (0.5 * (prev_weight + curr_weight)) if (mode == "comet" and comet_weights is not None) else 1.0
                     astroloom_rs.accumulate_startrail_step_rs(
                         sky_acc,
@@ -818,6 +893,7 @@ def generate_startrail(
                         prev_dilated_stars = curr_dilated_stars
                 else:
                     if fill_gaps:
+                        t0_gap = time.perf_counter()
                         curr_dilated_stars = extract_dilated_stars(
                             cleaned_img,
                             radius=gap_fill_radius,
@@ -833,10 +909,12 @@ def generate_startrail(
                                 bridge = bridge * w_bridge
                             np.maximum(sky_acc, bridge, out=sky_acc)
                         prev_dilated_stars = curr_dilated_stars
+                        t_gap_fill += time.perf_counter() - t0_gap
 
                     np.maximum(sky_acc, frame_sky, out=sky_acc)
 
                 if fill_gaps and prev_dilated_stars is None:
+                    t0_gap = time.perf_counter()
                     prev_dilated_stars = extract_dilated_stars(
                         cleaned_img,
                         radius=gap_fill_radius,
@@ -844,143 +922,156 @@ def generate_startrail(
                         sky_mask_bool=sky_mask_bool,
                         kernel=gap_kernel
                     )
+                    t_gap_fill += time.perf_counter() - t0_gap
+
+                t_accum += time.perf_counter() - t0_step_acc
 
                 prev_clean = cleaned_img
                 prev_weight = curr_weight
 
                 if timelapse_enabled:
+                    t0_tl = time.perf_counter()
                     _write_timelapse_frame(i)
+                    t_timelapse += time.perf_counter() - t0_tl
 
                 if use_clean_ground and mask_3c is not None and ground_mode == "average":
+                    t0_gnd = time.perf_counter()
                     if ground_sum is None:
                         ground_sum = cleaned_img.astype(np.float64)
                     else:
                         ground_sum += cleaned_img
+                    t_ground += time.perf_counter() - t0_gnd
 
             loaded_frames.clear()
 
         else:
-            # Acumulación directa estándar con prefetching asíncrono y arrastre de estrellas dilatadas
+            # Acumulación directa estándar con prefetching multihilo concurrente
             prev_img: Optional[np.ndarray] = None
             prev_weight: float = 1.0
             prev_dilated_stars: Optional[np.ndarray] = None
 
-            prefetch_exec = ThreadPoolExecutor(max_workers=1)
-            try:
-                future_next = prefetch_exec.submit(load_image_as_float32, files[0])
+            for i in range(n_files):
+                if abort_flag and abort_flag():
+                    raise InterruptedError("Procesamiento de trazas cancelado por el usuario.")
 
-                for i, path in enumerate(files):
-                    if abort_flag and abort_flag():
-                        raise InterruptedError("Procesamiento de trazas cancelado por el usuario.")
+                fname = os.path.basename(files[i])
+                pct = int(10 + (i / n_files) * 80)
+                tl_tag = " [Time-Lapse]" if timelapse_enabled else ""
+                if progress_callback:
+                    progress_callback(pct, f"Integrando toma ({i+1}/{n_files}): {fname}{tl_tag}")
 
-                    fname = os.path.basename(files[i])
-                    pct = int(10 + (i / n_files) * 80)
-                    tl_tag = " [Time-Lapse]" if timelapse_enabled else ""
-                    if progress_callback:
-                        progress_callback(pct, f"Integrando toma ({i+1}/{n_files}): {fname}{tl_tag}")
+                img = get_frame(i)
 
-                    img = future_next.result()
+                h, w = img.shape[:2]
+                if sky_mask_bool is not None and sky_mask_bool.shape[:2] != (h, w):
+                    sm_res = cv2.resize(sky_mask_bool.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
+                    sky_mask_bool = (sm_res > 0)
 
-                    # Lanzar en segundo plano la precarga de la siguiente toma
-                    if i + 1 < n_files:
-                        future_next = prefetch_exec.submit(load_image_as_float32, files[i + 1])
-                    else:
-                        future_next = None
+                if i == ref_idx:
+                    ref_frame = img.copy()
 
-                    if master_dark is not None and master_dark.shape == img.shape:
-                        img = np.maximum(0.0, img - master_dark)
+                curr_weight = comet_weights[i] if (mode == "comet" and comet_weights is not None) else 1.0
+                if mode == "comet" and comet_weights is not None:
+                    frame_sky = img * curr_weight
+                else:
+                    frame_sky = img
 
-                    h, w = img.shape[:2]
-                    if sky_mask_bool is not None and sky_mask_bool.shape[:2] != (h, w):
-                        sm_res = cv2.resize(sky_mask_bool.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
-                        sky_mask_bool = (sm_res > 0)
-
-                    if i == ref_idx:
-                        ref_frame = img.copy()
-
-                    curr_weight = comet_weights[i] if (mode == "comet" and comet_weights is not None) else 1.0
-                    if mode == "comet" and comet_weights is not None:
-                        frame_sky = img * curr_weight
-                    else:
-                        frame_sky = img
-
-                    if sky_acc is None:
-                        sky_acc = frame_sky.copy()
-                    elif HAS_RUST and hasattr(astroloom_rs, "accumulate_startrail_step_rs"):
-                        curr_dilated_stars = None
-                        if fill_gaps:
-                            curr_dilated_stars = extract_dilated_stars(
-                                img,
-                                radius=gap_fill_radius,
-                                threshold_factor=gap_fill_threshold_factor,
-                                sky_mask_bool=sky_mask_bool,
-                                kernel=gap_kernel
-                            )
-                        w_bridge = (0.5 * (prev_weight + curr_weight)) if (mode == "comet" and comet_weights is not None) else 1.0
-                        astroloom_rs.accumulate_startrail_step_rs(
-                            sky_acc,
-                            np.ascontiguousarray(img, dtype=np.float32),
-                            weight=float(curr_weight),
-                            prev_dilated=prev_dilated_stars,
-                            curr_dilated=curr_dilated_stars,
-                            w_bridge=float(w_bridge)
-                        )
-                        if fill_gaps:
-                            prev_dilated_stars = curr_dilated_stars
-                    else:
-                        if fill_gaps:
-                            curr_dilated_stars = extract_dilated_stars(
-                                img,
-                                radius=gap_fill_radius,
-                                threshold_factor=gap_fill_threshold_factor,
-                                sky_mask_bool=sky_mask_bool,
-                                kernel=gap_kernel
-                            )
-                            if prev_dilated_stars is not None:
-                                bridge = np.minimum(prev_dilated_stars, curr_dilated_stars)
-                                bridge[bridge < 0.005] = 0.0
-                                if mode == "comet" and comet_weights is not None:
-                                    w_bridge = 0.5 * (prev_weight + curr_weight)
-                                    bridge = bridge * w_bridge
-                                np.maximum(sky_acc, bridge, out=sky_acc)
-                            prev_dilated_stars = curr_dilated_stars
-
-                        np.maximum(sky_acc, frame_sky, out=sky_acc)
-
-                    if fill_gaps and prev_dilated_stars is None:
-                        prev_dilated_stars = extract_dilated_stars(
+                t0_step_acc = time.perf_counter()
+                if sky_acc is None:
+                    sky_acc = frame_sky.copy()
+                elif HAS_RUST and hasattr(astroloom_rs, "accumulate_startrail_step_rs"):
+                    curr_dilated_stars = None
+                    if fill_gaps:
+                        t0_gap = time.perf_counter()
+                        curr_dilated_stars = extract_dilated_stars(
                             img,
                             radius=gap_fill_radius,
                             threshold_factor=gap_fill_threshold_factor,
                             sky_mask_bool=sky_mask_bool,
                             kernel=gap_kernel
                         )
+                        t_gap_fill += time.perf_counter() - t0_gap
+                    w_bridge = (0.5 * (prev_weight + curr_weight)) if (mode == "comet" and comet_weights is not None) else 1.0
+                    astroloom_rs.accumulate_startrail_step_rs(
+                        sky_acc,
+                        np.ascontiguousarray(img, dtype=np.float32),
+                        weight=float(curr_weight),
+                        prev_dilated=prev_dilated_stars,
+                        curr_dilated=curr_dilated_stars,
+                        w_bridge=float(w_bridge)
+                    )
+                    if fill_gaps:
+                        prev_dilated_stars = curr_dilated_stars
+                else:
+                    if fill_gaps:
+                        t0_gap = time.perf_counter()
+                        curr_dilated_stars = extract_dilated_stars(
+                            img,
+                            radius=gap_fill_radius,
+                            threshold_factor=gap_fill_threshold_factor,
+                            sky_mask_bool=sky_mask_bool,
+                            kernel=gap_kernel
+                        )
+                        if prev_dilated_stars is not None:
+                            bridge = np.minimum(prev_dilated_stars, curr_dilated_stars)
+                            bridge[bridge < 0.005] = 0.0
+                            if mode == "comet" and comet_weights is not None:
+                                w_bridge = 0.5 * (prev_weight + curr_weight)
+                                bridge = bridge * w_bridge
+                            np.maximum(sky_acc, bridge, out=sky_acc)
+                        prev_dilated_stars = curr_dilated_stars
+                        t_gap_fill += time.perf_counter() - t0_gap
 
-                    prev_img = img
-                    prev_weight = curr_weight
+                    np.maximum(sky_acc, frame_sky, out=sky_acc)
 
-                    if timelapse_enabled:
-                        _write_timelapse_frame(i)
+                if fill_gaps and prev_dilated_stars is None:
+                    t0_gap = time.perf_counter()
+                    prev_dilated_stars = extract_dilated_stars(
+                        img,
+                        radius=gap_fill_radius,
+                        threshold_factor=gap_fill_threshold_factor,
+                        sky_mask_bool=sky_mask_bool,
+                        kernel=gap_kernel
+                    )
+                    t_gap_fill += time.perf_counter() - t0_gap
 
-                    if use_clean_ground and mask_3c is not None and ground_mode == "average":
-                        if ground_sum is None:
-                            ground_sum = img.astype(np.float64)
-                        else:
-                            ground_sum += img
-            finally:
-                prefetch_exec.shutdown(wait=False, cancel_futures=True)
+                t_accum += time.perf_counter() - t0_step_acc
+
+                prev_img = img
+                prev_weight = curr_weight
+
+                if timelapse_enabled:
+                    t0_tl = time.perf_counter()
+                    _write_timelapse_frame(i)
+                    t_timelapse += time.perf_counter() - t0_tl
+
+                if use_clean_ground and mask_3c is not None and ground_mode == "average":
+                    t0_gnd = time.perf_counter()
+                    if ground_sum is None:
+                        ground_sum = img.astype(np.float64)
+                    else:
+                        ground_sum += img
+                    t_ground += time.perf_counter() - t0_gnd
+
+                # Liberar memoria de la toma procesada
+                if i in loaded_frames:
+                    del loaded_frames[i]
 
     finally:
+        prefetch_exec.shutdown(wait=False, cancel_futures=True)
         if video_writer is not None:
+            video_writer.release()
             video_writer.release()
 
     if sky_acc is None:
         raise RuntimeError("No se pudo acumular ninguna imagen válida.")
 
     # 7. Realce y preservación de color estelar (Star Color Boost)
+    t_color_boost = 0.0
     if color_boost_enabled:
         if progress_callback:
             progress_callback(93, "Realzando y preservando saturación de trazas estelares...")
+        t0_cb = time.perf_counter()
         sky_acc = enhance_star_trails_color(
             sky_acc,
             saturation_boost=sat_boost,
@@ -988,11 +1079,14 @@ def generate_startrail(
             sky_mask=sky_mask_bool,
             bg_protect=True
         )
+        t_color_boost = time.perf_counter() - t0_cb
 
     # 8. Fusión con suelo limpio o retorno directo
+    t_fusion = 0.0
     if use_clean_ground and mask_3c is not None:
         if progress_callback:
             progress_callback(92, "Fusionando cielo de trazas con suelo anti-ruido...")
+        t0_fus = time.perf_counter()
 
         # Verificar dimensiones de la máscara respecto a la imagen
         h, w = sky_acc.shape[:2]
@@ -1014,6 +1108,7 @@ def generate_startrail(
 
         # Fusión alfa ponderada
         final_img = (sky_acc * mask_3c) + (ground_clean * (1.0 - mask_3c))
+        t_fusion = time.perf_counter() - t0_fus
     else:
         final_img = sky_acc
 
@@ -1025,10 +1120,71 @@ def generate_startrail(
     else:
         actual_video_path = None
 
+    t_total = time.perf_counter() - t_start
+    ms_per_frame = (t_total / n_files) * 1000.0 if n_files > 0 else 0.0
+    fps_rate = (n_files / t_total) if t_total > 0 else 0.0
+
+    logger.info(
+        f"✓ [GENERACIÓN STARTRAILS] Finalizada en {t_total:.2f}s ({n_files} tomas, "
+        f"{ms_per_frame:.1f} ms/toma, {fps_rate:.1f} fps)"
+    )
+
+    breakdown = [
+        f"  • I/O y Carga: {t_io:.2f}s ({100.0 * t_io / max(t_total, 1e-6):.1f}%)"
+    ]
+    if suppress_streaks:
+        ms_st = (t_streak_detection / n_files) * 1000.0 if n_files > 0 else 0.0
+        breakdown.append(
+            f"  • Detección y Supresión Trazas: {t_streak_detection:.2f}s "
+            f"({100.0 * t_streak_detection / max(t_total, 1e-6):.1f}%, {ms_st:.1f} ms/toma, {total_streaks} suprimidas)"
+        )
+    if fill_gaps:
+        breakdown.append(
+            f"  • Puenteo Gap Filling: {t_gap_fill:.2f}s ({100.0 * t_gap_fill / max(t_total, 1e-6):.1f}%)"
+        )
+    breakdown.append(
+        f"  • Acumulación Cielo: {t_accum:.2f}s ({100.0 * t_accum / max(t_total, 1e-6):.1f}%)"
+    )
+    if timelapse_enabled:
+        breakdown.append(
+            f"  • Renderizado Time-Lapse: {t_timelapse:.2f}s ({100.0 * t_timelapse / max(t_total, 1e-6):.1f}%)"
+        )
+    if use_clean_ground:
+        breakdown.append(
+            f"  • Suelo y Fusión Final: {(t_ground + t_fusion):.2f}s ({100.0 * (t_ground + t_fusion) / max(t_total, 1e-6):.1f}%)"
+        )
+    if color_boost_enabled:
+        breakdown.append(
+            f"  • Realce Color Estelar: {t_color_boost:.2f}s ({100.0 * t_color_boost / max(t_total, 1e-6):.1f}%)"
+        )
+
+    logger.info("[STARTRAILS RENDIMIENTO]:\n" + "\n".join(breakdown))
+
     if progress_callback:
-        msg = f"Composición de trazas finalizada con éxito ({n_files} tomas)."
+        msg = f"Composición de trazas finalizada en {t_total:.2f}s ({n_files} tomas, {fps_rate:.1f} fps)."
         if actual_video_path:
             msg += f" Vídeo time-lapse exportado: {os.path.basename(actual_video_path)}"
         progress_callback(100, msg)
 
+    metrics = {
+        "t_total": t_total,
+        "t_io": t_io,
+        "t_meta": t_meta,
+        "t_dark": t_dark,
+        "t_streak_detection": t_streak_detection,
+        "total_streaks": total_streaks,
+        "t_gap_fill": t_gap_fill,
+        "t_accum": t_accum,
+        "t_timelapse": t_timelapse,
+        "t_ground": t_ground,
+        "t_fusion": t_fusion,
+        "t_color_boost": t_color_boost,
+        "t_compute": max(0.0, t_total - t_io),
+        "ms_per_frame": ms_per_frame,
+        "fps": fps_rate,
+        "n_files": n_files
+    }
+
+    if return_metrics:
+        return final_img, actual_video_path, metrics
     return final_img, actual_video_path

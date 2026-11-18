@@ -420,43 +420,72 @@ def get_application_stylesheet() -> str:
             padding: 2px;
         }}
 
-        /* --- DESLIZADORES (QSlider) - Pro Studio Styling --- */
+        /* --- DESLIZADORES (QSlider) - Pro Studio Minimalista --- */
         QSlider::groove:horizontal {{
-            border: 1px solid #232738;
+            border: none;
             height: 3px;
-            background: #141722;
+            background: #242836;
             border-radius: 1.5px;
         }}
         QSlider::sub-page:horizontal {{
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284c7, stop:1 #38bdf8);
+            background: #4a657e;
             border-radius: 1.5px;
         }}
         QSlider::sub-page:horizontal:disabled {{
-            background: #232738;
+            background: #1a1e29;
         }}
         QSlider::handle:horizontal {{
-            background: #e2e8f0;
-            border: 1.5px solid #38bdf8;
-            width: 12px;
-            height: 12px;
-            margin: -5px 0;
-            border-radius: 6px;
+            background: #cbd5e1;
+            width: 6px;
+            height: 16px;
+            margin: -6px 0;
+            border-radius: 3px;
+            border: none;
         }}
         QSlider::handle:horizontal:hover {{
             background: #ffffff;
-            border: 1.5px solid #00e5ff;
-            width: 13px;
-            height: 13px;
-            margin: -5px 0;
-            border-radius: 6.5px;
+            border: 1px solid #38bdf8;
         }}
         QSlider::handle:horizontal:pressed {{
             background: #00e5ff;
-            border: 1.5px solid #ffffff;
+            border: 1px solid #ffffff;
         }}
         QSlider::handle:horizontal:disabled {{
-            background: #475569;
-            border: 1px solid #334155;
+            background: #334155;
+            border: none;
+        }}
+        QSlider::groove:vertical {{
+            border: none;
+            width: 3px;
+            background: #242836;
+            border-radius: 1.5px;
+        }}
+        QSlider::sub-page:vertical {{
+            background: #4a657e;
+            border-radius: 1.5px;
+        }}
+        QSlider::sub-page:vertical:disabled {{
+            background: #1a1e29;
+        }}
+        QSlider::handle:vertical {{
+            background: #cbd5e1;
+            height: 6px;
+            width: 16px;
+            margin: 0 -6px;
+            border-radius: 3px;
+            border: none;
+        }}
+        QSlider::handle:vertical:hover {{
+            background: #ffffff;
+            border: 1px solid #38bdf8;
+        }}
+        QSlider::handle:vertical:pressed {{
+            background: #00e5ff;
+            border: 1px solid #ffffff;
+        }}
+        QSlider::handle:vertical:disabled {{
+            background: #334155;
+            border: none;
         }}
 
         /* --- CASILLAS Y SELECTORES --- */

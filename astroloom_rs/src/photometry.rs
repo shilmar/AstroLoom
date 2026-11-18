@@ -646,3 +646,60 @@ pub fn apply_dualband_pipeline_fused<'py>(
         u_img
     }
 }
+
+// ----------------------------------------------------------------------------
+// SCNR (Subtractive Chromatic Noise Reduction) Verde con Preservación de Luminancia
+// ----------------------------------------------------------------------------
+#[pyfunction]
+#[pyo3(signature = (img_rgb, amount=1.0, use_max=false, preserve_lightness=true))]
+pub fn apply_scnr_green_rs<'py>(
+    py: Python<'py>,
+    img_rgb: PyReadonlyArray3<'py, f32>,
+    amount: f32,
+    use_max: bool,
+    preserve_lightness: bool,
+) -> Bound<'py, PyArray3<f32>> {
+    let img = img_rgb.as_array();
+    let (h, w, c) = img.dim();
+
+    if amount <= 1e-4 {
+        return img.to_owned().into_pyarray(py);
+    }
+
+    let amt = amount.clamp(0.0, 1.0);
+
+    let out_vec = py.allow_threads(|| {
+        let mut buf = vec![0.0f32; h * w * 3];
+
+        buf.par_chunks_mut(w * 3).enumerate().for_each(|(y, row_slice)| {
+            for x in 0..w {
+                let r = unsafe { *img.uget((y, x, 0)) }.clamp(0.0, 1.0);
+                let g = unsafe { *img.uget((y, x, 1)) }.clamp(0.0, 1.0);
+                let b = unsafe { *img.uget((y, x, 2)) }.clamp(0.0, 1.0);
+
+                let neutral = if use_max { r.max(b) } else { 0.5 * (r + b) };
+                let excess = (g - neutral).max(0.0);
+                let g_corr = (g - amt * excess).max(0.0);
+
+                let idx = x * 3;
+                if preserve_lightness {
+                    let y_orig = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                    let y_corr = 0.2126 * r + 0.7152 * g_corr + 0.0722 * b;
+                    let scale = if y_corr > 1e-6 { (y_orig / y_corr).min(1.5) } else { 1.0 };
+                    row_slice[idx] = (r * scale).clamp(0.0, 1.0);
+                    row_slice[idx + 1] = (g_corr * scale).clamp(0.0, 1.0);
+                    row_slice[idx + 2] = (b * scale).clamp(0.0, 1.0);
+                } else {
+                    row_slice[idx] = r;
+                    row_slice[idx + 1] = g_corr;
+                    row_slice[idx + 2] = b;
+                }
+            }
+        });
+
+        buf
+    });
+
+    let out_arr = Array3::from_shape_vec((h, w, c), out_vec).unwrap();
+    out_arr.into_pyarray(py)
+}

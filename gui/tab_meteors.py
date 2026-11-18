@@ -21,15 +21,17 @@ import numpy as np
 import cv2
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QPushButton, QFileDialog, QMessageBox, QComboBox, QCheckBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QProgressBar, QScrollArea, QSplitter, QFrame, QSizePolicy
+    QProgressBar, QScrollArea, QSplitter, QFrame, QSizePolicy,
+    QApplication, QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox
 )
 
 from core.log_hub import log_hub
+from gui.widgets.viewer_toolbar import ViewerToolbar
 
 from core.stacking import load_image_as_float32
 from core.meteors import (
@@ -545,79 +547,45 @@ class MeteorTab(QWidget):
         left_layout.addWidget(self.progress_bar)
 
         # -------------------------------------------------------------
-        # PANEL DERECHO: Canvas Interactivo y Galería de Culling
+        # PANEL DERECHO: Toolbar Unificada, Canvas Interactivo y Galería de Culling
         # -------------------------------------------------------------
+        self.left_container = left_container
         right_container = QWidget()
         right_layout = QVBoxLayout(right_container)
-        right_layout.setContentsMargins(2, 2, 2, 2)
-        right_layout.setSpacing(4)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
 
-        # Barra superior del visor con selector de visualización calibrada
-        top_bar = QHBoxLayout()
-        top_bar.setContentsMargins(6, 2, 6, 2)
-        top_bar.setSpacing(8)
-
-        lbl_view = QLabel("Visualización:")
-        lbl_view.setStyleSheet("font-weight: bold; color: #80d8ff;")
-        top_bar.addWidget(lbl_view)
-
-        self.combo_view_mode = QComboBox()
-        self.combo_view_mode.addItems([
-            "Natural / sRGB (Fiel al Revelador)",
-            "Auto-MTF (Cielo Profundo)",
-            "Realce de Trazas (Alto Contraste)"
-        ])
-        self.combo_view_mode.setToolTip("Ajusta la representación visual en pantalla sin alterar los datos científicos de 32 bits ni la exportación.")
+        # Barra superior del visor con Toolbar unificada
+        self.toolbar = ViewerToolbar(
+            self,
+            show_left_toggle=True,
+            show_right_toggle=False,
+            show_view_mode=True,
+            show_composite_btn=True,
+            show_clipping=True,
+            show_zoom=True,
+            show_magnifier=True,
+        )
+        self.toolbar.left_panel_toggled.connect(self.toggle_left_panel)
+        self.combo_view_mode = self.toolbar.combo_view_mode
+        self.btn_view_composite = self.toolbar.btn_composite
         self.combo_view_mode.currentIndexChanged.connect(self._on_view_mode_changed)
-        top_bar.addWidget(self.combo_view_mode)
-
-        self.btn_view_composite = QPushButton("Ver Compuesto")
-        self.btn_view_composite.setIcon(get_icon("layers", color="#ffffff"))
-        self.btn_view_composite.setCheckable(True)
-        self.btn_view_composite.setChecked(False)
-        self.btn_view_composite.setEnabled(False)
-        self.btn_view_composite.setToolTip("Alterna la visualización entre el compuesto final con todos los meteoros y los fotogramas individuales de la serie.")
         self.btn_view_composite.toggled.connect(self._on_toggle_view_composite)
-        self.btn_view_composite.setStyleSheet("""
-            QPushButton {
-                background-color: #1e2638;
-                color: #eceff4;
-                border: 1px solid #3a415a;
-                border-radius: 4px;
-                padding: 4px 10px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #28324a;
-                border-color: #00bcd4;
-            }
-            QPushButton:checked {
-                background-color: #00838f;
-                color: #ffffff;
-                border: 1px solid #00e5ff;
-            }
-            QPushButton:disabled {
-                background-color: #12141e;
-                color: #546e7a;
-                border-color: #232738;
-            }
-        """)
-        top_bar.addWidget(self.btn_view_composite)
-
-        top_bar.addStretch()
 
         self.lbl_view_status = QLabel("")
         self.lbl_view_status.setStyleSheet("color: #b0bec5; font-size: 11px;")
-        top_bar.addWidget(self.lbl_view_status)
+        self.toolbar.add_widget(self.lbl_view_status)
 
-        right_layout.addLayout(top_bar)
+        right_layout.addWidget(self.toolbar)
 
         splitter_v = QSplitter(Qt.Vertical)
         splitter_v.setChildrenCollapsible(False)
+        self.splitter_v = splitter_v
 
         # 1. Visor Canvas
         self.canvas = MaskCanvas(self, enable_masking=False)
         self.canvas.files_dropped.connect(self.add_series_files)
+        self.toolbar.connect_canvas(self.canvas)
         splitter_v.addWidget(self.canvas)
 
         # 2. Tira Inferior: Galería de Culling e Inspección de Trazas
@@ -664,6 +632,20 @@ class MeteorTab(QWidget):
         self.lbl_cand_summary = QLabel("0 trazas detectadas")
         self.lbl_cand_summary.setStyleSheet("color: #ffd54f; font-weight: bold;")
         bar_cull.addWidget(self.lbl_cand_summary)
+
+        # Botón plegar/desplegar galería inferior (detrás de la etiqueta de meteoros seleccionados)
+        self.btn_toggle_cull_panel = QPushButton()
+        self.btn_toggle_cull_panel.setIcon(
+            get_icon("chevron_down", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13)
+        )
+        self.btn_toggle_cull_panel.setCheckable(True)
+        self.btn_toggle_cull_panel.setChecked(True)
+        self.btn_toggle_cull_panel.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_cull_panel.setFixedSize(26, 24)
+        self.btn_toggle_cull_panel.setToolTip("Plegar / Desplegar galería de trazas de meteoros (Atajo: F9)")
+        self.btn_toggle_cull_panel.clicked.connect(self.toggle_cull_panel)
+        bar_cull.addWidget(self.btn_toggle_cull_panel)
+
         cull_l.addLayout(bar_cull)
 
         # Tabla de candidatos
@@ -692,6 +674,7 @@ class MeteorTab(QWidget):
 
         right_layout.addWidget(splitter_v)
 
+        self.splitter_h = splitter_h
         splitter_h.addWidget(left_container)
         splitter_h.addWidget(right_container)
         splitter_h.setStretchFactor(0, 0)
@@ -699,6 +682,90 @@ class MeteorTab(QWidget):
         splitter_h.setSizes([450, 1350])
 
         main_layout.addWidget(splitter_h)
+
+        # Atajos de teclado locales para el visor
+        self.shortcut_f7 = QShortcut(QKeySequence(Qt.Key_F7), self)
+        self.shortcut_f7.setContext(Qt.WidgetWithChildrenShortcut)
+        self.shortcut_f7.activated.connect(lambda: self.toggle_left_panel())
+
+        self.shortcut_bracket = QShortcut(QKeySequence(Qt.Key_BracketLeft), self)
+        self.shortcut_bracket.setContext(Qt.WidgetWithChildrenShortcut)
+        self.shortcut_bracket.activated.connect(lambda: self.toggle_left_panel())
+
+        self.shortcut_f9 = QShortcut(QKeySequence(Qt.Key_F9), self)
+        self.shortcut_f9.setContext(Qt.WidgetWithChildrenShortcut)
+        self.shortcut_f9.activated.connect(lambda: self.toggle_cull_panel())
+
+    def toggle_left_panel(self, visible: Optional[bool] = None) -> None:
+        """Muestra u oculta el panel lateral izquierdo de controles de meteoros (Atajo: F7 o [)."""
+        if not hasattr(self, 'left_container'):
+            return
+        if visible is None:
+            visible = not self.left_container.isVisible()
+        if not visible and self.left_container.isVisible() and hasattr(self, 'splitter_h'):
+            sizes = self.splitter_h.sizes()
+            if len(sizes) >= 2 and sizes[0] > 50:
+                self._last_left_panel_width = sizes[0]
+        self.left_container.setVisible(visible)
+        if hasattr(self, 'toolbar'):
+            self.toolbar.set_left_panel_checked(visible)
+        if visible and hasattr(self, 'splitter_h'):
+            sizes = self.splitter_h.sizes()
+            if len(sizes) >= 2 and sizes[0] < 50:
+                sizes[0] = getattr(self, '_last_left_panel_width', 450)
+                self.splitter_h.setSizes(sizes)
+
+    def toggle_cull_panel(self, visible: Optional[bool] = None) -> None:
+        """Pliega o despliega la tabla de candidatos de la galería inferior de culling (Atajo: F9)."""
+        if not hasattr(self, 'table_cull') or not hasattr(self, 'splitter_v'):
+            return
+        if visible is None:
+            visible = not self.table_cull.isVisible()
+        if not visible and self.table_cull.isVisible():
+            sizes = self.splitter_v.sizes()
+            if len(sizes) >= 2 and sizes[1] > 60:
+                self._last_cull_height = sizes[1]
+        self.table_cull.setVisible(visible)
+        if hasattr(self, 'btn_toggle_cull_panel'):
+            self.btn_toggle_cull_panel.blockSignals(True)
+            self.btn_toggle_cull_panel.setChecked(visible)
+            icon_name = "chevron_down" if visible else "chevron_up"
+            self.btn_toggle_cull_panel.setIcon(
+                get_icon(icon_name, color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13)
+            )
+            self.btn_toggle_cull_panel.blockSignals(False)
+        if visible:
+            sizes = self.splitter_v.sizes()
+            total_h = sum(sizes) if sizes else 800
+            restore_h = getattr(self, '_last_cull_height', 220)
+            self.splitter_v.setSizes([max(200, total_h - restore_h), restore_h])
+        else:
+            self.splitter_v.setSizes([3000, 42])
+
+    def keyPressEvent(self, event):
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            super().keyPressEvent(event)
+            return
+        if event.key() in (Qt.Key_F7, Qt.Key_BracketLeft):
+            self.toggle_left_panel()
+            event.accept()
+            return
+        elif event.key() == Qt.Key_F9:
+            self.toggle_cull_panel()
+            event.accept()
+            return
+        elif event.key() == Qt.Key_J:
+            if hasattr(self, 'toolbar') and hasattr(self.toolbar, 'btn_clipping'):
+                self.toolbar.btn_clipping.toggle()
+            event.accept()
+            return
+        elif event.key() == Qt.Key_Z:
+            if hasattr(self, 'toolbar') and hasattr(self.toolbar, 'btn_magnifier'):
+                self.toolbar.btn_magnifier.toggle()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def log(self, msg: str) -> None:
         log_hub.log("Meteoros", msg)

@@ -21,12 +21,13 @@ import cv2
 import numpy as np
 import tifffile
 from PySide6.QtCore import Qt, QThread, Signal, QPointF, QRectF
-from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QBrush, QCursor, QFont
+from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QBrush, QCursor, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QPushButton, QFileDialog, QMessageBox, QSlider, QComboBox,
     QCheckBox, QSpinBox, QDoubleSpinBox, QTableWidget, QTableWidgetItem, QHeaderView,
-    QProgressBar, QScrollArea, QSplitter, QFrame, QSizePolicy
+    QProgressBar, QScrollArea, QSplitter, QFrame, QSizePolicy,
+    QApplication, QLineEdit, QTextEdit, QPlainTextEdit
 )
 
 from core.panorama import (
@@ -42,6 +43,7 @@ from core.panorama import (
     load_panorama_session
 )
 from core.icc_manager import save_tiff_with_icc
+from gui.widgets.viewer_toolbar import ViewerToolbar
 from gui.widgets.drop_widgets import DropTableWidget, collect_image_files_from_mime
 from gui.theme import STYLE_RUN_IDLE, STYLE_CANCEL_ACTIVE, STYLE_TRANSFER_BTN
 from gui.icons import get_icon, get_svg_pixmap, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_ACCENT
@@ -695,47 +697,60 @@ class PanoramaTab(QWidget):
         splitter.addWidget(scroll_area)
 
         # =========================================================
-        # PANEL DERECHO: BARRA SUPERIOR + LIENZO INTERACTIVO
+        # PANEL DERECHO: BARRA SUPERIOR UNIFICADA + LIENZO INTERACTIVO
         # =========================================================
+        self.splitter = splitter
+        self.scroll_area = scroll_area
+
         right_container = QWidget()
         right_layout = QVBoxLayout(right_container)
-        right_layout.setContentsMargins(4, 4, 4, 4)
-        right_layout.setSpacing(6)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
 
-        # Barra de herramientas superior
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(6)
+        # Barra de herramientas superior unificada
+        self.toolbar = ViewerToolbar(
+            self,
+            show_left_toggle=True,
+            show_right_toggle=False,
+            show_view_mode=False,
+            show_composite_btn=False,
+            show_clipping=False,
+            show_zoom=True,
+            show_magnifier=False,
+        )
+        self.toolbar.left_panel_toggled.connect(self.toggle_left_panel)
+        self.btn_zoom_100 = self.toolbar.btn_zoom_100
+        self.btn_zoom_fit = self.toolbar.btn_zoom_fit
 
-        self.btn_zoom_out = QPushButton("-")
-        self.btn_zoom_out.setIcon(get_icon("search", color="#94a3b8"))
-        self.btn_zoom_out.setFixedWidth(44)
-        self.btn_zoom_100 = QPushButton("100%")
-        self.btn_zoom_100.setFixedWidth(55)
-        self.btn_zoom_in = QPushButton("+")
-        self.btn_zoom_in.setIcon(get_icon("zoom_in", color="#94a3b8"))
-        self.btn_zoom_in.setFixedWidth(44)
-        self.btn_zoom_fit = QPushButton("Ajustar")
-        self.btn_zoom_fit.setIcon(get_icon("maximize", color="#80d8ff"))
-        self.btn_zoom_fit.setFixedWidth(80)
+        # Botones de aumento gradual (+ / -)
+        self.btn_zoom_out = QPushButton()
+        self.btn_zoom_out.setIcon(get_icon("zoom_out", color="#94a3b8", hover_color="#ffffff", size=13))
+        self.btn_zoom_out.setToolTip("Reducir zoom (-)")
+        self.btn_zoom_out.setFixedSize(28, 26)
+        self.toolbar.insert_custom_widget_before_stretch(self.btn_zoom_out)
 
+        self.btn_zoom_in = QPushButton()
+        self.btn_zoom_in.setIcon(get_icon("zoom_in", color="#94a3b8", hover_color="#ffffff", size=13))
+        self.btn_zoom_in.setToolTip("Aumentar zoom (+)")
+        self.btn_zoom_in.setFixedSize(28, 26)
+        self.toolbar.insert_custom_widget_before_stretch(self.btn_zoom_in)
+
+        self.toolbar.add_separator_before_stretch()
+
+        # Botón Ver Recorte
         self.btn_toggle_crop = QPushButton("Ver Recorte")
-        self.btn_toggle_crop.setIcon(get_icon("crop", color="#80d8ff"))
+        self.btn_toggle_crop.setIcon(get_icon("crop", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
         self.btn_toggle_crop.setCheckable(True)
         self.btn_toggle_crop.setChecked(True)
-        self.btn_toggle_crop.setFixedWidth(110)
+        self.btn_toggle_crop.setToolTip("Alterna entre la panorámica recortada al rectángulo válido y la vista completa con bordes.")
+        self.toolbar.insert_custom_widget_before_stretch(self.btn_toggle_crop)
 
+        # Estadísticas y resolución a la derecha
         self.lbl_stats = QLabel("Sin panorámica generada")
-        self.lbl_stats.setStyleSheet("color: #78909c; font-size: 11px; margin-left: 10px;")
+        self.lbl_stats.setStyleSheet("color: #80d8ff; font-size: 11px; font-weight: bold;")
+        self.toolbar.add_widget(self.lbl_stats)
 
-        toolbar.addWidget(self.btn_zoom_out)
-        toolbar.addWidget(self.btn_zoom_100)
-        toolbar.addWidget(self.btn_zoom_in)
-        toolbar.addWidget(self.btn_zoom_fit)
-        toolbar.addWidget(self.btn_toggle_crop)
-        toolbar.addWidget(self.lbl_stats)
-        toolbar.addStretch()
-
-        right_layout.addLayout(toolbar)
+        right_layout.addWidget(self.toolbar)
 
         # Lienzo interactivo
         self.canvas = PanoramaInteractiveCanvas()
@@ -745,6 +760,45 @@ class PanoramaTab(QWidget):
         splitter.setSizes([450, 910])
 
         main_layout.addWidget(splitter)
+
+        # Atajos de teclado locales
+        self.shortcut_f7 = QShortcut(QKeySequence(Qt.Key_F7), self)
+        self.shortcut_f7.setContext(Qt.WidgetWithChildrenShortcut)
+        self.shortcut_f7.activated.connect(lambda: self.toggle_left_panel())
+
+        self.shortcut_bracket = QShortcut(QKeySequence(Qt.Key_BracketLeft), self)
+        self.shortcut_bracket.setContext(Qt.WidgetWithChildrenShortcut)
+        self.shortcut_bracket.activated.connect(lambda: self.toggle_left_panel())
+
+    def toggle_left_panel(self, visible: Optional[bool] = None) -> None:
+        """Muestra u oculta el panel lateral izquierdo de controles de panorámica (Atajo: F7 o [)."""
+        if not hasattr(self, 'scroll_area'):
+            return
+        if visible is None:
+            visible = not self.scroll_area.isVisible()
+        if not visible and self.scroll_area.isVisible() and hasattr(self, 'splitter'):
+            sizes = self.splitter.sizes()
+            if len(sizes) >= 2 and sizes[0] > 50:
+                self._last_left_panel_width = sizes[0]
+        self.scroll_area.setVisible(visible)
+        if hasattr(self, 'toolbar'):
+            self.toolbar.set_left_panel_checked(visible)
+        if visible and hasattr(self, 'splitter'):
+            sizes = self.splitter.sizes()
+            if len(sizes) >= 2 and sizes[0] < 50:
+                sizes[0] = getattr(self, '_last_left_panel_width', 450)
+                self.splitter.setSizes(sizes)
+
+    def keyPressEvent(self, event):
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            super().keyPressEvent(event)
+            return
+        if event.key() in (Qt.Key_F7, Qt.Key_BracketLeft):
+            self.toggle_left_panel()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
         # Conexiones
         self._connect_signals()

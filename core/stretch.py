@@ -285,6 +285,59 @@ def apply_white_balance(img_rgb: np.ndarray, temp_factor: float = 0.0, tint_fact
 
     balanced = img_rgb * gains
     return np.clip(balanced, 0.0, 1.0)
+
+def apply_scnr_green(
+    img_rgb: np.ndarray,
+    amount: float = 1.0,
+    method: str = "average",
+    preserve_lightness: bool = True
+) -> np.ndarray:
+    """
+    SCNR (Subtractive Chromatic Noise Reduction) para suprimir el exceso de ruido verde del sensor.
+    - amount: Intensidad de reducción [0.0, 1.0] (0.0 = sin cambio, 1.0 = supresión total del exceso).
+    - method: 'average' (promedio de R y B) o 'max' (máximo de R y B).
+    - preserve_lightness: Conserva la luminancia Rec.709 original para evitar oscurecimiento.
+    """
+    if img_rgb is None or amount <= 1e-4:
+        return img_rgb
+
+    if HAS_RUST and hasattr(astroloom_rs, "apply_scnr_green_rs"):
+        return astroloom_rs.apply_scnr_green_rs(
+            np.ascontiguousarray(img_rgb, dtype=np.float32),
+            float(amount),
+            bool(method == "max"),
+            bool(preserve_lightness)
+        )
+
+    img = np.clip(np.asarray(img_rgb, dtype=np.float32), 0.0, 1.0)
+    r = img[..., 0]
+    g = img[..., 1]
+    b = img[..., 2]
+
+    if method == "max":
+        neutral = np.maximum(r, b)
+    else:
+        neutral = 0.5 * (r + b)
+
+    excess = np.maximum(0.0, g - neutral)
+    if np.max(excess) < 1e-6:
+        return img
+
+    amt = float(np.clip(amount, 0.0, 1.0))
+    g_corr = np.maximum(0.0, g - amt * excess)
+
+    if preserve_lightness:
+        y_orig = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        y_corr = 0.2126 * r + 0.7152 * g_corr + 0.0722 * b
+        scale = np.where(y_corr > 1e-6, y_orig / np.maximum(1e-6, y_corr), 1.0)
+        scale = np.minimum(scale, 1.5)
+        r_out = np.clip(r * scale, 0.0, 1.0)
+        g_out = np.clip(g_corr * scale, 0.0, 1.0)
+        b_out = np.clip(b * scale, 0.0, 1.0)
+        return np.stack([r_out, g_out, b_out], axis=-1).astype(np.float32)
+    else:
+        return np.stack([r, g_corr, b], axis=-1).astype(np.float32)
+
     
 def adjust_vibrance(img_rgb: np.ndarray, vibrance: float = 0.0) -> np.ndarray:
     """

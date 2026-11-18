@@ -1,0 +1,57 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Executable
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install maturin pyinstaller
+
+      - name: Compile Rust native engine (astroloom_rs)
+        run: |
+          cd astroloom_rs
+          maturin develop --release
+          cd ..
+
+      - name: Build Executable with PyInstaller
+        run: |
+          pyinstaller --clean Astroloom.spec
+
+      - name: Compress Release Archive
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\AstroLoom.exe -DestinationPath dist\AstroLoom-windows-x64.zip
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/AstroLoom.exe
+            dist/AstroLoom-windows-x64.zip
+          generate_release_notes: true

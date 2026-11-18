@@ -7,6 +7,7 @@ import cv2
 
 from core.stretch import (
     apply_white_balance,
+    apply_scnr_green,
     adjust_vibrance,
     apply_ghs_stretch,
     manual_stretch,
@@ -39,6 +40,11 @@ from core.dualband import apply_dualband_palette, unclip_stars, unpurple
 from core.pcc import apply_pcc_gains
 from gui.developer.developer_state import DeveloperState
 
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
 
 _MASK_3D_CACHE: Dict[Tuple[int, int, int], np.ndarray] = {}
 
@@ -245,8 +251,12 @@ def apply_developer_pipeline(
                     img = unclip_stars(img)
 
                 unpurple_amt = getattr(state, 'unpurple_val', 0) / 100.0
-                if unpurple_amt > 1e-4:
-                    img = unpurple(img, amount=unpurple_amt)
+                scnr_amt = getattr(state, 'scnr_green_val', 0) / 100.0
+                temp_val = state.temp_val / 1000.0
+                tint_val = state.tint_val / 1000.0
+                sat_sky_val = state.sat_sky_val / 100.0
+                sat_gnd_val = state.sat_gnd_val / 100.0
+                vibrance_val = state.vibrance_val / 100.0
 
                 # 0b. Ganancias Fotometricas PCC (si estan activas)
                 pcc_kr = getattr(state, 'pcc_kr', 1.0)
@@ -254,35 +264,59 @@ def apply_developer_pipeline(
                 if abs(pcc_kr - 1.0) > 1e-4 or abs(pcc_kb - 1.0) > 1e-4:
                     img = apply_pcc_gains(img, pcc_kr, pcc_kb)
 
-                # 1. Balance de blancos
-                temp_val = state.temp_val / 1000.0
-                tint_val = state.tint_val / 1000.0
-                if abs(temp_val) > 1e-5 or abs(tint_val) > 1e-5:
-                    img = apply_white_balance(img, temp_val, tint_val)
+                # Optimización Nativa en Rust para el Grafo Proxy (60 FPS fijos)
+                can_use_rust_proxy = (
+                    HAS_RUST and hasattr(astroloom_rs, 'eval_developer_proxy_fused_rs')
+                    and (is_scrubbing or is_preview)
+                )
+                if can_use_rust_proxy:
+                    mask_2d = precomputed_mask[..., 0] if (precomputed_mask is not None and precomputed_mask.ndim == 3) else precomputed_mask
+                    img = astroloom_rs.eval_developer_proxy_fused_rs(
+                        np.ascontiguousarray(img, dtype=np.float32),
+                        temp_val=float(temp_val),
+                        tint_val=float(tint_val),
+                        scnr_amount=float(scnr_amt),
+                        unpurple_amount=float(unpurple_amt),
+                        sat_sky=float(sat_sky_val),
+                        sat_gnd=float(sat_gnd_val),
+                        vibrance=float(vibrance_val),
+                        contrast=0.0,
+                        contrast_pivot=0.20,
+                        mtf_mid=None,
+                        mtf_bp=0.0,
+                        sky_mask=mask_2d
+                    )
+                else:
+                    if unpurple_amt > 1e-4:
+                        img = unpurple(img, amount=unpurple_amt)
 
-                # 2. Saturación diferencial cielo / suelo
-                sat_sky_val = state.sat_sky_val / 100.0
-                sat_gnd_val = state.sat_gnd_val / 100.0
-                if sat_sky_val != 1.0 or sat_gnd_val != 1.0:
-                    hsv = cv2.cvtColor(np.clip(img, 0.0, 1.0), cv2.COLOR_RGB2HSV)
-                    if precomputed_mask is None or sat_sky_val == sat_gnd_val:
-                        hsv[..., 1] = np.clip(hsv[..., 1] * sat_sky_val, 0.0, 1.0)
-                        img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
-                    else:
-                        hsv_sky = hsv.copy()
-                        hsv_sky[..., 1] = np.clip(hsv_sky[..., 1] * sat_sky_val, 0.0, 1.0)
-                        rgb_sky = cv2.cvtColor(hsv_sky, cv2.COLOR_HSV2RGB)
+                    if scnr_amt > 1e-4:
+                        img = apply_scnr_green(img, amount=scnr_amt)
 
-                        hsv_gnd = hsv.copy()
-                        hsv_gnd[..., 1] = np.clip(hsv_gnd[..., 1] * sat_gnd_val, 0.0, 1.0)
-                        rgb_gnd = cv2.cvtColor(hsv_gnd, cv2.COLOR_HSV2RGB)
+                    # 1. Balance de blancos
+                    if abs(temp_val) > 1e-5 or abs(tint_val) > 1e-5:
+                        img = apply_white_balance(img, temp_val, tint_val)
 
-                        img = (rgb_sky * precomputed_mask) + (rgb_gnd * (1.0 - precomputed_mask))
+                    # 2. Saturación diferencial cielo / suelo
+                    if sat_sky_val != 1.0 or sat_gnd_val != 1.0:
+                        hsv = cv2.cvtColor(np.clip(img, 0.0, 1.0), cv2.COLOR_RGB2HSV)
+                        if precomputed_mask is None or sat_sky_val == sat_gnd_val:
+                            hsv[..., 1] = np.clip(hsv[..., 1] * sat_sky_val, 0.0, 1.0)
+                            img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+                        else:
+                            hsv_sky = hsv.copy()
+                            hsv_sky[..., 1] = np.clip(hsv_sky[..., 1] * sat_sky_val, 0.0, 1.0)
+                            rgb_sky = cv2.cvtColor(hsv_sky, cv2.COLOR_HSV2RGB)
 
-                # 3. Intensidad / Vibrance
-                vibrance_val = state.vibrance_val / 100.0
-                if abs(vibrance_val) > 1e-4:
-                    img = adjust_vibrance(img, vibrance_val)
+                            hsv_gnd = hsv.copy()
+                            hsv_gnd[..., 1] = np.clip(hsv_gnd[..., 1] * sat_gnd_val, 0.0, 1.0)
+                            rgb_gnd = cv2.cvtColor(hsv_gnd, cv2.COLOR_HSV2RGB)
+
+                            img = (rgb_sky * precomputed_mask) + (rgb_gnd * (1.0 - precomputed_mask))
+
+                    # 3. Intensidad / Vibrance
+                    if abs(vibrance_val) > 1e-4:
+                        img = adjust_vibrance(img, vibrance_val)
 
                 milestone_pre_lp = img
 

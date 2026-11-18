@@ -1527,5 +1527,148 @@ pub fn stamp_brush_stroke_rs<'py>(
     Ok(Some((bx0, by0, bx1, by1)))
 }
 
+// ============================================================================
+// EVALUACIÓN FUSIONADA DEL GRAFO PROXY EN TIEMPO REAL (60 FPS FIJOS)
+// Fusión de WB + Unpurple + SCNR + Saturación/Vibranza + MTF + Contraste
+// ============================================================================
+#[pyfunction]
+#[pyo3(signature = (
+    img_rgb,
+    temp_val=0.0,
+    tint_val=0.0,
+    scnr_amount=0.0,
+    unpurple_amount=0.0,
+    sat_sky=1.0,
+    sat_gnd=1.0,
+    vibrance=0.0,
+    contrast=0.0,
+    contrast_pivot=0.20,
+    mtf_mid=None,
+    mtf_bp=0.0,
+    sky_mask=None
+))]
+pub fn eval_developer_proxy_fused_rs<'py>(
+    py: Python<'py>,
+    img_rgb: PyReadonlyArray3<'py, f32>,
+    temp_val: f32,
+    tint_val: f32,
+    scnr_amount: f32,
+    unpurple_amount: f32,
+    sat_sky: f32,
+    sat_gnd: f32,
+    vibrance: f32,
+    contrast: f32,
+    contrast_pivot: f32,
+    mtf_mid: Option<f32>,
+    mtf_bp: f32,
+    sky_mask: Option<PyReadonlyArray2<'py, f32>>,
+) -> Bound<'py, PyArray3<f32>> {
+    let img = img_rgb.as_array();
+    let (h, w, c) = img.dim();
+
+    let mask_arr = sky_mask.as_ref().map(|m| m.as_array());
+
+    let out_vec = py.allow_threads(|| {
+        let mut buf = vec![0.0f32; h * w * 3];
+
+        let r_gain = 1.0 + (temp_val * 0.5) + (tint_val * 0.25);
+        let g_gain = 1.0 - (tint_val * 0.5);
+        let b_gain = 1.0 - (temp_val * 0.5) + (tint_val * 0.25);
+
+        let amt_scnr = scnr_amount.clamp(0.0, 1.0);
+        let amt_unpurple = unpurple_amount.clamp(0.0, 1.0);
+
+        buf.par_chunks_mut(w * 3).enumerate().for_each(|(y, row_slice)| {
+            for x in 0..w {
+                let mut r = unsafe { *img.uget((y, x, 0)) }.clamp(0.0, 1.0);
+                let mut g = unsafe { *img.uget((y, x, 1)) }.clamp(0.0, 1.0);
+                let mut b = unsafe { *img.uget((y, x, 2)) }.clamp(0.0, 1.0);
+
+                // 1. Balance de blancos
+                if (temp_val.abs() > 1e-5) || (tint_val.abs() > 1e-5) {
+                    r = (r * r_gain).clamp(0.0, 1.0);
+                    g = (g * g_gain).clamp(0.0, 1.0);
+                    b = (b * b_gain).clamp(0.0, 1.0);
+                }
+
+                // 2. Unpurple / Atenuación de halos magenta
+                if amt_unpurple > 1e-4 {
+                    let mut fringe = (r - g).min(b - g).max(0.0);
+                    if fringe > 0.0 {
+                        let ha_dom = ((r - b) / (r + 1e-4)).clamp(0.0, 1.0);
+                        fringe *= 1.0 - ha_dom;
+                        r = (r - amt_unpurple * fringe * 0.75).clamp(0.0, 1.0);
+                        b = (b - amt_unpurple * fringe).clamp(0.0, 1.0);
+                    }
+                }
+
+                // 3. SCNR Verde
+                if amt_scnr > 1e-4 {
+                    let neutral = 0.5 * (r + b);
+                    let excess = (g - neutral).max(0.0);
+                    if excess > 0.0 {
+                        let g_corr = (g - amt_scnr * excess).max(0.0);
+                        let y_orig = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                        let y_corr = 0.2126 * r + 0.7152 * g_corr + 0.0722 * b;
+                        let s = if y_corr > 1e-6 { (y_orig / y_corr).min(1.5) } else { 1.0 };
+                        r = (r * s).clamp(0.0, 1.0);
+                        g = (g_corr * s).clamp(0.0, 1.0);
+                        b = (b * s).clamp(0.0, 1.0);
+                    }
+                }
+
+                // 4. Saturación diferencial cielo / suelo y Vibranza
+                let effective_sat = if let Some(ref m) = mask_arr {
+                    let sky_w = unsafe { *m.uget((y, x)) }.clamp(0.0, 1.0);
+                    sat_sky * sky_w + sat_gnd * (1.0 - sky_w)
+                } else {
+                    sat_sky
+                };
+
+                if (effective_sat - 1.0).abs() > 1e-4 || vibrance.abs() > 1e-4 {
+                    adjust_sat_and_vibrance(&mut r, &mut g, &mut b, effective_sat, vibrance);
+                }
+
+                // 5. Estirado MTF (si está activo)
+                if let Some(m_param) = mtf_mid {
+                    let m_clamped = m_param.clamp(0.0001, 0.9999);
+                    let denom_norm = (1.0 - mtf_bp).max(1e-6);
+                    let r_norm = ((r - mtf_bp) / denom_norm).clamp(0.0, 1.0);
+                    let g_norm = ((g - mtf_bp) / denom_norm).clamp(0.0, 1.0);
+                    let b_norm = ((b - mtf_bp) / denom_norm).clamp(0.0, 1.0);
+
+                    #[inline(always)]
+                    fn mtf(v: f32, m: f32) -> f32 {
+                        let denom = (2.0 * m - 1.0) * v - m;
+                        if denom.abs() < 1e-7 { v } else { ((m - 1.0) * v) / denom }
+                    }
+
+                    r = mtf(r_norm, m_clamped).clamp(0.0, 1.0);
+                    g = mtf(g_norm, m_clamped).clamp(0.0, 1.0);
+                    b = mtf(b_norm, m_clamped).clamp(0.0, 1.0);
+                }
+
+                // 6. Contraste
+                if contrast.abs() > 1e-4 {
+                    r = adjust_contrast_val(r, contrast, contrast_pivot).clamp(0.0, 1.0);
+                    g = adjust_contrast_val(g, contrast, contrast_pivot).clamp(0.0, 1.0);
+                    b = adjust_contrast_val(b, contrast, contrast_pivot).clamp(0.0, 1.0);
+                }
+
+                let idx = x * 3;
+                row_slice[idx] = r;
+                row_slice[idx + 1] = g;
+                row_slice[idx + 2] = b;
+            }
+        });
+
+        buf
+    });
+
+    let out_arr = Array3::from_shape_vec((h, w, c), out_vec).unwrap();
+    out_arr.into_pyarray(py)
+}
+
+
 
 

@@ -34,6 +34,7 @@ class DeveloperState:
     dualband_oiii_boost: int = 100
     unclip_stars_val: int = 0
     unpurple_val: int = 0
+    scnr_green_val: int = 0
 
     # Light Pollution / Gradients
     lp_val: int = 0

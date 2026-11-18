@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 
 from PySide6.QtCore import Qt, QThread, Signal, QPointF, QRectF
-from PySide6.QtGui import QImage, QPixmap, QColor, QFont, QPainter, QCursor
+from PySide6.QtGui import QImage, QPixmap, QColor, QFont, QPainter, QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -38,8 +38,14 @@ from PySide6.QtWidgets import (
     QApplication,
     QSizePolicy,
     QSpinBox,
-    QColorDialog
+    QColorDialog,
+    QLineEdit,
+    QTextEdit,
+    QPlainTextEdit,
+    QDoubleSpinBox
 )
+
+from gui.widgets.viewer_toolbar import ViewerToolbar
 
 
 from core.eclipse_collage import (
@@ -571,64 +577,80 @@ class EclipseCollageTab(QWidget):
 
         scroll_area.setWidget(panel_content)
         left_panel_layout.addWidget(scroll_area)
+        self.splitter = splitter
+        self.left_panel = left_panel
         splitter.addWidget(left_panel)
 
         # -----------------------------------------------------------------
-        # Panel Derecho: Vista Previa Interactiva del Collage
+        # Panel Derecho: Toolbar Unificada + Vista Previa Interactiva del Collage
         # -----------------------------------------------------------------
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(4, 4, 4, 4)
-        right_layout.setSpacing(6)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
 
-        header_row = QHBoxLayout()
-        self.lbl_info = QLabel("Vista Previa del Collage (0 fases seleccionadas)")
-        self.lbl_info.setStyleSheet("font-weight: bold; color: #cfd8dc; font-size: 12px;")
-        header_row.addWidget(self.lbl_info)
-        header_row.addStretch()
+        self.toolbar = ViewerToolbar(
+            self,
+            show_left_toggle=True,
+            show_right_toggle=False,
+            show_view_mode=False,
+            show_composite_btn=False,
+            show_clipping=False,
+            show_zoom=True,
+            show_magnifier=False,
+        )
+        self.toolbar.left_panel_toggled.connect(self.toggle_left_panel)
+        self.btn_zoom_100 = self.toolbar.btn_zoom_100
+        self.btn_zoom_fit = self.toolbar.btn_zoom_fit
+
+        # Botón Actualizar composición
+        self.btn_refresh = QPushButton("Actualizar")
+        self.btn_refresh.setIcon(get_icon("refresh", color="#80d8ff"))
+        self.btn_refresh.setToolTip("Re-renderizar la composición previa del collage")
+        self.btn_refresh.clicked.connect(self._update_preview)
+        self.toolbar.insert_custom_widget_before_stretch(self.btn_refresh)
+
+        self.toolbar.add_separator_before_stretch()
+
+        # Botones de navegación interactiva y zoom gradual (+ / - / %)
+        self.btn_zoom_out = QPushButton()
+        self.btn_zoom_out.setIcon(get_icon("zoom_out", color="#94a3b8", hover_color="#ffffff", size=13))
+        self.btn_zoom_out.setToolTip("Alejar zoom (-)")
+        self.btn_zoom_out.setFixedSize(28, 26)
+        self.btn_zoom_out.clicked.connect(lambda: self.canvas_preview.zoom_by(1.0 / 1.25))
+        self.toolbar.insert_custom_widget_before_stretch(self.btn_zoom_out)
+
+        self.lbl_zoom_val = QLabel("100%")
+        self.lbl_zoom_val.setStyleSheet("color: #80d8ff; font-weight: bold; min-width: 44px;")
+        self.lbl_zoom_val.setAlignment(Qt.AlignCenter)
+        self.toolbar.insert_custom_widget_before_stretch(self.lbl_zoom_val)
+
+        self.btn_zoom_in = QPushButton()
+        self.btn_zoom_in.setIcon(get_icon("zoom_in", color="#94a3b8", hover_color="#ffffff", size=13))
+        self.btn_zoom_in.setToolTip("Acercar zoom (+)")
+        self.btn_zoom_in.setFixedSize(28, 26)
+        self.btn_zoom_in.clicked.connect(lambda: self.canvas_preview.zoom_by(1.25))
+        self.toolbar.insert_custom_widget_before_stretch(self.btn_zoom_in)
+
+        # Badge de Modo a la derecha (estilo idéntico a Eclipse HDR)
+        self.lbl_mode_badge = QLabel("● Modo: Solar (Collage)")
+        self.lbl_mode_badge.setStyleSheet(
+            "background-color: #141724; border: 1px solid #ff4081; border-radius: 4px; padding: 2px 8px; color: #ff4081; font-weight: bold; font-size: 11px;"
+        )
+        self.toolbar.add_widget(self.lbl_mode_badge)
+
+        # Etiqueta informativa de fases
+        self.lbl_info = QLabel("0 fases seleccionadas")
+        self.lbl_info.setStyleSheet("color: #90a4ae; font-size: 11px;")
+        self.toolbar.add_widget(self.lbl_info)
+
+        right_layout.addWidget(self.toolbar)
 
         # Crear lienzo interactivo
         self.canvas_preview = CollageInteractiveCanvas()
         self.canvas_preview.zoom_changed.connect(self._on_zoom_changed)
-
-        # Botones de navegación interactiva y zoom
-        self.btn_zoom_out = QPushButton("-")
-        self.btn_zoom_out.setIcon(get_icon("search", color="#94a3b8"))
-        self.btn_zoom_out.setFixedWidth(34)
-        self.btn_zoom_out.setToolTip("Alejar zoom")
-        self.btn_zoom_out.clicked.connect(lambda: self.canvas_preview.zoom_by(1.0 / 1.25))
-
-        self.lbl_zoom_val = QLabel("100%")
-        self.lbl_zoom_val.setStyleSheet("color: #80d8ff; font-weight: bold; min-width: 48px;")
-        self.lbl_zoom_val.setAlignment(Qt.AlignCenter)
-
-        self.btn_zoom_in = QPushButton("+")
-        self.btn_zoom_in.setIcon(get_icon("zoom_in", color="#94a3b8"))
-        self.btn_zoom_in.setFixedWidth(34)
-        self.btn_zoom_in.setToolTip("Acercar zoom")
-        self.btn_zoom_in.clicked.connect(lambda: self.canvas_preview.zoom_by(1.25))
-
-        self.btn_zoom_100 = QPushButton("1:1")
-        self.btn_zoom_100.setFixedWidth(36)
-        self.btn_zoom_100.setToolTip("Ver a tamaño real 100%")
         self.btn_zoom_100.clicked.connect(self.canvas_preview.set_zoom_100)
-
-        self.btn_zoom_fit = QPushButton("Ajustar")
-        self.btn_zoom_fit.setIcon(get_icon("maximize", color="#80d8ff"))
-        self.btn_zoom_fit.setToolTip("Ajustar al tamaño de la ventana (o doble clic en el lienzo)")
         self.btn_zoom_fit.clicked.connect(self.canvas_preview.fit_view)
-
-        header_row.addWidget(self.btn_zoom_out)
-        header_row.addWidget(self.lbl_zoom_val)
-        header_row.addWidget(self.btn_zoom_in)
-        header_row.addWidget(self.btn_zoom_100)
-        header_row.addWidget(self.btn_zoom_fit)
-
-        self.btn_refresh = QPushButton("Actualizar")
-        self.btn_refresh.setIcon(get_icon("refresh", color="#80d8ff"))
-        self.btn_refresh.clicked.connect(self._update_preview)
-        header_row.addWidget(self.btn_refresh)
-        right_layout.addLayout(header_row)
 
         right_layout.addWidget(self.canvas_preview, stretch=1)
 
@@ -638,8 +660,58 @@ class EclipseCollageTab(QWidget):
 
         main_layout.addWidget(splitter)
 
+        # Atajos de teclado locales
+        self.shortcut_f7 = QShortcut(QKeySequence(Qt.Key_F7), self)
+        self.shortcut_f7.setContext(Qt.WidgetWithChildrenShortcut)
+        self.shortcut_f7.activated.connect(lambda: self.toggle_left_panel())
+
+        self.shortcut_bracket = QShortcut(QKeySequence(Qt.Key_BracketLeft), self)
+        self.shortcut_bracket.setContext(Qt.WidgetWithChildrenShortcut)
+        self.shortcut_bracket.activated.connect(lambda: self.toggle_left_panel())
+
     def _on_mode_combo_changed(self, idx: int):
         self.eclipse_mode = "solar" if idx == 0 else "lunar"
+        if hasattr(self, 'lbl_mode_badge'):
+            if self.eclipse_mode == "solar":
+                self.lbl_mode_badge.setText("● Modo: Solar (Collage)")
+                self.lbl_mode_badge.setStyleSheet(
+                    "background-color: #141724; border: 1px solid #ff4081; border-radius: 4px; padding: 2px 8px; color: #ff4081; font-weight: bold; font-size: 11px;"
+                )
+            else:
+                self.lbl_mode_badge.setText("● Modo: Lunar (Collage)")
+                self.lbl_mode_badge.setStyleSheet(
+                    "background-color: #141724; border: 1px solid #00e5ff; border-radius: 4px; padding: 2px 8px; color: #00e5ff; font-weight: bold; font-size: 11px;"
+                )
+
+    def toggle_left_panel(self, visible: Optional[bool] = None) -> None:
+        """Muestra u oculta el panel lateral izquierdo de controles de collage de eclipses (Atajo: F7 o [)."""
+        if not hasattr(self, 'left_panel'):
+            return
+        if visible is None:
+            visible = not self.left_panel.isVisible()
+        if not visible and self.left_panel.isVisible() and hasattr(self, 'splitter'):
+            sizes = self.splitter.sizes()
+            if len(sizes) >= 2 and sizes[0] > 50:
+                self._last_left_panel_width = sizes[0]
+        self.left_panel.setVisible(visible)
+        if hasattr(self, 'toolbar'):
+            self.toolbar.set_left_panel_checked(visible)
+        if visible and hasattr(self, 'splitter'):
+            sizes = self.splitter.sizes()
+            if len(sizes) >= 2 and sizes[0] < 50:
+                sizes[0] = getattr(self, '_last_left_panel_width', 450)
+                self.splitter.setSizes(sizes)
+
+    def keyPressEvent(self, event):
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            super().keyPressEvent(event)
+            return
+        if event.key() in (Qt.Key_F7, Qt.Key_BracketLeft):
+            self.toggle_left_panel()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     # -----------------------------------------------------------------
     # Gestión de Sesiones de Collage (.ecollage)

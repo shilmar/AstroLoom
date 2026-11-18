@@ -11,19 +11,21 @@ Implementa:
 6. Exportación en TIFF 16-bit / 32-bit y transferencia directa al Revelador / Editor.
 """
 import os
+import time
 from typing import Optional, List, Dict, Any, Callable
 import tifffile
 import numpy as np
 import cv2
 
 from PySide6.QtCore import Qt, QThread, Signal, QCoreApplication
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QPushButton, QFileDialog, QMessageBox, QSlider, QRadioButton,
     QButtonGroup, QComboBox, QCheckBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QProgressBar, QScrollArea,
-    QSplitter, QFrame, QSizePolicy, QProgressDialog
+    QSplitter, QFrame, QSizePolicy, QProgressDialog, QApplication,
+    QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox
 )
 
 from core.log_hub import log_hub
@@ -32,6 +34,7 @@ from core.stacking import load_image_as_float32, scan_raw_batch_metadata
 from core.startrails import generate_startrail, enhance_star_trails_color
 from core.icc_manager import save_tiff_with_icc
 from gui.canvas import MaskCanvas
+from gui.widgets.viewer_toolbar import ViewerToolbar
 from gui.widgets.drop_widgets import DropTableWidget
 from gui.theme import (
     STYLE_RUN_IDLE, STYLE_RUN_ACTIVE, STYLE_RUN_CANCELLING, STYLE_TRANSFER_BTN
@@ -673,18 +676,138 @@ class StartrailsTab(QWidget):
         left_container_layout.addWidget(self.btn_run)
 
         # -------------------------------------------------------------
-        # PANEL DERECHO: Canvas Interactivo con Zoom 1:1 y Drag & Drop
+        # PANEL DERECHO: Toolbar Unificada + Canvas Interactivo con Zoom 1:1
         # -------------------------------------------------------------
+        self.splitter = splitter
+        self.left_container = left_container
+
+        right_container = QWidget()
+        right_layout = QVBoxLayout(right_container)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+
+        self.toolbar = ViewerToolbar(
+            self,
+            show_left_toggle=True,
+            show_right_toggle=False,
+            show_view_mode=True,
+            show_composite_btn=False,
+            show_clipping=True,
+            show_zoom=True,
+            show_magnifier=True,
+        )
+        self.toolbar.left_panel_toggled.connect(self.toggle_left_panel)
+        self.toolbar.view_mode_changed.connect(self._on_view_mode_changed)
+
+        self.lbl_view_status = QLabel("")
+        self.lbl_view_status.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        self.toolbar.add_widget(self.lbl_view_status)
+
         self.canvas = MaskCanvas(self, enable_masking=False)
         self.canvas.files_dropped.connect(self.add_series_files)
+        self.toolbar.connect_canvas(self.canvas)
+
+        right_layout.addWidget(self.toolbar)
+        right_layout.addWidget(self.canvas, 1)
 
         splitter.addWidget(left_container)
-        splitter.addWidget(self.canvas)
+        splitter.addWidget(right_container)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 10)
         splitter.setSizes([520, 1400])
 
         main_layout.addWidget(splitter)
+
+        # Atajos de teclado locales para el visor
+        self.shortcut_f7 = QShortcut(QKeySequence(Qt.Key_F7), self)
+        self.shortcut_f7.setContext(Qt.WidgetWithChildrenShortcut)
+        self.shortcut_f7.activated.connect(lambda: self.toggle_left_panel())
+
+        self.shortcut_bracket = QShortcut(QKeySequence(Qt.Key_BracketLeft), self)
+        self.shortcut_bracket.setContext(Qt.WidgetWithChildrenShortcut)
+        self.shortcut_bracket.activated.connect(lambda: self.toggle_left_panel())
+
+    def toggle_left_panel(self, visible: Optional[bool] = None) -> None:
+        """Muestra u oculta el panel lateral izquierdo de controles de circumpolares (Atajo: F7 o [)."""
+        if not hasattr(self, 'left_container'):
+            return
+        if visible is None:
+            visible = not self.left_container.isVisible()
+        if not visible and self.left_container.isVisible() and hasattr(self, 'splitter'):
+            sizes = self.splitter.sizes()
+            if len(sizes) >= 2 and sizes[0] > 50:
+                self._last_left_panel_width = sizes[0]
+        self.left_container.setVisible(visible)
+        if hasattr(self, 'toolbar'):
+            self.toolbar.set_left_panel_checked(visible)
+        if visible and hasattr(self, 'splitter'):
+            sizes = self.splitter.sizes()
+            if len(sizes) >= 2 and sizes[0] < 50:
+                sizes[0] = getattr(self, '_last_left_panel_width', 520)
+                self.splitter.setSizes(sizes)
+
+    def _compute_display_image(self, img: np.ndarray) -> np.ndarray:
+        """Calcula la representación en pantalla en uint8 según el modo de visualización elegido."""
+        if img is None:
+            return None
+        idx = self.toolbar.combo_view_mode.currentIndex() if hasattr(self, 'toolbar') and hasattr(self.toolbar, 'combo_view_mode') else 0
+        try:
+            if idx == 0:
+                return cv2.convertScaleAbs(np.clip(img, 0.0, 1.0), alpha=255.0)
+            elif idx == 1:
+                from core.stretch import calculate_mtf_params, manual_stretch
+                bp, m = calculate_mtf_params(img, target_background=0.18)
+                stretched = manual_stretch(img, black_point=bp, midtone=m)
+                return cv2.convertScaleAbs(np.clip(stretched, 0.0, 1.0), alpha=255.0)
+            elif idx == 2:
+                sample = img[::4, ::4]
+                med = float(np.median(sample))
+                mad = float(np.median(np.abs(sample - med)))
+                bp = float(np.clip(med - 0.5 * mad, 0.0, 0.9))
+                clipped = np.clip((img - bp) / max(1e-4, 1.0 - bp), 0.0, 1.0)
+                if clipped.ndim == 3:
+                    hsv = cv2.cvtColor((clipped * 255.0).astype(np.uint8), cv2.COLOR_RGB2HSV)
+                    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+                    hsv[..., 2] = clahe.apply(hsv[..., 2])
+                    return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+                else:
+                    gray = (clipped * 255.0).astype(np.uint8)
+                    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+                    return clahe.apply(gray)
+        except Exception:
+            return cv2.convertScaleAbs(np.clip(img, 0.0, 1.0), alpha=255.0)
+        return cv2.convertScaleAbs(np.clip(img, 0.0, 1.0), alpha=255.0)
+
+    def _display_image_in_canvas(self, img: np.ndarray) -> None:
+        """Transfiere un array float32 al canvas utilizando la visualización calibrada."""
+        self.current_preview_img = img
+        display_u8 = self._compute_display_image(img)
+        self.canvas.load_image(img, display_stretched=display_u8)
+
+    def _on_view_mode_changed(self, idx: int) -> None:
+        if getattr(self, 'current_preview_img', None) is not None:
+            self._display_image_in_canvas(self.current_preview_img)
+
+    def keyPressEvent(self, event):
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            super().keyPressEvent(event)
+            return
+        if event.key() in (Qt.Key_F7, Qt.Key_BracketLeft):
+            self.toggle_left_panel()
+            event.accept()
+            return
+        elif event.key() == Qt.Key_J:
+            if hasattr(self, 'toolbar') and hasattr(self.toolbar, 'btn_clipping'):
+                self.toolbar.btn_clipping.toggle()
+            event.accept()
+            return
+        elif event.key() == Qt.Key_Z:
+            if hasattr(self, 'toolbar') and hasattr(self.toolbar, 'btn_magnifier'):
+                self.toolbar.btn_magnifier.toggle()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _apply_styles(self) -> None:
         """Los estilos base provienen de gui.theme (Cosmic Dark Pro)."""
@@ -750,8 +873,7 @@ class StartrailsTab(QWidget):
         if was_empty and self.files_list:
             try:
                 img = load_image_as_float32(self.files_list[0])
-                self.current_preview_img = img
-                self.canvas.load_image(img)
+                self._display_image_in_canvas(img)
             except Exception as e:
                 self.log(f"Error al previsualizar primera toma: {e}")
 
@@ -813,8 +935,7 @@ class StartrailsTab(QWidget):
         self.log(f"Toma de referencia establecida: {os.path.basename(ref_path)}")
         try:
             img = load_image_as_float32(ref_path)
-            self.current_preview_img = img
-            self.canvas.load_image(img)
+            self._display_image_in_canvas(img)
         except Exception as e:
             self.log(f"Error al cargar referencia: {e}")
 
@@ -827,8 +948,7 @@ class StartrailsTab(QWidget):
         if 0 <= idx < len(self.files_list):
             try:
                 img = load_image_as_float32(self.files_list[idx])
-                self.current_preview_img = img
-                self.canvas.load_image(img)
+                self._display_image_in_canvas(img)
                 self._update_canvas_mask_overlay()
             except Exception:
                 pass
@@ -865,7 +985,7 @@ class StartrailsTab(QWidget):
             ref_path = self.files_list[ref_idx]
             try:
                 ref_img = load_image_as_float32(ref_path)
-                self.canvas.load_image(ref_img)
+                self._display_image_in_canvas(ref_img)
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"No se pudo cargar la toma de referencia:\n{e}")
                 return
@@ -938,17 +1058,20 @@ class StartrailsTab(QWidget):
         self.setCursor(Qt.WaitCursor)
         self.log("[IA HORIZONTE] Ejecutando detección de cielo/suelo...")
         QCoreApplication.processEvents()
+        t0 = time.perf_counter()
         try:
             from core.ai_horizon import auto_detect_sky_mask
             ref_img = self.canvas.orig_rgb
             mask, method = auto_detect_sky_mask(ref_img, force_algorithmic=force_algorithmic)
+            elapsed = time.perf_counter() - t0
             self.current_mask = (mask * 255.0).astype(np.uint8)
             self.chk_show_mask.setChecked(True)
             self._update_mask_status_label()
             self._update_canvas_mask_overlay()
-            self.log(f"✓ Máscara de horizonte calculada con éxito ({method}).")
+            self.log(f"✓ [DETECCIÓN HORIZONTE] Máscara calculada con éxito en {elapsed:.2f}s ({method}).")
         except Exception as e:
-            self.log(f"[ERROR IA HORIZONTE] Falló la detección: {e}")
+            elapsed = time.perf_counter() - t0
+            self.log(f"[ERROR IA HORIZONTE] Falló la detección tras {elapsed:.2f}s: {e}")
             QMessageBox.critical(self, "Error Detección IA", f"No se pudo completar la segmentación automática:\n{e}")
         finally:
             self.unsetCursor()
@@ -1049,7 +1172,12 @@ class StartrailsTab(QWidget):
         """Maneja la confirmación de cancelación del worker."""
         self._set_run_button_state("idle")
         self.progress_bar.setVisible(False)
-        self.log("Procesamiento de trazas cancelado por el usuario.")
+        if hasattr(self, "_startrail_start_time") and self._startrail_start_time is not None:
+            elapsed = time.perf_counter() - self._startrail_start_time
+            self._startrail_start_time = None
+            self.log(f"Procesamiento cancelado por el usuario tras {elapsed:.2f}s.")
+        else:
+            self.log("Procesamiento de trazas cancelado por el usuario.")
 
     def _on_run_clicked(self) -> None:
         """Dispara la generación del Startrail en segundo plano o cancela si está en curso."""
@@ -1124,7 +1252,8 @@ class StartrailsTab(QWidget):
         self._set_run_button_state("running")
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
-        self.log(f"Iniciando cálculo de trazas en modo: {mode.upper()}...")
+        self._startrail_start_time = time.perf_counter()
+        self.log(f"Iniciando cálculo de trazas en modo: {mode.upper()} ({len(self.files_list)} tomas)...")
 
         self.worker = StartrailWorker(params)
         self.worker.progress.connect(self._on_worker_progress)
@@ -1135,13 +1264,18 @@ class StartrailsTab(QWidget):
 
     def _on_worker_progress(self, pct: int, msg: str) -> None:
         self.progress_bar.setValue(pct)
-        if pct % 10 == 0 or pct >= 90:
+        if pct % 10 == 0 or pct >= 90 or "suprimidas" in msg:
             self.log(msg)
 
     def _on_worker_finished(self, data: Any, task_type: str) -> None:
         self._set_run_button_state("idle")
         self.progress_bar.setValue(100)
         self.progress_bar.setVisible(False)
+
+        elapsed = 0.0
+        if hasattr(self, "_startrail_start_time") and self._startrail_start_time is not None:
+            elapsed = time.perf_counter() - self._startrail_start_time
+            self._startrail_start_time = None
 
         if isinstance(data, (tuple, list)):
             result, video_path = data[0], data[1]
@@ -1151,9 +1285,15 @@ class StartrailsTab(QWidget):
         self.final_startrail_img = result
         self.raw_startrail_img = result.copy() if result is not None else None
         self.btn_apply_color_live.setEnabled(self.raw_startrail_img is not None)
-        self.canvas.load_image(result)
+        self._display_image_in_canvas(result)
         self._update_canvas_mask_overlay()
-        self.log("Trazas de estrellas compuestas y renderizadas en el visor.")
+
+        mins = int(elapsed // 60)
+        secs = elapsed % 60
+        time_str = f"{mins}m {secs:.1f}s" if mins > 0 else f"{secs:.2f}s"
+        n_files = len(self.files_list)
+        fps_str = f" ({n_files / max(elapsed, 1e-6):.1f} fps)" if elapsed > 0 and n_files > 0 else ""
+        self.log(f"✓ [GENERACIÓN STARTRAILS] Completada exitosamente en {time_str}{fps_str}.")
 
         if video_path and os.path.exists(video_path):
             self.last_timelapse_path = video_path
@@ -1164,7 +1304,12 @@ class StartrailsTab(QWidget):
     def _on_worker_error(self, err_msg: str) -> None:
         self._set_run_button_state("idle")
         self.progress_bar.setVisible(False)
-        self.log(f"ERROR: {err_msg}")
+        if hasattr(self, "_startrail_start_time") and self._startrail_start_time is not None:
+            elapsed = time.perf_counter() - self._startrail_start_time
+            self._startrail_start_time = None
+            self.log(f"ERROR tras {elapsed:.2f}s: {err_msg}")
+        else:
+            self.log(f"ERROR: {err_msg}")
         QMessageBox.critical(self, "Error de Procesado", f"Ocurrió un error al generar las trazas:\n{err_msg}")
 
     def _on_star_color_toggled(self, checked: bool) -> None:
@@ -1180,6 +1325,7 @@ class StartrailsTab(QWidget):
         core_rec = self.slider_core_rec.value() / 100.0
 
         self.log(f"Aplicando realce de color estelar (Sat: {sat:.1f}x, Recuperación: {int(core_rec*100)}%)...")
+        t0 = time.perf_counter()
         try:
             enhanced = enhance_star_trails_color(
                 self.raw_startrail_img,
@@ -1188,12 +1334,14 @@ class StartrailsTab(QWidget):
                 sky_mask=self.current_mask if self.chk_clean_ground.isChecked() else None,
                 bg_protect=True
             )
+            elapsed = time.perf_counter() - t0
             self.final_startrail_img = enhanced
-            self.canvas.load_image(enhanced)
+            self._display_image_in_canvas(enhanced)
             self._update_canvas_mask_overlay()
-            self.log("Color estelar actualizado con éxito en el visor.")
+            self.log(f"✓ Color estelar actualizado con éxito en el visor ({elapsed:.2f}s).")
         except Exception as e:
-            self.log(f"Error al actualizar color estelar: {e}")
+            elapsed = time.perf_counter() - t0
+            self.log(f"Error al actualizar color estelar tras {elapsed:.2f}s: {e}")
             QMessageBox.critical(self, "Error de Color", f"No se pudo aplicar el realce de color:\n{e}")
 
     def _on_timelapse_toggled(self, checked: bool) -> None:

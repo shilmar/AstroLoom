@@ -27,14 +27,16 @@ from PySide6.QtWidgets import (
     QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
     QProgressBar, QMessageBox, QGroupBox, QRadioButton, QSlider,
     QDoubleSpinBox, QSpinBox, QSplitter, QScrollArea, QCheckBox,
-    QSizePolicy, QAbstractItemView, QApplication, QButtonGroup, QComboBox, QDialog
+    QSizePolicy, QAbstractItemView, QApplication, QButtonGroup, QComboBox, QDialog,
+    QLineEdit, QTextEdit, QPlainTextEdit
 )
 from PySide6.QtCore import Qt, Signal, QThread, QPoint, QPointF, QRectF
-from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QImage, QCursor, QFont, QBrush
+from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QImage, QCursor, QFont, QBrush, QKeySequence, QShortcut
 
 from core.log_hub import log_hub
 
 from gui.dialog_coronal_stack import CoronalStackDialog
+from gui.widgets.viewer_toolbar import ViewerToolbar
 
 from core.eclipse import (
     extract_exposure_info,
@@ -222,6 +224,27 @@ class EclipseCanvas(QWidget):
                 int((vw - iw * self.zoom_level) / 2),
                 int((vh - ih * self.zoom_level) / 2)
             )
+
+    def set_zoom_100(self, active: bool = True):
+        """Ajusta el nivel de aumento al 100% nativo centrado en el visor."""
+        if self.base_pixmap is None:
+            return
+        if active:
+            self.zoom_level = 1.0
+            vw, vh = self.width(), self.height()
+            iw, ih = self.base_pixmap.width(), self.base_pixmap.height()
+            self.pan_offset = QPoint(
+                int((vw - iw) / 2),
+                int((vh - ih) / 2)
+            )
+        else:
+            self.reset_view()
+        self.update()
+
+    def fit_view(self):
+        """Ajusta la imagen completa a la ventana."""
+        self.reset_view()
+        self.update()
 
     def set_guide_params(self, cx: float, cy: float, r: float, show: bool = True):
         """Actualiza las coordenadas de la guía circular de limbo."""
@@ -1568,37 +1591,73 @@ class EclipseTab(QWidget):
         self.progress_bar.setVisible(False)
         left_panel_layout.addWidget(self.progress_bar)
 
+        self.splitter = splitter
+        self.left_panel = left_panel
         splitter.addWidget(left_panel)
 
         # -------------------------------------------------------------
-        # 2. PANEL DERECHO: Canvas Interactivo
+        # 2. PANEL DERECHO: Toolbar Unificada + Canvas Interactivo
         # -------------------------------------------------------------
         right_container = QWidget()
         right_layout = QVBoxLayout(right_container)
-        right_layout.setContentsMargins(4, 4, 4, 4)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
 
-        canvas_bar = QHBoxLayout()
-        self.btn_reset_zoom = QPushButton("Ajustar Vista")
-        self.btn_reset_zoom.setIcon(get_icon("maximize", color="#80d8ff"))
-        self.btn_reset_zoom.clicked.connect(self._on_reset_zoom_clicked)
+        self.toolbar = ViewerToolbar(
+            self,
+            show_left_toggle=True,
+            show_right_toggle=False,
+            show_view_mode=False,
+            show_composite_btn=False,
+            show_clipping=False,
+            show_zoom=True,
+            show_magnifier=False,
+        )
+        self.toolbar.left_panel_toggled.connect(self.toggle_left_panel)
 
+        # Botón Centrar Eclipse (Clic Canvas) en la barra
+        self.btn_pick_center_tb = QPushButton("Clic Canvas")
+        self.btn_pick_center_tb.setIcon(get_icon("crosshair", color="#ffd54f"))
+        self.btn_pick_center_tb.setCheckable(True)
+        self.btn_pick_center_tb.setCursor(Qt.PointingHandCursor)
+        self.btn_pick_center_tb.setToolTip("Haz clic en el canvas para situar el centro geométrico del eclipse")
+        self.btn_pick_center_tb.toggled.connect(self._on_pick_center_tb_toggled)
+        self.toolbar.insert_custom_widget_before_stretch(self.btn_pick_center_tb)
+
+        # Botón Guía Disco en la barra
+        self.btn_toggle_guide_tb = QPushButton("Guía Disco")
+        self.btn_toggle_guide_tb.setIcon(get_icon("target", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
+        self.btn_toggle_guide_tb.setCheckable(True)
+        self.btn_toggle_guide_tb.setChecked(True)
+        self.btn_toggle_guide_tb.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_guide_tb.setToolTip("Muestra u oculta la circunferencia de referencia del limbo lunar/solar")
+        self.btn_toggle_guide_tb.toggled.connect(self._on_toggle_guide_tb)
+        self.toolbar.insert_custom_widget_before_stretch(self.btn_toggle_guide_tb)
+
+        self.toolbar.add_separator_before_stretch()
+
+        # Badge de modo y estado a la derecha
         self.lbl_mode_badge = QLabel("● Modo: Solar (HDR)")
         self.lbl_mode_badge.setStyleSheet(
             "background-color: #141724; border: 1px solid #ff4081; border-radius: 4px; padding: 2px 8px; color: #ff4081; font-weight: bold; font-size: 11px;"
         )
+        self.toolbar.add_widget(self.lbl_mode_badge)
 
         self.lbl_canvas_status = QLabel("Listo.")
         self.lbl_canvas_status.setStyleSheet("color: #90a4ae; font-size: 11px;")
-        canvas_bar.addWidget(self.btn_reset_zoom)
-        canvas_bar.addWidget(self.lbl_mode_badge)
-        canvas_bar.addStretch()
-        canvas_bar.addWidget(self.lbl_canvas_status)
-        right_layout.addLayout(canvas_bar)
+        self.toolbar.add_widget(self.lbl_canvas_status)
+
+        right_layout.addWidget(self.toolbar)
 
         self.canvas = EclipseCanvas(self)
         self.canvas.center_clicked.connect(self._on_center_picked)
         self.canvas.files_dropped.connect(self.add_bracketing_paths)
-        right_layout.addWidget(self.canvas)
+        self.toolbar.connect_canvas(self.canvas)
+        right_layout.addWidget(self.canvas, 1)
+
+        # Sincronizar botones de barra con los del panel
+        self.btn_pick_center.toggled.connect(self._sync_pick_center_to_tb)
+        self.chk_show_guide.toggled.connect(self._sync_guide_to_tb)
 
         splitter.addWidget(right_container)
         splitter.setStretchFactor(0, 0)
@@ -1606,6 +1665,65 @@ class EclipseTab(QWidget):
         splitter.setSizes([520, 1400])
 
         main_layout.addWidget(splitter)
+
+        # Atajos de teclado locales para el visor
+        self.shortcut_f7 = QShortcut(QKeySequence(Qt.Key_F7), self)
+        self.shortcut_f7.setContext(Qt.WidgetWithChildrenShortcut)
+        self.shortcut_f7.activated.connect(lambda: self.toggle_left_panel())
+
+        self.shortcut_bracket = QShortcut(QKeySequence(Qt.Key_BracketLeft), self)
+        self.shortcut_bracket.setContext(Qt.WidgetWithChildrenShortcut)
+        self.shortcut_bracket.activated.connect(lambda: self.toggle_left_panel())
+
+    def _on_pick_center_tb_toggled(self, checked: bool) -> None:
+        if hasattr(self, 'btn_pick_center') and self.btn_pick_center.isChecked() != checked:
+            self.btn_pick_center.setChecked(checked)
+
+    def _sync_pick_center_to_tb(self, checked: bool) -> None:
+        if hasattr(self, 'btn_pick_center_tb') and self.btn_pick_center_tb.isChecked() != checked:
+            self.btn_pick_center_tb.blockSignals(True)
+            self.btn_pick_center_tb.setChecked(checked)
+            self.btn_pick_center_tb.blockSignals(False)
+
+    def _on_toggle_guide_tb(self, checked: bool) -> None:
+        if hasattr(self, 'chk_show_guide') and self.chk_show_guide.isChecked() != checked:
+            self.chk_show_guide.setChecked(checked)
+
+    def _sync_guide_to_tb(self, checked: bool) -> None:
+        if hasattr(self, 'btn_toggle_guide_tb') and self.btn_toggle_guide_tb.isChecked() != checked:
+            self.btn_toggle_guide_tb.blockSignals(True)
+            self.btn_toggle_guide_tb.setChecked(checked)
+            self.btn_toggle_guide_tb.blockSignals(False)
+
+    def toggle_left_panel(self, visible: Optional[bool] = None) -> None:
+        """Muestra u oculta el panel lateral izquierdo de controles de eclipses (Atajo: F7 o [)."""
+        if not hasattr(self, 'left_panel'):
+            return
+        if visible is None:
+            visible = not self.left_panel.isVisible()
+        if not visible and self.left_panel.isVisible() and hasattr(self, 'splitter'):
+            sizes = self.splitter.sizes()
+            if len(sizes) >= 2 and sizes[0] > 50:
+                self._last_left_panel_width = sizes[0]
+        self.left_panel.setVisible(visible)
+        if hasattr(self, 'toolbar'):
+            self.toolbar.set_left_panel_checked(visible)
+        if visible and hasattr(self, 'splitter'):
+            sizes = self.splitter.sizes()
+            if len(sizes) >= 2 and sizes[0] < 50:
+                sizes[0] = getattr(self, '_last_left_panel_width', 520)
+                self.splitter.setSizes(sizes)
+
+    def keyPressEvent(self, event):
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            super().keyPressEvent(event)
+            return
+        if event.key() in (Qt.Key_F7, Qt.Key_BracketLeft):
+            self.toggle_left_panel()
+            event.accept()
+            return
+        super().keyPressEvent(event)
         self.log("Módulo de Eclipses inicializado con escáner subpíxel y compuerta radial anti-ruido.")
 
     def _apply_styles(self) -> None:

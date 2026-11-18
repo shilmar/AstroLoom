@@ -33,7 +33,8 @@ PARAM_KEYS_TONE = {
 }
 
 PARAM_KEYS_COLOR = {
-    "temp_val", "tint_val", "sat_sky_val", "sat_gnd_val", "vibrance_val"
+    "temp_val", "tint_val", "sat_sky_val", "sat_gnd_val", "vibrance_val",
+    "scnr_green_val", "unpurple_val"
 }
 
 PARAM_KEYS_DETAILS = {
@@ -68,12 +69,16 @@ PARAM_BOUNDS: Dict[str, Tuple[int, int]] = {
     "sharp_detail": (0, 100),
     "sharp_masking": (0, 100),
     "sharp_scope_idx": (0, 2),
+    "scnr_green_val": (0, 100),
+    "unpurple_val": (0, 100),
 }
 
 DEFAULT_NEUTRAL_PARAMS: Dict[str, Any] = {
     "lp_val": 0,
     "layer_idx": 0,
     "stars_val": 100,
+    "scnr_green_val": 0,
+    "unpurple_val": 0,
     "sharp_amount": 0,
     "sharp_radius": 10,
     "sharp_detail": 25,

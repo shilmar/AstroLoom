@@ -67,10 +67,10 @@ class PrecisionSpinBox(QDoubleSpinBox):
         else:
             self.setStyleSheet(f"""
                 QDoubleSpinBox {{
-                    background-color: #141722;
-                    border: 1px solid #232738;
+                    background-color: #121520;
+                    border: 1px solid #1e2433;
                     border-radius: 4px;
-                    color: #e2e8f0;
+                    color: #94a3b8;
                     font-size: 11px;
                     font-weight: 500;
                     padding: 1px 4px;
@@ -78,6 +78,7 @@ class PrecisionSpinBox(QDoubleSpinBox):
                 QDoubleSpinBox:hover {{
                     border-color: #38bdf8;
                     background-color: #181d2c;
+                    color: #e2e8f0;
                 }}
                 QDoubleSpinBox:focus {{
                     border-color: #00e5ff;

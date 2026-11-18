@@ -37,6 +37,7 @@ class ColorWbPanel(QWidget):
         self.dualband_oiii_boost: int = 100
         self.unclip_stars_val: int = 0
         self.unpurple_val: int = 0
+        self.scnr_green_val: int = 0
         self.pcc_kr: float = 1.0
         self.pcc_kb: float = 1.0
 
@@ -165,12 +166,50 @@ class ColorWbPanel(QWidget):
         self.sec_color.set_content_widget(w_sat)
         layout.addWidget(self.sec_color)
 
+        # --- SECCIÓN: Corrección Cromática y Halos (SCNR / Magenta) ---
+        self.sec_chroma = CollapsibleSection(
+            "Corrección Cromática y Halos (SCNR / Magenta)",
+            is_expanded=True,
+            on_reset=self.reset_chroma,
+            icon_name="sparkles"
+        )
+        w_chroma = QWidget()
+        chroma_layout = QVBoxLayout(w_chroma)
+        chroma_layout.setContentsMargins(6, 4, 6, 6)
+        chroma_layout.setSpacing(8)
+
+        lbl_chroma_hint = QLabel(
+            "Elimina el exceso de verde del sensor (SCNR) y desatura halos magenta en estrellas causados por aberración cromática en objetivos luminosos."
+        )
+        lbl_chroma_hint.setWordWrap(True)
+        lbl_chroma_hint.setStyleSheet("color: #78909c; font-size: 10px; line-height: 1.3;")
+        chroma_layout.addWidget(lbl_chroma_hint)
+
+        self.row_scnr_green = PrecisionSliderRow("Reducción Verde (SCNR):", 0, 100, 0, scale=1.0, decimals=0, unit="%", label_width=145)
+        self.slider_scnr_green = self.row_scnr_green.slider
+        self.lbl_scnr_green = self.row_scnr_green.lbl_value
+        self.slider_scnr_green.valueChanged.connect(self._on_scnr_green_changed)
+        self.slider_scnr_green.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_scnr_green.sliderReleased.connect(self._on_slider_released)
+        chroma_layout.addWidget(self.row_scnr_green)
+
+        self.row_unpurple = PrecisionSliderRow("Atenuar Halos Magenta:", 0, 100, 0, scale=1.0, decimals=0, unit="%", label_width=145)
+        self.slider_unpurple = self.row_unpurple.slider
+        self.lbl_unpurple = self.row_unpurple.lbl_value
+        self.slider_unpurple.valueChanged.connect(self._on_unpurple_changed)
+        self.slider_unpurple.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_unpurple.sliderReleased.connect(self._on_slider_released)
+        chroma_layout.addWidget(self.row_unpurple)
+
+        self.sec_chroma.set_content_widget(w_chroma)
+        layout.addWidget(self.sec_chroma)
+
         # --- SECCIÓN: Paletas Dual-Band OSC y Reparación Estelar (Fase 1) ---
         self.sec_dualband = CollapsibleSection(
-            "Paletas Dual-Band y Corrección Estelar",
+            "Paletas Dual-Band y Rescate Estelar",
             is_expanded=False,
             on_reset=self.reset_dualband,
-            icon_name="sparkles"
+            icon_name="zap"
         )
         w_db = QWidget()
         db_layout = QVBoxLayout(w_db)
@@ -216,14 +255,6 @@ class ColorWbPanel(QWidget):
         self.slider_unclip.sliderPressed.connect(self.interaction_started.emit)
         self.slider_unclip.sliderReleased.connect(self._on_slider_released)
         db_layout.addWidget(self.row_unclip)
-
-        self.row_unpurple = PrecisionSliderRow("Atenuar Magenta:", 0, 100, 0, scale=1.0, decimals=0, unit="%", label_width=115)
-        self.slider_unpurple = self.row_unpurple.slider
-        self.lbl_unpurple = self.row_unpurple.lbl_value
-        self.slider_unpurple.valueChanged.connect(self._on_unpurple_changed)
-        self.slider_unpurple.sliderPressed.connect(self.interaction_started.emit)
-        self.slider_unpurple.sliderReleased.connect(self._on_slider_released)
-        db_layout.addWidget(self.row_unpurple)
 
         self.sec_dualband.set_content_widget(w_db)
         layout.addWidget(self.sec_dualband)
@@ -330,6 +361,11 @@ class ColorWbPanel(QWidget):
         self.lbl_unpurple.setText(f"{val}%")
         self.parameter_changed.emit()
 
+    def _on_scnr_green_changed(self, val: int) -> None:
+        self.scnr_green_val = val
+        self.lbl_scnr_green.setText(f"{val}%")
+        self.parameter_changed.emit()
+
     # -------------------------------------------------------------
     # Public controls API
     # -------------------------------------------------------------
@@ -377,28 +413,40 @@ class ColorWbPanel(QWidget):
         self.parameter_changed.emit()
         self.action_committed.emit()
 
+    def reset_chroma(self) -> None:
+        self.slider_scnr_green.blockSignals(True)
+        self.slider_unpurple.blockSignals(True)
+
+        self.slider_scnr_green.setValue(0)
+        self.slider_unpurple.setValue(0)
+        self.scnr_green_val = 0
+        self.unpurple_val = 0
+        self.lbl_scnr_green.setText("0%")
+        self.lbl_unpurple.setText("0%")
+
+        self.slider_scnr_green.blockSignals(False)
+        self.slider_unpurple.blockSignals(False)
+
+        self.parameter_changed.emit()
+        self.action_committed.emit()
+
     def reset_dualband(self) -> None:
         self.combo_dualband.blockSignals(True)
         self.slider_oiii_boost.blockSignals(True)
         self.slider_unclip.blockSignals(True)
-        self.slider_unpurple.blockSignals(True)
 
         self.combo_dualband.setCurrentIndex(0)
         self.slider_oiii_boost.setValue(100)
         self.slider_unclip.setValue(0)
-        self.slider_unpurple.setValue(0)
         self.dualband_mode = "none"
         self.dualband_oiii_boost = 100
         self.unclip_stars_val = 0
-        self.unpurple_val = 0
         self.lbl_oiii_boost.setText("1.00x")
         self.lbl_unclip.setText("0%")
-        self.lbl_unpurple.setText("0%")
 
         self.combo_dualband.blockSignals(False)
         self.slider_oiii_boost.blockSignals(False)
         self.slider_unclip.blockSignals(False)
-        self.slider_unpurple.blockSignals(False)
 
         self.parameter_changed.emit()
         self.action_committed.emit()
@@ -406,6 +454,7 @@ class ColorWbPanel(QWidget):
     def reset_all(self) -> None:
         self.reset_wb()
         self.reset_saturation()
+        self.reset_chroma()
         self.reset_dualband()
 
     def get_state(self) -> dict:
@@ -415,10 +464,11 @@ class ColorWbPanel(QWidget):
             "sat_sky_val": self.slider_sat_sky.value(),
             "sat_gnd_val": self.slider_sat_gnd.value(),
             "vibrance_val": self.slider_vibrance.value(),
+            "scnr_green_val": self.slider_scnr_green.value(),
+            "unpurple_val": self.slider_unpurple.value(),
             "dualband_mode": self.dualband_mode,
             "dualband_oiii_boost": self.slider_oiii_boost.value(),
             "unclip_stars_val": self.slider_unclip.value(),
-            "unpurple_val": self.slider_unpurple.value(),
             "pcc_kr": self.pcc_kr,
             "pcc_kb": self.pcc_kb,
         }
@@ -451,6 +501,16 @@ class ColorWbPanel(QWidget):
                 self.slider_vibrance.setValue(val)
                 self.vibrance_val = val / 100.0
                 self.lbl_vibrance.setText(f"{self.vibrance_val:+.2f}")
+            if "scnr_green_val" in state:
+                val = int(state["scnr_green_val"])
+                self.slider_scnr_green.setValue(val)
+                self.scnr_green_val = val
+                self.lbl_scnr_green.setText(f"{val}%")
+            if "unpurple_val" in state:
+                val = state["unpurple_val"]
+                self.slider_unpurple.setValue(val)
+                self.unpurple_val = val
+                self.lbl_unpurple.setText(f"{val}%")
             if "dualband_mode" in state:
                 mode_str = str(state["dualband_mode"]).lower()
                 modes = ["none", "hoo", "sho", "foraxx", "cannistra"]
@@ -467,11 +527,6 @@ class ColorWbPanel(QWidget):
                 self.slider_unclip.setValue(val)
                 self.unclip_stars_val = val
                 self.lbl_unclip.setText(f"{val}%")
-            if "unpurple_val" in state:
-                val = state["unpurple_val"]
-                self.slider_unpurple.setValue(val)
-                self.unpurple_val = val
-                self.lbl_unpurple.setText(f"{val}%")
             if "pcc_kr" in state or "pcc_kb" in state:
                 kr = float(state.get("pcc_kr", 1.0))
                 kb = float(state.get("pcc_kb", 1.0))
@@ -485,7 +540,8 @@ class ColorWbPanel(QWidget):
             self.slider_tint, self.spin_tint,
             self.slider_sat_sky, self.slider_sat_gnd,
             self.slider_vibrance,
+            self.slider_scnr_green, self.slider_unpurple,
             self.combo_dualband, self.slider_oiii_boost,
-            self.slider_unclip, self.slider_unpurple
+            self.slider_unclip
         ):
             w.blockSignals(blocked)
