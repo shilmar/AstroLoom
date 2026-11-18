@@ -132,23 +132,32 @@ def clean_frame_streaks(
     prev_img: Optional[np.ndarray],
     next_img: Optional[np.ndarray],
     sky_mask: Optional[np.ndarray] = None,
-    sensitivity: float = 0.5
+    sensitivity: float = 0.5,
+    method: str = "hough",
+    min_line_length: Optional[int] = None,
+    line_thickness: int = 3
 ) -> Tuple[np.ndarray, int]:
     """
-    Detecta y suprime trazas lineales transitorias (satélites y aviones) en el fotograma actual
-    mediante análisis morfológico de elongación geométrica y comparación temporal con fotogramas vecinos.
+    Detecta y suprime trazas lineales transitorias (satélites artificiales y aviones) en el fotograma actual
+    mediante Transformada de Hough probabilística (cv2.HoughLinesP), análisis morfológico o modo híbrido,
+    sustituyendo los píxeles afectados por el fondo limpio interpolado de los fotogramas vecinos.
 
     :param current_img: Fotograma actual float32 RGB [0, 1].
     :param prev_img: Fotograma anterior (o None si es el primero).
     :param next_img: Fotograma posterior (o None si es el último).
     :param sky_mask: Máscara binaria o float opcional (1.0 = cielo, 0.0 = suelo) para excluir vegetación y suelo móvil.
     :param sensitivity: Sensibilidad de detección (0.1 a 1.0, por defecto 0.5).
+    :param method: 'hough' (Transformada de Hough probabilística), 'morphological' (componentes conectadas y elongación)
+                   o 'hybrid' (unión de ambos métodos).
+    :param min_line_length: Longitud mínima en píxeles del trazo (si es None, se calcula adaptativamente).
+    :param line_thickness: Grosor en píxeles para trazar la línea antes de la dilatación del halo (3 por defecto).
     :return: (imagen_limpia, número_de_trazas_eliminadas)
     """
     if prev_img is None and next_img is None:
         return current_img, 0
 
     if prev_img is not None and next_img is not None:
+        # shortcut: Comparación diferencial temporal con fotogramas vecinos (k-1, k+1); actualizar a estimación de vector de velocidad si se integran trazas con seguimiento sideral.
         ref_bg = np.minimum(prev_img, next_img)
     elif prev_img is not None:
         ref_bg = prev_img
@@ -194,60 +203,89 @@ def clean_frame_streaks(
 
     bg_val = float(np.median(sample_vals))
     mad_noise = float(1.4826 * np.median(np.abs(sample_vals - bg_val)))
-    sigma_factor = max(2.5, 6.0 - (float(sensitivity) * 4.0))
+    sens_f = float(np.clip(sensitivity, 0.1, 1.0))
+    sigma_factor = max(2.0, 5.5 - (sens_f * 3.5))
     thresh_val = bg_val + max(mad_noise * sigma_factor, 0.015)
 
-    binary = (diff_lum_analysis > thresh_val).astype(np.uint8)
+    binary = (diff_lum_analysis > thresh_val).astype(np.uint8) * 255
 
-    # 4. Cierre morfológico suave (3x3) para mantener estroboscópicos unidos sin fusionar estrellas vecinas
-    k_close = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k_close)
+    # 4. Detección de trazas lineales por Hough y/o Morfología
+    min_dim = min(h, w)
+    mask_hough = np.zeros((h, w), dtype=np.uint8)
+    hough_streak_count = 0
 
-    # 5. Análisis de componentes conectadas para discriminar estrellas vs trazas largas y elongadas
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(closed, connectivity=8)
-    if num_labels <= 1:
+    if method in ("hough", "hybrid"):
+        hough_thresh = max(15, int(45 - sens_f * 25))
+        if min_line_length is not None:
+            calc_min_len = max(10, min(int(min_line_length), int(min_dim * 0.5)))
+        else:
+            calc_min_len = max(15, min(int(60 - sens_f * 25), int(min_dim * 0.35)))
+        max_line_gap = max(4, int(8 + sens_f * 8))
+
+        lines = cv2.HoughLinesP(
+            binary,
+            rho=1,
+            theta=np.pi / 180,
+            threshold=hough_thresh,
+            minLineLength=calc_min_len,
+            maxLineGap=max_line_gap
+        )
+        if lines is not None and len(lines) > 0:
+            thick = max(1, int(line_thickness))
+            for line in lines:
+                x1, y1, x2, y2 = line.ravel()[:4]
+                cv2.line(mask_hough, (int(x1), int(y1)), (int(x2), int(y2)), 255, thickness=thick)
+            hough_streak_count = len(lines)
+
+    mask_morph = np.zeros((h, w), dtype=np.uint8)
+    morph_streak_count = 0
+
+    if method in ("morphological", "hybrid"):
+        k_close = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k_close)
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(closed, connectivity=8)
+        if num_labels > 1:
+            min_length_m = max(8.0, 24.0 - (sens_f * 18.0))
+            min_elongation_m = max(2.3, 3.6 - (sens_f * 1.5))
+            for lbl in range(1, num_labels):
+                cw = stats[lbl, cv2.CC_STAT_WIDTH]
+                ch = stats[lbl, cv2.CC_STAT_HEIGHT]
+                diag = np.sqrt(float(cw * cw + ch * ch))
+                if diag >= min_length_m:
+                    x = stats[lbl, cv2.CC_STAT_LEFT]
+                    y = stats[lbl, cv2.CC_STAT_TOP]
+                    patch_lbl = labels[y:y+ch, x:x+cw]
+                    pts = np.argwhere(patch_lbl == lbl)
+                    if len(pts) >= 4:
+                        pts_xy = np.fliplr(pts).reshape(-1, 1, 2)
+                        rect = cv2.minAreaRect(pts_xy)
+                        rw, rh = rect[1]
+                        length = max(rw, rh)
+                        width = min(rw, rh)
+                        elongation = length / max(width, 0.5)
+                        if elongation >= min_elongation_m and length >= min_length_m:
+                            mask_morph[y:y+ch, x:x+cw][patch_lbl == lbl] = 255
+                            morph_streak_count += 1
+
+    if method == "hough":
+        final_mask = mask_hough
+    elif method == "morphological":
+        final_mask = mask_morph
+    else:  # hybrid
+        final_mask = np.bitwise_or(mask_hough, mask_morph)
+
+    if not np.any(final_mask):
         return current_img, 0
 
-    # Parámetros calibrados según la sensibilidad
-    sens_f = float(np.clip(sensitivity, 0.1, 1.0))
-    min_length = max(8.0, 24.0 - (sens_f * 18.0))
-    min_elongation = max(2.3, 3.6 - (sens_f * 1.5))
+    # Contar componentes conexas independientes para métricas y logs limpios
+    num_labels, _, _, _ = cv2.connectedComponentsWithStats(final_mask, connectivity=8)
+    found_streaks = max(1, num_labels - 1)
 
-    streak_mask = np.zeros((h, w), dtype=np.uint8)
-    found_streaks = 0
-
-    for lbl in range(1, num_labels):
-        cw = stats[lbl, cv2.CC_STAT_WIDTH]
-        ch = stats[lbl, cv2.CC_STAT_HEIGHT]
-        diag = np.sqrt(float(cw * cw + ch * ch))
-
-        if diag >= min_length:
-            x = stats[lbl, cv2.CC_STAT_LEFT]
-            y = stats[lbl, cv2.CC_STAT_TOP]
-
-            patch_lbl = labels[y:y+ch, x:x+cw]
-            pts = np.argwhere(patch_lbl == lbl)
-            if len(pts) >= 4:
-                pts_xy = np.fliplr(pts).reshape(-1, 1, 2)
-                rect = cv2.minAreaRect(pts_xy)
-                rw, rh = rect[1]
-                length = max(rw, rh)
-                width = min(rw, rh)
-                elongation = length / max(width, 0.5)
-
-                if elongation >= min_elongation and length >= min_length:
-                    # Asignación ultrarrápida usando el parche local O(1)
-                    streak_mask[y:y+ch, x:x+cw][patch_lbl == lbl] = 255
-                    found_streaks += 1
-
-    if found_streaks == 0:
-        return current_img, 0
-
-    # 6. Dilatar ligeramente la máscara para cubrir el halo óptico difuso
+    # 5. Dilatar ligeramente la máscara para cubrir el halo óptico difuso (bloom)
     k_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    streak_mask_dilated = cv2.dilate(streak_mask, k_dilate)
+    streak_mask_dilated = cv2.dilate(final_mask, k_dilate)
 
-    # 7. Inpainting / Sustitución de los píxeles de la traza por el fondo limpio
+    # 6. Inpainting / Sustitución de los píxeles de la traza por el fondo limpio
     cleaned_img = current_img.copy()
     cleaned_img[streak_mask_dilated > 0] = ref_bg[streak_mask_dilated > 0]
 
@@ -520,6 +558,7 @@ def generate_startrail(
     suppress_streaks: bool = False,
     streak_sensitivity: float = 0.5,
     min_streak_length: int = 40,
+    streak_method: str = "hough",
     fill_gaps: bool = False,
     gap_fill_radius: int = 3,
     gap_fill_threshold_factor: float = 3.0,
@@ -544,6 +583,7 @@ def generate_startrail(
     :param suppress_streaks: Si es True, detecta y suprime satélites y aviones automáticamente.
     :param streak_sensitivity: Sensibilidad de detección de trazas (0.1 a 1.0).
     :param min_streak_length: Longitud mínima en píxeles del trazo para considerarlo satélite/avión.
+    :param streak_method: Algoritmo de purga ("hough" para Transformada de Hough probabilística, "morphological" o "hybrid").
     :param fill_gaps: Si es True, conecta de forma continua las estrellas entre fotogramas consecutivos (Gap Filling).
     :param gap_fill_radius: Radio en píxeles del salto temporal a rellenar (1 a 8 px, típicamente 3 o 4 px).
     :param gap_fill_threshold_factor: Factor de umbral adaptativo sobre el ruido para discriminar estrellas.
@@ -826,12 +866,14 @@ def generate_startrail(
                     ref_A = None
                     ref_B = None
 
-                # Detección y supresión de satélites / aviones
+                # Detección y supresión de satélites / aviones (Hough / Morfológico)
                 t0_detect = time.perf_counter()
                 cleaned_img, num_streaks = clean_frame_streaks(
                     curr, ref_A, ref_B,
                     sky_mask=sky_mask_bool,
-                    sensitivity=streak_sensitivity
+                    sensitivity=streak_sensitivity,
+                    method=streak_method,
+                    min_line_length=min_streak_length
                 )
                 dt_detect = time.perf_counter() - t0_detect
                 t_streak_detection += dt_detect

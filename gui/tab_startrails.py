@@ -73,6 +73,8 @@ class StartrailWorker(QThread):
                 feather_radius=self.params.get("feather_radius", 5),
                 suppress_streaks=self.params.get("suppress_streaks", False),
                 streak_sensitivity=self.params.get("streak_sensitivity", 0.5),
+                min_streak_length=self.params.get("min_streak_length", 40),
+                streak_method=self.params.get("streak_method", "hough"),
                 fill_gaps=self.params.get("fill_gaps", False),
                 gap_fill_radius=self.params.get("gap_fill_radius", 3),
                 gap_fill_threshold_factor=self.params.get("gap_fill_threshold_factor", 3.0),
@@ -311,6 +313,16 @@ class StartrailsTab(QWidget):
         self.combo_streak_sens.setCurrentIndex(1)
         row_sens.addWidget(self.combo_streak_sens)
         streaks_layout.addLayout(row_sens)
+
+        row_method = QHBoxLayout()
+        row_method.addWidget(QLabel("Algoritmo:"))
+        self.combo_streak_method = QComboBox()
+        self.combo_streak_method.addItem("Transformada de Hough (Satélites / SASpro)", "hough")
+        self.combo_streak_method.addItem("Híbrido (Hough + Morfológico)", "hybrid")
+        self.combo_streak_method.addItem("Morfológico clásico", "morphological")
+        self.combo_streak_method.setCurrentIndex(0)
+        row_method.addWidget(self.combo_streak_method)
+        streaks_layout.addLayout(row_method)
 
         self.container_streaks.setVisible(False)
         modes_layout.addWidget(self.container_streaks)
@@ -1241,6 +1253,7 @@ class StartrailsTab(QWidget):
             "feather_radius": self.slider_feather.value(),
             "suppress_streaks": self.chk_suppress_streaks.isChecked(),
             "streak_sensitivity": float(self.combo_streak_sens.currentData() or 0.5),
+            "streak_method": str(self.combo_streak_method.currentData() or "hough"),
             "fill_gaps": self.chk_fill_gaps.isChecked(),
             "gap_fill_radius": self.slider_gap_radius.value(),
             "gap_fill_threshold_factor": float(self.combo_gap_sens.currentData() or 3.0),
