@@ -196,13 +196,12 @@ def clean_frame_streaks(
     else:
         diff_lum_analysis = diff_lum
 
-    # 3. Escala Proxy para análisis rápido y cancelación de ruido térmico/gaussiano
-    max_dim = max(h, w)
-    proxy_max = 1600
-    scale = proxy_max / float(max_dim) if max_dim > proxy_max else 1.0
+    # 3. Escala al 50% para análisis rápido y libre de artefactos de interpolación fraccional
+    use_half_scale = (max(h, w) > 800)
+    scale = 0.5 if use_half_scale else 1.0
 
-    if scale < 1.0:
-        pw, ph = int(round(w * scale)), int(round(h * scale))
+    if use_half_scale:
+        pw, ph = w // 2, h // 2
         diff_proc = cv2.resize(diff_lum_analysis, (pw, ph), interpolation=cv2.INTER_AREA)
     else:
         pw, ph = w, h
@@ -213,19 +212,19 @@ def clean_frame_streaks(
     bg_val = float(np.median(sample_vals))
     mad_noise = float(1.4826 * np.median(np.abs(sample_vals - bg_val)))
     sens_f = float(np.clip(sensitivity, 0.1, 1.0))
-    sigma_factor = max(2.5, 6.0 - (sens_f * 3.5))
-    thresh_val = bg_val + max(mad_noise * sigma_factor, 0.015)
+    sigma_factor = max(1.8, 5.0 - (sens_f * 3.5))
+    thresh_val = bg_val + max(mad_noise * sigma_factor, 0.003)
 
     binary = (diff_proc > thresh_val).astype(np.uint8) * 255
 
-    # 5. Filtrado vectorial rápido de ruido puntual y estrellas aisladas (<10 px)
+    # 5. Filtrado vectorial rápido de ruido puntual y estrellas aisladas
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
     if num_labels <= 1:
         return current_img, 0
 
     cw = stats[1:, cv2.CC_STAT_WIDTH]
     ch = stats[1:, cv2.CC_STAT_HEIGHT]
-    min_diag_sq = max(16, int((12 * scale) ** 2)) if scale < 1.0 else 25
+    min_diag_sq = 9 if use_half_scale else 16
     keep_indices = np.where((cw * cw + ch * ch) >= min_diag_sq)[0]
     if len(keep_indices) == 0:
         return current_img, 0
@@ -241,16 +240,15 @@ def clean_frame_streaks(
     min_dim = min(ph, pw)
     mask_hough = np.zeros((h, w), dtype=np.uint8)
     hough_streak_count = 0
-    inv_scale = 1.0 / scale
 
     if method in ("hough", "hybrid"):
-        hough_thresh = max(15, int(45 - sens_f * 25))
         if min_line_length is not None:
-            calc_min_len = max(10, min(int(min_line_length * scale), int(min_dim * 0.5)))
+            calc_min_len = max(8, min(int(min_line_length * scale), int(min_dim * 0.5)))
         else:
-            base_len = 65.0 - sens_f * 25.0
-            calc_min_len = max(15, min(int(base_len * scale), int(min_dim * 0.35)))
-        max_line_gap = max(3, int((8 + sens_f * 8) * scale))
+            base_len = 60.0 - sens_f * 25.0
+            calc_min_len = max(10, min(int(base_len * scale), int(min_dim * 0.35)))
+        hough_thresh = max(8, int(calc_min_len * 0.6))
+        max_line_gap = max(4, int((12 + sens_f * 16) * scale))
 
         lines = cv2.HoughLinesP(
             clean_bin,
@@ -261,12 +259,12 @@ def clean_frame_streaks(
             maxLineGap=max_line_gap
         )
         if lines is not None and len(lines) > 0:
-            thick = max(2, int(line_thickness * (1.5 if scale < 1.0 else 1.0)))
+            thick = max(2, int(line_thickness * (2 if use_half_scale else 1)))
             for line in lines:
                 x1, y1, x2, y2 = line.ravel()[:4]
-                if scale < 1.0:
-                    fx1, fy1 = int(round(x1 * inv_scale)), int(round(y1 * inv_scale))
-                    fx2, fy2 = int(round(x2 * inv_scale)), int(round(y2 * inv_scale))
+                if use_half_scale:
+                    fx1, fy1 = int(x1 * 2), int(y1 * 2)
+                    fx2, fy2 = int(x2 * 2), int(y2 * 2)
                 else:
                     fx1, fy1, fx2, fy2 = int(x1), int(y1), int(x2), int(y2)
                 cv2.line(mask_hough, (fx1, fy1), (fx2, fy2), 255, thickness=thick)
@@ -280,8 +278,8 @@ def clean_frame_streaks(
         closed = cv2.morphologyEx(clean_bin, cv2.MORPH_CLOSE, k_close)
         num_labels_m, labels_m, stats_m, _ = cv2.connectedComponentsWithStats(closed, connectivity=8)
         if num_labels_m > 1:
-            min_length_m = max(8.0, (24.0 - (sens_f * 18.0)) * scale)
-            min_elongation_m = max(2.3, 3.6 - (sens_f * 1.5))
+            min_length_m = max(6.0, (20.0 - (sens_f * 15.0)) * scale)
+            min_elongation_m = max(2.0, 3.2 - (sens_f * 1.5))
             for lbl in range(1, num_labels_m):
                 cw_m = stats_m[lbl, cv2.CC_STAT_WIDTH]
                 ch_m = stats_m[lbl, cv2.CC_STAT_HEIGHT]
@@ -299,9 +297,9 @@ def clean_frame_streaks(
                         width = min(rw, rh)
                         elongation = length / max(width, 0.5)
                         if elongation >= min_elongation_m and length >= min_length_m:
-                            if scale < 1.0:
+                            if use_half_scale:
                                 box = cv2.boxPoints(rect)
-                                box_full = np.round(box * inv_scale).astype(np.int32)
+                                box_full = (box * 2).astype(np.int32)
                                 cv2.fillPoly(mask_morph, [box_full], 255)
                             else:
                                 mask_morph[y:y+ch_m, x:x+cw_m][patch_lbl == lbl] = 255
