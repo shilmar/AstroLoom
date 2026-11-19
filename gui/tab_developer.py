@@ -3697,7 +3697,13 @@ class DeveloperTab(QWidget):
         # 2. Limpieza completa de datos de imagen y cachés de IA previos
         self._invalidate_pipeline_caches()
         self.active_filepath = filepath
-        self.current_mask = mask
+        if mask is not None:
+            m_norm = mask[..., 0].astype(np.float32) if mask.ndim == 3 else mask.astype(np.float32)
+            if m_norm.max() > 1.05:
+                m_norm /= 255.0
+            self.current_mask = np.ascontiguousarray(np.clip(m_norm, 0.0, 1.0), dtype=np.float32)
+        else:
+            self.current_mask = None
         self.image_starless = None
         self.raw_linear_starless = None
         self.starless_is_stretched = False
@@ -4206,8 +4212,12 @@ class DeveloperTab(QWidget):
             if self.current_mask is not None and base is not None:
                 h_f, w_f = base.shape[:2]
                 m_clean = self.current_mask[..., 0] if self.current_mask.ndim == 3 else self.current_mask
+                if m_clean.dtype != np.float32:
+                    m_clean = (m_clean / 255.0).astype(np.float32) if m_clean.dtype == np.uint8 else m_clean.astype(np.float32)
+                elif m_clean.max() > 1.05:
+                    m_clean = m_clean / 255.0
                 m_f = cv2.resize(m_clean, (w_f, h_f), interpolation=cv2.INTER_LINEAR) if m_clean.shape[:2] != (h_f, w_f) else m_clean
-                mask_3d = np.repeat(m_f[..., np.newaxis], 3, axis=2)
+                mask_3d = np.ascontiguousarray(np.repeat(m_f[..., np.newaxis], 3, axis=2), dtype=np.float32)
             crop_active = False
             self._zoom_crop_rect = None
         elif self.is_zoomed_100 and self.image_32bit is not None:
@@ -4270,12 +4280,16 @@ class DeveloperTab(QWidget):
 
             if self.current_mask is not None:
                 m_clean = self.current_mask[..., 0] if self.current_mask.ndim == 3 else self.current_mask
+                if m_clean.dtype != np.float32:
+                    m_clean = (m_clean / 255.0).astype(np.float32) if m_clean.dtype == np.uint8 else m_clean.astype(np.float32)
+                elif m_clean.max() > 1.05:
+                    m_clean = m_clean / 255.0
                 if m_clean.shape[:2] != (h_f, w_f):
                     m_f = cv2.resize(m_clean, (w_f, h_f), interpolation=cv2.INTER_LINEAR)
                 else:
                     m_f = m_clean
-                m_sub = m_f[y1:y2, x1:x2]
-                mask_3d = np.repeat(m_sub[..., np.newaxis], 3, axis=2)
+                m_sub = np.ascontiguousarray(m_f[y1:y2, x1:x2], dtype=np.float32)
+                mask_3d = np.ascontiguousarray(np.repeat(m_sub[..., np.newaxis], 3, axis=2), dtype=np.float32)
             else:
                 mask_3d = None
             crop_active = True

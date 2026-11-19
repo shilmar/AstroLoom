@@ -271,6 +271,15 @@ def apply_developer_pipeline(
                 )
                 if can_use_rust_proxy:
                     mask_2d = precomputed_mask[..., 0] if (precomputed_mask is not None and precomputed_mask.ndim == 3) else precomputed_mask
+                    if mask_2d is not None:
+                        if mask_2d.dtype != np.float32 or not mask_2d.flags['C_CONTIGUOUS']:
+                            if mask_2d.dtype == np.uint8:
+                                mask_2d = (mask_2d / 255.0).astype(np.float32)
+                            else:
+                                mask_2d = mask_2d.astype(np.float32)
+                            mask_2d = np.ascontiguousarray(mask_2d, dtype=np.float32)
+                        elif mask_2d.max() > 1.05:
+                            mask_2d = np.ascontiguousarray(mask_2d / 255.0, dtype=np.float32)
                     img = astroloom_rs.eval_developer_proxy_fused_rs(
                         np.ascontiguousarray(img, dtype=np.float32),
                         temp_val=float(temp_val),
