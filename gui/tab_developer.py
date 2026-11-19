@@ -37,7 +37,7 @@ from PySide6.QtCore import Qt, QCoreApplication, QTimer, QEvent, QPoint
 from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence, QImage, QPixmap, QColor, QFont, QCursor
 from core.log_hub import log_hub
 from core.stacking import load_image_as_float32
-from core.background_extraction import generate_sky_sample_points, extract_background_rbf
+from core.background_extraction import generate_sky_sample_points, extract_background_rbf, auto_extract_background_sky
 from core.stretch import (
     calculate_mtf_params, 
     calculate_sky_neutral_wb,
@@ -203,6 +203,7 @@ class DeveloperTab(QWidget):
         self._cached_psf_key: tuple = ()
 
         self.clarity_starless_val = 0.0
+        self.texture_clarity_starless_val = 0.0
         self.dehaze_starless_val = 0.0
         
         # Parámetros del revelador
@@ -609,6 +610,7 @@ class DeveloperTab(QWidget):
         # Conexiones reactivas
         self.panel_lp.parameter_changed.connect(self._on_lp_parameter_changed)
         self.panel_lp.extract_bg_requested.connect(self.on_extract_background_clicked)
+        self.panel_lp.auto_abe_requested.connect(self.on_auto_abe_clicked)
         self.panel_lp.auto_detect_lp_requested.connect(self.auto_detect_lp_center)
         self.panel_lp.center_pipette_toggled.connect(self._on_toggle_lp_center_pipette)
         self.panel_lp.color_pipette_toggled.connect(self._on_toggle_lp_color_pipette)
@@ -774,6 +776,8 @@ class DeveloperTab(QWidget):
         self.lbl_stars = self.panel_starnet.lbl_stars
         self.slider_clarity = self.panel_starnet.slider_clarity
         self.lbl_clarity = self.panel_starnet.lbl_clarity
+        self.slider_texture_clarity = self.panel_starnet.slider_texture_clarity
+        self.lbl_texture_clarity = self.panel_starnet.lbl_texture_clarity
         self.slider_dehaze = self.panel_starnet.slider_dehaze
         self.lbl_dehaze = self.panel_starnet.lbl_dehaze
         self.slider_ond_est = self.panel_starnet.slider_ond_est
@@ -828,6 +832,7 @@ class DeveloperTab(QWidget):
         self.combo_layer.currentIndexChanged.connect(self.on_layer_mode_changed)
         self.slider_stars.valueChanged.connect(self.on_stars_slider_changed)
         self.slider_clarity.valueChanged.connect(self.on_clarity_changed)
+        self.slider_texture_clarity.valueChanged.connect(self.on_texture_clarity_changed)
         self.slider_dehaze.valueChanged.connect(self.on_dehaze_changed)
         self.slider_ond_est.valueChanged.connect(self.on_ond_estructura_changed)
         self.slider_ond_bg.valueChanged.connect(self.on_ond_fondo_changed)
@@ -943,6 +948,7 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.stars_diff_mode_changed.connect(self._on_mask_widget_stars_diff_mode)
         self.mask_layers_widget.stars_reset_requested.connect(self.reset_stars_intensity)
         self.mask_layers_widget.starless_clarity_changed.connect(self._on_mask_widget_sl_clarity)
+        self.mask_layers_widget.starless_texture_clarity_changed.connect(self._on_mask_widget_sl_texture_clarity)
         self.mask_layers_widget.starless_dehaze_changed.connect(self._on_mask_widget_sl_dehaze)
         self.mask_layers_widget.starless_ond_est_changed.connect(self._on_mask_widget_sl_ond_est)
         self.mask_layers_widget.starless_ond_bg_changed.connect(self._on_mask_widget_sl_ond_bg)
@@ -955,13 +961,7 @@ class DeveloperTab(QWidget):
         self.mask_layers_widget.starless_orton_threshold_changed.connect(self._on_mask_widget_sl_orton_threshold)
         self.mask_layers_widget.starless_orton_tint_changed.connect(self._on_mask_widget_sl_orton_tint)
         self.mask_layers_widget.starless_orton_mode_changed.connect(self._on_mask_widget_sl_orton_mode)
-        self.mask_layers_widget.starless_reset_requested.connect(
-            lambda: (
-                self.panel_effects.reset_orton(),
-                self.panel_effects.reset_star_diff(),
-                self.update_stretch_preview()
-            )
-        )
+        self.mask_layers_widget.starless_reset_requested.connect(self.reset_starless_adjustments)
         self.mask_layers_widget.auto_stretch_starless_requested.connect(self.on_auto_stretch_starless_requested)
         self.mask_layers_widget.starless_ai_denoise_requested.connect(self.on_run_ai_denoise_requested)
 
@@ -986,7 +986,8 @@ class DeveloperTab(QWidget):
             self.combo_orton_tint.currentIndex(),
             self.combo_orton_mode.currentIndex(),
             denoise_color=self.slider_denoise_color.value() if hasattr(self, 'slider_denoise_color') else 50,
-            denoise_mask=self.slider_denoise_mask.value() if hasattr(self, 'slider_denoise_mask') else 50
+            denoise_mask=self.slider_denoise_mask.value() if hasattr(self, 'slider_denoise_mask') else 50,
+            texture_clarity=self.slider_texture_clarity.value()
         )
 
         def _update_masks_badge():
@@ -4151,13 +4152,21 @@ class DeveloperTab(QWidget):
                 else:
                     proc_starless = denoised
 
-            # 2. Claridad y Borrar Neblina
+            # 2. Claridad Clásica (Gauss), Claridad Textura (Seti) y Borrar Neblina
             if abs(self.clarity_starless_val) > 1e-4:
                 clarified = apply_clarity(proc_starless, strength=self.clarity_starless_val)
                 if proc_mask_3d is not None:
                     proc_starless = (clarified * proc_mask_3d) + (proc_starless * (1.0 - proc_mask_3d))
                 else:
                     proc_starless = clarified
+
+            if abs(self.texture_clarity_starless_val) > 1e-4:
+                from core.sharpening import apply_texture_clarity
+                t_clarified = apply_texture_clarity(proc_starless, strength=self.texture_clarity_starless_val)
+                if proc_mask_3d is not None:
+                    proc_starless = (t_clarified * proc_mask_3d) + (proc_starless * (1.0 - proc_mask_3d))
+                else:
+                    proc_starless = t_clarified
 
             if abs(self.dehaze_starless_val) > 1e-4:
                 dehazed = apply_dehaze(proc_starless, strength=self.dehaze_starless_val)
@@ -6066,10 +6075,18 @@ class DeveloperTab(QWidget):
         if target is None:
             return
 
-        bp_suggested, m_suggested = calculate_mtf_params(target, target_background=0.20)
+        sky_m = self.current_mask if self.current_mask is not None else getattr(self.canvas, 'last_mask_array', None)
+        hp = getattr(self.panel_stretch, 'mtf_hp_val', 0.50)
+        from core.stretch import auto_statistical_stretch
+        _, bp_suggested, m_suggested = auto_statistical_stretch(
+            target,
+            sky_mask=sky_m,
+            target_background=0.20,
+            highlight_protection=hp
+        )
         self.sync_controls(bp_suggested, m_suggested)
         self.update_stretch_preview(immediate=True)
-        self.log_message(f"Auto-MTF aplicado (Punto Negro: {bp_suggested:.5f}, MTF m: {m_suggested:.5f}).")
+        self.log_message(f"Auto-MTF Estadístico aplicado (Punto Negro: {bp_suggested:.5f}, MTF m: {m_suggested:.5f}, Prot. Estrellas: {int(hp*100)}%).")
 
     def on_slider_mtf_changed(self, val: int):
         if hasattr(self, 'panel_stretch') and self.panel_stretch is not None:
@@ -6107,7 +6124,8 @@ class DeveloperTab(QWidget):
                 self.combo_orton_tint.currentIndex(),
                 self.combo_orton_mode.currentIndex(),
                 denoise_color=self.slider_denoise_color.value() if hasattr(self, 'slider_denoise_color') else 50,
-                denoise_mask=self.slider_denoise_mask.value() if hasattr(self, 'slider_denoise_mask') else 50
+                denoise_mask=self.slider_denoise_mask.value() if hasattr(self, 'slider_denoise_mask') else 50,
+                texture_clarity=self.slider_texture_clarity.value() if hasattr(self, 'slider_texture_clarity') else 0
             )
             self.mask_layers_widget.set_stars_special_values(
                 presence=self.slider_stars.value(),
@@ -6464,6 +6482,48 @@ class DeveloperTab(QWidget):
         self._generate_preview_proxy()
         self.update_stretch_preview()
         
+    def on_auto_abe_clicked(self):
+        """Ejecuta la extracción automática de gradientes de fondo en 1-clic (ABE / Seti Astro)."""
+        if self.image_32bit is None:
+            return
+
+        mode = getattr(self.panel_lp, 'rbf_mode', 'subtraction')
+        box_size = getattr(self.panel_lp, 'rbf_box_size', 25)
+        self.log_message(f"[ABE 1-CLIC] Extrayendo gradiente de fondo de forma automática ({mode})...")
+
+        # Guardar instantánea para Deshacer
+        undo_item = {
+            "type": "bg_extract",
+            "image_32bit": self.image_32bit.copy(),
+            "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
+            "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
+            "starless_is_stretched": getattr(self, "starless_is_stretched", False),
+            "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
+            "current_mask": self.current_mask.copy() if self.current_mask is not None else None,
+        }
+        self.undo_stack.append(undo_item)
+        if len(self.undo_stack) > self.MAX_UNDO_STEPS:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+        self._update_undo_redo_buttons()
+
+        try:
+            sky_m = self.current_mask if self.current_mask is not None else getattr(self.canvas, 'last_mask_array', None)
+            corrected, _ = auto_extract_background_sky(
+                self.image_32bit,
+                sky_mask=sky_m,
+                box_size=box_size,
+                mode=mode,
+                smoothing=0.15,
+                kernel="multiquadric"
+            )
+            self.on_bg_extraction_success(corrected)
+            self.canvas.set_bg_sample_mode(False)
+            self.log_message("[ABE 1-CLIC] ✓ Gradiente neutralizado con éxito. Usa Ctrl+Z para revertir.")
+        except Exception as e:
+            self.log_message(f"[ERROR ABE] {e}")
+            self.on_bg_extraction_error(str(e))
+
     def on_bg_extraction_error(self, err_msg: str):
         self._set_ai_processing_state(False)
         self.log_message(f"[ERROR FONDO] {err_msg}")
@@ -6551,7 +6611,20 @@ class DeveloperTab(QWidget):
             self.mask_layers_widget.set_starless_tone_values(
                 val, self.slider_dehaze.value(),
                 self.slider_ond_est.value(), self.slider_ond_bg.value(),
-                self.slider_contrast_starless.value(), self.slider_denoise.value()
+                self.slider_contrast_starless.value(), self.slider_denoise.value(),
+                texture_clarity=self.slider_texture_clarity.value()
+            )
+        self.update_stretch_preview()
+
+    def on_texture_clarity_changed(self, val: int):
+        self.texture_clarity_starless_val = val / 100.0
+        self.lbl_texture_clarity.setText(f"{self.texture_clarity_starless_val:+.2f}")
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_starless_tone_values(
+                self.slider_clarity.value(), self.slider_dehaze.value(),
+                self.slider_ond_est.value(), self.slider_ond_bg.value(),
+                self.slider_contrast_starless.value(), self.slider_denoise.value(),
+                texture_clarity=val
             )
         self.update_stretch_preview()
 
@@ -6577,7 +6650,8 @@ class DeveloperTab(QWidget):
                 self.slider_orton.value(), self.slider_orton_radius.value(), self.slider_orton_threshold.value(),
                 self.combo_orton_tint.currentIndex(), self.combo_orton_mode.currentIndex(),
                 denoise_color=self.slider_denoise_color.value() if hasattr(self, 'slider_denoise_color') else 50,
-                denoise_mask=self.slider_denoise_mask.value() if hasattr(self, 'slider_denoise_mask') else 50
+                denoise_mask=self.slider_denoise_mask.value() if hasattr(self, 'slider_denoise_mask') else 50,
+                texture_clarity=self.slider_texture_clarity.value() if hasattr(self, 'slider_texture_clarity') else 0
             )
         self.update_stretch_preview()
 
@@ -6643,6 +6717,10 @@ class DeveloperTab(QWidget):
     def _on_mask_widget_sl_clarity(self, val: int):
         if self.slider_clarity.value() != val:
             self.slider_clarity.setValue(val)
+
+    def _on_mask_widget_sl_texture_clarity(self, val: int):
+        if self.slider_texture_clarity.value() != val:
+            self.slider_texture_clarity.setValue(val)
 
     def _on_mask_widget_sl_dehaze(self, val: int):
         if self.slider_dehaze.value() != val:
@@ -7102,9 +7180,17 @@ class DeveloperTab(QWidget):
         """Restablece las herramientas de ajuste de fondo starless y efectos."""
         if hasattr(self, 'panel_starnet') and self.panel_starnet is not None:
             self.panel_starnet.set_state({
-                "clarity_val": 0, "dehaze_val": 0, "ond_est_val": 0, "ond_bg_val": 0,
+                "clarity_val": 0, "texture_clarity_val": 0, "dehaze_val": 0, "ond_est_val": 0, "ond_bg_val": 0,
                 "contrast_starless_val": 0, "denoise_val": 0, "denoise_color_val": 50, "denoise_mask_val": 50
             })
+        if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget is not None:
+            self.mask_layers_widget.set_starless_tone_values(
+                0, 0, 0, 0, 0, 0,
+                orton_strength=0, orton_radius=40, orton_threshold=5,
+                orton_tint_idx=0, orton_mode_idx=0,
+                denoise_color=50, denoise_mask=50,
+                texture_clarity=0
+            )
         if hasattr(self, 'panel_effects') and self.panel_effects is not None:
             self.panel_effects.reset_orton()
             self.panel_effects.reset_star_diff()
@@ -7139,6 +7225,7 @@ class DeveloperTab(QWidget):
                 "stars_val": 100,
                 "contrast_starless_val": 0,
                 "clarity_val": 0,
+                "texture_clarity_val": 0,
                 "dehaze_val": 0,
                 "ond_est_val": 0,
                 "ond_bg_val": 0,
@@ -7936,6 +8023,7 @@ class DeveloperTab(QWidget):
             self.star_intensity = self.panel_starnet.slider_stars.value() / 100.0
             self.contrast_starless_val = self.panel_starnet.slider_contrast_starless.value() / 100.0
             self.clarity_starless_val = self.panel_starnet.slider_clarity.value() / 100.0
+            self.texture_clarity_starless_val = self.panel_starnet.slider_texture_clarity.value() / 100.0
             self.dehaze_starless_val = self.panel_starnet.slider_dehaze.value() / 100.0
             self.multiescala_estructura = self.panel_starnet.slider_ond_est.value() / 100.0
             self.multiescala_fondo = self.panel_starnet.slider_ond_bg.value() / 100.0
@@ -8008,7 +8096,8 @@ class DeveloperTab(QWidget):
                 self.combo_orton_tint.currentIndex() if hasattr(self, 'combo_orton_tint') else 0,
                 self.combo_orton_mode.currentIndex() if hasattr(self, 'combo_orton_mode') else 0,
                 denoise_color=getattr(self.panel_starnet, 'slider_denoise_color', None).value() if hasattr(self.panel_starnet, 'slider_denoise_color') else 50,
-                denoise_mask=getattr(self.panel_starnet, 'slider_denoise_mask', None).value() if hasattr(self.panel_starnet, 'slider_denoise_mask') else 50
+                denoise_mask=getattr(self.panel_starnet, 'slider_denoise_mask', None).value() if hasattr(self.panel_starnet, 'slider_denoise_mask') else 50,
+                texture_clarity=self.slider_texture_clarity.value() if hasattr(self, 'slider_texture_clarity') else 0
             )
 
         if hasattr(self, 'curve_widget'):

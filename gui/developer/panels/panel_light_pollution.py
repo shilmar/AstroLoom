@@ -22,6 +22,7 @@ class LightPollutionPanel(QWidget):
     interaction_started = pyqtSignal()
     interaction_finished = pyqtSignal()
     extract_bg_requested = pyqtSignal()
+    auto_abe_requested = pyqtSignal()
     auto_detect_lp_requested = pyqtSignal()
     center_pipette_toggled = pyqtSignal(bool)
     color_pipette_toggled = pyqtSignal(bool)
@@ -150,6 +151,13 @@ class LightPollutionPanel(QWidget):
         self.btn_extract_bg.setToolTip("Ajusta una superficie analítica inmune a la silueta del suelo y neutraliza el gradiente.")
         self.btn_extract_bg.clicked.connect(self.extract_bg_requested.emit)
         layout_bg.addWidget(self.btn_extract_bg)
+
+        self.btn_auto_abe = QPushButton("Auto Gradiente 1-Clic (ABE)")
+        self.btn_auto_abe.setIcon(get_icon("sparkles", color="#b388ff", size=13))
+        self.btn_auto_abe.setStyleSheet("font-weight: bold; color: #b388ff;")
+        self.btn_auto_abe.setToolTip("Calcula y neutraliza automáticamente el gradiente del cielo en un solo clic mediante muestreo no supervisado libre de estrellas y RBF (Seti Astro ABE).")
+        self.btn_auto_abe.clicked.connect(self.auto_abe_requested.emit)
+        layout_bg.addWidget(self.btn_auto_abe)
 
         # Cúpula de luz (Contaminación Lumínica) integrada
         self.row_lp = PrecisionSliderRow("Atenuar Cúpula:", 0, 100, 0, unit="%", label_width=115)

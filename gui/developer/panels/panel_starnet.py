@@ -176,14 +176,14 @@ class StarNetPanel(QWidget):
         self.slider_stars.setValue(100)
         tools_layout.addWidget(self.slider_stars)
 
-        # Par 1: Claridad Fondo (izq) y Borrar Neblina (der)
+        # Par 1: Claridad Gauss (izq) y Claridad Textura Seti (der) para comparación A/B
         row_pair1 = QHBoxLayout()
         row_pair1.setSpacing(14)
 
         col_clarity = QVBoxLayout()
         col_clarity.setSpacing(4)
         row_cl_lbl = QHBoxLayout()
-        row_cl_lbl.addWidget(self._make_resettable_label(QLabel("Claridad Fondo:"), lambda: self.slider_clarity.setValue(0), "0.00"))
+        row_cl_lbl.addWidget(self._make_resettable_label(QLabel("Claridad (Gauss):"), lambda: self.slider_clarity.setValue(0), "0.00"))
         self.lbl_clarity = QLabel("0.00")
         self.lbl_clarity.setStyleSheet("color: #80d8ff; font-weight: bold;")
         row_cl_lbl.addWidget(self.lbl_clarity)
@@ -191,9 +191,28 @@ class StarNetPanel(QWidget):
         self.slider_clarity = QSlider(Qt.Horizontal)
         self.slider_clarity.setRange(-200, 200)
         self.slider_clarity.setValue(0)
+        self.slider_clarity.setToolTip("Claridad clásica basada en paso alto con filtro gaussiano.")
         col_clarity.addWidget(self.slider_clarity)
         row_pair1.addLayout(col_clarity)
 
+        col_tex_clarity = QVBoxLayout()
+        col_tex_clarity.setSpacing(4)
+        row_tc_lbl = QHBoxLayout()
+        row_tc_lbl.addWidget(self._make_resettable_label(QLabel("Claridad Textura (Seti):"), lambda: self.slider_texture_clarity.setValue(0), "0.00"))
+        self.lbl_texture_clarity = QLabel("0.00")
+        self.lbl_texture_clarity.setStyleSheet("color: #b388ff; font-weight: bold;")
+        row_tc_lbl.addWidget(self.lbl_texture_clarity)
+        col_tex_clarity.addLayout(row_tc_lbl)
+        self.slider_texture_clarity = QSlider(Qt.Horizontal)
+        self.slider_texture_clarity.setRange(-200, 200)
+        self.slider_texture_clarity.setValue(0)
+        self.slider_texture_clarity.setToolTip("Claridad de textura bilateral modulada por campana de medios tonos 4L(1-L) (Seti Astro).")
+        col_tex_clarity.addWidget(self.slider_texture_clarity)
+        row_pair1.addLayout(col_tex_clarity)
+        tools_layout.addLayout(row_pair1)
+
+        # Fila Neblina
+        row_dehaze = QHBoxLayout()
         col_dehaze = QVBoxLayout()
         col_dehaze.setSpacing(4)
         row_dh_lbl = QHBoxLayout()
@@ -206,8 +225,8 @@ class StarNetPanel(QWidget):
         self.slider_dehaze.setRange(-200, 200)
         self.slider_dehaze.setValue(0)
         col_dehaze.addWidget(self.slider_dehaze)
-        row_pair1.addLayout(col_dehaze)
-        tools_layout.addLayout(row_pair1)
+        row_dehaze.addLayout(col_dehaze)
+        tools_layout.addLayout(row_dehaze)
 
         # Par 2: Estructura Ondículas (izq) y Atenuar Fondo (der)
         row_pair2 = QHBoxLayout()
@@ -430,6 +449,7 @@ class StarNetPanel(QWidget):
             self.slider_stars,
             self.slider_contrast_starless,
             self.slider_clarity,
+            self.slider_texture_clarity,
             self.slider_dehaze,
             self.slider_ond_est,
             self.slider_ond_bg,
@@ -491,6 +511,7 @@ class StarNetPanel(QWidget):
             "stars_val": self.slider_stars.value(),
             "contrast_starless_val": self.slider_contrast_starless.value(),
             "clarity_val": self.slider_clarity.value(),
+            "texture_clarity_val": self.slider_texture_clarity.value(),
             "dehaze_val": self.slider_dehaze.value(),
             "ond_est_val": self.slider_ond_est.value(),
             "ond_bg_val": self.slider_ond_bg.value(),
@@ -522,6 +543,10 @@ class StarNetPanel(QWidget):
                 val = state["clarity_val"]
                 self.slider_clarity.setValue(val)
                 self.lbl_clarity.setText(f"{val / 100.0:+.2f}")
+            if "texture_clarity_val" in state:
+                val = state["texture_clarity_val"]
+                self.slider_texture_clarity.setValue(val)
+                self.lbl_texture_clarity.setText(f"{val / 100.0:+.2f}")
             if "dehaze_val" in state:
                 val = state["dehaze_val"]
                 self.slider_dehaze.setValue(val)
@@ -562,6 +587,7 @@ class StarNetPanel(QWidget):
         for w in (
             self.combo_layer, self.slider_stars,
             self.slider_contrast_starless, self.slider_clarity,
+            self.slider_texture_clarity,
             self.slider_dehaze, self.slider_ond_est,
             self.slider_ond_bg, self.slider_denoise,
             self.slider_denoise_color, self.slider_denoise_mask,

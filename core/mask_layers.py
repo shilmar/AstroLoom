@@ -344,6 +344,8 @@ class MaskLayer:
     saturation: float = 1.0         # 0.00x a 2.50x
     temp: float = 0.0               # -1.0000 a +1.0000 (factor de balance cálido/frío)
     tint: float = 0.0               # -1.0000 a +1.0000 (factor de balance verde/magenta)
+    clarity: float = 0.0            # -2.00 a +2.00 (Claridad clásica basada en paso alto)
+    texture_clarity: float = 0.0    # -2.00 a +2.00 (Claridad de textura bilateral Seti Astro)
 
     # Máscara de Enfoque y Nitidez (USM con detección de bordes)
     sharp_amount: float = 0.0       # 0.0 a 150.0 (0 = desactivado)
@@ -898,7 +900,9 @@ def apply_local_adjustments_to_image(
                abs(layer.exposure) > 1e-3 or abs(layer.shadows) > 1e-3 or 
                abs(layer.highlights) > 1e-3 or abs(layer.contrast) > 1e-3 or 
                abs(layer.saturation - 1.0) > 1e-3 or not layer.is_curve_identity() or
-               getattr(layer, 'sharp_amount', 0.0) > 1e-4)
+               getattr(layer, 'sharp_amount', 0.0) > 1e-4 or
+               abs(getattr(layer, 'clarity', 0.0)) > 1e-3 or
+               abs(getattr(layer, 'texture_clarity', 0.0)) > 1e-3)
     if not has_adj:
         return image_rgb
 
@@ -945,6 +949,19 @@ def apply_local_adjustments_to_image(
             temp=float(layer.temp),
             tint=float(layer.tint)
         )
+        has_clarity = abs(getattr(layer, 'clarity', 0.0)) > 1e-3
+        has_tex_clarity = abs(getattr(layer, 'texture_clarity', 0.0)) > 1e-3
+        if has_clarity or has_tex_clarity:
+            c_res = res
+            if has_clarity:
+                from core.stretch import apply_clarity
+                c_res = apply_clarity(c_res, strength=float(layer.clarity))
+            if has_tex_clarity:
+                from core.sharpening import apply_texture_clarity
+                c_res = apply_texture_clarity(c_res, strength=float(layer.texture_clarity))
+            w_3d = (np.clip(mask_2d * layer.opacity, 0.0, 1.0))[..., np.newaxis]
+            res = np.clip((c_res * w_3d) + (res * (1.0 - w_3d)), 0.0, 1.0).astype(np.float32)
+
         if getattr(layer, 'sharp_amount', 0.0) > 1e-3:
             from core.sharpening import compute_edge_mask, apply_unsharp_mask
             edge_m = compute_edge_mask(res, masking=float(layer.sharp_masking), scope="global")
@@ -1015,6 +1032,19 @@ def apply_local_adjustments_to_image(
         float(layer.shadows), float(layer.highlights),
         use_lut, lut
     )
+    has_clarity = abs(getattr(layer, 'clarity', 0.0)) > 1e-3
+    has_tex_clarity = abs(getattr(layer, 'texture_clarity', 0.0)) > 1e-3
+    if has_clarity or has_tex_clarity:
+        c_res = res
+        if has_clarity:
+            from core.stretch import apply_clarity
+            c_res = apply_clarity(c_res, strength=float(layer.clarity))
+        if has_tex_clarity:
+            from core.sharpening import apply_texture_clarity
+            c_res = apply_texture_clarity(c_res, strength=float(layer.texture_clarity))
+        w_3d = (np.clip(mask_2d * layer.opacity, 0.0, 1.0))[..., np.newaxis]
+        res = np.clip((c_res * w_3d) + (res * (1.0 - w_3d)), 0.0, 1.0).astype(np.float32)
+
     if getattr(layer, 'sharp_amount', 0.0) > 1e-3:
         from core.sharpening import compute_edge_mask, apply_unsharp_mask
         edge_m = compute_edge_mask(res, masking=float(layer.sharp_masking), scope="global")
@@ -1040,6 +1070,19 @@ def apply_local_adjustments_to_image(
         adj = (cv2.LUT(u8, lut_u8).astype(np.float32) / 255.0)
 
     # 8. Máscara de Enfoque y Nitidez local de capa si está activa
+    has_clarity = abs(getattr(layer, 'clarity', 0.0)) > 1e-3
+    has_tex_clarity = abs(getattr(layer, 'texture_clarity', 0.0)) > 1e-3
+    if has_clarity or has_tex_clarity:
+        c_res = res
+        if has_clarity:
+            from core.stretch import apply_clarity
+            c_res = apply_clarity(c_res, strength=float(layer.clarity))
+        if has_tex_clarity:
+            from core.sharpening import apply_texture_clarity
+            c_res = apply_texture_clarity(c_res, strength=float(layer.texture_clarity))
+        w_3d = (np.clip(mask_2d * layer.opacity, 0.0, 1.0))[..., np.newaxis]
+        res = np.clip((c_res * w_3d) + (res * (1.0 - w_3d)), 0.0, 1.0).astype(np.float32)
+
     if getattr(layer, 'sharp_amount', 0.0) > 1e-3:
         from core.sharpening import compute_edge_mask, apply_unsharp_mask
         edge_m = compute_edge_mask(adj, masking=float(layer.sharp_masking), scope="global")
@@ -1333,6 +1376,8 @@ def _compute_subcomposite_key(
             float(l.highlights),
             float(l.shadows),
             float(l.saturation),
+            float(getattr(l, "clarity", 0.0)),
+            float(getattr(l, "texture_clarity", 0.0)),
             float(getattr(l, "sharp_amount", 0.0)),
             float(getattr(l, "sharp_radius", 1.0)),
             float(getattr(l, "sharp_detail", 25.0)),
@@ -1685,6 +1730,17 @@ def apply_all_mask_layers(
                             u8 = (np.clip(flt_img, 0.0, 1.0) * 255.0).astype(np.uint8)
                             lut_u8 = (np.clip(layer.curve_lut, 0.0, 1.0) * 255.0).astype(np.uint8)
                             flt_img = (cv2.LUT(u8, lut_u8).astype(np.float32) / 255.0)
+
+                # Claridad y textura de la capa ráster si está activa
+                has_clarity = abs(getattr(layer, 'clarity', 0.0)) > 1e-3
+                has_tex_clarity = abs(getattr(layer, 'texture_clarity', 0.0)) > 1e-3
+                if has_clarity or has_tex_clarity:
+                    if has_clarity:
+                        from core.stretch import apply_clarity
+                        flt_img = apply_clarity(flt_img, strength=float(layer.clarity))
+                    if has_tex_clarity:
+                        from core.sharpening import apply_texture_clarity
+                        flt_img = apply_texture_clarity(flt_img, strength=float(layer.texture_clarity))
 
                 # Máscara de Enfoque y Nitidez de la capa ráster si está activa
                 if getattr(layer, 'sharp_amount', 0.0) > 1e-3:

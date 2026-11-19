@@ -427,7 +427,12 @@ def apply_developer_pipeline(
                         color_mode=state.ghs_color_mode,
                     )
                 else:
-                    stretched_base = manual_stretch(img, black_point=state.bp_val, midtone=state.mtf_val)
+                    stretched_base = manual_stretch(
+                        img,
+                        black_point=state.bp_val,
+                        midtone=state.mtf_val,
+                        highlight_protection=getattr(state, "mtf_hp_val", 0.0)
+                    )
                 
                 mask_blend = precomputed_mask if precomputed_mask.ndim == 3 else precomputed_mask[..., np.newaxis]
                 if mask_blend.shape[:2] != img.shape[:2]:
@@ -450,7 +455,12 @@ def apply_developer_pipeline(
                     color_mode=state.ghs_color_mode,
                 )
             else:
-                stretched = manual_stretch(img, black_point=state.bp_val, midtone=state.mtf_val)
+                stretched = manual_stretch(
+                    img,
+                    black_point=state.bp_val,
+                    midtone=state.mtf_val,
+                    highlight_protection=getattr(state, "mtf_hp_val", 0.0)
+                )
 
         milestone_stretched = stretched
 

@@ -20,6 +20,7 @@ class DeveloperState:
     ghs_bp_val: float = 0.0
     bp_val: float = 0.0
     mtf_val: float = 0.15
+    mtf_hp_val: float = 0.50
     contrast_val: int = 0
 
     # Color & White Balance
@@ -52,6 +53,7 @@ class DeveloperState:
     stars_val: int = 100
     contrast_starless_val: int = 0
     clarity_val: int = 0
+    texture_clarity_val: int = 0
     dehaze_val: int = 0
     ond_est_val: int = 0
     ond_bg_val: int = 0

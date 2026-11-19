@@ -32,6 +32,7 @@ class StretchingPanel(QWidget):
         self.ghs_color_mode: str = "luma"
         self.bp_val: float = 0.0
         self.mtf_val: float = 0.15
+        self.mtf_hp_val: float = 0.50
         self.contrast_val: float = 0.0
 
         self.ghs_sp_val: float = 0.02
@@ -133,6 +134,17 @@ class StretchingPanel(QWidget):
         self.slider_mtf.sliderPressed.connect(self.interaction_started.emit)
         self.slider_mtf.sliderReleased.connect(self._on_slider_released)
         mtf_layout.addWidget(self.row_mtf)
+
+        # 3. Protección de Altas Luces / Núcleos Estelares (Seti Astro)
+        self.row_mtf_hp = PrecisionSliderRow("Prot. Estrellas:", 0, 100, 50, unit="%", label_width=115)
+        self.slider_mtf_hp = self.row_mtf_hp.slider
+        self.spin_mtf_hp = self.row_mtf_hp.spin
+        self.slider_mtf_hp.setToolTip("Comprime suavemente las altas luces para evitar que los núcleos estelares se saturen en blanco plano.")
+        self.slider_mtf_hp.valueChanged.connect(self._on_slider_mtf_hp_changed)
+        self.spin_mtf_hp.valueChanged.connect(self._on_spin_mtf_hp_changed)
+        self.slider_mtf_hp.sliderPressed.connect(self.interaction_started.emit)
+        self.slider_mtf_hp.sliderReleased.connect(self._on_slider_released)
+        mtf_layout.addWidget(self.row_mtf_hp)
 
         stretch_layout.addWidget(self.w_mtf_container)
 
@@ -325,6 +337,26 @@ class StretchingPanel(QWidget):
         self.slider_mtf.blockSignals(False)
         self.parameter_changed.emit()
 
+    def _on_slider_mtf_hp_changed(self, val: int) -> None:
+        hp = val / 100.0
+        if abs(self.mtf_hp_val - hp) < 1e-4:
+            return
+        self.mtf_hp_val = hp
+        self.spin_mtf_hp.blockSignals(True)
+        self.spin_mtf_hp.setValue(val)
+        self.spin_mtf_hp.blockSignals(False)
+        self.parameter_changed.emit()
+
+    def _on_spin_mtf_hp_changed(self, val: float) -> None:
+        hp = float(val) / 100.0
+        if abs(self.mtf_hp_val - hp) < 1e-4:
+            return
+        self.mtf_hp_val = hp
+        self.slider_mtf_hp.blockSignals(True)
+        self.slider_mtf_hp.setValue(int(round(val)))
+        self.slider_mtf_hp.blockSignals(False)
+        self.parameter_changed.emit()
+
     def _on_contrast_changed(self, val: int) -> None:
         c = val / 100.0
         if abs(self.contrast_val - c) < 1e-4:
@@ -503,9 +535,12 @@ class StretchingPanel(QWidget):
             self.spin_bp.setValue(0.0)
             self.slider_mtf.setValue(400)
             self.spin_mtf.setValue(0.10)
+            self.slider_mtf_hp.setValue(50)
+            self.spin_mtf_hp.setValue(50)
             self.slider_contrast.setValue(0)
             self.bp_val = 0.0
             self.mtf_val = 0.10
+            self.mtf_hp_val = 0.50
             self.contrast_val = 0.0
         finally:
             self.block_signals(False)
@@ -552,6 +587,7 @@ class StretchingPanel(QWidget):
             "ghs_bp_val": float(self.spin_ghs_bp.value()),
             "bp_val": float(self.spin_bp.value()),
             "mtf_val": float(self.spin_mtf.value()),
+            "mtf_hp_val": float(self.mtf_hp_val),
             "contrast_val": self.slider_contrast.value(),
         }
 
@@ -602,6 +638,11 @@ class StretchingPanel(QWidget):
                 self.mtf_val = val
                 self.spin_mtf.setValue(val)
                 self.slider_mtf.setValue(int(np.clip(val * 4000.0, 1, 2000)))
+            if "mtf_hp_val" in state:
+                val = float(state["mtf_hp_val"])
+                self.mtf_hp_val = val
+                self.spin_mtf_hp.setValue(int(round(val * 100.0)))
+                self.slider_mtf_hp.setValue(int(np.clip(val * 100.0, 0, 100)))
             if "contrast_val" in state:
                 val = int(state["contrast_val"])
                 self.slider_contrast.setValue(val)
@@ -618,6 +659,7 @@ class StretchingPanel(QWidget):
         for w in (
             self.slider_bp, self.spin_bp,
             self.slider_mtf, self.spin_mtf,
+            self.slider_mtf_hp, self.spin_mtf_hp,
             self.slider_contrast,
             self.slider_ghs_sp, self.spin_ghs_sp,
             self.slider_ghs_d, self.spin_ghs_d,

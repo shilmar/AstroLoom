@@ -259,3 +259,47 @@ def extract_background_rbf(
         corrected = (corrected * m_3d) + (img_rgb * (1.0 - m_3d))
 
     return np.clip(corrected, 0.0, 1.0).astype(np.float32), bg_full
+
+
+def auto_extract_background_sky(
+    img_rgb: np.ndarray,
+    sky_mask: Optional[np.ndarray] = None,
+    mode: str = "subtraction",
+    grid_cols: int = 8,
+    grid_rows: int = 6,
+    box_size: int = 25,
+    smoothing: float = 0.15,
+    kernel: str = "multiquadric"
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Extracción de fondo automática (ABE 1-Clic / Seti Astro abe.py) para cielo nocturno y astropaisaje.
+    Genera automáticamente una rejilla de muestras en el cielo libre de estrellas y suelo,
+    y computa la superficie RBF de gradiente eliminándola de forma no destructiva.
+    """
+    if img_rgb is None or img_rgb.size == 0:
+        raise ValueError("img_rgb no puede ser nulo o vacío")
+
+    h, w = img_rgb.shape[:2]
+    pts = generate_sky_sample_points(
+        h=h,
+        w=w,
+        sky_mask=sky_mask,
+        grid_cols=grid_cols,
+        grid_rows=grid_rows,
+        img_rgb=img_rgb,
+        box_size=box_size
+    )
+
+    if len(pts) < 4:
+        raise ValueError("No se encontraron suficientes puntos de muestreo en el cielo para ABE.")
+
+    corrected, bg_model = extract_background_rbf(
+        img_rgb=img_rgb,
+        sample_points=pts,
+        sky_mask=sky_mask,
+        box_size=box_size,
+        mode=mode,
+        kernel=kernel,
+        smoothing=smoothing
+    )
+    return corrected, bg_model

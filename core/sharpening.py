@@ -152,3 +152,63 @@ def apply_unsharp_mask(
         out = np.clip(image + delta, 0.0, 1.0)
 
     return np.ascontiguousarray(out, dtype=np.float32)
+
+
+def apply_texture_clarity(
+    image: np.ndarray,
+    strength: float = 0.0,
+    radius: float = 3.0,
+    sky_mask: Optional[np.ndarray] = None,
+    scope: str = "global"
+) -> np.ndarray:
+    """
+    Realza el micro-contraste y la textura local (Seti Astro texture_clarity)
+    mediante filtro bilateral edge-preserving modulado por una máscara tonal de medios tonos 4L(1-L).
+    Protege los núcleos estelares contra halos y las sombras contra la amplificación de ruido.
+    """
+    if image is None or abs(strength) < 1e-4:
+        return image
+
+    is_rgb = image.ndim == 3 and image.shape[2] >= 3
+    if is_rgb:
+        luma = 0.2126 * image[..., 0] + 0.7152 * image[..., 1] + 0.0722 * image[..., 2]
+    else:
+        luma = image.squeeze() if image.ndim == 3 else image
+
+    luma = np.ascontiguousarray(np.clip(luma, 0.0, 1.0), dtype=np.float32)
+    h, w = luma.shape[:2]
+
+    # Filtro bilateral con preservación de bordes
+    d = max(3, int(round(radius * 2.0)) | 1)
+    sigma_color = 0.12
+    sigma_space = max(1.0, float(radius))
+    luma_smooth = cv2.bilateralFilter(luma, d=d, sigmaColor=sigma_color, sigmaSpace=sigma_space)
+
+    # Detalle de textura en altas/medias frecuencias
+    texture = luma - luma_smooth
+
+    # Máscara campana de medios tonos: 4 * L * (1 - L), nula en sombras y en altas luces
+    midtones_mask = 4.0 * luma * (1.0 - luma)
+    midtones_mask = np.clip(midtones_mask, 0.0, 1.0)
+
+    # Ponderación por scope y sky_mask si procede
+    if scope == "ground" and sky_mask is not None:
+        sm = sky_mask[..., 0] if sky_mask.ndim == 3 else sky_mask
+        if sm.shape[:2] != (h, w):
+            sm = cv2.resize(sm, (w, h), interpolation=cv2.INTER_LINEAR)
+        midtones_mask *= (1.0 - np.clip(sm, 0.0, 1.0))
+    elif scope == "sky" and sky_mask is not None:
+        sm = sky_mask[..., 0] if sky_mask.ndim == 3 else sky_mask
+        if sm.shape[:2] != (h, w):
+            sm = cv2.resize(sm, (w, h), interpolation=cv2.INTER_LINEAR)
+        midtones_mask *= np.clip(sm, 0.0, 1.0)
+
+    factor = float(strength) * 0.85
+    delta = texture * factor * midtones_mask
+
+    if is_rgb:
+        out = np.clip(image + delta[..., np.newaxis], 0.0, 1.0)
+    else:
+        out = np.clip(image + delta, 0.0, 1.0)
+
+    return np.ascontiguousarray(out, dtype=np.float32)

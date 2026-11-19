@@ -154,6 +154,7 @@ class MaskLayersWidget(QWidget):
 
     # Sincronización contextual de Fondo Nebular (Starless)
     starless_clarity_changed = Signal(int)       # (val -200 a 200)
+    starless_texture_clarity_changed = Signal(int) # (val -200 a 200)
     starless_dehaze_changed = Signal(int)        # (val -200 a 200)
     starless_ond_est_changed = Signal(int)       # (val -100 a 100)
     starless_ond_bg_changed = Signal(int)        # (val 0 a 100)
@@ -1133,6 +1134,24 @@ class MaskLayersWidget(QWidget):
         self.row_adj_highlights.sliderReleased.connect(self.ground_slider_released.emit)
         adj_layout.addWidget(self.row_adj_highlights)
 
+        # Claridad Clásica (Gauss)
+        self.row_adj_clarity = PrecisionSliderRow("Claridad (Gauss):", -200, 200, 0, scale=100.0, decimals=2, force_sign=True, label_width=115)
+        self.slider_adj_clarity = self.row_adj_clarity.slider
+        self.lbl_adj_clarity = self.row_adj_clarity.lbl_value
+        self.slider_adj_clarity.valueChanged.connect(self._on_adj_clarity_changed)
+        self.row_adj_clarity.sliderReleased.connect(self.ground_slider_released.emit)
+        self.row_adj_clarity.setToolTip("Claridad clásica de frecuencias medias basada en paso alto gaussiano.")
+        adj_layout.addWidget(self.row_adj_clarity)
+
+        # Claridad Textura (Seti Astro)
+        self.row_adj_texture_clarity = PrecisionSliderRow("Claridad Textura:", -200, 200, 0, scale=100.0, decimals=2, force_sign=True, label_width=115)
+        self.slider_adj_texture_clarity = self.row_adj_texture_clarity.slider
+        self.lbl_adj_texture_clarity = self.row_adj_texture_clarity.lbl_value
+        self.slider_adj_texture_clarity.valueChanged.connect(self._on_adj_texture_clarity_changed)
+        self.row_adj_texture_clarity.sliderReleased.connect(self.ground_slider_released.emit)
+        self.row_adj_texture_clarity.setToolTip("Claridad de textura bilateral modulada por campana de medios tonos 4L(1-L) (Seti Astro).")
+        adj_layout.addWidget(self.row_adj_texture_clarity)
+
         # Saturación
         self.row_adj_sat = PrecisionSliderRow("Saturación:", 0, 250, 100, scale=100.0, decimals=2, unit="x", label_width=115)
         self.slider_adj_sat = self.row_adj_sat.slider
@@ -1493,13 +1512,23 @@ class MaskLayersWidget(QWidget):
         lbl_sl_notice.setStyleSheet("color: #ce93d8; font-size: 11px; font-style: italic;")
         sl_layout.addWidget(lbl_sl_notice)
 
-        # Claridad Fondo
-        self.row_sl_clarity = PrecisionSliderRow("Claridad Fondo:", -200, 200, 0, scale=100.0, decimals=2, force_sign=True, label_width=130)
+        # Claridad Clásica (Gauss)
+        self.row_sl_clarity = PrecisionSliderRow("Claridad (Gauss):", -200, 200, 0, scale=100.0, decimals=2, force_sign=True, label_width=130)
         self.slider_sl_clarity = self.row_sl_clarity.slider
         self.lbl_sl_clarity = self.row_sl_clarity.lbl_value
         self.slider_sl_clarity.valueChanged.connect(self._on_sl_clarity_changed)
         self.slider_sl_clarity.sliderReleased.connect(self.ground_slider_released.emit)
+        self.row_sl_clarity.setToolTip("Claridad clásica basada en paso alto con filtro gaussiano.")
         sl_layout.addWidget(self.row_sl_clarity)
+
+        # Claridad Textura (Seti Astro)
+        self.row_sl_texture_clarity = PrecisionSliderRow("Claridad Textura:", -200, 200, 0, scale=100.0, decimals=2, force_sign=True, label_width=130)
+        self.slider_sl_texture_clarity = self.row_sl_texture_clarity.slider
+        self.lbl_sl_texture_clarity = self.row_sl_texture_clarity.lbl_value
+        self.slider_sl_texture_clarity.valueChanged.connect(self._on_sl_texture_clarity_changed)
+        self.slider_sl_texture_clarity.sliderReleased.connect(self.ground_slider_released.emit)
+        self.row_sl_texture_clarity.setToolTip("Claridad de textura bilateral modulada por campana de medios tonos 4L(1-L) (Seti Astro).")
+        sl_layout.addWidget(self.row_sl_texture_clarity)
 
         # Borrar Neblina
         self.row_sl_dehaze = PrecisionSliderRow("Borrar Neblina:", -200, 200, 0, scale=100.0, decimals=2, force_sign=True, label_width=130)
@@ -1817,12 +1846,14 @@ class MaskLayersWidget(QWidget):
         slider_attrs = [
             'slider_opacity', 'slider_b_radius', 'slider_b_hardness', 'slider_b_flow',
             'slider_hue', 'slider_adj_ev', 'slider_adj_contrast', 'slider_adj_shadows',
-            'slider_adj_highlights', 'slider_adj_sat', 'slider_adj_temp', 'slider_adj_tint',
+            'slider_adj_highlights', 'slider_adj_clarity', 'slider_adj_texture_clarity',
+            'slider_adj_sat', 'slider_adj_temp', 'slider_adj_tint',
             'slider_adj_sharp_amount', 'slider_adj_sharp_radius', 'slider_adj_sharp_detail', 'slider_adj_sharp_masking',
             'slider_gnd_special_ev', 'slider_gnd_special_sh', 'slider_gnd_special_bp',
             'slider_gnd_special_dn', 'slider_gnd_special_antihalo', 'slider_gnd_special_edge_shift',
             'slider_stars_special', 'slider_sl_star_diff_strength', 'slider_sl_star_diff_radius',
             'slider_sl_star_diff_threshold', 'slider_sl_star_diff_color', 'slider_sl_clarity',
+            'slider_sl_texture_clarity',
             'slider_sl_dehaze', 'slider_sl_ond_est', 'slider_sl_ond_bg', 'slider_sl_contrast',
             'slider_sl_denoise', 'slider_sl_denoise_color', 'slider_sl_denoise_mask',
             'slider_sl_orton_strength', 'slider_sl_orton_radius',
@@ -3203,6 +3234,19 @@ class MaskLayersWidget(QWidget):
             self.slider_adj_highlights.setValue(int(round(layer.highlights * 100)))
             self.lbl_adj_highlights.setText(f"{layer.highlights:+.2f}")
 
+            if hasattr(self, 'slider_adj_clarity'):
+                self.slider_adj_clarity.setValue(int(round(getattr(layer, 'clarity', 0.0) * 100)))
+                self.lbl_adj_clarity.setText(f"{getattr(layer, 'clarity', 0.0):+.2f}")
+            if hasattr(self, 'slider_adj_texture_clarity'):
+                self.slider_adj_texture_clarity.setValue(int(round(getattr(layer, 'texture_clarity', 0.0) * 100)))
+                self.lbl_adj_texture_clarity.setText(f"{getattr(layer, 'texture_clarity', 0.0):+.2f}")
+
+            hide_adj_clarity = (is_stars or is_starless)
+            if hasattr(self, 'row_adj_clarity'):
+                self.row_adj_clarity.setVisible(not hide_adj_clarity)
+            if hasattr(self, 'row_adj_texture_clarity'):
+                self.row_adj_texture_clarity.setVisible(not hide_adj_clarity)
+
             sat_pct = int(round(layer.saturation * 100))
             self.slider_adj_sat.setValue(sat_pct)
             self.lbl_adj_sat.setText(f"{layer.saturation:.2f}x")
@@ -3994,6 +4038,24 @@ class MaskLayersWidget(QWidget):
             self.update_active_layer_histogram()
             self.layers_changed.emit()
 
+    def _on_adj_clarity_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if layer:
+            layer.clarity = val / 100.0
+            self.lbl_adj_clarity.setText(f"{layer.clarity:+.2f}")
+            self.update_active_layer_histogram()
+            self.layers_changed.emit()
+
+    def _on_adj_texture_clarity_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        layer = self.get_selected_layer()
+        if layer:
+            layer.texture_clarity = val / 100.0
+            self.lbl_adj_texture_clarity.setText(f"{layer.texture_clarity:+.2f}")
+            self.update_active_layer_histogram()
+            self.layers_changed.emit()
+
     def _on_adj_sat_changed(self, val: int) -> None:
         if self._updating_ui: return
         layer = self.get_selected_layer()
@@ -4207,6 +4269,8 @@ class MaskLayersWidget(QWidget):
         layer.saturation = 1.0
         layer.temp = 0.0
         layer.tint = 0.0
+        layer.clarity = 0.0
+        layer.texture_clarity = 0.0
         layer.sharp_amount = 0.0
         layer.sharp_radius = 1.0
         layer.sharp_detail = 25.0
@@ -4484,6 +4548,11 @@ class MaskLayersWidget(QWidget):
         self.lbl_sl_clarity.setText(f"{val / 100.0:+.2f}")
         self.starless_clarity_changed.emit(val)
 
+    def _on_sl_texture_clarity_changed(self, val: int) -> None:
+        if self._updating_ui: return
+        self.lbl_sl_texture_clarity.setText(f"{val / 100.0:+.2f}")
+        self.starless_texture_clarity_changed.emit(val)
+
     def _on_sl_dehaze_changed(self, val: int) -> None:
         if self._updating_ui: return
         self.lbl_sl_dehaze.setText(f"{val / 100.0:+.2f}")
@@ -4591,13 +4660,17 @@ class MaskLayersWidget(QWidget):
         self, clarity: int, dehaze: int, ond_est: int, ond_bg: int, contrast: int, denoise: int,
         orton_strength: int = 0, orton_radius: int = 40, orton_threshold: int = 5,
         orton_tint_idx: int = 0, orton_mode_idx: int = 0,
-        denoise_color: int = 50, denoise_mask: int = 50
+        denoise_color: int = 50, denoise_mask: int = 50,
+        texture_clarity: Optional[int] = None
     ) -> None:
         """Sincroniza los controles especiales de fondo nebular desde tab_developer."""
         self._updating_ui = True
         if hasattr(self, 'slider_sl_clarity'):
             self.slider_sl_clarity.setValue(clarity)
             self.lbl_sl_clarity.setText(f"{clarity / 100.0:+.2f}")
+        if texture_clarity is not None and hasattr(self, 'slider_sl_texture_clarity'):
+            self.slider_sl_texture_clarity.setValue(texture_clarity)
+            self.lbl_sl_texture_clarity.setText(f"{texture_clarity / 100.0:+.2f}")
         if hasattr(self, 'slider_sl_dehaze'):
             self.slider_sl_dehaze.setValue(dehaze)
             self.lbl_sl_dehaze.setText(f"{dehaze / 100.0:+.2f}")

@@ -258,11 +258,47 @@ def auto_mtf_stretch(img_float: np.ndarray, target_background: float = 0.20):
     stretched = manual_stretch(img_float, black_point=bp, midtone=m)
     return stretched, bp, m
 
-def manual_stretch(img_float: np.ndarray, black_point: float = 0.0, midtone: float = 0.1):
+def auto_statistical_stretch(
+    img_float: np.ndarray,
+    sky_mask: Optional[np.ndarray] = None,
+    target_background: float = 0.20,
+    highlight_protection: float = 0.50
+) -> Tuple[np.ndarray, float, float]:
+    """
+    Estirado estadístico automático (Seti Astro stat_stretch / MTF adaptativo).
+    Calcula punto negro y medios tonos a partir de la mediana y MAD del cielo,
+    aplicando compresión suave de altas luces para evitar la saturación de núcleos estelares.
+    """
+    if img_float is None or img_float.size == 0:
+        raise ValueError("img_float no puede ser nulo o vacío")
+
+    bp, m = calculate_sky_mtf_params(img_float, sky_mask=sky_mask, target_background=target_background)
+    stretched = manual_stretch(img_float, black_point=bp, midtone=m, highlight_protection=highlight_protection)
+    return stretched, bp, m
+
+def manual_stretch(
+    img_float: np.ndarray,
+    black_point: float = 0.0,
+    midtone: float = 0.1,
+    highlight_protection: float = 0.0
+) -> np.ndarray:
     # 1. Recorte y re-escalado del punto negro
     clipped = np.clip((img_float - black_point) / max(1e-6, 1.0 - black_point), 0.0, 1.0)
     # 2. Aplicación directa de curva MTF con el 'm' elegido
     stretched = mtf_curve(clipped, max(1e-5, min(0.9999, midtone)))
+
+    # 3. Compresión suave de altas luces para proteger núcleos estelares (Seti Astro)
+    if highlight_protection > 1e-4:
+        hp = float(np.clip(highlight_protection, 0.0, 1.0))
+        knee = 1.0 - (0.35 * hp)  # Umbral de compresión entre 0.65 y 1.0
+        mask_hl = stretched > knee
+        if np.any(mask_hl):
+            scale = 1.0 - knee
+            u = (stretched[mask_hl] - knee) / scale
+            c = 0.40 * hp
+            u_comp = u - c * u * (1.0 - u)
+            stretched[mask_hl] = knee + scale * u_comp
+
     return np.clip(stretched, 0.0, 1.0).astype(np.float32)
     
 def apply_white_balance(img_rgb: np.ndarray, temp_factor: float = 0.0, tint_factor: float = 0.0) -> np.ndarray:
