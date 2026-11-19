@@ -35,9 +35,7 @@ jobs:
 
       - name: Compile Rust native engine (astroloom_rs)
         run: |
-          cd astroloom_rs
-          maturin develop --release
-          cd ..
+          pip install ./astroloom_rs
 
       - name: Build Executable with PyInstaller
         run: |
