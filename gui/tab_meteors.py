@@ -540,12 +540,6 @@ class MeteorTab(QWidget):
         scroll.setWidget(scroll_content)
         left_layout.addWidget(scroll)
 
-        # Barra de progreso inferior izquierda
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedHeight(14)
-        self.progress_bar.setVisible(False)
-        left_layout.addWidget(self.progress_bar)
-
         # -------------------------------------------------------------
         # PANEL DERECHO: Toolbar Unificada, Canvas Interactivo y Galería de Culling
         # -------------------------------------------------------------
@@ -593,6 +587,7 @@ class MeteorTab(QWidget):
         canvas_box_layout.setSpacing(0)
         canvas_box_layout.addWidget(self.canvas, 1)
         self.canvas_footer = CanvasFooterBar(self)
+        self.progress_bar = self.canvas_footer.progress_bar
         canvas_box_layout.addWidget(self.canvas_footer)
 
         self.canvas.zoom_toggled.connect(
@@ -945,6 +940,8 @@ class MeteorTab(QWidget):
             QMessageBox.warning(self, "Atención", "Carga al menos 2 tomas de la serie para detectar trazas de meteoros.")
             return
 
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_progress(0, "Iniciando escaneo...")
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.btn_scan.setText("DETENER ESCANEO")
@@ -995,6 +992,8 @@ class MeteorTab(QWidget):
             QMessageBox.warning(self, "Atención", "No hay imagen base de referencia cargada.")
             return
 
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_progress(0, "Iniciando composición...")
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.btn_fuse.setEnabled(False)
@@ -1068,6 +1067,8 @@ class MeteorTab(QWidget):
 
     def _on_worker_error(self, err_msg: str) -> None:
         self.progress_bar.setVisible(False)
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.btn_scan.setText("ESCANEAR SERIE DE METEOROS")
         self.btn_scan.setStyleSheet(STYLE_RUN_IDLE)
         self.btn_scan.setEnabled(True)
@@ -1077,6 +1078,8 @@ class MeteorTab(QWidget):
 
     def _on_worker_cancelled(self) -> None:
         self.progress_bar.setVisible(False)
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.btn_scan.setText("ESCANEAR SERIE DE METEOROS")
         self.btn_scan.setStyleSheet(STYLE_RUN_IDLE)
         self.btn_scan.setEnabled(True)
@@ -1369,6 +1372,8 @@ class MeteorTab(QWidget):
         self.btn_detect_ai_mask.setEnabled(False)
         self.btn_detect_ai_mask.setText("Detectando IA...")
         self.btn_detect_ai_mask.setIcon(get_icon("refresh", color="#ffffff"))
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_progress(0, "Detectando IA...")
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)
         self.setCursor(Qt.WaitCursor)
@@ -1389,6 +1394,8 @@ class MeteorTab(QWidget):
         self.btn_detect_ai_mask.setText("Detectar por IA")
         self.btn_detect_ai_mask.setIcon(get_icon("sparkles", color="#80d8ff"))
         self.unsetCursor()
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.progress_bar.setVisible(False)
         self.progress_bar.setRange(0, 100)
 
@@ -1402,6 +1409,8 @@ class MeteorTab(QWidget):
         self.btn_detect_ai_mask.setText("Detectar por IA")
         self.btn_detect_ai_mask.setIcon(get_icon("sparkles", color="#80d8ff"))
         self.unsetCursor()
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.progress_bar.setVisible(False)
         self.progress_bar.setRange(0, 100)
         self.log(f"[ERROR IA HORIZONTE] Falló la detección: {err_msg}")

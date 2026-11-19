@@ -1587,13 +1587,6 @@ class EclipseTab(QWidget):
         scroll_area.setWidget(panel_content)
         left_panel_layout.addWidget(scroll_area, stretch=1)
 
-        # Consola de estado y Progreso fija abajo (siempre visible, sin scroll)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedHeight(16)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setVisible(False)
-        left_panel_layout.addWidget(self.progress_bar)
-
         self.splitter = splitter
         self.left_panel = left_panel
         splitter.addWidget(left_panel)
@@ -1659,6 +1652,7 @@ class EclipseTab(QWidget):
         right_layout.addWidget(self.canvas, 1)
 
         self.canvas_footer = CanvasFooterBar(self)
+        self.progress_bar = self.canvas_footer.progress_bar
         right_layout.addWidget(self.canvas_footer)
 
         # Sincronizar botones de barra con los del panel
@@ -1838,9 +1832,13 @@ class EclipseTab(QWidget):
             self.bracketing_files.append(info)
             if (idx + 1) % 15 == 0 or idx == total_new - 1:
                 self.progress_bar.setValue(idx + 1)
+                if hasattr(self, 'canvas_footer'):
+                    self.canvas_footer.set_progress(int((idx + 1) / total_new * 100), f"Cargando {idx + 1}/{total_new}")
                 QApplication.processEvents()
 
         self.progress_bar.setFormat("Detectando limbo en toma de referencia...")
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_progress(95, "Detectando limbo en referencia...")
         QApplication.processEvents()
 
         self.bracketing_files.sort(key=lambda x: x["exposure_s"])
@@ -1868,6 +1866,8 @@ class EclipseTab(QWidget):
 
         self._refresh_table()
         self.table_brack.selectRow(self.ref_file_idx)
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.progress_bar.setVisible(False)
         self.log(f"Carga finalizada: se cargaron {total_new} tomas de bracketing (Total: {len(self.bracketing_files)}).")
 
@@ -2553,6 +2553,8 @@ class EclipseTab(QWidget):
 
     def _on_worker_error(self, err_msg: str):
         self.progress_bar.setVisible(False)
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.btn_detect_all.setEnabled(True)
         self.btn_fuse_hdr.setEnabled(True)
         self.btn_apply_filters.setEnabled(True)

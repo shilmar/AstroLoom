@@ -446,10 +446,6 @@ class EclipseCollageTab(QWidget):
         self.btn_analyze.clicked.connect(self._on_analyze_clicked)
         box_files.addWidget(self.btn_analyze)
 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        box_files.addWidget(self.progress_bar)
-
         left_layout.addWidget(self.sec_files)
 
         # --- SECCIÓN 2: Recomendador Inteligente ---
@@ -654,6 +650,7 @@ class EclipseCollageTab(QWidget):
 
         right_layout.addWidget(self.canvas_preview, stretch=1)
         self.canvas_footer = CanvasFooterBar(self)
+        self.progress_bar = self.canvas_footer.progress_bar
         right_layout.addWidget(self.canvas_footer)
 
         splitter.addWidget(right_widget)
@@ -883,10 +880,14 @@ class EclipseCollageTab(QWidget):
             ))
             if (idx + 1) % 25 == 0 or idx == total - 1:
                 self.progress_bar.setValue(idx + 1)
+                if hasattr(self, 'canvas_footer'):
+                    self.canvas_footer.set_progress(int((idx + 1) / total * 100), f"Cargando {idx + 1}/{total}")
                 QApplication.processEvents()
 
         self.frames_meta.extend(new_metas)
         self._populate_table()
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.progress_bar.setVisible(False)
         self.lbl_info.setText(f"Carga finalizada: {len(self.frames_meta)} tomas añadidas (pulsa 'Analizar').")
 
@@ -993,6 +994,8 @@ class EclipseCollageTab(QWidget):
             return
 
         fps = [f.filepath for f in self.frames_meta]
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_progress(0, "Iniciando análisis...")
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.btn_analyze.setText("Cancelar Análisis")

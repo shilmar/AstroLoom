@@ -673,13 +673,7 @@ class StartrailsTab(QWidget):
         scroll_area.setWidget(panel_content)
         left_container_layout.addWidget(scroll_area, 1)
 
-        # Consola de estado, barra de progreso y botón de ejecución FIJOS abajo
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedHeight(16)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setVisible(False)
-        left_container_layout.addWidget(self.progress_bar)
-
+        # Botón de ejecución FIJO abajo (progreso integrado en CanvasFooterBar)
         self.btn_run = QPushButton()
         self.btn_run.setFixedHeight(42)
         self.btn_run.setCursor(Qt.PointingHandCursor)
@@ -723,6 +717,7 @@ class StartrailsTab(QWidget):
         right_layout.addWidget(self.canvas, 1)
 
         self.canvas_footer = CanvasFooterBar(self)
+        self.progress_bar = self.canvas_footer.progress_bar
         right_layout.addWidget(self.canvas_footer)
 
         self.canvas.zoom_toggled.connect(
@@ -1193,6 +1188,8 @@ class StartrailsTab(QWidget):
     def _on_worker_cancelled(self) -> None:
         """Maneja la confirmación de cancelación del worker."""
         self._set_run_button_state("idle")
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.progress_bar.setVisible(False)
         if hasattr(self, "_startrail_start_time") and self._startrail_start_time is not None:
             elapsed = time.perf_counter() - self._startrail_start_time
@@ -1273,6 +1270,8 @@ class StartrailsTab(QWidget):
 
         self.btn_play_timelapse.setEnabled(False)
         self._set_run_button_state("running")
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_progress(0, "Iniciando...")
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self._startrail_start_time = time.perf_counter()
@@ -1330,6 +1329,8 @@ class StartrailsTab(QWidget):
 
     def _on_worker_error(self, err_msg: str) -> None:
         self._set_run_button_state("idle")
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.progress_bar.setVisible(False)
         if hasattr(self, "_startrail_start_time") and self._startrail_start_time is not None:
             elapsed = time.perf_counter() - self._startrail_start_time

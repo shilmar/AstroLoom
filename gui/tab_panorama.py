@@ -652,12 +652,6 @@ class PanoramaTab(QWidget):
         proc_layout.addWidget(self.btn_stitch)
         proc_layout.addWidget(self.btn_cancel)
 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setVisible(False)
-        proc_layout.addWidget(self.progress_bar)
-
         self.lbl_status = QLabel("Listo para componer.")
         self.lbl_status.setWordWrap(True)
         self.lbl_status.setStyleSheet("color: #b0bec5; font-size: 11px;")
@@ -756,6 +750,7 @@ class PanoramaTab(QWidget):
         self.canvas = PanoramaInteractiveCanvas()
         right_layout.addWidget(self.canvas, stretch=1)
         self.canvas_footer = CanvasFooterBar(self)
+        self.progress_bar = self.canvas_footer.progress_bar
         right_layout.addWidget(self.canvas_footer)
 
         splitter.addWidget(right_container)
@@ -1166,6 +1161,8 @@ class PanoramaTab(QWidget):
 
     def _on_stitch_error(self, err_msg: str):
         self._set_processing_ui(False)
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.lbl_status.setText(f"Error: {err_msg}")
         QMessageBox.critical(self, "Error en Cosido Panorámico", f"Ocurrió un error al componer la panorámica:\n\n{err_msg}")
 
