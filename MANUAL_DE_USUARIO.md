@@ -19,7 +19,7 @@ Este manual ha sido redactado pensando en fotógrafos y aficionados: **sin fórm
    - [Sección 4: Curvas Tonales (Contraste S-Curve)](#sección-4-curvas-tonales)
    - [Sección 5: StarNet++ y Fondo Nebular (Claridad, Ondículas, Denoise y Banding CMOS)](#sección-5-starnet-y-fondo-nebular)
    - [Sección 5b: Deconvolución Óptica y Enfoque (Richardson-Lucy)](#sección-5b-deconvolución-óptica-y-enfoque-richardson-lucy)
-   - [Sección 5c: Máscara de Enfoque y Nitidez (Sharpening / USM)](#sección-5c-máscara-de-enfoque-y-nitidez-sharpening--usm)
+   - [Sección 5c: Máscara de Enfoque, Nitidez y Ondículas Multiescala (USM / Wavelets)](#sección-5c-máscara-de-enfoque-nitidez-y-ondículas-multiescala-usm--wavelets-novedades-v0160--v0170)
    - [Sección 6: Balance de Blancos, Calibración Fotométrica (PCC) y Filtros Dual-Band](#sección-6-balance-de-blancos-y-calibración)
    - [Sección 7: Color, Saturación e Intensidad de Nebulosa](#sección-7-color-saturación-e-intensidad-de-nebulosa)
    - [Sección 8: Tono y Exposición del Suelo](#sección-8-tono-y-exposición-del-suelo)
@@ -31,7 +31,8 @@ Este manual ha sido redactado pensando en fotógrafos y aficionados: **sin fórm
    - [7.1 Filosofía y Arquitectura Híbrida](#71-filosofía-y-arquitectura-híbrida)
    - [7.2 Flujo de Trabajo Paso a Paso](#72-flujo-de-trabajo-paso-a-paso)
 8. [Módulo 7: Panorámicas (Mosaicos)](#8-módulo-7-panorámicas-mosaicos)
-9. [Atajos de Teclado y Consejos de Productividad](#9-atajos-de-teclado-y-consejos-de-productividad)
+9. [Visor de Inspección Rápida y Descarte (Blink Viewer)](#9-visor-de-inspección-rápida-y-descarte-blink-viewer)
+10. [Atajos de Teclado y Consejos de Productividad](#10-atajos-de-teclado-y-consejos-de-productividad)
 
 ---
 
@@ -43,9 +44,12 @@ Para iniciar AstroLoom en Windows de la manera más cómoda y sin ventanas negra
 * Si no hay entorno virtual, recurre automáticamente a la instalación de Python del sistema.
 * En entornos Linux/macOS o desde la terminal, puedes iniciar la suite ejecutando directamente `python run_app.py`.
 
-### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.16.0)
-A partir de las versiones **v0.14.0** a **v0.16.0**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
+### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.17.0)
+A partir de las versiones **v0.14.0** a **v0.17.0**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
 * **Fluidez Total a 60-160+ FPS:** El renderizado del lienzo (`MaskCanvas`) vuelca directamente a búferes de memoria continua `BGRA8888` compatibles de forma nativa con `QImage(Format_RGB32)`. Las alertas de clipping (`J`) y el comparador Antes/Después con cortina (`Y`) se procesan en microsegundos sin crear copias intermedias en NumPy ni capas secundarias de `QPixmap`.
+* **Pipeline de Exportación Zero-Copy e In-Place en Rust (v0.17.0):** El grafo de capas se evalúa y fusiona en registros de CPU en un único bucle paralelo multihilo de Rayon en Rust, eliminando arrays temporales de NumPy y volcando a enteros `uint16` in-place, lo que acelera entre un 40% y 60% la exportación de proyectos `.devloom` y archivos PSD multicapa.
+* **Purga Inteligente Anti-Satélites por Transformada de Hough (v0.17.0):** Escaneo geométrico de trazas lineales a escala 50% con evaluación monocanal de alta velocidad en circumpolares (`Startrails`), suprimiendo satélites artificiales y aviones mientras se preservan con fidelidad las estrellas y trazas circulares.
+* **Barra de Progreso Unificada en Lienzo (`CanvasFooterBar`, v0.17.0):** Integración homogénea de barras de progreso contextuales directamente sobre la base del lienzo en todos los visores y módulos (Revelador, Circumpolares, Meteoros, Panorámicas, Eclipses y Apilador), con cancelación reactiva instantánea.
 * **Purga Integral de Numba y Mapeo LUT 16 a 8 Bits en Rust (v0.16.0):** Eliminación total de dependencias LLVM/Numba, reduciendo 2.36 s en el arranque en frío. El estirado interactivo MTF, GHS y curvas tonales se evalúa en Rust Rayon (`apply_display_lut16_rs`, `apply_display_lut16_dual_rs`) a más de 4.000 FPS (0.24 ms por frame de 2 MP), con cálculo de histograma multihilo en OpenCV C++ AVX2/SSE.
 * **Aceleración Nativa para Eclipses Solares (v0.16.0):** Centrado solar automático de sub-milisegundo por momentos (`center_solar_disc_rs`), estirado Asinh Luma preservando el color (`asinh_stretch_luma_rs`) y fusión coronal HDR adaptativa multiescala (`coronal_hdr_fusion_rs`) ejecutados en registros paralelos de CPU.
 * **Caché LRU de Búferes con Presupuesto de RAM (v0.16.0):** Gestor inteligente de memoria para hitos del pipeline con cuota máxima configurable en MB/GB, purgando búferes antiguos y manteniendo el consumo de memoria acotado incluso en proyectos de alta densidad.
@@ -63,9 +67,9 @@ A partir de las versiones **v0.14.0** a **v0.16.0**, AstroLoom incorpora un moto
 * **Tiling ONNX y Filtro Guiado O(1):** Pre y post-procesado acelerado para StarNet++ v2 y NAFNet con ventanas 2D de Hann continuas, y refinado de bordes de horizonte con imágenes integrales (SAT) en ~21 ms.
 * **Resiliencia Automática (*Drop-in Fallback*):** Si en algún entorno el módulo binario no estuviera presente, AstroLoom conmuta de forma transparente y automática a su motor de reserva en Python/NumPy sin que el usuario experimente errores.
 
-### 🖥️ Cabecera de Telemetría Superior y Espacio Útil (v0.16.0)
-Para maximizar el área de trabajo vertical dedicada al lienzo de revelado y apilado, en **v0.16.0** se ha suprimido la barra de estado inferior (*status bar*), reubicando toda la información de diagnóstico y monitorización en la esquina superior derecha de la barra de pestañas:
-* **Insignia del Motor:** Identifica en todo momento la versión activa de la suite (`● AstroLoom Engine v0.16.0`).
+### 🖥️ Cabecera de Telemetría Superior y Espacio Útil (v0.16.0 / v0.17.0)
+Para maximizar el área de trabajo vertical dedicada al lienzo de revelado y apilado, se ha suprimido la barra de estado inferior (*status bar*), reubicando toda la información de diagnóstico y monitorización en la esquina superior derecha de la barra de pestañas:
+* **Insignia del Motor:** Identifica en todo momento la versión activa de la suite (`● AstroLoom Engine v0.17.0`).
 * **Píldora de Alerta Fallback GPU $\rightarrow$ CPU:** Si tu tarjeta gráfica se satura de memoria (VRAM) durante la ejecución de StarNet++ o AI Denoise, se enciende una píldora ámbar (`⚠️ Fallback CPU (VRAM)`) indicando que el proceso continuó en CPU de forma segura. Puedes pinchar en ella para ocultarla.
 * **Monitor de RAM en Tiempo Real:** Muestra el porcentaje y los gigabytes de memoria en uso del sistema operativo (`RAM: XX% (used / total GB)`), actualizado mediante telemetría cada 2.5 segundos.
 * **Botón de Registro de Actividad:** Abre una ventana flotante con el histórico cronológico de operaciones, advertencias, tiempos de ejecución y telemetría de depuración.
@@ -197,6 +201,9 @@ Permite modelar con precisión matemática la superficie del fondo cósmico y su
   * **Modo de Corrección:**
     * *Sustracción:* Para resplandores aditivos de luz (contaminación lumínica, claridad crepuscular o brillo lunar).
     * *División:* Para gradientes ópticos multiplicativos (viñeteo o transmisión óptica desigual).
+* **Botón "Auto Gradiente 1-Clic (ABE)" (Novedad v0.17.0):**
+  * Inspirado en el módulo ABE (*Automatic Background Extraction*) de Seti Astro.
+  * Realiza un muestreo no supervisado instantáneo en el cielo libre de estrellas y suelo, genera una rejilla inteligente de muestras y extrae la superficie de gradiente RBF con un solo clic, sin necesidad de definir puntos manuales.
 * **Botón "Eliminar Gradientes":** Aplica la neutralización analítica sobre el fondo del cielo protegiendo el 100% de la silueta del terreno terrestre. La operación se integra por completo en el historial de **Deshacer (`Ctrl+Z`) y Rehacer (`Ctrl+Y`)**.
 
 #### B. Reducción Paramétrica y Cúpula 2D de Contaminación Lumínica
@@ -244,6 +251,7 @@ Puedes alternar entre dos motores:
 * **Medios Tonos (Midtones):** Ilumina progresivamente todo el cielo nocturno sacando la Vía Láctea de la oscuridad.
 * **Sombras / Punto Negro (Shadows):** Ajusta el nivel de negro del espacio profundo para que no se vea lavado ni grisáceo.
 * **Luces (Highlights):** Controla el punto blanco para evitar que las estrellas más brillantes se saturen.
+* **Prot. Estrellas (% / Highlight Protection, Novedad v0.17.0):** Comprime suavemente las altas luces para evitar que los núcleos estelares colapsen a blanco plano saturado, preservando el color fotométrico original en las estrellas más brillantes.
 * **Auto-Estirado MTF:** Analiza el histograma y calcula automáticamente un estirado equilibrado.
 
 #### Modo B: GHS Hiperbólico (Generalized Hyperbolic Stretch)
@@ -294,7 +302,8 @@ Esta sección permite separar la fotografía en dos realidades independientes: e
 * **Totalmente No Destructivo:** Compatible con `Ctrl+Z` / `Ctrl+Y`, preservando la base lineal intacta en memoria para reajustes ilimitados.
 
 #### Controles de Textura de Polvo Galáctico
-* **Claridad Nebular:** Realza el micro-contraste local en los bordes de los filamentos oscuros de polvo.
+* **Claridad (Gauss):** Realza el micro-contraste local en los bordes de los filamentos oscuros de polvo mediante filtro de paso alto gaussiano clásico.
+* **Claridad Textura (Seti Astro, Novedad v0.17.0):** Realce avanzado de textura y micro-estructuras finas mediante filtro bilateral con preservación de bordes, modulado por una máscara analítica en campana de medios tonos $4L(1-L)$ para no levantar grano en fondos oscuros ni crear halos en altas luces.
 * **Dehaze (Anti-Niebla):** Retira la bruma atmosférica aumentando la profundidad visual.
 * **Ondículas (Estructura):** Aumenta el relieve y la tridimensionalidad de las nubes moleculares galácticas.
 * **Ondículas (Fondo):** Suaviza el grano y el ruido de alta frecuencia del fondo del cielo.
@@ -360,8 +369,8 @@ Restaura la resolución óptica y nitidez perdida debido a la difracción de la 
 
 ---
 
-### Sección 5c: Máscara de Enfoque y Nitidez (Sharpening / USM, Novedad v0.16.0)
-Diseñada con un flujo de trabajo profesional idéntico al motor de detalle de Lightroom/Camera Raw, esta sección restituye microcontraste y acentuación espacial en texturas del suelo (rocas, árboles, montañas) y estructuras astronómicas contrastadas:
+### Sección 5c: Máscara de Enfoque, Nitidez y Ondículas Multiescala (USM / Wavelets, Novedades v0.16.0 / v0.17.0)
+Diseñada con un flujo de trabajo profesional idéntico al motor de detalle de Lightroom/Camera Raw y complementada con descomposición frecuencial de ondículas (B3-Spline Wavelets), esta sección restituye microcontraste y acentuación espacial en texturas del suelo (rocas, árboles, montañas) y estructuras astronómicas contrastadas:
 
 * **Cantidad (Amount, 0% a 150%):** Determina la fuerza del afilado aplicado sobre las altas frecuencias espaciales. Al `0%` el módulo permanece desactivado (`0 (Off)`).
 * **Radio (Radius, 0.5 a 3.0 px):** Controla el grosor en píxeles del halo de acentuación de bordes. Para fotografía de paisaje nocturno se recomiendan valores entre `0.8 px` y `1.2 px` para obtener definición nítida sin engrosar la textura.
@@ -374,6 +383,11 @@ Diseñada con un flujo de trabajo profesional idéntico al motor de detalle de L
   * `Solo Suelo (Recomendado)`: Utiliza la máscara de horizonte de IA para confinar el afilado exclusivamente al paisaje terrestre, evitando que el cielo o las estrellas sufran incremento de ruido.
   * `Cielo sin Estrellas`: Aplica el enfoque a las nebulosas y polvo interestelar respetando las estrellas.
   * `Todo el Fotograma (Global)`: Aplica el afilado uniformemente a lo largo de todo el encuadre.
+
+#### 🌊 Ondículas Multiescala (B3-Spline Wavelets, Novedad v0.17.0)
+Descompone la imagen mediante la transformada de ondículas (*À Trous*) para aislar bandas espaciales de frecuencia y regular su presencia:
+* **Estructura (-1.00 a +1.00):** Realza las escalas intermedias de frecuencia correspondientes a bandas de polvo interestelar y filamentos de la Vía Láctea, aportando tridimensionalidad y volumen sin engrosar el diámetro estelar ni amplificar el grano de fondo.
+* **Atenuar Fondo (0% a 100%):** Regula la capa residual de frecuencia ultra-baja (pedestal y gradiente homogéneo), profundizando los negros del cielo y mejorando el contraste general del campo estelar.
 
 ---
 
@@ -610,10 +624,15 @@ Especializado en transformar cientos de fotos fijas en espectaculares círculos 
   * *Máximo (Lighten):* El modo clásico que mantiene los trazos continuos sin oscurecer.
   * *Efecto Cometa:* Añade una cola decreciente a cada estrella para emular una lluvia de meteoros.
   * *Relleno de Huecos (Gap Filling):* Si la cámara tardó 1 segundo entre foto y foto, este filtro rellena las micro-interrupciones para que las trazas sean líneas continuas perfectas.
+* **Purga Inteligente Anti-Satélites por Transformada de Hough (Novedad v0.17.0):**
+  * Detección geométrica lineal ultrarrápida a escala 50% basada en `cv2.HoughLinesP` con evaluación monocanal.
+  * Identifica y suprime con precisión matemática las estelas rectilíneas de satélites artificiales y trayectorias de aviones sin degradar las trazas circumpolares naturales de las estrellas.
 * **Eliminación de Tráfico Aéreo:**
   * Detecta y suprime automáticamente las luces intermitentes rojas y verdes de los aviones para que no estropeen las trazas.
 * **Suelo Estático:**
   * Fusiona una toma limpia del terreno para que los árboles o rocas se vean nítidos y libres de ruido.
+* **Barra de Progreso Integrada en Lienzo (`CanvasFooterBar`, Novedad v0.17.0):**
+  * Muestra el porcentaje y fotograma activo directamente en la base del lienzo con soporte de cancelación reactiva instantánea.
 
 ---
 
@@ -658,7 +677,7 @@ En el panel lateral izquierdo encontrarás los controles que gobiernan el algori
 * **Relación de Aspecto (Elongación):** Exige que el objeto sea visiblemente lineal (largo vs ancho), descartando estrellas puntuales o manchas circulares.
 * **Filtros Inteligentes Anti-Parásitos:**
   * *🛡️ Filtro Anti-Satélites:* Analiza la continuidad colineal a través de fotogramas contiguos (satélites que cruzan en 2 o 3 tomas sucesivas) y los cruces en 'X' dentro del mismo fotograma, clasificándolos automáticamente como satélite.
-  * *✈️ Filtro Anti-Aviones:* Analiza la fotometría espectral a lo largo de la traza para detectar la alternancia cromática de las luces estroboscópicas de navegación aeronáutica (destellos rojos y verdes).
+  * *✈️ Filtro Anti-Aviones y Balizas Aeronáuticas (Novedad v0.17.0):* Analiza la fotometría espectral a lo largo de la traza para detectar la alternancia cromática de luces estroboscópicas y patrones periódicos de balizas intermitentes de navegación aérea, excluyéndolas automáticamente del catálogo de candidatos.
   * *Filtrado de Esporádicos:* Compara la inclinación del vector de la traza respecto a la posición calculada del radiante astronómico. Las trazas que divergen significativamente se catalogan como "Esporádico".
 
 #### Paso 3: Definición del Suelo (Máscara de Terreno)
@@ -680,9 +699,10 @@ La tabla de culling es la herramienta central de supervisión del fotógrafo:
 * **Inspección en el Visor:**
   * Al hacer clic en cualquier fila de la tabla, el visor muestra la toma original correspondiente.
   * **Resaltar Traza:** Dibuja una retícula amarilla en forma de cápsula alrededor del meteoro activo con su etiqueta de ID y longitud.
-  * **👁️ Resaltar Todas:** Muestra de forma simultánea sobre el lienzo todas las cápsulas y etiquetas de los meteoros activos seleccionados, permitiendo una visión de conjunto de la composición.
+  * **👁️ Resaltar Todas (Novedad v0.17.0):** Muestra de forma simultánea sobre el lienzo todas las cápsulas y etiquetas de los meteoros activos seleccionados, tanto sobre los fotogramas fuente individuales como re-proyectadas sobre la imagen compuesta de referencia.
   * **🔍 Centrar Traza (1:1):** Ajusta instantáneamente el zoom del visor al 100% centrado sobre el meteoro seleccionado para evaluar su color, detalle y veracidad sin tener que buscarlo manualmente.
-  * **👁️ Ver Compuesto:** Botón conmutable que permite alternar entre la toma individual seleccionada y el compuesto final fusionado, sin perder la selección en la tabla.
+  * **👁️ Ver Compuesto:** Botón conmutable que permite alternar entre la toma individual seleccionada y el compuesto final fusionado, manteniendo las retículas y selecciones sincronizadas en todo momento.
+  * **Barra de Progreso Integrada (`CanvasFooterBar`, Novedad v0.17.0):** Monitorea el escaneo de la sesión y la fusión en la base del lienzo con cancelación reactiva.
 
 #### Paso 6: Fusión Fotométrica y Generación del Compuesto
 1. Cuando estés satisfecho con las trazas marcadas en la tabla, pulsa **"✨ Fusión 1:1 de Meteoros"**.
@@ -725,7 +745,17 @@ Permite ensamblar mosaicos gigantes del cielo nocturno (por ejemplo, el arco com
 
 ---
 
-## 9. Atajos de Teclado y Consejos de Productividad
+## 9. Visor de Inspección Rápida y Descarte (Blink Viewer, Novedad v0.17.0)
+
+AstroLoom incorpora un visor de inspección secuencial (*Blink Viewer*) diseñado para examinar y cribar a gran velocidad series temporales de capturas astronómicas (tomas RAW/TIFF para apilado, circumpolares, meteoros o eclipses):
+* **Reproducción Automática (Blink):** Reproduce la secuencia de tomas hacia delante o hacia atrás con velocidad regulable en fotogramas por segundo (FPS), permitiendo detectar de un vistazo nubes en movimiento, variaciones de transparencia atmosférica, trazas de satélites o saltos en el seguimiento de la montura.
+* **Navegación Manual por Teclado:** Utiliza las flechas de dirección para avanzar o retroceder fotograma a fotograma al instante.
+* **Inspección de Zoom y Pan Sincronizados:** Examina detalles a escala 1:1 o cualquier factor de zoom; la posición se mantiene idéntica al conmutar entre fotogramas para verificar la puntualidad de las estrellas.
+* **Marcado y Cribado de Tomas:** Marca o desmarca rápidamente fotogramas defectuosos con desenfoque, viento o tráfico aéreo para excluirlos del flujo de procesado.
+
+---
+
+## 10. Atajos de Teclado y Consejos de Productividad
 
 | Atajo | Acción |
 | :--- | :--- |

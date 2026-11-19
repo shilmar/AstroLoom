@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication
 
 def run_test():
     app = QApplication.instance() or QApplication(sys.argv)
-    from gui.tab_meteors import MeteorTab, MeteorWorker
+    from gui.tab_meteors import MeteorTab, MeteorWorker, MeteorCandidate
 
     tab = MeteorTab()
     print("MeteorTab instantiated successfully.")
@@ -138,6 +138,35 @@ def run_test():
     tab.chk_highlight_all.setChecked(False)
     assert len(tab.canvas.highlight_streaks_multi) == 0, "Multi reticles not cleared"
     print("Highlight all streaks toggle verified!")
+
+    # Test highlight all with multiple candidates across different frames (before fusion simulation)
+    cand_a = MeteorCandidate(
+        id=10, frame_index=0, filename="f1.tif", filepath="f1.tif",
+        start_pt=(10, 10), end_pt=(50, 50), bbox=(5, 5, 55, 55),
+        length_px=56.0, angle_deg=45.0, thickness_px=2.0, peak_flux=1.0, mean_flux=0.5,
+        line_continuity=1.0, is_meteor=True, reprojected_start=(10, 10), reprojected_end=(50, 50)
+    )
+    cand_b = MeteorCandidate(
+        id=11, frame_index=1, filename="f2.tif", filepath="f2.tif",
+        start_pt=(100, 100), end_pt=(150, 150), bbox=(95, 95, 155, 155),
+        length_px=70.0, angle_deg=45.0, thickness_px=2.0, peak_flux=1.0, mean_flux=0.5,
+        line_continuity=1.0, is_meteor=True, reprojected_start=(105, 105), reprojected_end=(155, 155)
+    )
+    cand_c = MeteorCandidate(
+        id=12, frame_index=2, filename="f3.tif", filepath="f3.tif",
+        start_pt=(200, 200), end_pt=(250, 250), bbox=(195, 195, 255, 255),
+        length_px=70.0, angle_deg=45.0, thickness_px=2.0, peak_flux=1.0, mean_flux=0.5,
+        line_continuity=1.0, is_meteor=False, is_airplane=True, reprojected_start=(205, 205), reprojected_end=(255, 255)
+    )
+    tab.candidates = [cand_a, cand_b, cand_c]
+    tab._refresh_cull_table()
+    tab.chk_highlight_all.setChecked(True)
+    assert len(tab.canvas.highlight_streaks_multi) == 2, f"Expected 2 active multi reticles across frames, got {len(tab.canvas.highlight_streaks_multi)}"
+    multi_ids = {r["id"] for r in tab.canvas.highlight_streaks_multi}
+    assert multi_ids == {10, 11}, f"Expected IDs 10 and 11, got {multi_ids}"
+    tab.chk_highlight_all.setChecked(False)
+    assert len(tab.canvas.highlight_streaks_multi) == 0, "Multi reticles not cleared"
+    print("Multi-frame candidates highlight verified!")
 
     # 4. Test Airplane Beacon & Navigation Light Discrimination
     from core.meteors import detect_streaks_in_frame, refine_satellite_classifications

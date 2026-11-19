@@ -217,10 +217,6 @@ class ViewerToolbar(QWidget):
         else:
             self._layout.addWidget(widget)
 
-    def add_separator(self) -> None:
-        """Añade un divisor."""
-        self._add_separator()
-
     def _find_stretch_index(self) -> int:
         for i in range(self._layout.count()):
             item = self._layout.itemAt(i)
@@ -241,39 +237,17 @@ class ViewerToolbar(QWidget):
             self.btn_toggle_left_panel.setChecked(checked)
             self.btn_toggle_left_panel.blockSignals(False)
 
-    def set_right_panel_checked(self, checked: bool) -> None:
-        if hasattr(self, 'btn_toggle_right_panel'):
-            self.btn_toggle_right_panel.blockSignals(True)
-            self.btn_toggle_right_panel.setChecked(checked)
-            self.btn_toggle_right_panel.blockSignals(False)
-
     def set_zoom_100_checked(self, checked: bool) -> None:
         if hasattr(self, 'btn_zoom_100'):
             self.btn_zoom_100.blockSignals(True)
             self.btn_zoom_100.setChecked(checked)
             self.btn_zoom_100.blockSignals(False)
 
-    def set_clipping_checked(self, checked: bool) -> None:
-        if hasattr(self, 'btn_clipping'):
-            self.btn_clipping.blockSignals(True)
-            self.btn_clipping.setChecked(checked)
-            self.btn_clipping.blockSignals(False)
-
     def set_magnifier_checked(self, checked: bool) -> None:
         if hasattr(self, 'btn_magnifier'):
             self.btn_magnifier.blockSignals(True)
             self.btn_magnifier.setChecked(checked)
             self.btn_magnifier.blockSignals(False)
-
-    def set_composite_checked(self, checked: bool) -> None:
-        if hasattr(self, 'btn_composite'):
-            self.btn_composite.blockSignals(True)
-            self.btn_composite.setChecked(checked)
-            self.btn_composite.blockSignals(False)
-
-    def set_composite_enabled(self, enabled: bool) -> None:
-        if hasattr(self, 'btn_composite'):
-            self.btn_composite.setEnabled(enabled)
 
     def connect_canvas(self, canvas: QWidget) -> None:
         """Conecta automáticamente los controles de la barra a un lienzo compatible."""
@@ -408,18 +382,9 @@ class CanvasFooterBar(QWidget):
         self.lbl_canvas_info.setStyleSheet("color: #94a3b8; font-size: 11px;")
         layout.addWidget(self.lbl_canvas_info)
 
-    def set_tool_badge(self, text: str, color: str = "#38bdf8") -> None:
-        """Actualiza el texto y color del indicador de modo de herramienta activo."""
-        self.lbl_tool_badge.setText(text)
-        self.lbl_tool_badge.setStyleSheet(f"color: {color}; font-size: 11px; font-weight: 600;")
-
     def set_zoom_text(self, text: str) -> None:
         """Actualiza la etiqueta de nivel de zoom."""
         self.lbl_canvas_zoom.setText(text)
-
-    def set_info_text(self, text: str) -> None:
-        """Actualiza directamente la etiqueta de información técnica del lienzo."""
-        self.lbl_canvas_info.setText(text)
 
     def set_image_info(self, width: int, height: int, depth_str: str = "32-bit Float", color_space: str = "sRGB") -> None:
         """Formatea y actualiza los metadatos de dimensiones, MP, profundidad y espacio de color."""

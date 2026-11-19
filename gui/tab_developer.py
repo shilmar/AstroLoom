@@ -48,12 +48,9 @@ from core.stretch import (
     apply_ghs_stretch,
     estimate_ghs_params,
     apply_white_balance, 
-    adjust_saturation_dual, 
     extract_background_polynomial,
     adjust_vibrance, 
     adjust_contrast, 
-    apply_light_pollution_gradient,
-    apply_denoise,
     apply_clarity,
     apply_dehaze,
     apply_curve_lut,
@@ -2663,6 +2660,8 @@ class DeveloperTab(QWidget):
             if img is not None:
                 if gnd_m is not None:
                     m_eff_2d = gnd_m[..., 0] if gnd_m.ndim == 3 else gnd_m
+                    if m_eff_2d.shape[:2] != img.shape[:2]:
+                        m_eff_2d = cv2.resize(m_eff_2d, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
                     img = apply_local_adjustments_to_image(img, m_eff_2d, layer)
                 else:
                     img = apply_pre_curve_adjustments(img, layer)
@@ -2796,6 +2795,8 @@ class DeveloperTab(QWidget):
         mask = None
         if img is not None:
             sky_m = self.proxy_mask if self.proxy_mask is not None else self.current_mask
+            if sky_m is not None and sky_m.shape[:2] != img.shape[:2]:
+                sky_m = cv2.resize(sky_m, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
             mask = compute_effective_layer_mask(
                 layer,
                 img,
@@ -4656,10 +4657,11 @@ class DeveloperTab(QWidget):
                 self._cache_pre_layers_key = (key_spatial, key_stars)
                 self._cache_pre_layers_stretched = out_spt
                 self._cache_pre_layers_stars = out_stars
-                self._cached_base_stretched = out_spt
-                self._cached_stars_stretched = out_stars
-                self._cached_sky_mask = precomputed_mask
-                self._cached_rendered_image = final_img
+                if not is_zoomed:
+                    self._cached_base_stretched = out_spt
+                    self._cached_stars_stretched = out_stars
+                    self._cached_sky_mask = precomputed_mask
+                    self._cached_rendered_image = final_img
 
         return final_img
 
@@ -4705,10 +4707,11 @@ class DeveloperTab(QWidget):
                 self._cache_pre_layers_key = (key_spatial, key_stars)
                 self._cache_pre_layers_stretched = out_spt
                 self._cache_pre_layers_stars = out_stars
-                self._cached_base_stretched = out_spt
-                self._cached_stars_stretched = out_stars
-                self._cached_sky_mask = precomputed_mask
-                self._cached_rendered_image = final_img
+                if not is_zoomed:
+                    self._cached_base_stretched = out_spt
+                    self._cached_stars_stretched = out_stars
+                    self._cached_sky_mask = precomputed_mask
+                    self._cached_rendered_image = final_img
 
         self._last_rendered_preview = final_img
         base_to_render = getattr(self, '_last_async_base', None)
@@ -5067,6 +5070,11 @@ class DeveloperTab(QWidget):
         self.starless_is_stretched = False
         self.image_stars = np.ascontiguousarray(stars_img, dtype=np.float32)
         self._cache_starless_ai = None
+        self.starless_ai_denoise_enabled = False
+        if hasattr(self, 'slider_denoise') and self.slider_denoise.value() > 0:
+            self.slider_denoise.setValue(0)
+        else:
+            self.denoise_strength = 0.0
         if hasattr(self, 'panel_starnet'):
             self.panel_starnet.set_ai_denoise_active(False)
         if hasattr(self, 'mask_layers_widget'):
@@ -5473,11 +5481,33 @@ class DeveloperTab(QWidget):
             QMessageBox.information(self, "Estirado Adaptativo Starless", "Primero debes desacoplar las estrellas con StarNet.")
             return
 
+        has_ai_denoise = (getattr(self, '_cache_starless_ai', None) is not None) or getattr(self, 'starless_ai_denoise_enabled', False)
+        if has_ai_denoise:
+            reply = QMessageBox.question(
+                self,
+                "Re-estirado y Reducción de Ruido IA",
+                "Se ha detectado una reducción de ruido con IA (NAFNet) activa o calculada sobre el estirado actual.\n\n"
+                "Al re-estirar la capa Starless, la base tonal cambia y la inferencia de IA previa "
+                "debe descartarse para evitar artefactos graves de luminancia y color.\n\n"
+                "• El modo IA se desactivará.\n"
+                "• El control de reducción de ruido se restablecerá a 0%.\n"
+                "• Podrás volver a calcular la IA ('✨ IA') cuando finalices el nuevo estirado.\n\n"
+                "¿Deseas continuar y re-estirar?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
         # Snapshot de estado previo para Deshacer
         undo_item = {
             "type": "starless",
             "image_starless": self.image_starless.copy(),
             "starless_is_stretched": getattr(self, "starless_is_stretched", False),
+            "_cache_starless_ai": self._cache_starless_ai.copy() if getattr(self, "_cache_starless_ai", None) is not None else None,
+            "starless_ai_denoise_enabled": getattr(self, "starless_ai_denoise_enabled", False),
+            "denoise_strength": getattr(self, "denoise_strength", 0.0),
+            "denoise_slider_val": self.slider_denoise.value() if hasattr(self, 'slider_denoise') else 0,
         }
         self.undo_stack.append(undo_item)
         if len(self.undo_stack) > self.MAX_UNDO_STEPS:
@@ -5517,6 +5547,11 @@ class DeveloperTab(QWidget):
         self.image_starless = stretched_starless
         self.starless_is_stretched = True
         self._cache_starless_ai = None
+        self.starless_ai_denoise_enabled = False
+        if hasattr(self, 'slider_denoise'):
+            self.slider_denoise.setValue(0)
+        else:
+            self.denoise_strength = 0.0
         if hasattr(self, 'panel_starnet'):
             self.panel_starnet.set_ai_denoise_active(False)
         if hasattr(self, 'mask_layers_widget'):
@@ -5528,6 +5563,8 @@ class DeveloperTab(QWidget):
             self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
             self.mask_layers_widget.update_active_layer_histogram()
         self.update_stretch_preview(immediate=True)
+        if has_ai_denoise:
+            self.log_message("[AUTO-STRETCH] ℹ️ Base re-estirada: Reducción de ruido IA desactivada y control restablecido a 0%.")
         self.log_message(
             f"[AUTO-STRETCH] ✨ Estirado Adaptativo RGB aplicado sobre Starless "
             f"(Bg={target_bg*100:.0f}%, {shadow_clip_sigma:.1f}σ, sat {saturation_boost:.1f}x, {mode_str})."
@@ -5674,15 +5711,6 @@ class DeveloperTab(QWidget):
             self._cached_psf_key = ()
         if self.deconv_iterations > 0:
             self.update_stretch_preview()
-
-    def _on_sharpening_parameter_changed(self):
-        """Sincroniza el panel de enfoque y actualiza la previsualización interactiva."""
-        self.update_stretch_preview()
-
-    def _on_sharpening_mask_preview_toggled(self, checked: bool):
-        """Alterna la visualización de la máscara de bordes en blanco y negro en el lienzo."""
-        self.update_stretch_preview()
-
 
     def _on_mask_widget_stars_diff_strength(self, val: int):
         self.star_diff_strength = val / 100.0
@@ -6076,10 +6104,6 @@ class DeveloperTab(QWidget):
         self.update_stretch_preview(immediate=True)
         self.log_message(f"Auto-MTF Estadístico aplicado (Punto Negro: {bp_suggested:.5f}, MTF m: {m_suggested:.5f}, Prot. Estrellas: {int(hp*100)}%).")
 
-    def on_slider_mtf_changed(self, val: int):
-        if hasattr(self, 'panel_stretch') and self.panel_stretch is not None:
-            self.panel_stretch._on_slider_mtf_changed(val)
-
     def sync_controls(self, bp: float, m: float):
         if hasattr(self, 'panel_stretch') and self.panel_stretch is not None:
             self.panel_stretch.sync_controls(bp, m)
@@ -6141,51 +6165,6 @@ class DeveloperTab(QWidget):
             self.ghs_lp_val = self.panel_stretch.ghs_lp_val
             self.ghs_bp_val = self.panel_stretch.ghs_bp_val
         self.update_stretch_preview()
-
-    def _set_stretch_mode(self, mode: str):
-        """Alterna el modo de estirado entre MTF clásico y GHS hiperbólico."""
-        if mode not in ("mtf", "ghs"):
-            return
-        self.stretch_mode = mode
-        if hasattr(self, 'panel_stretch'):
-            self.panel_stretch.set_stretch_mode(mode)
-        else:
-            if hasattr(self, 'btn_mode_mtf'):
-                self.btn_mode_mtf.blockSignals(True)
-                self.btn_mode_mtf.setChecked(mode == "mtf")
-                self.btn_mode_mtf.blockSignals(False)
-            if hasattr(self, 'btn_mode_ghs'):
-                self.btn_mode_ghs.blockSignals(True)
-                self.btn_mode_ghs.setChecked(mode == "ghs")
-                self.btn_mode_ghs.blockSignals(False)
-
-            if hasattr(self, 'w_mtf_container'):
-                self.w_mtf_container.setVisible(mode == "mtf")
-            if hasattr(self, 'w_ghs_container'):
-                self.w_ghs_container.setVisible(mode == "ghs")
-
-        self.update_stretch_preview()
-        self._commit_action()
-
-    def _set_ghs_color_mode(self, mode: str):
-        """Alterna el modo de color de GHS entre Luminancia y RGB Enlazado."""
-        if mode not in ("luma", "rgb"):
-            return
-        self.ghs_color_mode = mode
-        if hasattr(self, 'panel_stretch'):
-            self.panel_stretch.set_ghs_color_mode(mode)
-        else:
-            if hasattr(self, 'btn_ghs_luma'):
-                self.btn_ghs_luma.blockSignals(True)
-                self.btn_ghs_luma.setChecked(mode == "luma")
-                self.btn_ghs_luma.blockSignals(False)
-            if hasattr(self, 'btn_ghs_rgb'):
-                self.btn_ghs_rgb.blockSignals(True)
-                self.btn_ghs_rgb.setChecked(mode == "rgb")
-                self.btn_ghs_rgb.blockSignals(False)
-
-        self.update_stretch_preview()
-        self._commit_action()
 
     def apply_auto_ghs(self):
         """Calcula y aplica parámetros óptimos de GHS delegando en el panel de estirado."""
@@ -6900,13 +6879,6 @@ class DeveloperTab(QWidget):
             self.setCursor(Qt.WaitCursor)
         else:
             self.unsetCursor()
-
-    def export_psd_dialog(self):
-        """Abre el diálogo de exportación configurado directamente en formato Photoshop por capas."""
-        if self.image_32bit is None:
-            QMessageBox.warning(self, "Aviso", "Abre o procesa primero una toma en el revelador.")
-            return
-        self.export_image(force_format="psd")
 
     def export_image(self, force_format: Optional[str] = None):
         if self.image_32bit is None:
@@ -7761,10 +7733,25 @@ class DeveloperTab(QWidget):
                     "type": "starless",
                     "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
                     "starless_is_stretched": getattr(self, "starless_is_stretched", False),
+                    "_cache_starless_ai": self._cache_starless_ai.copy() if getattr(self, "_cache_starless_ai", None) is not None else None,
+                    "starless_ai_denoise_enabled": getattr(self, "starless_ai_denoise_enabled", False),
+                    "denoise_strength": getattr(self, "denoise_strength", 0.0),
+                    "denoise_slider_val": self.slider_denoise.value() if hasattr(self, 'slider_denoise') else 0,
                 }
                 self.redo_stack.append(redo_item)
                 self.image_starless = target["image_starless"]
                 self.starless_is_stretched = target.get("starless_is_stretched", False)
+                self._cache_starless_ai = target.get("_cache_starless_ai")
+                self.starless_ai_denoise_enabled = target.get("starless_ai_denoise_enabled", False)
+                self.denoise_strength = target.get("denoise_strength", 0.0)
+                dn_slider_val = target.get("denoise_slider_val", int(round(self.denoise_strength * 100)))
+                if hasattr(self, 'slider_denoise'):
+                    self.slider_denoise.setValue(dn_slider_val)
+                has_ai = (self._cache_starless_ai is not None) and self.starless_ai_denoise_enabled
+                if hasattr(self, 'panel_starnet'):
+                    self.panel_starnet.set_ai_denoise_active(has_ai)
+                if hasattr(self, 'mask_layers_widget'):
+                    self.mask_layers_widget.set_ai_denoise_active(has_ai)
                 self._invalidate_pipeline_caches()
                 self._generate_preview_proxy()
                 if hasattr(self, 'mask_layers_widget'):
@@ -7911,10 +7898,25 @@ class DeveloperTab(QWidget):
                     "type": "starless",
                     "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
                     "starless_is_stretched": getattr(self, "starless_is_stretched", False),
+                    "_cache_starless_ai": self._cache_starless_ai.copy() if getattr(self, "_cache_starless_ai", None) is not None else None,
+                    "starless_ai_denoise_enabled": getattr(self, "starless_ai_denoise_enabled", False),
+                    "denoise_strength": getattr(self, "denoise_strength", 0.0),
+                    "denoise_slider_val": self.slider_denoise.value() if hasattr(self, 'slider_denoise') else 0,
                 }
                 self.undo_stack.append(undo_item)
                 self.image_starless = target["image_starless"]
                 self.starless_is_stretched = target.get("starless_is_stretched", True)
+                self._cache_starless_ai = target.get("_cache_starless_ai")
+                self.starless_ai_denoise_enabled = target.get("starless_ai_denoise_enabled", False)
+                self.denoise_strength = target.get("denoise_strength", 0.0)
+                dn_slider_val = target.get("denoise_slider_val", int(round(self.denoise_strength * 100)))
+                if hasattr(self, 'slider_denoise'):
+                    self.slider_denoise.setValue(dn_slider_val)
+                has_ai = (self._cache_starless_ai is not None) and self.starless_ai_denoise_enabled
+                if hasattr(self, 'panel_starnet'):
+                    self.panel_starnet.set_ai_denoise_active(has_ai)
+                if hasattr(self, 'mask_layers_widget'):
+                    self.mask_layers_widget.set_ai_denoise_active(has_ai)
                 self._invalidate_pipeline_caches()
                 self._generate_preview_proxy()
                 if hasattr(self, 'mask_layers_widget'):
@@ -8634,8 +8636,8 @@ class DeveloperTab(QWidget):
                 self.log_message(f"[PROYECTO] {msg}")
                 QCoreApplication.processEvents()
 
-            # Recolectar datos
-            state_dict = self._capture_state()
+            # Recolectar datos (omitiendo capas en memoria ya que se serializan aparte)
+            state_dict = self._capture_state(include_mask_layers=False)
             layers = self.mask_layers_widget.layers if hasattr(self, 'mask_layers_widget') else []
             master_mask = self.current_mask
 

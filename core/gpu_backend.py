@@ -124,34 +124,6 @@ def _init_gpu_backends(force: bool = False) -> None:
             pass
 
 
-def is_crash_sentinel_active() -> bool:
-    """Indica si el centinela de cuelgue GPU está activo debido a un fallo previo."""
-    return _CRASH_SENTINEL_TRIGGERED
-
-
-def clear_gpu_crash_sentinel() -> bool:
-    """Elimina el marcador del centinela de cuelgue y reintenta la detección GPU."""
-    marker_path = get_gpu_marker_path()
-    if os.path.isfile(marker_path):
-        try:
-            os.remove(marker_path)
-        except Exception as e:
-            logger.error(f"[Crash Sentinel] No se pudo eliminar el marcador GPU: {e}")
-            return False
-    _init_gpu_backends(force=True)
-    return True
-
-
-def is_cupy_installed() -> bool:
-    """Indica si CuPy está instalado y detecta hardware CUDA funcional."""
-    return _CUPY_AVAILABLE
-
-
-def is_torch_available() -> bool:
-    """Indica si PyTorch con soporte CUDA está disponible."""
-    return _TORCH_CUDA_AVAILABLE
-
-
 def is_opencl_available() -> bool:
     """Indica si OpenCV OpenCL (Transparent API) está disponible y activo."""
     return _OPENCL_AVAILABLE and cv2.ocl.useOpenCL()
@@ -165,17 +137,6 @@ def is_gpu_available() -> bool:
 def get_gpu_name() -> str:
     """Retorna el nombre comercial del dispositivo acelerador detectado."""
     return _GPU_DEVICE_NAME if _GPU_DEVICE_NAME else "CPU (Sin aceleración GPU detectada)"
-
-
-def set_gpu_enabled(enabled: bool) -> None:
-    """Habilita o deshabilita el uso de la GPU (si está disponible en hardware)."""
-    global _USE_GPU
-    _USE_GPU = bool(enabled and is_gpu_available())
-    if _OPENCL_AVAILABLE:
-        try:
-            cv2.ocl.setUseOpenCL(bool(enabled and _OPENCL_AVAILABLE))
-        except Exception:
-            pass
 
 
 def is_gpu_enabled() -> bool:
@@ -193,61 +154,6 @@ def get_array_module(arr=None):
             return _cp.get_array_module(arr)
         return _cp
     return np
-
-
-def get_gpu_backend_info() -> Dict[str, Any]:
-    """Retorna un diccionario detallado con el estado de todos los backends GPU."""
-    return {
-        "gpu_available": is_gpu_available(),
-        "gpu_enabled": is_gpu_enabled(),
-        "device_name": get_gpu_name(),
-        "cupy_available": _CUPY_AVAILABLE,
-        "torch_cuda_available": _TORCH_CUDA_AVAILABLE,
-        "opencl_available": _OPENCL_AVAILABLE,
-        "opencl_active": cv2.ocl.useOpenCL() if _OPENCL_AVAILABLE else False,
-        "crash_sentinel_triggered": _CRASH_SENTINEL_TRIGGERED,
-    }
-
-
-def accelerated_filter2d(
-    img: np.ndarray,
-    kernel: np.ndarray,
-    border_type: int = cv2.BORDER_REFLECT
-) -> np.ndarray:
-    """
-    Aplica convolución 2D acelerada por GPU (OpenCL UMat) con tolerancia total a fallos.
-    Si la GPU está inactiva o falla, recurre de forma transparente a cv2.filter2D en CPU.
-    """
-    if is_gpu_enabled() and is_opencl_available():
-        try:
-            u_img = cv2.UMat(img)
-            u_k = cv2.UMat(kernel)
-            u_out = cv2.filter2D(u_img, -1, u_k, borderType=border_type)
-            return u_out.get()
-        except Exception:
-            pass
-    return cv2.filter2D(img, -1, kernel, borderType=border_type)
-
-
-def accelerated_gaussian_blur(
-    img: np.ndarray,
-    ksize: Tuple[int, int] = (0, 0),
-    sigma_x: float = 0.0,
-    sigma_y: float = 0.0,
-    border_type: int = cv2.BORDER_REFLECT
-) -> np.ndarray:
-    """
-    Aplica desenfoque gaussiano acelerado por GPU (OpenCL UMat) con tolerancia total a fallos.
-    Si la GPU está inactiva o falla, recurre de forma transparente a cv2.GaussianBlur en CPU.
-    """
-    if is_gpu_enabled() and is_opencl_available():
-        try:
-            u_img = cv2.UMat(img)
-            u_out = cv2.GaussianBlur(u_img, ksize, sigmaX=sigma_x, sigmaY=sigma_y, borderType=border_type)
-            return u_out.get()
-        except Exception:
-            pass
-    return cv2.GaussianBlur(img, ksize, sigmaX=sigma_x, sigmaY=sigma_y, borderType=border_type)
 
 
 # Ejecutar inicialización protegida al importar el módulo

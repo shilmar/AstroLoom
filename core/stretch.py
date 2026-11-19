@@ -23,52 +23,6 @@ from core.orton import (
 from core.star_diffusion import apply_star_diffusion
 from core.background_extraction import extract_background_rbf, generate_sky_sample_points
 
-def adjust_saturation_dual(
-    img_rgb: np.ndarray, 
-    sat_sky: float = 1.0, 
-    sat_ground: float = 1.0, 
-    sky_mask: np.ndarray = None
-) -> np.ndarray:
-    """
-    Ajusta la saturación en espacio HSV en float32 de forma independiente para cielo y suelo.
-    sat_sky, sat_ground: 1.0 es original, 0.0 es escala de grises, 2.0 es el doble de saturación.
-    """
-    if sat_sky == 1.0 and (sat_ground == 1.0 or sky_mask is None):
-        return img_rgb
-
-    # Conversión a HSV en rango [0.0, 1.0]
-    hsv = cv2.cvtColor(np.clip(img_rgb, 0.0, 1.0), cv2.COLOR_RGB2HSV)
-
-    if sky_mask is None or sat_sky == sat_ground:
-        # Ajuste global directo
-        hsv[..., 1] = np.clip(hsv[..., 1] * sat_sky, 0.0, 1.0)
-        return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
-
-    # 1. Crear versión saturada para cielo y versión saturada para suelo
-    hsv_sky = hsv.copy()
-    hsv_sky[..., 1] = np.clip(hsv_sky[..., 1] * sat_sky, 0.0, 1.0)
-    rgb_sky = cv2.cvtColor(hsv_sky, cv2.COLOR_HSV2RGB)
-
-    hsv_gnd = hsv.copy()
-    hsv_gnd[..., 1] = np.clip(hsv_gnd[..., 1] * sat_ground, 0.0, 1.0)
-    rgb_gnd = cv2.cvtColor(hsv_gnd, cv2.COLOR_HSV2RGB)
-
-    # 2. Suavizado de máscara para evitar artefactos o halos en la silueta (horizonte/árboles)
-    h, w = img_rgb.shape[:2]
-    if sky_mask.shape != (h, w):
-        mask_aligned = cv2.resize(sky_mask, (w, h), interpolation=cv2.INTER_LINEAR)
-    else:
-        mask_aligned = sky_mask
-
-    # Desenfoque gaussiano suave adaptado a la resolución (kernel impar ~15-25 px)
-    ksize = int(max(15, (min(h, w) // 150) | 1))
-    smooth_mask = cv2.GaussianBlur(mask_aligned, (ksize, ksize), sigmaX=ksize / 3.0)
-    smooth_mask = np.repeat(smooth_mask[..., np.newaxis], 3, axis=2)
-
-    # 3. Mezcla lineal continua
-    blended = (rgb_sky * smooth_mask) + (rgb_gnd * (1.0 - smooth_mask))
-    return np.clip(blended, 0.0, 1.0)
-
 def calculate_mtf_params(img_float: np.ndarray, target_background: float = 0.20):
     sample = img_float[::4, ::4]
     med = float(np.median(sample))
@@ -252,11 +206,6 @@ def mtf_curve(x: np.ndarray, m: float) -> np.ndarray:
     num = (m - 1.0) * x
     den = (2.0 * m - 1.0) * x - m
     return np.where(np.abs(den) > 1e-7, num / den, 0.0)
-
-def auto_mtf_stretch(img_float: np.ndarray, target_background: float = 0.20):
-    bp, m = calculate_mtf_params(img_float, target_background)
-    stretched = manual_stretch(img_float, black_point=bp, midtone=m)
-    return stretched, bp, m
 
 def auto_statistical_stretch(
     img_float: np.ndarray,
@@ -453,94 +402,8 @@ def adjust_contrast(img_rgb: np.ndarray, contrast: float = 0.0, pivot: float = N
 
     return np.clip(out, 0.0, 1.0).astype(np.float32)
     
-# --- Ecualizador Tonal de 4 Bandas (Starless) ---
-def adjust_tonal_bands(
-    img_rgb: np.ndarray,
-    blacks: float = 0.0,
-    shadows: float = 0.0,
-    highlights: float = 0.0,
-    whites: float = 0.0
-) -> np.ndarray:
-    """
-    Ecualizador de 4 bandas actuando sobre la imagen ya estirada (perceptual [0.0, 1.0]):
-    - blacks: [-1.0, 1.0] ajusta el anclaje del fondo profundo (0.0 a 0.25).
-    - shadows: [-1.0, 1.0] modula el polvo y nebulosas tenues (0.15 a 0.50).
-    - highlights: [-1.0, 1.0] modula estructuras brillantes (0.45 a 0.80).
-    - whites: [-1.0, 1.0] expande o comprime los picos de luminosidad (0.70 a 1.0).
-    """
-    if all(abs(v) < 1e-4 for v in (blacks, shadows, highlights, whites)):
-        return img_rgb
-
-    # 1. Luminancia perceptiva (segura y delimitada en 0..1)
-    lum = 0.2126 * img_rgb[..., 0] + 0.7152 * img_rgb[..., 1] + 0.0722 * img_rgb[..., 2]
-    lum = np.clip(lum, 0.0, 1.0)
-
-    # 2. Pesos polinómicos suaves y continuos (sin funciones trigonométricas ni potencias fraccionarias)
-    # A) Negros: máximo en 0.0, decrece hasta 0.25
-    w_blacks = np.clip((0.25 - lum) / 0.25, 0.0, 1.0) ** 2
-
-    # B) Sombras: campana suave entre 0.10 y 0.55 (pico en ~0.30)
-    w_shadows = np.clip((lum - 0.10) / 0.20, 0.0, 1.0) * np.clip((0.55 - lum) / 0.25, 0.0, 1.0) * 4.0
-
-    # C) Altas Luces: campana entre 0.40 y 0.85 (pico en ~0.65)
-    w_highlights = np.clip((lum - 0.40) / 0.25, 0.0, 1.0) * np.clip((0.85 - lum) / 0.20, 0.0, 1.0) * 4.0
-
-    # D) Blancos: sube a partir de 0.65 hasta 1.0
-    w_whites = np.clip((lum - 0.65) / 0.35, 0.0, 1.0) ** 2
-
-    # 3. Deltas tonales (con escala de fuerza equilibrada e intuitiva)
-    delta_lum = (
-        (blacks * 0.12 * w_blacks) +
-        (shadows * 0.18 * w_shadows) +
-        (highlights * 0.18 * w_highlights) +
-        (whites * 0.15 * w_whites)
-    )
-
-    new_lum = np.clip(lum + delta_lum, 0.0, 1.0)
-
-    # 4. Modulación cromática segura (evitando cualquier división por cero)
-    eps = 1e-6
-    ratio = (new_lum + eps) / (lum + eps)
-    out_rgb = img_rgb * ratio[..., np.newaxis]
-
-    return np.clip(out_rgb, 0.0, 1.0).astype(np.float32)
-
 # --- Reducción de Ruido Multimodelo (Starless) ---
 
-def _guided_filter(guide: np.ndarray, src: np.ndarray, radius: int, eps: float) -> np.ndarray:
-    """Implementación rápida en NumPy del Guided Filter."""
-    ksize = (2 * radius + 1, 2 * radius + 1)
-    mean_I = cv2.boxFilter(guide, -1, ksize)
-    mean_p = cv2.boxFilter(src, -1, ksize)
-    mean_Ip = cv2.boxFilter(guide * src, -1, ksize)
-    cov_Ip = mean_Ip - mean_I * mean_p
-
-    mean_II = cv2.boxFilter(guide * guide, -1, ksize)
-    var_I = mean_II - mean_I * mean_I
-
-    a = cov_Ip / (var_I + eps)
-    b = mean_p - a * mean_I
-
-    mean_a = cv2.boxFilter(a, -1, ksize)
-    mean_b = cv2.boxFilter(b, -1, ksize)
-
-    q = mean_a * guide + mean_b
-    return q
-
-
-def apply_denoise(
-    img_rgb: np.ndarray,
-    strength: float = 0.0,
-    is_full_res: bool = False,
-    **kwargs
-) -> np.ndarray:
-    """
-    Aplica reducción de ruido multietapa (Luminancia + Croma + Máscara de sombras/bordes).
-    Delega en el motor core.denoise.apply_astro_denoise.
-    """
-    from core.denoise import apply_astro_denoise
-    return apply_astro_denoise(img_rgb, strength=strength, is_full_res=is_full_res, **kwargs)
-    
 def apply_curve_lut(img_rgb: np.ndarray, lut: np.ndarray) -> np.ndarray:
     """
     Aplica una curva tonal mediante tabla de consulta (LUT de 256 elementos [0..1]).
@@ -556,47 +419,6 @@ def apply_curve_lut(img_rgb: np.ndarray, lut: np.ndarray) -> np.ndarray:
 
     mapped_u8 = cv2.LUT(u8, lut_u8)
     return (mapped_u8.astype(np.float32) / 255.0)
-    
-def apply_light_pollution_gradient(
-    img_rgb: np.ndarray, 
-    strength: float = 0.0, 
-    height_ratio: float = 0.50,
-    sky_mask: np.ndarray = None
-) -> np.ndarray:
-    """
-    Atenúa la cúpula de luz en el horizonte modulando la luminancia de forma neutra.
-    strength: 0.0 (desactivado) a 1.0 (máxima atenuación).
-    """
-    if strength <= 1e-4:
-        return img_rgb
-
-    h, w = img_rgb.shape[:2]
-    
-    # 1. Perfil vertical normalizado a 1D
-    y_coords = np.linspace(0.0, 1.0, h, dtype=np.float32)
-    
-    # 0 arriba, 1 en la base del horizonte
-    grad_y = np.clip((y_coords - (1.0 - height_ratio)) / max(1e-4, height_ratio), 0.0, 1.0)
-    
-    # Curva suave coseno (sin saltos bruscos)
-    curve_1d = 0.5 * (1.0 - np.cos(np.pi * grad_y)) * (strength * 0.70)
-    
-    # 2. Expandir explícitamente a toda la cuadrícula (h, w)
-    weight_2d = np.tile(curve_1d[:, np.newaxis], (1, w))
-
-    # 3. Aplicar máscara si existe
-    if sky_mask is not None:
-        m = np.squeeze(sky_mask).astype(np.float32)
-        if m.shape != (h, w):
-            m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
-        weight_2d = weight_2d * m
-
-    # 4. Pasar a 3 canales (h, w, 3)
-    weight_3d = np.repeat(weight_2d[..., np.newaxis], 3, axis=2)
-
-    # 5. Atenuación multiplicativa neutra sobre los 3 canales por igual
-    attenuated = img_rgb * (1.0 - weight_3d)
-    return np.clip(attenuated, 0.0, 1.0).astype(np.float32)
     
 def extract_background_polynomial(
     img_rgb: np.ndarray, 

@@ -546,16 +546,6 @@ class LightPollutionPanel(QWidget):
         self.parameter_changed.emit()
         self.action_committed.emit()
 
-    def set_center(self, cx: float, cy: float) -> None:
-        """Sets the dome center programmatically (e.g. from canvas click or auto-detect)."""
-        self.lp_center_x = float(cx)
-        self.lp_center_y = float(cy)
-        self.spin_lp_cx.setValue(cx)
-        self.slider_lp_cx.setValue(int(round(cx * 100.0)))
-        self.spin_lp_cy.setValue(cy)
-        self.slider_lp_cy.setValue(int(round(cy * 100.0)))
-        self.parameter_changed.emit()
-
     def set_custom_tint(self, r: float, g: float, b: float) -> None:
         """Sets custom sampled tint and activates custom mode."""
         self.lp_custom_tint = (float(r), float(g), float(b))

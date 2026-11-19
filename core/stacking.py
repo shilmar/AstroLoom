@@ -511,33 +511,6 @@ def calibrate_light(
     return light_img
 
 
-def estimate_frame_background_dome(img_rgb: np.ndarray, sky_mask: np.ndarray = None) -> np.ndarray:
-    h, w, c = img_rgb.shape
-    scale = max(1, min(h, w) // 120)
-    sh, sw = max(16, h // scale), max(16, w // scale)
-
-    small_img = cv2.resize(img_rgb, (sw, sh), interpolation=cv2.INTER_AREA)
-
-    if sky_mask is not None:
-        sm_mask = cv2.resize(np.squeeze(sky_mask).astype(np.float32), (sw, sh), interpolation=cv2.INTER_NEAREST)
-        k_erode = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        valid_sky = cv2.erode((sm_mask > 0.5).astype(np.uint8), k_erode) > 0
-    else:
-        valid_sky = np.ones((sh, sw), dtype=bool)
-
-    k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
-    bg_low = np.zeros_like(small_img)
-
-    for ch in range(c):
-        channel = small_img[..., ch]
-        opened = cv2.morphologyEx(channel, cv2.MORPH_OPEN, k_open)
-        sigma = max(5.0, min(sh, sw) / 10.0)
-        bg_low[..., ch] = cv2.GaussianBlur(opened, (0, 0), sigmaX=sigma, sigmaY=sigma)
-
-    bg_full = cv2.resize(bg_low, (w, h), interpolation=cv2.INTER_LINEAR)
-    return bg_full
-
-
 def preprocess_subframe_lp(
     frame_rgb: np.ndarray,
     method: str = "standard",

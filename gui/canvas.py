@@ -222,10 +222,6 @@ class MaskCanvas(QWidget):
             self.setCursor(Qt.ArrowCursor)
         self.update()
 
-    def set_layer_brush_active(self, active: bool) -> None:
-        """Alias para set_layer_brush_enabled."""
-        self.set_layer_brush_enabled(active)
-
     def set_layer_move_enabled(self, enabled: bool) -> None:
         """Activa o desactiva la interacción directa en el lienzo para mover y redimensionar la capa ráster."""
         self.layer_move_active = enabled
@@ -280,9 +276,6 @@ class MaskCanvas(QWidget):
             self.set_refined_mask(None)
             self.set_mask_visible(False)
         self.update()
-
-    def get_active_layer_mask(self) -> Optional[np.ndarray]:
-        return self.layer_brush_mask
 
     def set_masking_enabled(self, enabled: bool) -> None:
         """Activa o desactiva interactivamente el modo de trazado de máscaras."""
@@ -1002,12 +995,6 @@ class MaskCanvas(QWidget):
             if target_rect.width() <= 0:
                 return None
             return target_rect.x() + target_rect.width() * self.split_position
-
-    def _get_split_screen_x(self) -> Optional[float]:
-        """Calcula la coordenada horizontal en pantalla de la cortina divisoria."""
-        if not self.split_view_enabled or self.split_orientation == "horizontal":
-            return None
-        return self._get_split_screen_coord()
 
     def get_render_geometry(self) -> Tuple[QRectF, QRectF, float]:
         """Calcula los rectángulos de origen y destino para el escalado proporcional de la imagen."""
@@ -2979,11 +2966,6 @@ class MaskCanvas(QWidget):
             self.refined_overlay = QPixmap.fromImage(self._mask_overlay_qimage)
         self.update()
 
-    def _create_mask_pixmap(self, mask_float: np.ndarray) -> Optional[QPixmap]:
-        """Método de compatibilidad para generar el QPixmap de la máscara."""
-        self.set_refined_mask(mask_float)
-        return self.refined_overlay
-
     # =========================================================================
     # HERRAMIENTA INTERACTIVA DE RECORTE (CROP TOOL)
     # =========================================================================
@@ -3052,27 +3034,6 @@ class MaskCanvas(QWidget):
             self._enforce_aspect_ratio()
         self._emit_crop_size()
         self.update()
-
-    def get_crop_pixel_rect(self, use_native: bool = True) -> Tuple[int, int, int, int]:
-        """Calcula y retorna las coordenadas de recorte (x, y, ancho, alto) en píxeles de la imagen."""
-        if use_native and self.native_image_size:
-            iw, ih = self.native_image_size
-        elif self.base_pixmap and not self.base_pixmap.isNull():
-            iw = self.base_pixmap.width()
-            ih = self.base_pixmap.height()
-        else:
-            return 0, 0, 0, 0
-        r = self.crop_rect_norm
-        px_x = int(round(r.x() * iw))
-        px_y = int(round(r.y() * ih))
-        px_w = int(round(r.width() * iw))
-        px_h = int(round(r.height() * ih))
-
-        px_x = max(0, min(iw - 1, px_x))
-        px_y = max(0, min(ih - 1, px_y))
-        px_w = max(10, min(iw - px_x, px_w))
-        px_h = max(10, min(ih - px_y, px_h))
-        return px_x, px_y, px_w, px_h
 
     def _get_crop_screen_rect(self) -> QRectF:
         """Calcula el rectángulo del marco de recorte proyectado en coordenadas de pantalla del widget."""

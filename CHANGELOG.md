@@ -3,6 +3,58 @@
 Todas las novedades, mejoras y correcciones notables de **AstroLoom** (anteriormente *Apilator*) se documentan en este archivo.
 El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.17.0] - 2026-11-19
+
+### Añadido
+* **Purga Inteligente Anti-Satélites por Transformada de Hough Probabilística (`core/startrails.py`, `gui/tab_startrails.py`):**
+  - **Detección Geométrica Lineal Rápida:** Algoritmo basado en `cv2.HoughLinesP` para identificar trazas rectilíneas de satélites en órbita baja y trayectorias transitorias de aeronaves en series circumpolares.
+  - **Procesamiento Multiescala a 50%:** Reducción previa a media resolución exacta para acelerar drásticamente el escaneo manteniendo una calibración de sensibilidad óptima para trazas tenues.
+  - **Evaluación Monocanal:** Análisis sobre canal de luminancia / canal verde que minimiza el consumo de memoria y maximiza la velocidad de cálculo en series densas de cientos de tomas.
+
+* **Integración de Tecnologías Seti Astro en el Revelador (`core/stretch.py`, `core/sharpening.py`, `core/background_extraction.py`, `core/mask_layers.py`, `gui/developer/`):**
+  - **Estirado Estadístico Adaptativo (*Statistical Stretch*):** Normalización de fondo con detección robusta de mediana y desviación absoluta de la mediana (MAD), estirando el rango dinámico de objetos astronómicos sin sobreexponer estrellas ni saturar núcleos brillantes.
+  - **Claridad de Textura y Micro-contraste (*Texture Clarity*):** Realce de micro-estructuras de polvo cósmico y filamentos nebulares mediante filtrado guiado laplaciano de alta fidelidad.
+  - **Extracción Automática de Fondo (*Automatic Background Extraction - ABE*):** Modelado polinomial multivariante de superficie 2D para supresión uniforme de gradientes complejos de contaminación lumínica y viñeteo residual.
+  - **Ajustes Avanzados de Capas de Composición:** Mayor flexibilidad en la modulación fotométrica independiente por capas de ajuste y máscaras tonales.
+
+* **Ondículas Multiescala / Separación de Frecuencias (*À Trous Wavelet Transform*, `core/sharpening.py`, `gui/developer/panels/panel_sharpening.py`):**
+  - **Control de Estructura:** Realce selectivo de planos de frecuencia intermedia correspondientes a bandas de polvo galáctico y filamentos gaseosos de la Vía Láctea sin inflar el tamaño de las estrellas ni amplificar el grano fino.
+  - **Control de Atenuar Fondo:** Modulación de la capa residual de frecuencia ultra-baja para rebajar el pedestal lumínico del cielo y acentuar el contraste del espacio profundo.
+
+* **Visor de Inspección de Tomas (*Blink Viewer*, `gui/dialog_blink.py`):**
+  - Nueva ventana especializada para revisión secuencial y cribado ágil de series temporales de capturas astronómicas.
+  - Reproducción con cadencia regulable (FPS), navegación rápida con teclas de flecha, zoom y desplazamiento sincronizados, e histograma para detección instantánea de ráfagas con nubes, saltos de guiado o paso de satélites.
+
+* **Discriminación de Balizas Aeronáuticas y Resalte Multitrazas en Meteoros (`core/meteors.py`, `gui/tab_meteors.py`):**
+  - **Filtro Anti-Aviones por Luces Intermitentes:** Detección de patrones periódicos y espaciados regulares de balizas de navegación aérea para excluirlas automáticamente del catálogo de candidatos a meteoros.
+  - **Resalte Multitrazas Global y Sincronizado (`chk_highlight_all`, `btn_view_composite`):** Capacidad de previsualizar simultáneamente todas las trazas detectadas tanto sobre los fotogramas fuente individuales como re-proyectadas sobre la imagen compuesta de referencia.
+
+### Rendimiento y Optimización
+* **Pipeline de Exportación Zero-Copy en Rust e In-Place (`astroloom_rs`, `gui/developer/pipeline.py`, `core/psd_export.py`):**
+  - Evaluación del grafo de capas en un solo paso fusionado directamente en memoria compartida de Rust Rayon, prescindiendo por completo de arrays y conversiones intermedias de NumPy.
+  - Conversión y volcado directo a enteros `uint16` in-place, optimizando en un $40-60\%$ los tiempos de exportación de proyectos `.devloom` y exportación a PSD multicapa de 16 bits.
+* **Exportación PSD Multicapa en Paralelo (`core/psd_export.py`, `gui/tab_developer.py`):**
+  - Compresión y generación de canales de capas en hilos concurrentes en segundo plano con soporte de cancelación asíncrona.
+* **Revelador Proxy de Ultra-Baja Latencia (`gui/canvas.py`, `gui/developer/pipeline.py`):**
+  - Generación reactiva de proxies a resolución adaptada para interacción fluida de controles y curvas en imágenes de 24 a 60 MP.
+* **Reducción de Ruido Cromático SCNR Optimizada (`astroloom_rs/src/photometry.rs`):**
+  - Supresión de tonos verdes espurios en espacio lineal con kernel nativo SIMD de alta velocidad.
+* **Saneamiento y Depuración de Código Huérfano:**
+  - Poda exhaustiva de funciones huérfanas y código en desuso en los módulos `core/` y `gui/`, reduciendo la complejidad técnica y acelerando la mantenibilidad.
+
+### Modificado
+* **Unificación de Interfaz con Barra de Progreso en Lienzo (`CanvasFooterBar`, `gui/widgets/viewer_toolbar.py`):**
+  - Supresión de barras de progreso dispersas y heterogéneas, sustituidas por un componente integrado de forma nativa en la parte inferior de cada visor (`MaskCanvas`).
+  - Integrado homogéneamente en Revelador, Circumpolares, Meteoros, Panorámicas, Eclipses (HDR y Collage), Apilador y exportación PSD.
+* **Sincronización Global de Versión:**
+  - Actualización transversal a `v0.17.0` en motor Rust (`Cargo.toml`, `Cargo.lock`, `pyproject.toml`), ventana principal, pantalla splash, diálogos y localizaciones multilingües (`es.json`, `en.json`).
+
+### Corregido
+* **Máscaras Continuas en Zoom 1:1:**
+  - Saneamiento de arrays de máscara `float32` C-contiguos para evitar fallos de renderizado al inspeccionar a máxima resolución 1:1 con backend nativo de Rust.
+* **Estabilidad y Configuración de Pruebas:**
+  - Añadido `pytest.ini` consolidando el suite de tests unitarios y de integración con 369 pruebas verificadas en verde.
+
 ## [0.16.0] - 2026-11-17
 
 ### Añadido

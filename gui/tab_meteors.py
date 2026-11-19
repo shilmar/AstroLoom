@@ -46,8 +46,6 @@ from core.meteors import (
     refine_satellite_classifications,
     compose_meteor_shower_image,
     export_meteor_layered_psd,
-    save_meteor_session,
-    load_meteor_session,
     load_fast_meteor_frame,
     ThreadSafeFrameCache,
     extract_frame_timestamp
@@ -1046,6 +1044,8 @@ class MeteorTab(QWidget):
                 self.lbl_radiant_info.setText("Radiante: No convergente (pocos meteoros o dispersión alta)")
 
             self._refresh_cull_table()
+            if hasattr(self, 'btn_view_composite'):
+                self.btn_view_composite.setEnabled(True)
             if self.candidates:
                 self.table_cull.selectRow(0)
             self._update_multi_highlight_reticles()
@@ -1156,11 +1156,14 @@ class MeteorTab(QWidget):
             if self.composite_result is not None:
                 self._display_image_in_canvas(self.composite_result)
                 self.lbl_view_status.setText("Compuesto final de meteoros")
-                rows = self.table_cull.selectionModel().selectedRows()
-                if rows and rows[0].row() < len(self.candidates):
-                    self._update_highlight_reticle(self.candidates[rows[0].row()])
+            elif self.files_list:
+                self._preview_frame(self.ref_idx)
+                self.lbl_view_status.setText(f"Toma de referencia: {os.path.basename(self.files_list[self.ref_idx])}")
             else:
                 self.btn_view_composite.setChecked(False)
+            rows = self.table_cull.selectionModel().selectedRows()
+            if rows and rows[0].row() < len(self.candidates):
+                self._update_highlight_reticle(self.candidates[rows[0].row()])
         else:
             rows = self.table_cull.selectionModel().selectedRows()
             if rows and rows[0].row() < len(self.candidates):
@@ -1179,8 +1182,12 @@ class MeteorTab(QWidget):
         row = rows[0].row()
         if row < len(self.candidates):
             c = self.candidates[row]
-            if hasattr(self, 'btn_view_composite') and self.btn_view_composite.isChecked() and self.composite_result is not None:
-                # Mantener la vista del compuesto y mover el resalte a las coordenadas reproyectadas
+            is_global = (
+                (hasattr(self, 'btn_view_composite') and self.btn_view_composite.isChecked())
+                or (hasattr(self, 'chk_highlight_all') and self.chk_highlight_all.isChecked())
+            )
+            if is_global:
+                # Mantener la vista de conjunto (compuesto o referencia con todas las trazas) y mover el resalte
                 self._update_highlight_reticle(c)
             else:
                 # Previsualizar el fotograma individual que contiene la traza original
@@ -1197,10 +1204,13 @@ class MeteorTab(QWidget):
         color = "#ffea00" if (c.is_meteor and not c.is_airplane) else "#ff5252"
         label = f"#{c.id:02d} ({c.length_px:.0f}px)"
 
-        is_comp = hasattr(self, 'btn_view_composite') and self.btn_view_composite.isChecked() and self.composite_result is not None
-        start = c.reprojected_start if (is_comp and c.reprojected_start is not None) else c.start_pt
-        end = c.reprojected_end if (is_comp and c.reprojected_end is not None) else c.end_pt
-        if is_comp and c.reprojected_start is not None and c.reprojected_end is not None:
+        is_global = (
+            (hasattr(self, 'btn_view_composite') and self.btn_view_composite.isChecked())
+            or (hasattr(self, 'chk_highlight_all') and self.chk_highlight_all.isChecked())
+        )
+        start = c.reprojected_start if (is_global and c.reprojected_start is not None) else c.start_pt
+        end = c.reprojected_end if (is_global and c.reprojected_end is not None) else c.end_pt
+        if is_global and c.reprojected_start is not None and c.reprojected_end is not None:
             pad = 20
             bbox = (
                 int(min(start[0], end[0])) - pad,
@@ -1234,9 +1244,12 @@ class MeteorTab(QWidget):
         if not rows or rows[0].row() >= len(self.candidates):
             return
         c = self.candidates[rows[0].row()]
-        is_comp = hasattr(self, 'btn_view_composite') and self.btn_view_composite.isChecked() and self.composite_result is not None
-        start = c.reprojected_start if (is_comp and c.reprojected_start is not None) else c.start_pt
-        end = c.reprojected_end if (is_comp and c.reprojected_end is not None) else c.end_pt
+        is_global = (
+            (hasattr(self, 'btn_view_composite') and self.btn_view_composite.isChecked())
+            or (hasattr(self, 'chk_highlight_all') and self.chk_highlight_all.isChecked())
+        )
+        start = c.reprojected_start if (is_global and c.reprojected_start is not None) else c.start_pt
+        end = c.reprojected_end if (is_global and c.reprojected_end is not None) else c.end_pt
         mid_x = (start[0] + end[0]) / 2.0
         mid_y = (start[1] + end[1]) / 2.0
         self.canvas.center_on_image_point((mid_x, mid_y), zoom_in=True)
@@ -1261,24 +1274,14 @@ class MeteorTab(QWidget):
             self.canvas.clear_multi_highlight_reticles()
             return
 
-        is_comp = hasattr(self, 'btn_view_composite') and self.btn_view_composite.isChecked() and self.composite_result is not None
         active_reticles = []
-
-        rows = self.table_cull.selectionModel().selectedRows()
-        curr_frame_idx = self.candidates[rows[0].row()].frame_index if (rows and rows[0].row() < len(self.candidates)) else self.ref_idx
 
         for c in self.candidates:
             if not c.is_meteor:
                 continue
 
-            if is_comp:
-                start = c.reprojected_start if c.reprojected_start is not None else c.start_pt
-                end = c.reprojected_end if c.reprojected_end is not None else c.end_pt
-            else:
-                if c.frame_index != curr_frame_idx:
-                    continue
-                start = c.start_pt
-                end = c.end_pt
+            start = c.reprojected_start if c.reprojected_start is not None else c.start_pt
+            end = c.reprojected_end if c.reprojected_end is not None else c.end_pt
 
             color = "#00e5ff" if not c.is_sporadic else "#ffd54f"
             label = f"#{c.id:02d}"
@@ -1295,6 +1298,23 @@ class MeteorTab(QWidget):
         self.canvas.set_multi_highlight_reticles(active_reticles)
 
     def _on_toggle_highlight_all(self, enabled: bool) -> None:
+        if enabled:
+            if self.composite_result is not None:
+                if hasattr(self, 'btn_view_composite') and not self.btn_view_composite.isChecked():
+                    self.btn_view_composite.setChecked(True)
+            elif self.files_list:
+                self._preview_frame(self.ref_idx)
+                self.lbl_view_status.setText(f"Toma de referencia: {os.path.basename(self.files_list[self.ref_idx])}")
+                rows = self.table_cull.selectionModel().selectedRows()
+                if rows and rows[0].row() < len(self.candidates):
+                    self._update_highlight_reticle(self.candidates[rows[0].row()])
+        else:
+            rows = self.table_cull.selectionModel().selectedRows()
+            if rows and rows[0].row() < len(self.candidates):
+                c = self.candidates[rows[0].row()]
+                if not (hasattr(self, 'btn_view_composite') and self.btn_view_composite.isChecked() and self.composite_result is not None):
+                    self._preview_frame(c.frame_index)
+                self._update_highlight_reticle(c)
         self._update_multi_highlight_reticles()
 
     # -------------------------------------------------------------

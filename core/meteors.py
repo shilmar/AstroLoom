@@ -135,27 +135,8 @@ def extract_frame_timestamp(filepath: str) -> float:
 
 
 # =============================================================================
-# 3. KERNEL RUST / NUMPY DE DIFERENCIA POSITIVA Y CARGA ULTRA-RÁPIDA
+# 3. CARGA ULTRA-RÁPIDA DE TOMAS DE METEOROS
 # =============================================================================
-
-def _numpy_positive_diff_and_stats(arr_curr: np.ndarray, arr_bg: np.ndarray) -> Tuple[np.ndarray, float, float]:
-    """Fallback vectorial en NumPy si Rust no está disponible."""
-    diff = np.maximum(0.0, arr_curr - arr_bg)
-    mean_val = float(np.mean(diff))
-    std_val = float(np.std(diff))
-    return diff, mean_val, std_val
-
-
-def compute_positive_diff_stats(arr_curr: np.ndarray, arr_bg: np.ndarray) -> Tuple[np.ndarray, float, float]:
-    """Despachador acelerado con Rust o NumPy (vectorizado) según disponibilidad."""
-    if HAS_RUST and hasattr(astroloom_rs, "meteor_positive_diff_and_stats_rs") and arr_curr.ndim == 2 and arr_bg.ndim == 2:
-        diff, mean_val, std_val, _, _ = astroloom_rs.meteor_positive_diff_and_stats_rs(
-            np.ascontiguousarray(arr_curr, dtype=np.float32),
-            np.ascontiguousarray(arr_bg, dtype=np.float32)
-        )
-        return diff, mean_val, std_val
-    return _numpy_positive_diff_and_stats(arr_curr, arr_bg)
-
 
 def load_fast_meteor_frame(filepath: str, max_dim: int = 2400) -> Tuple[np.ndarray, float]:
     """
@@ -1325,21 +1306,3 @@ def export_meteor_layered_psd(
 # 7. SERIALIZACIÓN DE SESIÓN (.astrometeor)
 # =============================================================================
 
-def save_meteor_session(filepath: str, session_data: Dict[str, Any]) -> bool:
-    """Guarda la configuración y la lista de meteoros analizados en formato JSON."""
-    try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(session_data, f, indent=2, ensure_ascii=False)
-        return True
-    except Exception:
-        return False
-
-
-def load_meteor_session(filepath: str) -> Optional[Dict[str, Any]]:
-    """Carga y valida un archivo de sesión .astrometeor."""
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data
-    except Exception:
-        return None

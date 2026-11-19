@@ -287,13 +287,6 @@ class PrecisionSliderRow(QWidget):
         self.resetRequested.emit()
         self.sliderReleased.emit()
 
-    def is_modified(self) -> bool:
-        return self.slider.value() != self.raw_default
-
     def set_title(self, text: str) -> None:
         self.lbl_title.setText(text)
 
-    def set_default(self, val: int) -> None:
-        self.raw_default = int(val)
-        self.lbl_title.setToolTip(f"Doble clic para restablecer (por defecto: {self._format_value(self.raw_default)})")
-        self._update_styles()

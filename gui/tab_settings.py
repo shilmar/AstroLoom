@@ -542,7 +542,7 @@ class SettingsTab(QWidget):
         row_author_title.addWidget(lbl_work_title)
         row_author_title.addStretch()
 
-        self.lbl_engine_badge = QLabel("AstroLoom v0.16.0")
+        self.lbl_engine_badge = QLabel("AstroLoom v0.17.0")
         self.lbl_engine_badge.setStyleSheet("color: #80d8ff; font-size: 11px; font-weight: bold;")
         row_author_title.addWidget(self.lbl_engine_badge)
 

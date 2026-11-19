@@ -349,10 +349,6 @@ class PresetCardWidget(QFrame):
         layout.addWidget(lbl_cat)
         layout.addStretch()
 
-    def set_thumbnail(self, pixmap: QPixmap):
-        if pixmap and not pixmap.isNull():
-            self.lbl_thumb.setPixmap(pixmap)
-
     def set_selected(self, selected: bool):
         self._is_selected = selected
         self._update_style()

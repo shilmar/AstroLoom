@@ -250,12 +250,6 @@ def _is_cache_valid(cache_path: str, original_path: str) -> bool:
 _SESSION_CACHE: dict[str, "ort.InferenceSession"] = {}
 
 
-def clear_nafnet_session_cache() -> None:
-    """Libera las sesiones ONNX retenidas en memoria caché."""
-    global _SESSION_CACHE
-    _SESSION_CACHE.clear()
-
-
 def _create_inference_session(model_path: str, use_cache: bool = True, force_cpu: bool = False) -> "ort.InferenceSession":
     """
     Inicializa o recupera de caché la sesión ONNX con el proveedor de hardware más rápido disponible.

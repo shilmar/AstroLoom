@@ -906,9 +906,13 @@ def apply_local_adjustments_to_image(
     if not has_adj:
         return image_rgb
 
+    mask_2d = effective_mask[..., 0] if effective_mask.ndim == 3 else effective_mask
+    if mask_2d.shape[:2] != image_rgb.shape[:2]:
+        mask_2d = cv2.resize(mask_2d, (image_rgb.shape[1], image_rgb.shape[0]), interpolation=cv2.INTER_LINEAR)
+
     # Ponderación global de la máscara por opacidad
     # Comprobación ligera sin asignar buffers temporales
-    if float(layer.opacity) <= 1e-4 or float(np.max(effective_mask)) * float(layer.opacity) <= 1e-4:
+    if float(layer.opacity) <= 1e-4 or float(np.max(mask_2d)) * float(layer.opacity) <= 1e-4:
         return image_rgb
 
     if HAS_RUST:
@@ -932,7 +936,6 @@ def apply_local_adjustments_to_image(
         else:
             lut_c = None
 
-        mask_2d = effective_mask[..., 0] if effective_mask.ndim == 3 else effective_mask
         mask_c = np.ascontiguousarray(mask_2d, dtype=np.float32)
 
         res = astroloom_rs.apply_layer_adjustments_fused(
@@ -1023,7 +1026,6 @@ def apply_local_adjustments_to_image(
         lut = np.empty(1, dtype=np.float32)
         use_lut = False
 
-    mask_2d = effective_mask[..., 0] if effective_mask.ndim == 3 else effective_mask
     mask_c = np.ascontiguousarray(mask_2d, dtype=np.float32)
 
     res = _numpy_fused_layer_adjust(

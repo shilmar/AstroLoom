@@ -124,9 +124,6 @@ class CurveWidget(QWidget):
             self.dragging = False
             self.update()
 
-    def get_mode(self) -> str:
-        return self._mode
-
     def get_lut(self, mode: Optional[str] = None) -> np.ndarray:
         """Retorna la Look-Up Table calculada para el modo especificado o el activo."""
         target_mode = mode if (mode is not None and mode in self._modes_data) else self._mode
@@ -140,12 +137,6 @@ class CurveWidget(QWidget):
             return len(pts) == 2 and pts[0] == (0.0, 0.0) and pts[1] == (1.0, 1.0)
         else:
             return all(abs(p[1] - 0.5) < 1e-4 for p in pts)
-
-    def has_curve_edits(self, mode: Optional[str] = None) -> bool:
-        """Indica si una curva específica o cualquiera contiene modificaciones activas."""
-        if mode is not None:
-            return not self.is_identity(mode)
-        return any(not self.is_identity(m) for m in self._modes_data)
 
     def reset_curve(self, mode: Optional[str] = None) -> None:
         """Restablece la curva indicada (o la activa) a su estado neutro."""

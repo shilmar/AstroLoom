@@ -115,6 +115,10 @@ def save_devloom_project(
         except ValueError:
             source_info["relative_path"] = None
 
+    # developer_state no debe contener objetos MaskLayer en memoria
+    clean_developer_state = dict(developer_state) if developer_state else {}
+    clean_developer_state.pop("mask_layers", None)
+
     manifest = {
         "version": "1.0",
         "app": "AstroLoom",
@@ -123,8 +127,8 @@ def save_devloom_project(
         "master_sky_mask": master_mask_ref,
         "has_starnet": has_starnet,
         "has_cropped_base": has_cropped_base,
-        "starless_is_stretched": developer_state.get("starless_is_stretched", False) if developer_state else False,
-        "developer_state": developer_state,
+        "starless_is_stretched": clean_developer_state.get("starless_is_stretched", False) if clean_developer_state else False,
+        "developer_state": clean_developer_state,
         "mask_layers": serialized_layers,
     }
     manifest_json = json.dumps(manifest, indent=2, ensure_ascii=False)

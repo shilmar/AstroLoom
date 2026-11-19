@@ -204,21 +204,3 @@ def apply_pcc_gains(
     return np.ascontiguousarray(out, dtype=np.float32)
 
 
-def calibrate_image_pcc(
-    img_rgb: np.ndarray,
-    preserve_neutral_bg: bool = True
-) -> tuple[np.ndarray, dict]:
-    """High-level one-shot PCC calibration function.
-    
-    Detects stars, fits robust physical gains, and returns (calibrated_image, stats).
-    """
-    stars = detect_stars_photometry(img_rgb)
-    k_r, k_g, k_b = fit_theil_sen_pcc(stars)
-    calibrated = apply_pcc_gains(img_rgb, k_r, k_b, preserve_neutral_bg=preserve_neutral_bg)
-    stats = {
-        "num_stars": len(stars),
-        "k_r": k_r,
-        "k_g": 1.0,
-        "k_b": k_b,
-    }
-    return calibrated, stats

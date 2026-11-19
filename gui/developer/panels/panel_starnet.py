@@ -434,33 +434,6 @@ class StarNetPanel(QWidget):
         self.sec_starnet.set_content_widget(w_starnet)
         main_layout.addWidget(self.sec_starnet)
 
-    def set_tools_enabled(self, enabled: bool):
-        """Habilita o deshabilita los controles dependientes de StarNet."""
-        if enabled:
-            self.sec_starnet.set_status_badge("✨ Separadas", "#00e5ff")
-        else:
-            self.sec_starnet.set_status_badge("")
-
-        self.btn_go_to_masks_starnet.setVisible(enabled)
-
-        controls = [
-            self.combo_layer,
-            self.btn_auto_stretch_starless,
-            self.slider_stars,
-            self.slider_contrast_starless,
-            self.slider_clarity,
-            self.slider_texture_clarity,
-            self.slider_dehaze,
-            self.slider_ond_est,
-            self.slider_ond_bg,
-            self.slider_denoise,
-            self.slider_denoise_color,
-            self.slider_denoise_mask,
-        ]
-        for ctrl in controls:
-            if ctrl is not None:
-                ctrl.setEnabled(enabled)
-
     def set_ai_denoise_active(self, active: bool):
         """Actualiza el aspecto visual del botón según si hay un buffer IA activo."""
         if not hasattr(self, 'btn_ai_denoise'):

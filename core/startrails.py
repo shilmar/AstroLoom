@@ -383,55 +383,6 @@ def extract_dilated_stars(
     return dilated
 
 
-def compute_gap_bridge(
-    prev_img: np.ndarray,
-    curr_img: np.ndarray,
-    radius: int = 3,
-    threshold_factor: float = 3.0,
-    sky_mask: Optional[np.ndarray] = None
-) -> np.ndarray:
-    """
-    Calcula un puente continuo de luminancia estelar entre dos fotogramas consecutivos
-    para eliminar los huecos periódicos (gap filling) provocados por el tiempo de obturación
-    e intervalómetro.
-    
-    :param prev_img: Fotograma anterior (float32 RGB [0, 1]).
-    :param curr_img: Fotograma actual (float32 RGB [0, 1]).
-    :param radius: Radio de dilatación en píxeles (cierra saltos de hasta 2*radius píxeles).
-    :param threshold_factor: Factor multiplicador sobre el MAD de ruido para aislar estrellas.
-    :param sky_mask: Máscara opcional donde > 0 indica cielo. Si se proporciona, el suelo no se dilata.
-    :return: Matriz float32 RGB con los puentes de estrellas calculados (0 en fondo y suelo).
-    """
-    h, w = prev_img.shape[:2]
-    sky_mask_bool = None
-    if sky_mask is not None:
-        if isinstance(sky_mask, np.ndarray) and sky_mask.dtype == bool:
-            if sky_mask.shape[:2] == (h, w):
-                sky_mask_bool = sky_mask
-            else:
-                sm_res = cv2.resize(sky_mask.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
-                sky_mask_bool = (sm_res > 0)
-        else:
-            sm = sky_mask.astype(np.float32)
-            if sm.shape[:2] != (h, w):
-                sm = cv2.resize(sm, (w, h), interpolation=cv2.INTER_NEAREST)
-            if sm.ndim == 3:
-                sm = sm[..., 0]
-            if sm.max() > 1.05:
-                sm /= 255.0
-            sky_mask_bool = (sm > 0.3)
-
-    k_size = max(3, int(radius * 2 + 1))
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
-
-    d_p = extract_dilated_stars(prev_img, radius=radius, threshold_factor=threshold_factor, sky_mask_bool=sky_mask_bool, kernel=kernel)
-    d_c = extract_dilated_stars(curr_img, radius=radius, threshold_factor=threshold_factor, sky_mask_bool=sky_mask_bool, kernel=kernel)
-
-    bridge_stars = np.minimum(d_p, d_c)
-    bridge_stars[bridge_stars < 0.005] = 0.0
-    return bridge_stars
-
-
 def compute_target_video_dims(w: int, h: int, res_mode: str) -> Tuple[int, int]:
     """
     Calcula dimensiones pares de vídeo preservando la relación de aspecto.

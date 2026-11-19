@@ -297,9 +297,6 @@ class DeconvolutionPanel(QWidget):
         self.interaction_finished.emit()
         self.action_committed.emit()
 
-    def update_psf_status(self, text: str) -> None:
-        self.lbl_psf_status.setText(text)
-
     def get_state(self) -> Dict[str, Any]:
         return {
             "deconv_iterations": self.slider_deconv_iter.value(),

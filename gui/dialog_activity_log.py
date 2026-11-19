@@ -174,10 +174,6 @@ class ActivityLogDialog(QDialog):
 
         return True
 
-    def _format_entry(self, ts: str, module: str, message: str) -> str:
-        """Formatea una línea de registro pura con marcas de tiempo y módulo."""
-        return f"[{ts}] [{module:<11}] {message}"
-
     def _format_entry_html(self, ts: str, module: str, message: str) -> str:
         """Formatea una entrada con HTML enriquecido y paleta ergonómica calibrada."""
         msg_upper = message.upper()

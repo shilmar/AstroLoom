@@ -2000,29 +2000,6 @@ class MaskLayersWidget(QWidget):
             self._rebuild_list_items(select_layer_id=self._selected_layer_id)
             self.layers_changed.emit()
 
-    def remove_starnet_layers(self) -> None:
-        """Elimina las capas de sistema generadas por StarNet y restaura la capa base si hay imagen."""
-        self.layers = [l for l in self.layers if l.mask_type not in (MASK_TYPE_IMAGE_STARS, MASK_TYPE_IMAGE_STARLESS, MASK_TYPE_IMAGE_GROUND)]
-        if self._image_reference_getter and self._image_reference_getter() is not None:
-            self.ensure_base_layer()
-        else:
-            self._rebuild_list_items()
-            self.layers_changed.emit()
-
-    def set_starnet_stars_opacity(self, opacity: float) -> None:
-        """Sincroniza la opacidad de la capa de estrellas con controles externos."""
-        for l in self.layers:
-            if l.mask_type == MASK_TYPE_IMAGE_STARS:
-                l.opacity = float(np.clip(opacity, 0.0, 1.0))
-                if self._selected_layer_id == l.id:
-                    self._updating_ui = True
-                    op_pct = int(round(l.opacity * 100))
-                    self.slider_opacity.setValue(op_pct)
-                    self.lbl_opacity.setText(f"{op_pct}%")
-                    self._updating_ui = False
-                break
-        self._rebuild_list_items(select_layer_id=self._selected_layer_id)
-
     def set_starnet_stars_enabled(self, enabled: bool) -> None:
         """Sincroniza la visibilidad de la capa de estrellas con controles externos."""
         for l in self.layers:
@@ -4065,18 +4042,6 @@ class MaskLayersWidget(QWidget):
             self.update_active_layer_histogram()
             self.layers_changed.emit()
 
-    def _on_spin_adj_temp_changed(self, val: float) -> None:
-        if self._updating_ui: return
-        self._updating_ui = True
-        slider_val = int(round(val * 10000.0))
-        self.slider_adj_temp.setValue(slider_val)
-        self._updating_ui = False
-        layer = self.get_selected_layer()
-        if layer:
-            layer.temp = float(val)
-            self.update_active_layer_histogram()
-            self.layers_changed.emit()
-
     def _on_slider_adj_temp_changed(self, val: int) -> None:
         if self._updating_ui: return
         self._updating_ui = True
@@ -4086,18 +4051,6 @@ class MaskLayersWidget(QWidget):
         layer = self.get_selected_layer()
         if layer:
             layer.temp = float_val
-            self.update_active_layer_histogram()
-            self.layers_changed.emit()
-
-    def _on_spin_adj_tint_changed(self, val: float) -> None:
-        if self._updating_ui: return
-        self._updating_ui = True
-        slider_val = int(round(val * 10000.0))
-        self.slider_adj_tint.setValue(slider_val)
-        self._updating_ui = False
-        layer = self.get_selected_layer()
-        if layer:
-            layer.tint = float(val)
             self.update_active_layer_histogram()
             self.layers_changed.emit()
 
@@ -4515,10 +4468,6 @@ class MaskLayersWidget(QWidget):
         finally:
             self._updating_ui = False
 
-    def set_stars_special_value(self, val: int) -> None:
-        """Sincroniza el control especial de intensidad de estrellas desde tab_developer (compatibilidad)."""
-        self.set_stars_special_values(presence=val)
-
     def get_autostretch_params(self) -> dict:
         """Retorna los parámetros actuales configurados para el Estirado Adaptativo RGB."""
         return {
@@ -4528,19 +4477,6 @@ class MaskLayersWidget(QWidget):
             "feather_radius": self.row_sl_as_feather.value() if hasattr(self, "row_sl_as_feather") else 2,
             "unlinked": self.chk_sl_as_unlinked.isChecked() if hasattr(self, "chk_sl_as_unlinked") else True,
         }
-
-    def set_autostretch_params(self, params: dict) -> None:
-        """Configura los controles del panel de Estirado Adaptativo RGB."""
-        if "target_bg" in params and hasattr(self, "row_sl_as_target_bg"):
-            self.row_sl_as_target_bg.setValue(int(round(params["target_bg"] * 100)))
-        if "shadow_clip_sigma" in params and hasattr(self, "row_sl_as_sigma"):
-            self.row_sl_as_sigma.setValue(int(round(params["shadow_clip_sigma"] * 10)))
-        if "saturation_boost" in params and hasattr(self, "row_sl_as_sat"):
-            self.row_sl_as_sat.setValue(int(round(params["saturation_boost"] * 10)))
-        if "feather_radius" in params and hasattr(self, "row_sl_as_feather"):
-            self.row_sl_as_feather.setValue(int(params["feather_radius"]))
-        if "unlinked" in params and hasattr(self, "chk_sl_as_unlinked"):
-            self.chk_sl_as_unlinked.setChecked(bool(params["unlinked"]))
 
     # Controles Especiales de Fondo Nebular (Starless)
     def _on_sl_clarity_changed(self, val: int) -> None:

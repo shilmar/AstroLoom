@@ -208,32 +208,6 @@ def extract_panel_metadata(filepath: str, index: int = 0) -> PanoramaPanelMetada
     return meta
 
 
-def extract_astro_features(
-    image_gray: np.ndarray,
-    astro_mode: bool = True,
-    max_features: int = 4000
-) -> Tuple[List[cv2.KeyPoint], np.ndarray]:
-    """
-    Extrae puntos clave y descriptores SIFT con pre-realce astro específico.
-    Aplica CLAHE + estirado suave sobre sombras para capturar estrellas y textura
-    terrestre con alta repetibilidad.
-    """
-    if astro_mode:
-        clahe = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))
-        prep = clahe.apply(image_gray)
-    else:
-        prep = image_gray
-
-    sift = cv2.SIFT_create(
-        nfeatures=max_features,
-        contrastThreshold=0.010,
-        edgeThreshold=12,
-        sigma=1.4
-    )
-    kps, descs = sift.detectAndCompute(prep, None)
-    return kps, descs
-
-
 def find_maximum_inscribed_rectangle(mask: np.ndarray) -> Tuple[int, int, int, int]:
     """
     Calcula el rectángulo de área máxima completamente contenido dentro de la máscara binaria
@@ -293,75 +267,6 @@ def find_maximum_inscribed_rectangle(mask: np.ndarray) -> Tuple[int, int, int, i
         return rx, ry, rw, rh
 
     return best_rect
-
-
-def warp_image_cylindrical(
-    image: np.ndarray,
-    focal_px: float
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Aplica proyección cilíndrica nativa a una imagen y genera su máscara válida.
-    x_cyl = f * tan( (x - cx) / f ) + cx
-    y_cyl = (y - cy) / cos( (x - cx) / f ) + cy
-    """
-    h, w = image.shape[:2]
-    cx = w / 2.0
-    cy = h / 2.0
-
-    # Malla de coordenadas de destino
-    x_c = np.arange(w, dtype=np.float32)
-    y_c = np.arange(h, dtype=np.float32)
-    x_grid, y_grid = np.meshgrid(x_c, y_c)
-
-    theta = (x_grid - cx) / focal_px
-    x_orig = focal_px * np.tan(theta) + cx
-    y_orig = (y_grid - cy) / np.cos(theta) + cy
-
-    # Válidos solo donde cos(theta) > 0 y dentro de la imagen original
-    valid = (np.cos(theta) > 0.05) & (x_orig >= 0) & (x_orig < w - 1) & (y_orig >= 0) & (y_orig < h - 1)
-
-    map_x = x_orig.astype(np.float32)
-    map_y = y_orig.astype(np.float32)
-
-    warped = cv2.remap(image, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-    mask = (valid.astype(np.uint8)) * 255
-    return warped, mask
-
-
-def warp_image_spherical(
-    image: np.ndarray,
-    focal_px: float
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Aplica proyección esférica nativa a una imagen y genera su máscara válida.
-    """
-    h, w = image.shape[:2]
-    cx = w / 2.0
-    cy = h / 2.0
-
-    x_c = np.arange(w, dtype=np.float32)
-    y_c = np.arange(h, dtype=np.float32)
-    x_grid, y_grid = np.meshgrid(x_c, y_c)
-
-    theta = (x_grid - cx) / focal_px
-    phi = (y_grid - cy) / focal_px
-
-    cos_phi = np.cos(phi)
-    sin_phi = np.sin(phi)
-    cos_theta = np.cos(theta)
-    sin_theta = np.sin(theta)
-
-    x_orig = focal_px * (sin_theta / (cos_theta * cos_phi + 1e-7)) + cx
-    y_orig = focal_px * (sin_phi / (cos_theta * cos_phi + 1e-7)) + cy
-
-    valid = (cos_theta > 0.1) & (x_orig >= 0) & (x_orig < w - 1) & (y_orig >= 0) & (y_orig < h - 1)
-
-    map_x = x_orig.astype(np.float32)
-    map_y = y_orig.astype(np.float32)
-
-    warped = cv2.remap(image, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-    mask = (valid.astype(np.uint8)) * 255
-    return warped, mask
 
 
 def extract_bright_stars(
@@ -586,37 +491,6 @@ def match_star_asterisms(
 
     inl_mask = inliers.ravel() > 0
     return pts1_m[inl_mask], pts2_m[inl_mask], int(np.sum(inl_mask))
-
-
-def match_star_triangles(
-    pts1: np.ndarray,
-    pts2: np.ndarray,
-    tolerance: float = 0.025,
-    max_ransac_iters: int = 5000,
-    inlier_thresh: float = 5.0
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Emparejamiento astronómico de teselas mediante triángulos invariantes y RANSAC en Rust.
-    Retorna (H_matrix (3, 3), inliers_mask (N2,)).
-    """
-    if HAS_RUST and hasattr(astroloom_rs, "match_star_triangles_ransac_rs"):
-        p1 = np.ascontiguousarray(pts1[:, :2], dtype=np.float32)
-        p2 = np.ascontiguousarray(pts2[:, :2], dtype=np.float32)
-        return astroloom_rs.match_star_triangles_ransac_rs(
-            p1, p2, float(tolerance), int(max_ransac_iters), float(inlier_thresh)
-        )
-    if len(pts1) < 4 or len(pts2) < 4:
-        return np.eye(3, dtype=np.float64), np.zeros(len(pts2), dtype=bool)
-    feats1, quads1 = build_star_asterisms(pts1)
-    feats2, quads2 = build_star_asterisms(pts2)
-    p1_m, p2_m, n_inl = match_star_asterisms(feats1, quads1, pts1, feats2, quads2, pts2, tolerance=tolerance)
-    if n_inl < 4:
-        return np.eye(3, dtype=np.float64), np.zeros(len(pts2), dtype=bool)
-    H, inliers = cv2.findHomography(p2_m, p1_m, cv2.RANSAC, inlier_thresh)
-    mask = np.zeros(len(pts2), dtype=bool)
-    if H is not None and inliers is not None:
-        return H, inliers.ravel() > 0
-    return np.eye(3, dtype=np.float64), mask
 
 
 def estimate_camera_rotation_from_stars(
@@ -873,93 +747,6 @@ def _compute_global_homographies(
                 continue
 
     return global_H, anchor_idx
-
-
-def blend_multiband_pyramid(
-    images: List[np.ndarray],
-    masks: List[np.ndarray],
-    num_bands: int = 5
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Fusión de múltiples imágenes mediante Pirámide Laplaciana Multibanda.
-    Separa las frecuencias bajas (iluminación, degradados y cielo nocturno continuo)
-    de las altas frecuencias (estrellas, ramas y siluetas del terreno nítidas).
-    """
-    n = len(images)
-    if n == 0:
-        raise ValueError("No hay imágenes para fusionar.")
-    if n == 1:
-        return images[0], masks[0]
-
-    h, w, c = images[0].shape
-
-    # 1. Mapas de pesos suavizados basados en Distance Transform
-    weight_maps = []
-    for m in masks:
-        bin_m = (m > 127).astype(np.uint8)
-        dist = cv2.distanceTransform(bin_m, cv2.DIST_L2, 5)
-        # Normalizar para evitar divisiones inestables
-        max_d = np.max(dist)
-        if max_d > 0:
-            dist /= max_d
-        weight_maps.append(dist)
-
-    total_weight = np.sum(np.stack(weight_maps, axis=-1), axis=-1, keepdims=True)
-    total_weight = np.where(total_weight > 1e-6, total_weight, 1.0)
-
-    norm_weights = [(w_m[..., np.newaxis] / total_weight).astype(np.float32) for w_m in weight_maps]
-
-    # 2. Pirámide Gaussiana para los pesos y Laplaciana para las imágenes
-    lap_pyrs = []
-    weight_pyrs = []
-
-    for i in range(n):
-        # Construir pirámide gaussiana de pesos
-        g_w = norm_weights[i]
-        pyr_w = [g_w]
-        for _ in range(num_bands - 1):
-            g_w = cv2.pyrDown(g_w)
-            if len(g_w.shape) == 2:
-                g_w = g_w[..., np.newaxis]
-            pyr_w.append(g_w)
-        weight_pyrs.append(pyr_w)
-
-        # Construir pirámide laplaciana de la imagen
-        g_img = images[i].astype(np.float32)
-        pyr_g_img = [g_img]
-        for _ in range(num_bands - 1):
-            g_img = cv2.pyrDown(g_img)
-            pyr_g_img.append(g_img)
-
-        pyr_lap = []
-        for level in range(num_bands - 1):
-            size = (pyr_g_img[level].shape[1], pyr_g_img[level].shape[0])
-            expanded = cv2.pyrUp(pyr_g_img[level + 1], dstsize=size)
-            pyr_lap.append(pyr_g_img[level] - expanded)
-        pyr_lap.append(pyr_g_img[-1])
-        lap_pyrs.append(pyr_lap)
-
-    # 3. Fusión en cada nivel de la pirámide
-    blended_pyr = []
-    for level in range(num_bands):
-        level_sum = np.zeros_like(lap_pyrs[0][level])
-        for i in range(n):
-            level_sum += lap_pyrs[i][level] * weight_pyrs[i][level]
-        blended_pyr.append(level_sum)
-
-    # 4. Reconstrucción ascendente desde el nivel base
-    reconstructed = blended_pyr[-1]
-    for level in range(num_bands - 2, -1, -1):
-        size = (blended_pyr[level].shape[1], blended_pyr[level].shape[0])
-        reconstructed = cv2.pyrUp(reconstructed, dstsize=size) + blended_pyr[level]
-
-    final_rgb = np.clip(reconstructed, 0.0, 1.0)
-    # Máscara total unificada
-    union_mask = np.zeros((h, w), dtype=np.uint8)
-    for m in masks:
-        union_mask = cv2.bitwise_or(union_mask, m)
-
-    return final_rgb, union_mask
 
 
 def stitch_nightscape_panorama(

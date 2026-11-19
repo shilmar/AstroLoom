@@ -143,20 +143,3 @@ class DeveloperState:
             filtered["lp_custom_tint"] = tuple(filtered["lp_custom_tint"])
         return cls(**filtered)
 
-    def is_different_from(self, other: Optional[DeveloperState | Dict[str, Any]]) -> bool:
-        """Check if this state differs significantly from another state or dict snapshot."""
-        if other is None:
-            return True
-        is_dev_state = isinstance(other, DeveloperState)
-        for k in self.__dataclass_fields__:
-            v1 = getattr(self, k)
-            v2 = getattr(other, k) if is_dev_state else other.get(k)
-            if k in ("curves", "mask_layers", "dust_spots"):
-                if v1 != v2:
-                    return True
-            elif isinstance(v1, float) and v2 is not None:
-                if abs(v1 - float(v2)) > 1e-4:
-                    return True
-            elif v1 != v2:
-                return True
-        return False

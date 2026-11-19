@@ -104,19 +104,6 @@ class ResolutionPyramid:
             current = cv2.resize(current, (nw, nh), interpolation=cv2.INTER_AREA)
             self.levels.append(np.ascontiguousarray(current, dtype=np.float32))
 
-    def get_level(self, level: int) -> np.ndarray:
-        """Retrieve image at specific mipmap level."""
-        idx = max(0, min(level, len(self.levels) - 1))
-        return self.levels[idx]
-
-    @property
-    def num_levels(self) -> int:
-        return len(self.levels)
-
-    @property
-    def full_res(self) -> np.ndarray:
-        return self.levels[0]
-
     @property
     def preview(self) -> np.ndarray:
         """Level 1 (max_dim <= 1600 px) for crisp interactive rendering on 1080p/1440p viewports."""
@@ -126,12 +113,6 @@ class ResolutionPyramid:
     def draft(self) -> np.ndarray:
         """Level 2 (max_dim <= 800 px) for ultra-fast 60fps real-time dragging of heavy filters."""
         return self.levels[2] if len(self.levels) > 2 else self.levels[-1]
-
-    @property
-    def thumb(self) -> np.ndarray:
-        """Lowest mipmap level for fast thumbnail and histogram calculations."""
-        return self.levels[-1]
-
 
 def get_psf_for_state(state: DeveloperState) -> np.ndarray:
     """Generate the optical PSF kernel corresponding to state parameters."""

@@ -308,11 +308,6 @@ class CollapsibleSection(QWidget):
         if not self._is_expanded:
             self.set_expanded(True)
 
-    def collapse(self) -> None:
-        """Colapsa la sección."""
-        if self._is_expanded:
-            self.set_expanded(False)
-
     def toggle(self) -> None:
         """Alterna el estado de expansión de la sección."""
         self.set_expanded(not self._is_expanded)
@@ -332,13 +327,6 @@ class CollapsibleSection(QWidget):
             self.lbl_icon.setPixmap(get_svg_pixmap(detected_icon, color="#38bdf8", size=15))
             self.lbl_icon.setVisible(True)
 
-    def set_icon(self, icon_name: str) -> None:
-        """Asigna explícitamente un icono SVG vectorial a la cabecera."""
-        self._explicit_icon = icon_name
-        self._icon_name = icon_name
-        self.lbl_icon.setPixmap(get_svg_pixmap(icon_name, color="#38bdf8", size=15))
-        self.lbl_icon.setVisible(True)
-
     def set_status_badge(self, text: str, color: str = "#80d8ff") -> None:
         """Muestra u oculta una insignia de estado en la cabecera (ej: '● ON', '● Separadas')."""
         if text:
@@ -356,11 +344,6 @@ class CollapsibleSection(QWidget):
             self.lbl_badge.setToolTip("")
             self.lbl_badge.setVisible(False)
 
-    def set_reset_callback(self, callback: Optional[Callable[[], None]]) -> None:
-        """Asigna o actualiza la acción del botón '↺' de reinicio."""
-        self._on_reset_callback = callback
-        self.btn_reset.setVisible(callback is not None)
-
     # Alias para compatibilidad con código existente que use setTitle() de QGroupBox
     setTitle = set_title
 
@@ -377,27 +360,6 @@ class CollapsibleSection(QWidget):
 
     def addLayout(self, layout) -> None:
         self.content_layout.addLayout(layout)
-
-    def enable_switch(self, checked: bool = True, on_toggled: Optional[Callable[[bool], None]] = None) -> QPushButton:
-        """Habilita y muestra el switch On/Off en la cabecera del acordeón."""
-        self._switch_enabled = True
-        self.btn_switch.blockSignals(True)
-        self.btn_switch.setChecked(checked)
-        self.btn_switch.blockSignals(False)
-        self.btn_switch.setVisible(True)
-        if on_toggled:
-            self.switchToggled.connect(on_toggled)
-        return self.btn_switch
-
-    def is_switch_checked(self) -> bool:
-        """Retorna True si el switch de la cabecera está activo o si no existe."""
-        if getattr(self, "_switch_enabled", False):
-            return self.btn_switch.isChecked()
-        return True
-
-    def set_switch_checked(self, checked: bool) -> None:
-        """Actualiza el estado del switch de la cabecera."""
-        self.btn_switch.setChecked(checked)
 
     def _on_switch_toggled(self, checked: bool) -> None:
         """Emite la señal al alternar el switch."""

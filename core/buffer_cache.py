@@ -45,10 +45,6 @@ class PipelineBufferCache:
     def max_bytes(self) -> int:
         return self._max_bytes
 
-    @property
-    def current_bytes(self) -> int:
-        return self._current_bytes
-
     def get(self, stage: str, key: Any, shape: Tuple[int, ...]) -> Optional[np.ndarray]:
         """
         Recupera un búfer intermedio de la caché.

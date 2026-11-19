@@ -2156,10 +2156,6 @@ class EclipseTab(QWidget):
 
         self._update_canvas_guide()
 
-    def _on_reset_zoom_clicked(self):
-        self.canvas.reset_view()
-        self.canvas.update()
-
     def _on_asinh_slider_changed(self, val: int):
         factor = float(val)
         self.lbl_asinh_val.setText(f"{int(factor)}x" if factor > 0 else "Lineal (1x)")

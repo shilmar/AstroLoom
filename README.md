@@ -4,7 +4,7 @@
 
 **Suite y Estación de Trabajo Integral para Astrofotografía de Paisaje, Cielo Profundo y Eventos Astronómicos**
 
-[![Version](https://img.shields.io/badge/version-v0.16.0-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
+[![Version](https://img.shields.io/badge/version-v0.17.0-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -46,7 +46,19 @@ Impulsada por una arquitectura híbrida que combina una interfaz gráfica reacti
 
 ---
 
-## 🚀 Novedades de la Versión v0.16.0
+## 🚀 Novedades de la Versión v0.17.0
+
+* **Purga Inteligente Anti-Satélites por Transformada de Hough (Startrails):** Detección geométrica lineal rápida a escala 50% con evaluación monocanal de alta velocidad; suprime con precisión estelas de satélites artificiales y aviones en circumpolares preservando las trazas estelares naturales.
+* **Integración de Tecnologías Seti Astro en el Revelador:** Estirado Estadístico Adaptativo (Statistical Stretch) basado en MAD, Claridad de Textura (Texture Clarity) para realce de micro-contraste en nebulosas y polvo galáctico, Extracción Automática de Fondo (ABE) mediante superficie polinomial 2D y modulación fotométrica de capas.
+* **Ondículas Multiescala (Wavelets B3-Spline):** Panel de enfoque ampliado con descomposición frecuencial multiescala: deslizador de *Estructura* para enfatizar filamentos y estructuras medias sin levantar ruido, y *Atenuar Fondo* para profundizar los negros cósmicos.
+* **Pipeline de Exportación Zero-Copy en Rust e In-Place:** Grafo de capas evaluado en registros nativos de CPU en Rust (`astroloom_rs`), eliminando copias intermedias de memoria y volcando a enteros `uint16` in-place para una exportación ultrarrápida de proyectos `.devloom` y archivos PSD multicapa de 16 bits.
+* **Barra de Progreso Unificada en Lienzo (`CanvasFooterBar`):** Estandarización ergonómica transversal en todos los visores y módulos (Revelador, Circumpolares, Meteoros, Panorámicas, Eclipses, Collage y Apilador), con seguimiento porcentual en tiempo real y cancelación reactiva inmediata.
+* **Visor de Inspección Secuencial (*Blink Viewer*):** Inspección rápida fotograma a fotograma de series temporales con ajuste de cadencia (FPS), zoom/pan sincronizado y descarte ágil de tomas con nubes o defectos.
+* **Discriminación de Balizas Aeronáuticas y Resalte Multitrazas (Meteoros):** Detección inteligente de luces de navegación y balizas intermitentes para evitar falsos positivos, junto a previsualización global sincronizada de múltiples trazas sobre la imagen compuesta.
+
+---
+
+## 🌟 Novedades de la Versión v0.16.0
 
 * **Máscara de Enfoque y Nitidez (Sharpening / USM):** Nuevo motor de microcontraste y altas frecuencias espaciales en el Revelador con controles de *Cantidad*, *Radio*, *Detalle* y *Máscara* de bordes estilo Lightroom, incluyendo previsualización monocroma interactiva (`Alt`-drag) y restricción por ámbito (`Solo Suelo`, `Cielo sin Estrellas` o `Global`).
 * **Purga Integral de Numba y Unificación en Rust Rayon:** Eliminación definitiva de dependencias LLVM/Numba con reducción neta de 2.36 s en el arranque en frío, LUT display mapping a >4.000 FPS en Rust y cálculo de histograma multihilo en OpenCV C++.

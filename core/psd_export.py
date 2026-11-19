@@ -28,11 +28,6 @@ except Exception:
 HAS_PYTOSHOP = HAS_PSD_ENGINE
 
 
-def is_psd_export_available() -> bool:
-    """Indica si el motor de exportación PSD está disponible en el entorno."""
-    return HAS_PSD_ENGINE
-
-
 def export_developer_psd(
     filepath: str,
     composite_image: np.ndarray,
