@@ -14,6 +14,7 @@ Elimina por completo la dependencia externa de `pytoshop`.
 """
 import os
 from typing import Optional, List, Any, Callable, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import cv2
 import numpy as np
 
@@ -43,7 +44,8 @@ def export_developer_psd(
     adjustment_layers: Optional[List[Any]] = None,
     depth: int = 16,
     icc_profile_bytes: Optional[bytes] = None,
-    log_fn: Optional[Callable[[str], None]] = None
+    log_fn: Optional[Callable[[str], None]] = None,
+    progress_fn: Optional[Callable[[int, str], None]] = None
 ) -> Tuple[bool, str, int]:
     """
     Exporta el revelado completo a un archivo PSD nativo de Adobe Photoshop por capas con máscaras nativas.
@@ -59,11 +61,16 @@ def export_developer_psd(
     :param depth: Profundidad de color por canal (16 para uint16, 8 para uint8).
     :param icc_profile_bytes: Bytes del perfil ICC para incrustar en el PSD.
     :param log_fn: Callback opcional para registrar mensajes informativos.
+    :param progress_fn: Callback opcional (pct, texto) para notificar el avance del guardado.
     :return: (éxito: bool, mensaje_descriptivo: str, total_capas: int)
     """
     def _log(msg: str):
         if log_fn:
             log_fn(msg)
+
+    def _progress(pct: int, msg: str):
+        if progress_fn:
+            progress_fn(pct, msg)
 
     if not HAS_PSD_ENGINE:
         err = "El motor nativo de exportación PSD no está disponible."
@@ -78,6 +85,7 @@ def export_developer_psd(
         depth = 16
 
     _log(f"[PSD] Creando estructura PSD multicapa ({w}x{h} px, {depth}-bit) con motor Rust...")
+    _progress(70, "Estructurando capas PSD...")
 
     # Preparar máscara de horizonte limpia si existe
     clean_mask = None
@@ -165,7 +173,10 @@ def export_developer_psd(
             l for l in adjustment_layers 
             if not getattr(l, 'is_system_layer', False)
         ]
-        for idx, adj in enumerate(user_layers):
+        n_user = len(user_layers)
+
+        def _build_adj_record(idx_adj):
+            idx, adj = idx_adj
             is_raster = getattr(adj, 'mask_type', None) == 'image_raster' or getattr(adj, 'layer_kind', None) == 'image'
             bmask = getattr(adj, 'brush_mask', None)
             if bmask is None:
@@ -224,7 +235,7 @@ def export_developer_psd(
                     "multiply": "mul "
                 }.get(b_mode, "norm")
 
-                layer_records.append({
+                return idx, {
                     "name": f"Ráster - {getattr(adj, 'name', f'Capa {idx+1}')}",
                     "top": 0, "left": 0, "bottom": h, "right": w,
                     "blend_mode": psd_mode,
@@ -232,7 +243,7 @@ def export_developer_psd(
                     "visible": getattr(adj, 'enabled', True),
                     "rgb": _format_rgb(raw_img),
                     "mask": _format_mask(bmask) if bmask is not None else None
-                })
+                }
             elif not is_raster and bmask is not None:
                 adj_name = f"Ajuste - {getattr(adj, 'name', f'Capa {idx+1}')}"
                 try:
@@ -242,7 +253,7 @@ def export_developer_psd(
                 except Exception:
                     adj_rgb = composite_image
 
-                layer_records.append({
+                return idx, {
                     "name": adj_name,
                     "top": 0, "left": 0, "bottom": h, "right": w,
                     "blend_mode": "norm",
@@ -250,7 +261,31 @@ def export_developer_psd(
                     "visible": getattr(adj, 'enabled', True),
                     "rgb": _format_rgb(adj_rgb),
                     "mask": _format_mask(bmask)
-                })
+                }
+            return idx, None
+
+        if n_user > 1:
+            max_workers = min(4, n_user)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(_build_adj_record, (idx, adj)): (idx, adj) for idx, adj in enumerate(user_layers)}
+                finished = 0
+                results = []
+                for fut in as_completed(futures):
+                    finished += 1
+                    idx, rec = fut.result()
+                    if rec is not None:
+                        results.append((idx, rec))
+                    layer_name = getattr(futures[fut][1], 'name', f'Capa {idx+1}')
+                    pct = 72 + int(15 * (finished / max(1, n_user)))
+                    _progress(pct, f"Ajuste {finished}/{n_user}: {layer_name[:12]}")
+                results.sort(key=lambda x: x[0])
+                for _, rec in results:
+                    layer_records.append(rec)
+        else:
+            for idx, adj in enumerate(user_layers):
+                _, rec = _build_adj_record((idx, adj))
+                if rec is not None:
+                    layer_records.append(rec)
 
     # 6. Capa Cúspide de Referencia: Resultado Revelado Final AstroLoom (Compuesto)
     # Por defecto 'visible=False' para no alterar el revelado interactivo en Photoshop
@@ -265,6 +300,7 @@ def export_developer_psd(
 
     total_layers = len(layer_records)
     _log(f"[PSD] Escribiendo archivo en disco ({total_layers} capas generadas con máscaras nativas)...")
+    _progress(88, f"Escribiendo {total_layers} capas...")
 
     dir_name = os.path.dirname(os.path.abspath(filepath))
     os.makedirs(dir_name, exist_ok=True)
@@ -283,5 +319,6 @@ def export_developer_psd(
     file_size_mb = os.path.getsize(filepath) / (1024.0 * 1024.0)
     desc = f"PSD multicapa ({total_layers} capas, {depth}-bit, {file_size_mb:.1f} MB)"
     _log(f"[PSD FINALIZADO] Guardado con éxito: {os.path.basename(filepath)} ({desc})")
+    _progress(100, "PSD guardado con éxito")
 
     return True, desc, total_layers

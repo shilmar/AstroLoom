@@ -9,9 +9,9 @@ activar indicadores de recorte, zoom 1:1, vista ajustada y lupa de inspección f
 """
 
 from typing import Optional
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QCoreApplication
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QPushButton, QLabel, QComboBox, QFrame, QSizePolicy
+    QWidget, QHBoxLayout, QPushButton, QLabel, QComboBox, QFrame, QSizePolicy, QProgressBar
 )
 from gui.icons import get_icon
 from gui.theme import (
@@ -345,3 +345,84 @@ class ViewerToolbar(QWidget):
                 font-size: 11px;
             }}
         """)
+
+
+class CanvasFooterBar(QWidget):
+    """
+    Barra inferior de estado, modo de herramienta, barra de progreso compacta
+    (estilo Photoshop) y metadatos del lienzo reutilizable para los visores de AstroLoom.
+    """
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setObjectName("canvas_footer_bar")
+        self.setFixedHeight(26)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 0, 10, 0)
+        layout.setSpacing(10)
+
+        # 1. Indicador de Herramienta Activa (Pill badge)
+        self.lbl_tool_badge = QLabel("● Modo: Vista General")
+        self.lbl_tool_badge.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: 600;")
+        layout.addWidget(self.lbl_tool_badge)
+
+        # Separador vertical
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.VLine)
+        sep1.setStyleSheet(f"color: {BORDER_BASE};")
+        layout.addWidget(sep1)
+
+        # 2. Información de Zoom
+        self.lbl_canvas_zoom = QLabel("Zoom: Ajustar (Fit)")
+        self.lbl_canvas_zoom.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        layout.addWidget(self.lbl_canvas_zoom)
+
+        # Espaciador elástico
+        layout.addStretch(1)
+
+        # 3. Barra de Progreso Compacta Estilo Photoshop (oculta por defecto)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setFixedHeight(14)
+        self.progress_bar.setFixedWidth(210)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #232738;
+                border-radius: 4px;
+                background-color: #0b0f19;
+                text-align: center;
+                color: #e2e8f0;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284c7, stop:1 #38bdf8);
+                border-radius: 3px;
+            }
+        """)
+        layout.addWidget(self.progress_bar)
+
+        # 4. Metadatos de la Imagen (Resolución, MP, Profundidad, Espacio de Color)
+        self.lbl_canvas_info = QLabel("Sin imagen cargada")
+        self.lbl_canvas_info.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        layout.addWidget(self.lbl_canvas_info)
+
+    def set_progress(self, percent: int, text: str = "") -> None:
+        """Muestra y actualiza el valor y texto de la barra de progreso compacta."""
+        if not self.progress_bar.isVisible():
+            self.progress_bar.setVisible(True)
+        val = max(0, min(100, int(percent)))
+        self.progress_bar.setValue(val)
+        if text:
+            self.progress_bar.setFormat(f"{text} (%p%)")
+        else:
+            self.progress_bar.setFormat("%p%")
+        QCoreApplication.processEvents()
+
+    def hide_progress(self) -> None:
+        """Oculta y reinicia la barra de progreso compacta."""
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(False)
+        QCoreApplication.processEvents()
+

@@ -94,6 +94,7 @@ from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow, PrecisionSpinBox
 from gui.icons import get_icon, get_svg_pixmap
 from gui.canvas import MaskCanvas
+from gui.widgets.viewer_toolbar import CanvasFooterBar
 from gui.worker import StarNetWorker
 from core.icc_manager import save_tiff_with_icc
 from core.config_manager import load_config
@@ -1439,41 +1440,24 @@ class DeveloperTab(QWidget):
 
         return toolbar
 
-    def _create_canvas_footer_bar(self) -> QWidget:
-        """Crea la barra inferior de estado, modo de herramienta activa y metadatos del lienzo."""
-        footer = QWidget()
-        footer.setObjectName("canvas_footer_bar")
-        footer.setFixedHeight(26)
-
-        layout = QHBoxLayout(footer)
-        layout.setContentsMargins(10, 0, 10, 0)
-        layout.setSpacing(10)
-
-        # 1. Indicador de Herramienta Activa (Pill badge)
-        self.lbl_tool_badge = QLabel("● Modo: Vista General")
-        self.lbl_tool_badge.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: 600;")
-        layout.addWidget(self.lbl_tool_badge)
-
-        # Separador vertical
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.VLine)
-        sep1.setStyleSheet("color: #232738;")
-        layout.addWidget(sep1)
-
-        # 2. Información de Zoom
-        self.lbl_canvas_zoom = QLabel("Zoom: Ajustar (Fit)")
-        self.lbl_canvas_zoom.setStyleSheet("color: #94a3b8; font-size: 11px;")
-        layout.addWidget(self.lbl_canvas_zoom)
-
-        # Espaciador elástico
-        layout.addStretch(1)
-
-        # 3. Metadatos de la Imagen (Resolución, MP, Profundidad, Espacio de Color)
-        self.lbl_canvas_info = QLabel("Sin imagen cargada")
-        self.lbl_canvas_info.setStyleSheet("color: #94a3b8; font-size: 11px;")
-        layout.addWidget(self.lbl_canvas_info)
-
+    def _create_canvas_footer_bar(self) -> CanvasFooterBar:
+        """Crea la barra inferior de estado, modo de herramienta activa, progreso y metadatos del lienzo."""
+        footer = CanvasFooterBar(self)
+        self.lbl_tool_badge = footer.lbl_tool_badge
+        self.lbl_canvas_zoom = footer.lbl_canvas_zoom
+        self.lbl_canvas_info = footer.lbl_canvas_info
+        self.canvas_progress = footer.progress_bar
         return footer
+
+    def set_canvas_progress(self, percent: int, text: str = "") -> None:
+        """Actualiza la barra de progreso compacta en el pie del lienzo estilo Photoshop."""
+        if hasattr(self, 'canvas_footer') and self.canvas_footer is not None:
+            self.canvas_footer.set_progress(percent, text)
+
+    def hide_canvas_progress(self) -> None:
+        """Oculta la barra de progreso compacta del lienzo."""
+        if hasattr(self, 'canvas_footer') and self.canvas_footer is not None:
+            self.canvas_footer.hide_progress()
 
     def retranslate_ui(self) -> None:
         """Actualiza todos los textos visibles del Revelador según el idioma activo."""
@@ -6980,11 +6964,13 @@ class DeveloperTab(QWidget):
                 return
 
         h_full, w_full = self.image_32bit.shape[:2]
+        self.set_canvas_progress(5, "Iniciando exportación...")
         self.log_message(f"Exportando imagen completa ({w_full}x{h_full} px)...")
         self.setCursor(Qt.WaitCursor)
         QCoreApplication.processEvents()
 
         try:
+            self.set_canvas_progress(10, "Componiendo base...")
             full_base, _ = self._compose_active_base(for_export=True)
 
             full_mask = None
@@ -7004,7 +6990,9 @@ class DeveloperTab(QWidget):
                 sm = cv2.GaussianBlur(clean_m, (ksize, ksize), sigmaX=ksize / 3.0)
                 full_mask = np.ascontiguousarray(np.repeat(sm[..., np.newaxis], 3, axis=2), dtype=np.float32)
 
+            self.set_canvas_progress(18, "Renderizando compuesto base...")
             processed = self._apply_pipeline_on_image(full_base, precomputed_mask=full_mask, is_preview=False)
+            self.set_canvas_progress(35, "Compuesto listo")
 
             is_psd = (ext == '.psd') or ("Photoshop" in selected_filter and ext not in ['.tif', '.tiff', '.jpg', '.jpeg'])
             if is_psd:
@@ -7012,99 +7000,129 @@ class DeveloperTab(QWidget):
                 from core.config_manager import get_config_val
                 from core.icc_manager import get_icc_profile_bytes, normalize_colorspace_name
 
+                self.set_canvas_progress(40, "Preparando capas 16-bit...")
                 self.log_message("[PSD] Preparando capas reveladas y estiradas en 16-bit...")
 
-                # 1. Base estirada completa (imagen base original desarrollada sin capas superpuestas)
-                stretched_base = self._apply_pipeline_on_image(
-                    self.image_32bit, 
-                    precomputed_mask=None, 
-                    apply_mask_layers=False,
-                    is_preview=False
-                )
-
-                # 2. Suelo desarrollado (con ajustes diferenciales de suelo/EV/sombras sin capas superpuestas)
-                ground_dev = None
-                if clean_m is not None and full_mask is not None:
-                    zero_mask = np.zeros_like(full_mask)
-                    ground_dev = self._apply_pipeline_on_image(
+                def _render_base():
+                    return self._apply_pipeline_on_image(
                         self.image_32bit, 
-                        precomputed_mask=zero_mask, 
+                        precomputed_mask=None, 
                         apply_mask_layers=False,
                         is_preview=False
                     )
 
-                # 3. Capas StarNet desacopladas (Starless puro estirado y Estrellas estiradas)
-                stretched_starless = None
-                stretched_stars = None
+                def _render_ground():
+                    if clean_m is not None and full_mask is not None:
+                        zero_mask = np.zeros_like(full_mask)
+                        return self._apply_pipeline_on_image(
+                            self.image_32bit, 
+                            precomputed_mask=zero_mask, 
+                            apply_mask_layers=False,
+                            is_preview=False
+                        )
+                    return None
+
+                def _render_starless():
+                    if self.image_starless is not None:
+                        starless_full = self._process_starless_base(
+                            self.image_starless,
+                            mask_3d=full_mask,
+                            is_full_res=True
+                        )
+                        return self._apply_pipeline_on_image(
+                            starless_full,
+                            precomputed_mask=full_mask if full_mask is not None else None,
+                            apply_mask_layers=False,
+                            is_preview=False
+                        )
+                    return None
+
+                def _render_stars():
+                    if self.image_starless is not None and self.image_stars is not None:
+                        st_img = self.image_stars.copy()
+                        st_params = self.panel_stretch.get_state() if hasattr(self, 'panel_stretch') and self.panel_stretch is not None else {}
+                        stretch_mode = st_params.get("stretch_mode", "mtf")
+                        
+                        if stretch_mode == "ghs":
+                            st_stretched = np.clip(
+                                apply_ghs_stretch(
+                                    st_img,
+                                    sp=st_params.get("ghs_sp_val", 0.02),
+                                    d=st_params.get("ghs_d_val", 5.0),
+                                    b=st_params.get("ghs_b_val", 2.0),
+                                    hp=st_params.get("ghs_hp_val", 0.0),
+                                    lp=st_params.get("ghs_lp_val", 0.0),
+                                    bp=0.0,
+                                    color_mode="rgb"
+                                ) * self.star_intensity,
+                                0.0, 1.0
+                            )
+                        else:
+                            st_stretched = np.clip(
+                                manual_stretch(st_img, black_point=0.0, midtone=st_params.get("mtf_val", 0.15)) * self.star_intensity,
+                                0.0, 1.0
+                            )
+
+                        if self.star_diff_strength > 1e-4:
+                            st_stretched = apply_star_diffusion(
+                                st_stretched,
+                                strength=self.star_diff_strength,
+                                radius=self.star_diff_radius,
+                                threshold=self.star_diff_threshold,
+                                color_boost=self.star_diff_color_boost,
+                                halo_mode=self.star_diff_mode,
+                                sky_mask=clean_m if clean_m is not None else None,
+                                stars_layer=st_stretched
+                            )
+
+                        if hasattr(self, 'mask_layers_widget'):
+                            stars_layer = next((l for l in self.mask_layers_widget.layers if getattr(l, 'mask_type', '') == 'image_stars'), None)
+                            if stars_layer is not None:
+                                has_adj = (abs(stars_layer.temp) > 1e-4 or abs(stars_layer.tint) > 1e-4 or 
+                                           abs(stars_layer.exposure) > 1e-3 or abs(stars_layer.contrast) > 1e-3 or 
+                                           abs(stars_layer.saturation - 1.0) > 1e-3)
+                                if has_adj:
+                                    from core.mask_layers import apply_local_adjustments_to_image
+                                    st_stretched = apply_local_adjustments_to_image(st_stretched, np.ones((h_full, w_full), dtype=np.float32), stars_layer)
+
+                        if clean_m is not None:
+                            st_stretched = st_stretched * clean_m[..., np.newaxis]
+
+                        return np.ascontiguousarray(st_stretched, dtype=np.float32)
+                    return None
+
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                tasks = {"base": _render_base}
+                if clean_m is not None and full_mask is not None:
+                    tasks["ground"] = _render_ground
                 if self.image_starless is not None:
-                    # Fondo starless procesado (con filtros de denoise, claridad, dehaze)
-                    starless_full = self._process_starless_base(
-                        self.image_starless,
-                        mask_3d=full_mask,
-                        is_full_res=True
-                    )
-                    # Estirar el fondo starless con el pipeline de revelado SIN añadir estrellas ni capas
-                    stretched_starless = self._apply_pipeline_on_image(
-                        starless_full,
-                        precomputed_mask=full_mask if full_mask is not None else None,
-                        apply_mask_layers=False,
-                        is_preview=False
-                    )
+                    tasks["starless"] = _render_starless
+                    if self.image_stars is not None:
+                        tasks["stars"] = _render_stars
 
-                    # Estirar la capa de estrellas directamente desde self.image_stars con MTF o GHS
-                    st_img = self.image_stars.copy()
-                    st_params = self.panel_stretch.get_state() if hasattr(self, 'panel_stretch') and self.panel_stretch is not None else {}
-                    stretch_mode = st_params.get("stretch_mode", "mtf")
-                    
-                    if stretch_mode == "ghs":
-                        st_stretched = np.clip(
-                            apply_ghs_stretch(
-                                st_img,
-                                sp=st_params.get("ghs_sp_val", 0.02),
-                                d=st_params.get("ghs_d_val", 5.0),
-                                b=st_params.get("ghs_b_val", 2.0),
-                                hp=st_params.get("ghs_hp_val", 0.0),
-                                lp=st_params.get("ghs_lp_val", 0.0),
-                                bp=0.0,
-                                color_mode="rgb"
-                            ) * self.star_intensity,
-                            0.0, 1.0
-                        )
-                    else:
-                        st_stretched = np.clip(
-                            manual_stretch(st_img, black_point=0.0, midtone=st_params.get("mtf_val", 0.15)) * self.star_intensity,
-                            0.0, 1.0
-                        )
+                max_w = min(4, len(tasks))
+                task_names = {
+                    "base": "Capa base",
+                    "ground": "Capa suelo",
+                    "starless": "Fondo starless",
+                    "stars": "Capa estrellas"
+                }
+                results = {}
+                with ThreadPoolExecutor(max_workers=max_w) as executor:
+                    fut_map = {executor.submit(fn): k for k, fn in tasks.items()}
+                    done = 0
+                    for fut in as_completed(fut_map):
+                        k = fut_map[fut]
+                        results[k] = fut.result()
+                        done += 1
+                        pct = 40 + int(28 * (done / len(tasks)))
+                        self.set_canvas_progress(pct, f"Listo: {task_names.get(k, k)}")
+                        QCoreApplication.processEvents()
 
-                    # Aplicar filtro difusor de estrellas si está activo
-                    if self.star_diff_strength > 1e-4:
-                        st_stretched = apply_star_diffusion(
-                            st_stretched,
-                            strength=self.star_diff_strength,
-                            radius=self.star_diff_radius,
-                            threshold=self.star_diff_threshold,
-                            color_boost=self.star_diff_color_boost,
-                            halo_mode=self.star_diff_mode,
-                            sky_mask=clean_m if clean_m is not None else None,
-                            stars_layer=st_stretched
-                        )
-
-                    # Aplicar ajustes cromáticos propios de la capa de estrellas si están definidos
-                    if hasattr(self, 'mask_layers_widget'):
-                        stars_layer = next((l for l in self.mask_layers_widget.layers if getattr(l, 'mask_type', '') == 'image_stars'), None)
-                        if stars_layer is not None:
-                            has_adj = (abs(stars_layer.temp) > 1e-4 or abs(stars_layer.tint) > 1e-4 or 
-                                       abs(stars_layer.exposure) > 1e-3 or abs(stars_layer.contrast) > 1e-3 or 
-                                       abs(stars_layer.saturation - 1.0) > 1e-3)
-                            if has_adj:
-                                from core.mask_layers import apply_local_adjustments_to_image
-                                st_stretched = apply_local_adjustments_to_image(st_stretched, np.ones((h_full, w_full), dtype=np.float32), stars_layer)
-
-                    # Restringir estrellas al cielo si hay máscara de horizonte (para anular cualquier residuo en el suelo)
-                    if clean_m is not None:
-                        st_stretched = st_stretched * clean_m[..., np.newaxis]
-
-                    stretched_stars = np.ascontiguousarray(st_stretched, dtype=np.float32)
+                stretched_base = results.get("base")
+                ground_dev = results.get("ground")
+                stretched_starless = results.get("starless")
+                stretched_stars = results.get("stars")
 
                 # Obtener bytes del perfil de color ICC seleccionado en configuración o detectado
                 target_cs = getattr(self, 'current_color_space', normalize_colorspace_name(get_config_val("icc_profile", "srgb")))
@@ -7122,7 +7140,8 @@ class DeveloperTab(QWidget):
                     adjustment_layers=adj_layers,
                     depth=16,
                     icc_profile_bytes=icc_bytes,
-                    log_fn=self.log_message
+                    log_fn=self.log_message,
+                    progress_fn=self.set_canvas_progress
                 )
                 if not ok:
                     raise RuntimeError(desc)
@@ -7142,20 +7161,26 @@ class DeveloperTab(QWidget):
                 )
                 return
             elif ext in ['.jpg', '.jpeg']:
+                self.set_canvas_progress(75, "Guardando JPEG...")
                 bgr8 = cv2.cvtColor((np.clip(processed, 0.0, 1.0) * 255.0).astype(np.uint8), cv2.COLOR_RGB2BGR)
                 cv2.imwrite(p, bgr8, [cv2.IMWRITE_JPEG_QUALITY, 96])
                 desc = "JPEG 8-bit"
+                self.set_canvas_progress(100, "JPEG completado")
             elif "32-bit" in selected_filter:
+                self.set_canvas_progress(75, "Guardando TIFF 32-bit...")
                 out32 = np.ascontiguousarray(np.clip(processed, 0.0, 1.0), dtype=np.float32)
                 src_cs = getattr(self, 'current_color_space', 'srgb')
                 save_tiff_with_icc(p, out32, compression='zlib', photometric='rgb', source_color_space=src_cs)
                 desc = "TIFF 32-bit float (ICC)"
+                self.set_canvas_progress(100, "TIFF guardado")
             else:
+                self.set_canvas_progress(75, "Guardando TIFF 16-bit...")
                 u16 = np.empty(processed.shape, dtype=np.uint16)
                 np.clip(processed * 65535.0 + 0.5, 0, 65535, out=u16, casting='unsafe')
                 src_cs = getattr(self, 'current_color_space', 'srgb')
                 save_tiff_with_icc(p, u16, compression='zlib', photometric='rgb', source_color_space=src_cs)
                 desc = "TIFF 16-bit (ICC)"
+                self.set_canvas_progress(100, "TIFF guardado")
 
             from core.config_manager import get_config_val
             from core.icc_manager import normalize_colorspace_name
@@ -7172,6 +7197,7 @@ class DeveloperTab(QWidget):
             self.log_message(f"[ERROR EXPORT] Fallo al escribir el archivo: {e}")
             QMessageBox.critical(self, "Error de Exportación", f"Fallo al escribir el archivo:\n{e}")
         finally:
+            self.hide_canvas_progress()
             self.unsetCursor()
             
     def reset_wb(self):
