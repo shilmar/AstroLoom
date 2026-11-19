@@ -408,6 +408,24 @@ class CanvasFooterBar(QWidget):
         self.lbl_canvas_info.setStyleSheet("color: #94a3b8; font-size: 11px;")
         layout.addWidget(self.lbl_canvas_info)
 
+    def set_tool_badge(self, text: str, color: str = "#38bdf8") -> None:
+        """Actualiza el texto y color del indicador de modo de herramienta activo."""
+        self.lbl_tool_badge.setText(text)
+        self.lbl_tool_badge.setStyleSheet(f"color: {color}; font-size: 11px; font-weight: 600;")
+
+    def set_zoom_text(self, text: str) -> None:
+        """Actualiza la etiqueta de nivel de zoom."""
+        self.lbl_canvas_zoom.setText(text)
+
+    def set_info_text(self, text: str) -> None:
+        """Actualiza directamente la etiqueta de información técnica del lienzo."""
+        self.lbl_canvas_info.setText(text)
+
+    def set_image_info(self, width: int, height: int, depth_str: str = "32-bit Float", color_space: str = "sRGB") -> None:
+        """Formatea y actualiza los metadatos de dimensiones, MP, profundidad y espacio de color."""
+        mp = (width * height) / 1e6
+        self.lbl_canvas_info.setText(f"{width} × {height} px ({mp:.1f} MP)  |  {depth_str}  |  {color_space}")
+
     def set_progress(self, percent: int, text: str = "") -> None:
         """Muestra y actualiza el valor y texto de la barra de progreso compacta."""
         if not self.progress_bar.isVisible():

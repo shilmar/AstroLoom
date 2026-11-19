@@ -43,7 +43,7 @@ from core.panorama import (
     load_panorama_session
 )
 from core.icc_manager import save_tiff_with_icc
-from gui.widgets.viewer_toolbar import ViewerToolbar
+from gui.widgets.viewer_toolbar import ViewerToolbar, CanvasFooterBar
 from gui.widgets.drop_widgets import DropTableWidget, collect_image_files_from_mime
 from gui.theme import STYLE_RUN_IDLE, STYLE_CANCEL_ACTIVE, STYLE_TRANSFER_BTN
 from gui.icons import get_icon, get_svg_pixmap, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_ACCENT
@@ -752,9 +752,11 @@ class PanoramaTab(QWidget):
 
         right_layout.addWidget(self.toolbar)
 
-        # Lienzo interactivo
+        # Lienzo interactivo con Barra de Pie (CanvasFooterBar)
         self.canvas = PanoramaInteractiveCanvas()
         right_layout.addWidget(self.canvas, stretch=1)
+        self.canvas_footer = CanvasFooterBar(self)
+        right_layout.addWidget(self.canvas_footer)
 
         splitter.addWidget(right_container)
         splitter.setSizes([450, 910])
@@ -1129,6 +1131,8 @@ class PanoramaTab(QWidget):
     def _on_stitch_progress(self, pct: int, msg: str):
         self.progress_bar.setValue(pct)
         self.lbl_status.setText(msg)
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_progress(pct, msg)
 
     def _on_stitch_finished(self, result: PanoramaResult):
         self._set_processing_ui(False)
@@ -1143,6 +1147,10 @@ class PanoramaTab(QWidget):
         )
         self.lbl_status.setText(f"● {result.message}")
 
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_image_info(w, h, "16-bit", "sRGB")
+            self.canvas_footer.hide_progress()
+
         # Enviar al lienzo
         self.canvas.set_image(result.image, crop_rect=result.crop_rect)
         self.canvas.set_show_cropped(self.btn_toggle_crop.isChecked())
@@ -1153,6 +1161,8 @@ class PanoramaTab(QWidget):
     def _on_stitch_cancelled(self):
         self._set_processing_ui(False)
         self.lbl_status.setText("Proceso cancelado por el usuario.")
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
 
     def _on_stitch_error(self, err_msg: str):
         self._set_processing_ui(False)

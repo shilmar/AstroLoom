@@ -34,7 +34,7 @@ from core.stacking import load_image_as_float32, scan_raw_batch_metadata
 from core.startrails import generate_startrail, enhance_star_trails_color
 from core.icc_manager import save_tiff_with_icc
 from gui.canvas import MaskCanvas
-from gui.widgets.viewer_toolbar import ViewerToolbar
+from gui.widgets.viewer_toolbar import ViewerToolbar, CanvasFooterBar
 from gui.widgets.drop_widgets import DropTableWidget
 from gui.theme import (
     STYLE_RUN_IDLE, STYLE_RUN_ACTIVE, STYLE_RUN_CANCELLING, STYLE_TRANSFER_BTN
@@ -722,6 +722,13 @@ class StartrailsTab(QWidget):
         right_layout.addWidget(self.toolbar)
         right_layout.addWidget(self.canvas, 1)
 
+        self.canvas_footer = CanvasFooterBar(self)
+        right_layout.addWidget(self.canvas_footer)
+
+        self.canvas.zoom_toggled.connect(
+            lambda is_z, *_: self.canvas_footer.set_zoom_text("Zoom: 100% (1:1)" if is_z else "Zoom: Ajustar (Fit)")
+        )
+
         splitter.addWidget(left_container)
         splitter.addWidget(right_container)
         splitter.setStretchFactor(0, 0)
@@ -795,6 +802,9 @@ class StartrailsTab(QWidget):
         self.current_preview_img = img
         display_u8 = self._compute_display_image(img)
         self.canvas.load_image(img, display_stretched=display_u8)
+        if hasattr(self, 'canvas_footer') and img is not None:
+            h, w = img.shape[:2]
+            self.canvas_footer.set_image_info(w, h, "32-bit Float", "sRGB")
 
     def _on_view_mode_changed(self, idx: int) -> None:
         if getattr(self, 'current_preview_img', None) is not None:
@@ -1277,10 +1287,14 @@ class StartrailsTab(QWidget):
 
     def _on_worker_progress(self, pct: int, msg: str) -> None:
         self.progress_bar.setValue(pct)
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_progress(pct, msg)
         if pct % 10 == 0 or pct >= 90 or "suprimidas" in msg:
             self.log(msg)
 
     def _on_worker_finished(self, data: Any, task_type: str) -> None:
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self._set_run_button_state("idle")
         self.progress_bar.setValue(100)
         self.progress_bar.setVisible(False)

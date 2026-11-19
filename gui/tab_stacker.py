@@ -20,6 +20,7 @@ from core.project_manager import ProjectManager
 from core.masking import refine_mask_guided, apply_direct_brush_to_mask
 from core.stacking import load_image_as_float32, scan_raw_batch_metadata
 from gui.canvas import MaskCanvas
+from gui.widgets.viewer_toolbar import CanvasFooterBar
 from gui.widgets.drop_widgets import DropListWidget
 from gui.worker import StackingWorker, SubstackingWorker, QualityCullingWorker, AIHorizonWorker, ModelDownloadWorker
 from core.gpu_backend import is_gpu_enabled
@@ -915,7 +916,21 @@ class StackerTab(QWidget):
         left_panel_layout.addWidget(self.btn_run)
 
         splitter.addWidget(left_panel)
-        splitter.addWidget(self.canvas)
+
+        # Contenedor derecho: Lienzo interactivo + Barra de pie de estado y progreso
+        right_container = QWidget()
+        right_layout = QVBoxLayout(right_container)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+        right_layout.addWidget(self.canvas, 1)
+        self.canvas_footer = CanvasFooterBar(self)
+        right_layout.addWidget(self.canvas_footer)
+
+        self.canvas.zoom_toggled.connect(
+            lambda is_z, *_: self.canvas_footer.set_zoom_text("Zoom: 100% (1:1)" if is_z else "Zoom: Ajustar (Fit)")
+        )
+
+        splitter.addWidget(right_container)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 10)
         splitter.setSizes([520, 1400])
@@ -1360,6 +1375,9 @@ class StackerTab(QWidget):
         try:
             img = load_image_as_float32(path)
             self.canvas.load_image(img)
+            if hasattr(self, 'canvas_footer') and img is not None:
+                h_img, w_img = img.shape[:2]
+                self.canvas_footer.set_image_info(w_img, h_img, "32-bit Float", "RGB")
             self.log_message(f"Vista previa activa: {os.path.basename(path)}")
         except Exception as e:
             self.log_message(f"[ERROR] Al cargar {os.path.basename(path)}: {e}")
@@ -1890,6 +1908,9 @@ class StackerTab(QWidget):
 
     def on_stack_success(self, path):
         self._reset_run_button()
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_progress(100, "Apilado completado")
+            self.canvas_footer.hide_progress()
 
         if hasattr(self, '_stack_start_time') and self._stack_start_time is not None:
             elapsed = time.perf_counter() - self._stack_start_time
@@ -1910,6 +1931,8 @@ class StackerTab(QWidget):
         self._reset_run_button()
         self._stack_start_time = None
         self.progress_bar.setFormat("Error")
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.log_message(f"[ERROR CRÍTICO] {err_msg}")
         QMessageBox.critical(self, "Error durante el apilado", f"Ocurrió un error:\n{err_msg}")
 
@@ -1919,6 +1942,8 @@ class StackerTab(QWidget):
         self._stack_start_time = None
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("Apilado Cancelado")
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.log_message("[INFO] Proceso detenido con éxito. Recursos y memoria liberados.")  
 
     def _on_stack_lp_changed(self, val: int):
@@ -1938,9 +1963,14 @@ class StackerTab(QWidget):
             else:
                 eta_str = f"ETA: ~{rem_s}s"
                 
+            fmt_str = f"{value}%  ({eta_str})"
             self.progress_bar.setFormat(f"%p%  ({eta_str})")
         else:
+            fmt_str = f"{value}%"
             self.progress_bar.setFormat("%p%")
+
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_progress(value, f"Apilando... {fmt_str}")
 
     def on_new_session_clicked(self):
         """Pide confirmación y resetea la sesión en todo el software."""

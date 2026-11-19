@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox
 )
 
-from gui.widgets.viewer_toolbar import ViewerToolbar
+from gui.widgets.viewer_toolbar import ViewerToolbar, CanvasFooterBar
 
 
 from core.eclipse_collage import (
@@ -653,6 +653,8 @@ class EclipseCollageTab(QWidget):
         self.btn_zoom_fit.clicked.connect(self.canvas_preview.fit_view)
 
         right_layout.addWidget(self.canvas_preview, stretch=1)
+        self.canvas_footer = CanvasFooterBar(self)
+        right_layout.addWidget(self.canvas_footer)
 
         splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 0)
@@ -1016,9 +1018,14 @@ class EclipseCollageTab(QWidget):
         self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(curr)
         self.progress_bar.setFormat(f"{curr}/{total} - {msg}")
+        if hasattr(self, 'canvas_footer'):
+            pct = int((curr / max(1, total)) * 100)
+            self.canvas_footer.set_progress(pct, msg)
 
     def _on_worker_finished(self, results: List[EclipseFrameMetadata]):
         self.progress_bar.setVisible(False)
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.btn_analyze.setText("Analizar Calidad y Ocultación en Lote")
         self.btn_analyze.setIcon(get_icon("search", color="#80d8ff"))
         self.btn_analyze.setStyleSheet("font-weight: bold; background: #263238; color: #80d8ff; border: 1px solid #80d8ff;")
@@ -1031,6 +1038,8 @@ class EclipseCollageTab(QWidget):
 
     def _on_worker_error(self, err: str):
         self.progress_bar.setVisible(False)
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.btn_analyze.setText("Analizar Calidad y Ocultación en Lote")
         self.btn_analyze.setIcon(get_icon("search", color="#80d8ff"))
         self.btn_analyze.setStyleSheet("font-weight: bold; background: #263238; color: #80d8ff; border: 1px solid #80d8ff;")
@@ -1091,6 +1100,8 @@ class EclipseCollageTab(QWidget):
     def _on_zoom_changed(self, zoom: float):
         pct = int(round(zoom * 100))
         self.lbl_zoom_val.setText(f"{pct}%")
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_zoom_text(f"Zoom: {pct}%")
 
     def _get_current_layout_mode(self) -> str:
         idx = self.combo_layout_mode.currentIndex()
@@ -1143,6 +1154,8 @@ class EclipseCollageTab(QWidget):
             flat = render_flat_collage(cw, ch, placements, bg_color=self.canvas_bg_color, draw_captions=draw_caps)
             self.preview_image = flat
             self.canvas_preview.set_image(flat)
+            if hasattr(self, 'canvas_footer') and flat is not None:
+                self.canvas_footer.set_image_info(cw, ch, "8-bit", "sRGB")
         except Exception as e:
             self.canvas_preview.set_placeholder(f"Error generando vista previa: {e}")
         finally:

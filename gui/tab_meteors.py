@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.log_hub import log_hub
-from gui.widgets.viewer_toolbar import ViewerToolbar
+from gui.widgets.viewer_toolbar import ViewerToolbar, CanvasFooterBar
 
 from core.stacking import load_image_as_float32
 from core.meteors import (
@@ -582,11 +582,24 @@ class MeteorTab(QWidget):
         splitter_v.setChildrenCollapsible(False)
         self.splitter_v = splitter_v
 
-        # 1. Visor Canvas
+        # 1. Visor Canvas con Barra de Pie (CanvasFooterBar)
         self.canvas = MaskCanvas(self, enable_masking=False)
         self.canvas.files_dropped.connect(self.add_series_files)
         self.toolbar.connect_canvas(self.canvas)
-        splitter_v.addWidget(self.canvas)
+
+        canvas_box = QWidget()
+        canvas_box_layout = QVBoxLayout(canvas_box)
+        canvas_box_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_box_layout.setSpacing(0)
+        canvas_box_layout.addWidget(self.canvas, 1)
+        self.canvas_footer = CanvasFooterBar(self)
+        canvas_box_layout.addWidget(self.canvas_footer)
+
+        self.canvas.zoom_toggled.connect(
+            lambda is_z, *_: self.canvas_footer.set_zoom_text("Zoom: 100% (1:1)" if is_z else "Zoom: Ajustar (Fit)")
+        )
+
+        splitter_v.addWidget(canvas_box)
 
         # 2. Tira Inferior: Galería de Culling e Inspección de Trazas
         culling_box = QGroupBox("Galería de Trazas Detectadas (Culling Interactivo)")
@@ -903,6 +916,9 @@ class MeteorTab(QWidget):
         self.current_preview_img = img
         display_u8 = self._compute_display_image(img)
         self.canvas.load_image(img, display_stretched=display_u8)
+        if hasattr(self, 'canvas_footer') and img is not None:
+            h, w = img.shape[:2]
+            self.canvas_footer.set_image_info(w, h, "32-bit Float", "sRGB")
 
     def _preview_frame(self, idx: int) -> None:
         try:
@@ -1001,10 +1017,14 @@ class MeteorTab(QWidget):
 
     def _on_worker_progress(self, val: int, msg: str) -> None:
         self.progress_bar.setValue(val)
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_progress(val, msg)
         self.log(msg)
 
     def _on_worker_finished(self, result: object, task_type: str) -> None:
         self.progress_bar.setVisible(False)
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.btn_scan.setText("ESCANEAR SERIE DE METEOROS")
         self.btn_scan.setStyleSheet(STYLE_RUN_IDLE)
         self.btn_scan.setEnabled(True)

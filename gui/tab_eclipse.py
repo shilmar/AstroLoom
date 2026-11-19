@@ -36,7 +36,7 @@ from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QImage, QCursor, QFon
 from core.log_hub import log_hub
 
 from gui.dialog_coronal_stack import CoronalStackDialog
-from gui.widgets.viewer_toolbar import ViewerToolbar
+from gui.widgets.viewer_toolbar import ViewerToolbar, CanvasFooterBar
 
 from core.eclipse import (
     extract_exposure_info,
@@ -198,6 +198,9 @@ class EclipseCanvas(QWidget):
         """Asigna y renderiza una imagen float32 en rango [0, 1]."""
         self.orig_f32 = img_f32
         h, w = img_f32.shape[:2]
+
+        if hasattr(self.parent(), 'canvas_footer') and img_f32 is not None:
+            self.parent().canvas_footer.set_image_info(w, h, "32-bit Float", "sRGB")
 
         img_u8 = np.clip(img_f32 * 255.0, 0, 255).astype(np.uint8)
         if img_u8.ndim == 2:
@@ -1655,6 +1658,9 @@ class EclipseTab(QWidget):
         self.toolbar.connect_canvas(self.canvas)
         right_layout.addWidget(self.canvas, 1)
 
+        self.canvas_footer = CanvasFooterBar(self)
+        right_layout.addWidget(self.canvas_footer)
+
         # Sincronizar botones de barra con los del panel
         self.btn_pick_center.toggled.connect(self._sync_pick_center_to_tb)
         self.chk_show_guide.toggled.connect(self._sync_guide_to_tb)
@@ -2414,10 +2420,14 @@ class EclipseTab(QWidget):
 
     def _on_worker_progress(self, val: int, msg: str):
         self.progress_bar.setValue(val)
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_progress(val, msg)
         self.log(msg)
 
     def _on_worker_finished(self, result: object, task_type: str):
         self.progress_bar.setVisible(False)
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         self.btn_detect_all.setEnabled(True)
         self.btn_fuse_hdr.setEnabled(True)
         self.btn_apply_filters.setEnabled(True)
