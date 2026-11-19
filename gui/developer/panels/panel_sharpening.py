@@ -40,7 +40,7 @@ class SharpeningPanel(QWidget):
 
         # --- SECCIÓN: Máscara de Enfoque y Nitidez ---
         self.sec_sharpening = CollapsibleSection(
-            "Máscara de Enfoque y Nitidez",
+            "Enfoque y Detalle (Wavelets / USM)",
             is_expanded=False,
             on_reset=self.reset_sharpening,
             icon_name="zap",
@@ -131,6 +131,33 @@ class SharpeningPanel(QWidget):
         row_scope.addWidget(self.combo_scope, stretch=1)
         content_layout.addLayout(row_scope)
 
+        # --- Subsección: Ondículas Multiescala (Wavelets B3-Spline) ---
+        sep_wavelets = QLabel("Realce Multiescala por Ondículas (B3-Spline):")
+        sep_wavelets.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 600; margin-top: 8px; margin-bottom: 2px;")
+        content_layout.addWidget(sep_wavelets)
+
+        # 6. Estructura Ondículas (-100 a +100 -> -1.00 a +1.00)
+        self.row_ond_est = PrecisionSliderRow(
+            "Estructura:", -100, 100, 0,
+            scale=100.0, decimals=2, force_sign=True, special_zero_text="0.00", label_width=100
+        )
+        self.row_ond_est.setToolTip("Realce multiescala de filamentos de gas y bandas de polvo de la Vía Láctea (escalas intermedias) sin inflar estrellas ni ruido.")
+        self.row_ond_est.valueChanged.connect(self._on_slider_changed)
+        self.row_ond_est.sliderPressed.connect(self._on_slider_pressed)
+        self.row_ond_est.sliderReleased.connect(self._on_slider_released)
+        content_layout.addWidget(self.row_ond_est)
+
+        # 7. Atenuar Fondo (0 a 100 -> 0% a 100%)
+        self.row_ond_bg = PrecisionSliderRow(
+            "Atenuar Fondo:", 0, 100, 0,
+            unit="%", special_zero_text="0%", label_width=100
+        )
+        self.row_ond_bg.setToolTip("Atenúa la capa residual de frecuencia ultra-baja (pedestal y cúpula de fondo) profundizando los negros del cielo.")
+        self.row_ond_bg.valueChanged.connect(self._on_slider_changed)
+        self.row_ond_bg.sliderPressed.connect(self._on_slider_pressed)
+        self.row_ond_bg.sliderReleased.connect(self._on_slider_released)
+        content_layout.addWidget(self.row_ond_bg)
+
         self.sec_sharpening.set_content_widget(w_content)
         layout.addWidget(self.sec_sharpening)
 
@@ -185,6 +212,8 @@ class SharpeningPanel(QWidget):
             "sharp_masking": self.row_masking.slider.value(),
             "sharp_scope_idx": self.combo_scope.currentIndex(),
             "sharp_mask_preview": self.btn_mask_preview.isChecked() or self._alt_scrubbing,
+            "ond_est_val": self.row_ond_est.slider.value(),
+            "ond_bg_val": self.row_ond_bg.slider.value(),
         }
 
     def set_state(self, state: Dict[str, Any]) -> None:
@@ -204,6 +233,10 @@ class SharpeningPanel(QWidget):
                 self.combo_scope.setCurrentIndex(idx)
             if "sharp_mask_preview" in state:
                 self.btn_mask_preview.setChecked(bool(state["sharp_mask_preview"]))
+            if "ond_est_val" in state:
+                self.row_ond_est.slider.setValue(int(state["ond_est_val"]))
+            if "ond_bg_val" in state:
+                self.row_ond_bg.slider.setValue(int(state["ond_bg_val"]))
         finally:
             self.block_signals(False)
 
@@ -218,6 +251,8 @@ class SharpeningPanel(QWidget):
             self.combo_scope.setCurrentIndex(0)
             self.btn_mask_preview.setChecked(False)
             self._alt_scrubbing = False
+            self.row_ond_est.slider.setValue(0)
+            self.row_ond_bg.slider.setValue(0)
         finally:
             self.block_signals(False)
 
@@ -229,6 +264,8 @@ class SharpeningPanel(QWidget):
             self.row_amount.slider, self.row_radius.slider,
             self.row_detail.slider, self.row_masking.slider,
             self.combo_scope, self.btn_mask_preview,
+            getattr(self, 'row_ond_est', None) and self.row_ond_est.slider,
+            getattr(self, 'row_ond_bg', None) and self.row_ond_bg.slider,
         ):
             if w is not None:
                 w.blockSignals(blocked)

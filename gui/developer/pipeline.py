@@ -873,6 +873,32 @@ def apply_developer_pipeline(
                 edge_mask=edge_mask,
             )
 
+    # 14c. Realce Multiescala por Ondículas (À-Trous B3-Spline)
+    ond_est = float(getattr(state, "ond_est_val", 0)) / 100.0
+    ond_bg = float(getattr(state, "ond_bg_val", 0)) / 100.0
+    if (abs(ond_est) > 1e-4 or ond_bg > 1e-4) and (image_starless is None):
+        from core.stretch import realce_multiescala_ondiculas
+        scope_names = ["ground", "sky_starless", "global"]
+        scope_idx = getattr(state, "sharp_scope_idx", 0)
+        scope = scope_names[scope_idx] if 0 <= scope_idx < len(scope_names) else "ground"
+
+        sm_ref = None
+        if precomputed_mask is not None:
+            sm = precomputed_mask[..., 0] if precomputed_mask.ndim == 3 else precomputed_mask
+            if scope == "ground":
+                sm_ref = 1.0 - sm
+            elif scope == "sky_starless":
+                sm_ref = sm
+            else:  # global
+                sm_ref = None
+
+        stretched = realce_multiescala_ondiculas(
+            stretched,
+            fuerza_estructura=ond_est,
+            reduccion_fondo=ond_bg,
+            sky_mask=sm_ref
+        )
+
     # 15. Supresión de Halos en Frontera de Horizonte (Anti-Halo Clamping)
     antihalo_strength = getattr(state, "gnd_antihalo_val", 0) / 100.0
     if antihalo_strength > 1e-4 and precomputed_mask is not None:

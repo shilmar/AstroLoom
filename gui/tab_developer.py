@@ -885,7 +885,11 @@ class DeveloperTab(QWidget):
         self.panel_deconv.action_committed.connect(self._commit_action)
 
         left_layout.addWidget(self.panel_deconv)
-        self.panel_sharpening = None
+        self.panel_sharpening = SharpeningPanel(self)
+        self.panel_sharpening.parameter_changed.connect(self.update_stretch_preview)
+        self.panel_sharpening.row_ond_est.valueChanged.connect(self.on_ond_estructura_changed)
+        self.panel_sharpening.row_ond_bg.valueChanged.connect(self.on_ond_fondo_changed)
+        left_layout.addWidget(self.panel_sharpening)
 
         # --- SECCIÓN 9: Máscaras y Capas de Ajuste Local ---
         self.sec_masks = CollapsibleSection("Máscaras y Capas de Ajuste Local", is_expanded=False, icon_name="layers")
@@ -6694,23 +6698,49 @@ class DeveloperTab(QWidget):
 
     def on_ond_estructura_changed(self, val: int):
         self.multiescala_estructura = val / 100.0
-        self.lbl_ond_est.setText(f"{self.multiescala_estructura:+.2f}")
+        if hasattr(self, 'lbl_ond_est'):
+            self.lbl_ond_est.setText(f"{self.multiescala_estructura:+.2f}")
+        if hasattr(self, 'slider_ond_est') and self.slider_ond_est.value() != val:
+            self.slider_ond_est.blockSignals(True)
+            self.slider_ond_est.setValue(val)
+            self.slider_ond_est.blockSignals(False)
+        if hasattr(self, 'panel_sharpening') and self.panel_sharpening is not None:
+            if self.panel_sharpening.row_ond_est.slider.value() != val:
+                self.panel_sharpening.row_ond_est.slider.blockSignals(True)
+                self.panel_sharpening.row_ond_est.slider.setValue(val)
+                self.panel_sharpening.row_ond_est.slider.blockSignals(False)
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_starless_tone_values(
-                self.slider_clarity.value(), self.slider_dehaze.value(),
-                val, self.slider_ond_bg.value(),
-                self.slider_contrast_starless.value(), self.slider_denoise.value()
+                self.slider_clarity.value() if hasattr(self, 'slider_clarity') else 0,
+                self.slider_dehaze.value() if hasattr(self, 'slider_dehaze') else 0,
+                val,
+                self.slider_ond_bg.value() if hasattr(self, 'slider_ond_bg') else 0,
+                self.slider_contrast_starless.value() if hasattr(self, 'slider_contrast_starless') else 0,
+                self.slider_denoise.value() if hasattr(self, 'slider_denoise') else 0
             )
         self.update_stretch_preview()
 
     def on_ond_fondo_changed(self, val: int):
         self.multiescala_fondo = val / 100.0
-        self.lbl_ond_bg.setText(f"{val}%")
+        if hasattr(self, 'lbl_ond_bg'):
+            self.lbl_ond_bg.setText(f"{val}%")
+        if hasattr(self, 'slider_ond_bg') and self.slider_ond_bg.value() != val:
+            self.slider_ond_bg.blockSignals(True)
+            self.slider_ond_bg.setValue(val)
+            self.slider_ond_bg.blockSignals(False)
+        if hasattr(self, 'panel_sharpening') and self.panel_sharpening is not None:
+            if self.panel_sharpening.row_ond_bg.slider.value() != val:
+                self.panel_sharpening.row_ond_bg.slider.blockSignals(True)
+                self.panel_sharpening.row_ond_bg.slider.setValue(val)
+                self.panel_sharpening.row_ond_bg.slider.blockSignals(False)
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_starless_tone_values(
-                self.slider_clarity.value(), self.slider_dehaze.value(),
-                self.slider_ond_est.value(), val,
-                self.slider_contrast_starless.value(), self.slider_denoise.value()
+                self.slider_clarity.value() if hasattr(self, 'slider_clarity') else 0,
+                self.slider_dehaze.value() if hasattr(self, 'slider_dehaze') else 0,
+                self.slider_ond_est.value() if hasattr(self, 'slider_ond_est') else 0,
+                val,
+                self.slider_contrast_starless.value() if hasattr(self, 'slider_contrast_starless') else 0,
+                self.slider_denoise.value() if hasattr(self, 'slider_denoise') else 0
             )
         self.update_stretch_preview()
 
