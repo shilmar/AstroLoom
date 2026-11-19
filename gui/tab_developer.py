@@ -8622,25 +8622,15 @@ class DeveloperTab(QWidget):
         return self._do_save_project(filepath)
 
     def _do_save_project(self, filepath: str) -> bool:
-        """Ejecuta la serialización y compresión del proyecto .devloom con barra de progreso."""
-        progress = None
+        """Ejecuta la serialización y compresión del proyecto .devloom con barra de progreso en el pie del lienzo."""
         try:
             self.setCursor(Qt.WaitCursor)
             self.log_message(f"--- Guardando proyecto: {os.path.basename(filepath)} ---")
-
-            progress = QProgressDialog("Iniciando guardado de proyecto...", None, 0, 100, self)
-            progress.setWindowTitle("Guardar Proyecto AstroLoom")
-            progress.setWindowModality(Qt.WindowModal)
-            progress.setMinimumDuration(0)
-            progress.setCancelButton(None)
-            progress.setValue(5)
-            progress.show()
+            self.set_canvas_progress(5, "Iniciando guardado de proyecto...")
             QCoreApplication.processEvents()
 
             def on_progress(pct: int, msg: str):
-                if progress:
-                    progress.setValue(pct)
-                    progress.setLabelText(msg)
+                self.set_canvas_progress(pct, msg)
                 self.log_message(f"[PROYECTO] {msg}")
                 QCoreApplication.processEvents()
 
@@ -8685,6 +8675,7 @@ class DeveloperTab(QWidget):
                 self._is_dirty = False
                 self._update_project_ui_status()
                 self.log_message(f"✓ Proyecto guardado correctamente: {os.path.basename(filepath)}")
+                self.set_canvas_progress(100, "Proyecto guardado")
                 return True
             else:
                 self.log_message("[ERROR] No se pudo guardar el archivo de proyecto.")
@@ -8694,8 +8685,7 @@ class DeveloperTab(QWidget):
             QMessageBox.critical(self, "Error al guardar", f"Fallo al guardar el proyecto:\n{e}")
             return False
         finally:
-            if progress:
-                progress.close()
+            self.hide_canvas_progress()
             self.unsetCursor()
 
     def open_project_dialog(self):

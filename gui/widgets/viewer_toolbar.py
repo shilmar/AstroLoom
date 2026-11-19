@@ -433,7 +433,10 @@ class CanvasFooterBar(QWidget):
         val = max(0, min(100, int(percent)))
         self.progress_bar.setValue(val)
         if text:
-            self.progress_bar.setFormat(f"{text} (%p%)")
+            if "%p%" in text or "%" in text:
+                self.progress_bar.setFormat(text)
+            else:
+                self.progress_bar.setFormat(f"{text} (%p%)")
         else:
             self.progress_bar.setFormat("%p%")
         QCoreApplication.processEvents()

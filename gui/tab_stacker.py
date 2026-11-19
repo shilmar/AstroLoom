@@ -900,13 +900,7 @@ class StackerTab(QWidget):
         scroll_area.setWidget(panel_content)
         left_panel_layout.addWidget(scroll_area, stretch=1)
 
-        # SECCIÓN INFERIOR FIJA: Progreso y Ejecución
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedHeight(16)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setValue(0)
-        left_panel_layout.addWidget(self.progress_bar)
-
+        # SECCIÓN INFERIOR FIJA: Botón de Ejecución (progreso integrado en CanvasFooterBar)
         self.btn_run = QPushButton("INICIAR APILADO DUAL")
         self.btn_run.setIcon(get_icon("play", size=16, color="#ffffff"))
         self.btn_run.setFixedHeight(44)
@@ -924,6 +918,7 @@ class StackerTab(QWidget):
         right_layout.setSpacing(0)
         right_layout.addWidget(self.canvas, 1)
         self.canvas_footer = CanvasFooterBar(self)
+        self.progress_bar = self.canvas_footer.progress_bar
         right_layout.addWidget(self.canvas_footer)
 
         self.canvas.zoom_toggled.connect(
@@ -1803,8 +1798,8 @@ class StackerTab(QWidget):
         if hasattr(self, 'rb_out_single'):
             self.rb_out_single.setChecked(True)
 
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("%p%")
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
         log_hub.log("Apilador", "--- Restablecido para nuevo proceso de apilado ---")
 
     def start_stacking(self):
@@ -1840,8 +1835,8 @@ class StackerTab(QWidget):
         self.btn_run.setIcon(get_icon("stop", size=16, color="#ffffff"))
         self.btn_run.setStyleSheet(STYLE_RUN_ACTIVE)
 
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("Iniciando... %p%")
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_progress(0, "Iniciando...")
 
         lp_mode_idx = self.combo_lp_algo.currentIndex()
         lp_methods = ["standard", "sequator_subtraction", "min_rejection", "local_norm"]
@@ -1930,7 +1925,6 @@ class StackerTab(QWidget):
     def on_stack_error(self, err_msg):
         self._reset_run_button()
         self._stack_start_time = None
-        self.progress_bar.setFormat("Error")
         if hasattr(self, 'canvas_footer'):
             self.canvas_footer.hide_progress()
         self.log_message(f"[ERROR CRÍTICO] {err_msg}")
@@ -1940,8 +1934,6 @@ class StackerTab(QWidget):
         """Maneja la finalización tras una interrupción manual."""
         self._reset_run_button()
         self._stack_start_time = None
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("Apilado Cancelado")
         if hasattr(self, 'canvas_footer'):
             self.canvas_footer.hide_progress()
         self.log_message("[INFO] Proceso detenido con éxito. Recursos y memoria liberados.")  
@@ -1950,8 +1942,6 @@ class StackerTab(QWidget):
         self.lbl_lp_str.setText(f"{val}%")
         
     def on_progress_changed(self, value: int):
-        self.progress_bar.setValue(value)
-        
         if hasattr(self, "_stack_start_time") and value > 3:
             elapsed = time.perf_counter() - self._stack_start_time
             total_est = (elapsed / value) * 100.0
@@ -1964,10 +1954,8 @@ class StackerTab(QWidget):
                 eta_str = f"ETA: ~{rem_s}s"
                 
             fmt_str = f"{value}%  ({eta_str})"
-            self.progress_bar.setFormat(f"%p%  ({eta_str})")
         else:
             fmt_str = f"{value}%"
-            self.progress_bar.setFormat("%p%")
 
         if hasattr(self, 'canvas_footer'):
             self.canvas_footer.set_progress(value, f"Apilando... {fmt_str}")
@@ -2051,8 +2039,8 @@ class StackerTab(QWidget):
         self.btn_run.setIcon(get_icon("stop", size=16, color="#ffffff"))
         self.btn_run.setStyleSheet(STYLE_RUN_ACTIVE)
 
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("Iniciando Sub-Stacking... %p%")
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_progress(0, "Iniciando Sub-Stacking...")
 
         stride_choice = self.combo_sub_stride.currentData()
         stride = 1 if stride_choice == 1 else w_val
@@ -2099,6 +2087,9 @@ class StackerTab(QWidget):
 
     def on_substack_success(self, video_path: str, stats: dict):
         self._reset_run_button()
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.set_progress(100, "Vídeo completado")
+            self.canvas_footer.hide_progress()
 
         if hasattr(self, '_stack_start_time') and self._stack_start_time is not None:
             elapsed = time.perf_counter() - self._stack_start_time
@@ -2143,7 +2134,8 @@ class StackerTab(QWidget):
             self.btn_run.setText("CANCELANDO PROCESOS...")
             self.btn_run.setIcon(get_icon("stop", size=16, color="#ffffff"))
             self.btn_run.setStyleSheet(STYLE_RUN_CANCELLING)
-            self.progress_bar.setFormat("Deteniendo... %p%")
+            if hasattr(self, 'canvas_footer'):
+                self.canvas_footer.set_progress(self.canvas_footer.progress_bar.value(), "Deteniendo...")
             self.log_message("[AVISO] Solicitando parada de tareas y liberación de memoria...")
             self.worker.cancel()
 
