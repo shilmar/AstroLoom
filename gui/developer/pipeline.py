@@ -264,10 +264,9 @@ def apply_developer_pipeline(
                 if abs(pcc_kr - 1.0) > 1e-4 or abs(pcc_kb - 1.0) > 1e-4:
                     img = apply_pcc_gains(img, pcc_kr, pcc_kb)
 
-                # Optimización Nativa en Rust para el Grafo Proxy (60 FPS fijos)
+                # Optimización Nativa en Rust para el Grafo Fused (Interactivo y Exportación a Resolución Completa)
                 can_use_rust_proxy = (
                     HAS_RUST and hasattr(astroloom_rs, 'eval_developer_proxy_fused_rs')
-                    and (is_scrubbing or is_preview)
                 )
                 if can_use_rust_proxy:
                     mask_2d = precomputed_mask[..., 0] if (precomputed_mask is not None and precomputed_mask.ndim == 3) else precomputed_mask
@@ -280,8 +279,12 @@ def apply_developer_pipeline(
                             mask_2d = np.ascontiguousarray(mask_2d, dtype=np.float32)
                         elif mask_2d.max() > 1.05:
                             mask_2d = np.ascontiguousarray(mask_2d / 255.0, dtype=np.float32)
+                    
+                    if not img.flags['C_CONTIGUOUS'] or img.dtype != np.float32:
+                        img = np.ascontiguousarray(img, dtype=np.float32)
+
                     img = astroloom_rs.eval_developer_proxy_fused_rs(
-                        np.ascontiguousarray(img, dtype=np.float32),
+                        img,
                         temp_val=float(temp_val),
                         tint_val=float(tint_val),
                         scnr_amount=float(scnr_amt),

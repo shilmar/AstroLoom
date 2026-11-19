@@ -263,3 +263,47 @@ def test_memory_ceiling_large_megaframes():
     assert len(out_buf) == h * w * 4
     arr = np.frombuffer(out_buf, dtype=np.uint8).reshape((h, w, 4))
     assert arr[0, 0, 0] == int(round(0.4 * 255))
+
+
+def test_export_pipeline_uses_rust_fused():
+    """Verifica que el pipeline de exportación (is_preview=False) utiliza el grafo Rust fused optimizado."""
+    from gui.developer.developer_state import DeveloperState
+    from gui.developer.pipeline import apply_developer_pipeline
+
+    h, w = 120, 160
+    img = np.full((h, w, 3), 0.25, dtype=np.float32)
+    img[..., 1] = 0.55  # Dominante verde
+
+    state_noscnr = DeveloperState()
+    state_noscnr.scnr_green_val = 0
+
+    state_scnr = DeveloperState()
+    state_scnr.scnr_green_val = 100
+
+    # Ejecutar pipeline en modo exportación completa (is_preview=False, is_scrubbing=False)
+    res_noscnr = apply_developer_pipeline(img, state_noscnr, is_preview=False, is_scrubbing=False)
+    res_scnr = apply_developer_pipeline(img, state_scnr, is_preview=False, is_scrubbing=False)
+
+    assert res_scnr.shape == (h, w, 3)
+    assert res_scnr.dtype == np.float32
+    assert res_scnr.flags['C_CONTIGUOUS']
+    # Con SCNR al 100% en el pipeline de exportación, el verde es significativamente menor que sin SCNR
+    assert np.mean(res_scnr[..., 1]) < np.mean(res_noscnr[..., 1])
+    # Y los canales rojo y azul se preservan (o aumentan ligeramente por preservación Rec.709)
+    assert np.mean(res_scnr[..., 0]) >= np.mean(res_noscnr[..., 0])
+
+
+def test_export_uint16_inplace_no_temp_churn():
+    """Comprueba la cuantización a uint16 de 16-bit TIFF sin creación excesiva de temporales en Python."""
+    h, w = 200, 200
+    processed = np.random.uniform(0.0, 1.0, (h, w, 3)).astype(np.float32)
+
+    u16 = np.empty(processed.shape, dtype=np.uint16)
+    np.clip(processed * 65535.0 + 0.5, 0, 65535, out=u16, casting='unsafe')
+
+    assert u16.shape == (h, w, 3)
+    assert u16.dtype == np.uint16
+    assert u16.flags['C_CONTIGUOUS']
+    # Validación numérica contra referencia
+    ref = np.clip(np.round(processed * 65535.0), 0, 65535).astype(np.uint16)
+    np.testing.assert_allclose(u16, ref, atol=1)

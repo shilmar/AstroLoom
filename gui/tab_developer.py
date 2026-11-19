@@ -7151,7 +7151,8 @@ class DeveloperTab(QWidget):
                 save_tiff_with_icc(p, out32, compression='zlib', photometric='rgb', source_color_space=src_cs)
                 desc = "TIFF 32-bit float (ICC)"
             else:
-                u16 = np.ascontiguousarray((np.clip(processed, 0.0, 1.0) * 65535.0), dtype=np.uint16)
+                u16 = np.empty(processed.shape, dtype=np.uint16)
+                np.clip(processed * 65535.0 + 0.5, 0, 65535, out=u16, casting='unsafe')
                 src_cs = getattr(self, 'current_color_space', 'srgb')
                 save_tiff_with_icc(p, u16, compression='zlib', photometric='rgb', source_color_space=src_cs)
                 desc = "TIFF 16-bit (ICC)"
