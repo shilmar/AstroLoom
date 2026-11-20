@@ -850,6 +850,55 @@ def balance_coronal_white_balance(
     return balanced, (float(f[0]), float(f[1]), float(f[2]))
 
 
+def balance_coronal_thermal_dual(
+    image: np.ndarray,
+    center_x: float,
+    center_y: float,
+    radius: float,
+    corona_warmth: float = 0.0,
+    sky_temp: float = 0.0,
+    transition_range: Tuple[float, float] = (1.5, 4.0)
+) -> np.ndarray:
+    """
+    Ajuste térmico lineal dual para la corona y el fondo de cielo exterior.
+    - corona_warmth: [-1.0, 1.0] modula la calidez cromática de la corona (dispersión de Thomson).
+      Valores > 0 confieren un tono perlado/dorado suave; < 0 un tono más frío/azulado.
+    - sky_temp: [-1.0, 1.0] modula la temperatura del cielo periférico.
+      Valores < 0 profundizan el azul marino crepuscular; > 0 calientan el fondo.
+    - transition_range: (r_in, r_out) múltiplos del radio lunar para el traspaso gradual continuo.
+    """
+    if image.ndim != 3 or (abs(corona_warmth) < 1e-4 and abs(sky_temp) < 1e-4):
+        return image.copy()
+
+    img = np.ascontiguousarray(image, dtype=np.float32)
+    h, w = img.shape[:2]
+    y, x = np.ogrid[:h, :w]
+    dist = np.hypot(x - center_x, y - center_y)
+
+    r_ref = max(float(radius), 1.0)
+    r_norm = dist / r_ref
+
+    r_in, r_out = float(transition_range[0]), float(transition_range[1])
+    t = _smoothstep(r_norm, r_in, r_out)
+
+    cw = float(np.clip(corona_warmth, -1.0, 1.0))
+    st = float(np.clip(sky_temp, -1.0, 1.0))
+    k = (1.0 - t) * cw + t * st
+
+    # Ganancias RGB térmicas con conservación aproximada de luminancia fotométrica:
+    # 0.2126 * (0.30 * k) - 0.7152 * (0.06 * k) - 0.0722 * (0.30 * k) ~ 0
+    g_r = 1.0 + 0.30 * k
+    g_g = 1.0 - 0.06 * k
+    g_b = 1.0 - 0.30 * k
+
+    result = np.empty_like(img)
+    result[..., 0] = np.clip(img[..., 0] * g_r, 0.0, 1.0)
+    result[..., 1] = np.clip(img[..., 1] * g_g, 0.0, 1.0)
+    result[..., 2] = np.clip(img[..., 2] * g_b, 0.0, 1.0)
+
+    return result.astype(np.float32)
+
+
 def fuse_hdr_bracketing(
     images: List[np.ndarray],
     exposures_s: List[float],
@@ -860,7 +909,9 @@ def fuse_hdr_bracketing(
     lunar_mask_params: Optional[Tuple[float, float, float]] = None,
     subtract_sky: bool = True,
     auto_wb_corona: bool = True,
-    gradual_handover: bool = True
+    gradual_handover: bool = True,
+    corona_warmth: float = 0.0,
+    sky_temp: float = 0.0
 ) -> np.ndarray:
     """
     Fusión de alto rango dinámico (HDR) para tomas de bracketing de eclipses.
@@ -927,6 +978,12 @@ def fuse_hdr_bracketing(
             if auto_wb_corona and lunar_mask_params is not None and hdr_norm.ndim == 3:
                 mcx, mcy, mr = lunar_mask_params
                 hdr_norm, _ = balance_coronal_white_balance(hdr_norm, mcx, mcy, mr, ring_range=(1.2, 1.8))
+
+            if (abs(corona_warmth) > 1e-4 or abs(sky_temp) > 1e-4) and lunar_mask_params is not None and hdr_norm.ndim == 3:
+                mcx, mcy, mr = lunar_mask_params
+                hdr_norm = balance_coronal_thermal_dual(
+                    hdr_norm, mcx, mcy, mr, corona_warmth=corona_warmth, sky_temp=sky_temp
+                )
 
             if asinh_stretch > 1.0:
                 hdr_norm = apply_asinh_stretch(hdr_norm, stretch_factor=asinh_stretch)
@@ -1041,6 +1098,12 @@ def fuse_hdr_bracketing(
     if auto_wb_corona and lunar_mask_params is not None and hdr_norm.ndim == 3:
         mcx, mcy, mr = lunar_mask_params
         hdr_norm, _ = balance_coronal_white_balance(hdr_norm, mcx, mcy, mr, ring_range=(1.2, 1.8))
+
+    if (abs(corona_warmth) > 1e-4 or abs(sky_temp) > 1e-4) and lunar_mask_params is not None and hdr_norm.ndim == 3:
+        mcx, mcy, mr = lunar_mask_params
+        hdr_norm = balance_coronal_thermal_dual(
+            hdr_norm, mcx, mcy, mr, corona_warmth=corona_warmth, sky_temp=sky_temp
+        )
 
     if asinh_stretch > 1.0:
         hdr_norm = apply_asinh_stretch(hdr_norm, stretch_factor=asinh_stretch)

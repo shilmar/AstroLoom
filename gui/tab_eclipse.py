@@ -188,6 +188,7 @@ class EclipseCanvas(QWidget):
         self.center_x: float = 0.0
         self.center_y: float = 0.0
         self.radius: float = 0.0
+        self.mask_offset: float = -2.5
         self.pick_center_mode: bool = False
 
     @property
@@ -249,12 +250,13 @@ class EclipseCanvas(QWidget):
         self.reset_view()
         self.update()
 
-    def set_guide_params(self, cx: float, cy: float, r: float, show: bool = True):
-        """Actualiza las coordenadas de la guía circular de limbo."""
+    def set_guide_params(self, cx: float, cy: float, r: float, show: bool = True, mask_offset: float = -2.5):
+        """Actualiza las coordenadas de la guía circular de limbo y máscara interna."""
         self.center_x = cx
         self.center_y = cy
         self.radius = r
         self.show_guide = show
+        self.mask_offset = mask_offset
         self.update()
 
     def paintEvent(self, event):
@@ -279,12 +281,15 @@ class EclipseCanvas(QWidget):
         if self._drag_hover:
             self._draw_drag_feedback(painter)
 
-        # Dibujar guía geométrica del limbo si está habilitada y es válida
+        # Dibujar guía geométrica del limbo y máscara interna si está habilitada
         if self.show_guide and self.radius > 5:
             scx = self.pan_offset.x() + self.center_x * self.zoom_level
             scy = self.pan_offset.y() + self.center_y * self.zoom_level
             sr = self.radius * self.zoom_level
+            mask_r = max(2.0, self.radius + self.mask_offset)
+            smr = mask_r * self.zoom_level
 
+            # 1. Guía de limbo físico (Cian discontinuo)
             pen_bg = QPen(QColor(0, 0, 0, 220), 3, Qt.DashLine)
             pen_fg = QPen(QColor(0, 240, 255, 240), 1.5, Qt.DashLine)
 
@@ -293,6 +298,15 @@ class EclipseCanvas(QWidget):
             painter.drawEllipse(QPoint(int(scx), int(scy)), int(sr), int(sr))
             painter.setPen(pen_fg)
             painter.drawEllipse(QPoint(int(scx), int(scy)), int(sr), int(sr))
+
+            # 2. Guía de máscara lunar interior (Ámbar punteado)
+            if smr > 3:
+                pen_mask_bg = QPen(QColor(0, 0, 0, 200), 2.5, Qt.DotLine)
+                pen_mask_fg = QPen(QColor(255, 183, 77, 230), 1.3, Qt.DotLine)
+                painter.setPen(pen_mask_bg)
+                painter.drawEllipse(QPoint(int(scx), int(scy)), int(smr), int(smr))
+                painter.setPen(pen_mask_fg)
+                painter.drawEllipse(QPoint(int(scx), int(scy)), int(smr), int(smr))
 
             # Cruz central
             cl = 10
@@ -308,7 +322,7 @@ class EclipseCanvas(QWidget):
             font.setPointSize(9)
             font.setBold(True)
             painter.setFont(font)
-            info_txt = f"Limbo (X: {self.center_x:.1f}, Y: {self.center_y:.1f}, R: {self.radius:.1f}px)"
+            info_txt = f"Limbo: R={self.radius:.1f}px | Máscara: R={mask_r:.1f}px ({self.mask_offset:+.1f}px)"
             painter.drawText(int(scx + sr + 8), int(scy), info_txt)
 
     def mousePressEvent(self, event):
@@ -601,6 +615,8 @@ class EclipseWorker(QThread):
                 self.progress.emit(75, progress_msg)
                 auto_wb = self.params.get("auto_wb_corona", True)
                 gradual_handover = self.params.get("gradual_handover", True)
+                corona_warmth = self.params.get("corona_warmth", 0.0)
+                sky_temp = self.params.get("sky_temp", 0.0)
                 hdr_raw = fuse_hdr_bracketing(
                     aligned_images,
                     exposures,
@@ -610,7 +626,9 @@ class EclipseWorker(QThread):
                     lunar_mask_params=lunar_mask,
                     subtract_sky=subtract_sky,
                     auto_wb_corona=auto_wb,
-                    gradual_handover=gradual_handover
+                    gradual_handover=gradual_handover,
+                    corona_warmth=corona_warmth,
+                    sky_temp=sky_temp
                 )
 
                 hdr_stretched = apply_asinh_stretch(hdr_raw, stretch_factor=asinh_factor) if asinh_factor > 1.0 else hdr_raw.copy()
@@ -633,6 +651,7 @@ class EclipseWorker(QThread):
                 cx = self.params["cx"]
                 cy = self.params["cy"]
                 r = self.params["radius"]
+                mask_r = self.params.get("mask_radius", r)
                 filter_type = self.params.get("filter_type", "mgn")
                 use_highpass = self.params.get("use_highpass", False)
                 hp_strength = self.params.get("hp_strength", 0.5)
@@ -646,7 +665,7 @@ class EclipseWorker(QThread):
                         base_img,
                         center_x=cx,
                         center_y=cy,
-                        radius_min=r,
+                        radius_min=mask_r,
                         blend_ratio=blend,
                         radius_max_factor=reach,
                         use_detail_rings=use_detail_rings
@@ -663,7 +682,7 @@ class EclipseWorker(QThread):
                         delta_theta_deg=ls_dtheta,
                         blend_ratio=blend,
                         protect_prominences=ls_protect,
-                        radius_min=r,
+                        radius_min=mask_r,
                         radius_max_factor=reach,
                         use_detail_rings=use_detail_rings
                     )
@@ -676,7 +695,7 @@ class EclipseWorker(QThread):
                         base_img,
                         center_x=cx,
                         center_y=cy,
-                        radius_min=r,
+                        radius_min=mask_r,
                         window_deg=swap_win,
                         c0=swap_c0,
                         blend_ratio=blend
@@ -688,7 +707,7 @@ class EclipseWorker(QThread):
                     blend = self.params.get("blend", 0.50)
                     noise_floor = self.params.get("mgn_noise_floor", 0.003)
                     chroma_denoise = self.params.get("mgn_chroma_denoise", 16.0)
-                    lunar_mask = (cx, cy, r) if r > 5 else None
+                    lunar_mask = (cx, cy, mask_r) if mask_r > 5 else None
 
                     filtered = apply_mgn(
                         base_img,
@@ -709,7 +728,7 @@ class EclipseWorker(QThread):
                         base_img,
                         center_x=cx,
                         center_y=cy,
-                        radius_min=r,
+                        radius_min=mask_r,
                         sigma=sigma,
                         blend_ratio=blend,
                         use_overlay=use_ov
@@ -723,7 +742,7 @@ class EclipseWorker(QThread):
                         base_img,
                         center_x=cx,
                         center_y=cy,
-                        radius_min=r,
+                        radius_min=mask_r,
                         n_scales=scales,
                         guided=guided,
                         blend_ratio=blend,
@@ -743,7 +762,7 @@ class EclipseWorker(QThread):
                         bin_px=bin_px,
                         robust=robust,
                         blend_ratio=blend,
-                        radius_min=r,
+                        radius_min=mask_r,
                         radius_max_factor=reach,
                         use_detail_rings=use_detail_rings,
                         partial_annuli=part_annuli
@@ -754,7 +773,7 @@ class EclipseWorker(QThread):
                     filtered = apply_coronal_highpass(
                         filtered,
                         strength=hp_strength,
-                        radius_min=r,
+                        radius_min=mask_r,
                         center_x=cx,
                         center_y=cy,
                         radius_max_factor=reach,
@@ -814,8 +833,9 @@ class EclipseWorker(QThread):
                     self.progress.emit(pct, f"Calculando {name}...")
 
                     filtered = None
+                    mask_r = self.params.get("mask_radius", r)
                     if flt_id == "mgn":
-                        lunar_mask = (cx, cy, r) if r > 5 else None
+                        lunar_mask = (cx, cy, mask_r) if mask_r > 5 else None
                         filtered = apply_mgn(
                             base_rgb,
                             sigmas=(1.5, 3.0, 6.0, 12.0, 24.0, 48.0),
@@ -826,17 +846,17 @@ class EclipseWorker(QThread):
                             lunar_mask_params=lunar_mask
                         )
                     elif flt_id == "wow":
-                        filtered = apply_wow_edge_aware(base_rgb, cx, cy, radius_min=r, blend_ratio=0.50)
+                        filtered = apply_wow_edge_aware(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.50)
                     elif flt_id == "nafe":
-                        filtered = apply_nafe(base_rgb, cx, cy, radius_min=r, blend_ratio=0.79)
+                        filtered = apply_nafe(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.79)
                     elif flt_id == "nrgf":
-                        filtered = apply_nrgf(base_rgb, cx, cy, radius_min=r, blend_ratio=0.55)
+                        filtered = apply_nrgf(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.55)
                     elif flt_id == "steerable_g2":
-                        filtered = apply_steerable_g2(base_rgb, cx, cy, radius_min=r, blend_ratio=0.50)
+                        filtered = apply_steerable_g2(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.50)
                     elif flt_id == "larson_sekanina":
-                        filtered = apply_larson_sekanina(base_rgb, cx, cy, radius_min=r, blend_ratio=0.20)
+                        filtered = apply_larson_sekanina(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.20)
                     elif flt_id == "swap":
-                        filtered = apply_swap_filter(base_rgb, cx, cy, radius_min=r, blend_ratio=1.0)
+                        filtered = apply_swap_filter(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=1.0)
 
                     if filtered is not None:
                         computed_layers.append({
@@ -1025,6 +1045,24 @@ class EclipseTab(QWidget):
         row_radius.addWidget(self.chk_show_guide)
         geom_layout.addLayout(row_radius)
 
+        # Control de Máscara Lunar Interna (Doble Radio)
+        row_mask = QHBoxLayout()
+        row_mask.addWidget(QLabel("Offset Máscara:"))
+        self.spin_mask_offset = QDoubleSpinBox()
+        self.spin_mask_offset.setRange(-100.0, 50.0)
+        self.spin_mask_offset.setDecimals(1)
+        self.spin_mask_offset.setSingleStep(0.5)
+        self.spin_mask_offset.setValue(-2.5)
+        self.spin_mask_offset.setSuffix(" px")
+        self.spin_mask_offset.setToolTip("Desplazamiento radial de la máscara negra interna respecto al limbo lunar físico (por defecto -2.5 px).")
+        self.spin_mask_offset.valueChanged.connect(self._on_mask_offset_changed)
+        row_mask.addWidget(self.spin_mask_offset)
+
+        self.lbl_mask_r_disp = QLabel("R_mask: 97.5 px")
+        self.lbl_mask_r_disp.setStyleSheet("color: #ffb74d; font-size: 11px; font-weight: bold;")
+        row_mask.addWidget(self.lbl_mask_r_disp)
+        geom_layout.addLayout(row_mask)
+
         left_layout.addWidget(self.sec_geom)
 
         # SECCIÓN 3: Fusión HDR (Bracketing y Estirado Asinh)
@@ -1046,6 +1084,31 @@ class EclipseTab(QWidget):
         self.chk_auto_wb.setStyleSheet("font-weight: bold; color: #ffcc80;")
         self.chk_auto_wb.setToolTip("Neutraliza la dominante cálida/crepuscular en el anillo medio de la corona (1.2 - 1.8 R) según AEL, manteniendo intactas las protuberancias H-alfa.")
         hdr_layout.addWidget(self.chk_auto_wb)
+
+        # Controles térmicos duales (Corona vs Fondo de Cielo)
+        self.slider_corona_warmth = PrecisionSliderRow(
+            title="Calidez Corona",
+            min_val=-100,
+            max_val=100,
+            default_val=0,
+            unit="%",
+            decimals=0,
+            label_width=135
+        )
+        self.slider_corona_warmth.setToolTip("Modula la calidez cromática de la corona interior/media (dispersión de Thomson). + = tono dorado/nacarado; - = tono frío.")
+        hdr_layout.addWidget(self.slider_corona_warmth)
+
+        self.slider_sky_temp = PrecisionSliderRow(
+            title="Tono Cielo Ext.",
+            min_val=-100,
+            max_val=100,
+            default_val=0,
+            unit="%",
+            decimals=0,
+            label_width=135
+        )
+        self.slider_sky_temp.setToolTip("Modula la temperatura cromática del cielo periférico. - = azul marino frío crepuscular; + = tono cálido.")
+        hdr_layout.addWidget(self.slider_sky_temp)
 
         row_roi = QHBoxLayout()
         self.chk_crop_roi = QCheckBox("Recorte ROI centrado en limbo")
@@ -1630,6 +1693,17 @@ class EclipseTab(QWidget):
         self.btn_toggle_guide_tb.toggled.connect(self._on_toggle_guide_tb)
         self.toolbar.insert_custom_widget_before_stretch(self.btn_toggle_guide_tb)
 
+        # Botón Comparar A/B (Bypass Filtros Coronales)
+        self.btn_bypass_tb = QPushButton("Comparar A/B")
+        self.btn_bypass_tb.setIcon(get_icon("eye", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
+        self.btn_bypass_tb.setCheckable(True)
+        self.btn_bypass_tb.setChecked(False)
+        self.btn_bypass_tb.setEnabled(False)
+        self.btn_bypass_tb.setCursor(Qt.PointingHandCursor)
+        self.btn_bypass_tb.setToolTip("Alterna instantáneamente entre el HDR Base (A) y la imagen con Filtros Coronales (B).\nAtajo: [Espacio] o [\\]")
+        self.btn_bypass_tb.toggled.connect(self._on_bypass_tb_toggled)
+        self.toolbar.insert_custom_widget_before_stretch(self.btn_bypass_tb)
+
         self.toolbar.add_separator_before_stretch()
 
         # Badge de modo y estado a la derecha
@@ -1675,6 +1749,38 @@ class EclipseTab(QWidget):
         self.shortcut_bracket.setContext(Qt.WidgetWithChildrenShortcut)
         self.shortcut_bracket.activated.connect(lambda: self.toggle_left_panel())
 
+        # Atajos de comparación A/B (Bypass rápido)
+        self.shortcut_space = QShortcut(QKeySequence(Qt.Key_Space), self)
+        self.shortcut_space.setContext(Qt.WidgetWithChildrenShortcut)
+        self.shortcut_space.activated.connect(self._toggle_bypass_shortcut)
+
+        self.shortcut_backslash = QShortcut(QKeySequence(Qt.Key_Backslash), self)
+        self.shortcut_backslash.setContext(Qt.WidgetWithChildrenShortcut)
+        self.shortcut_backslash.activated.connect(self._toggle_bypass_shortcut)
+
+    def _toggle_bypass_shortcut(self) -> None:
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            return
+        if hasattr(self, 'btn_bypass_tb') and self.btn_bypass_tb.isEnabled():
+            self.btn_bypass_tb.setChecked(not self.btn_bypass_tb.isChecked())
+
+    def _on_bypass_tb_toggled(self, checked: bool) -> None:
+        """Conmuta instantáneamente entre el HDR Base (A) y la imagen con filtros aplicados (B)."""
+        if self.fused_hdr_img is None or self.final_filtered_img is None:
+            return
+
+        if checked:
+            self.canvas.set_image(self.fused_hdr_img)
+            self.btn_bypass_tb.setText("A: Base HDR")
+            self.lbl_canvas_status.setText("Mostrando: Base HDR (Bypass activo)")
+        else:
+            self.canvas.set_image(self.final_filtered_img)
+            self.btn_bypass_tb.setText("B: Filtrada")
+            self.lbl_canvas_status.setText("Mostrando: Filtros Coronales")
+
+        self._update_canvas_guide()
+
     def _on_pick_center_tb_toggled(self, checked: bool) -> None:
         if hasattr(self, 'btn_pick_center') and self.btn_pick_center.isChecked() != checked:
             self.btn_pick_center.setChecked(checked)
@@ -1719,6 +1825,11 @@ class EclipseTab(QWidget):
         if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
             super().keyPressEvent(event)
             return
+        if event.key() in (Qt.Key_Space, Qt.Key_Backslash):
+            if hasattr(self, 'btn_bypass_tb') and self.btn_bypass_tb.isEnabled():
+                self.btn_bypass_tb.setChecked(not self.btn_bypass_tb.isChecked())
+                event.accept()
+                return
         if event.key() in (Qt.Key_F7, Qt.Key_BracketLeft):
             self.toggle_left_panel()
             event.accept()
@@ -1757,8 +1868,14 @@ class EclipseTab(QWidget):
         cx = self.spin_cx.value()
         cy = self.spin_cy.value()
         r = self.spin_radius.value()
+        offset = self.spin_mask_offset.value() if hasattr(self, 'spin_mask_offset') else -2.5
         show = self.chk_show_guide.isChecked()
-        self.canvas.set_guide_params(cx, cy, r, show=show)
+        self.canvas.set_guide_params(cx, cy, r, show=show, mask_offset=offset)
+        if hasattr(self, 'lbl_mask_r_disp'):
+            self.lbl_mask_r_disp.setText(f"R_mask: {max(0.0, r + offset):.1f} px")
+
+    def _on_mask_offset_changed(self):
+        self._update_canvas_guide()
 
     def _get_active_geometry_for_image(self, base_img: np.ndarray) -> Tuple[float, float, float]:
         """Devuelve (cx, cy, r) de la imagen objetivo (fusión HDR recortada o toma individual)."""
@@ -2234,6 +2351,8 @@ class EclipseTab(QWidget):
             "subtract_sky": sub_sky,
             "auto_wb_corona": self.chk_auto_wb.isChecked(),
             "gradual_handover": self.chk_gradual_handover.isChecked(),
+            "corona_warmth": float(self.slider_corona_warmth.value() / 100.0) if hasattr(self, 'slider_corona_warmth') else 0.0,
+            "sky_temp": float(self.slider_sky_temp.value() / 100.0) if hasattr(self, 'slider_sky_temp') else 0.0,
             "sat_thresh": sat_thresh,
             "asinh_factor": asinh_factor,
             "mode": mode
@@ -2322,11 +2441,16 @@ class EclipseTab(QWidget):
         self.btn_fuse_hdr.setEnabled(False)
         self.btn_detect_all.setEnabled(False)
 
+        offset = self.spin_mask_offset.value() if hasattr(self, 'spin_mask_offset') else -2.5
+        mask_radius = max(1.0, r + offset)
+
         params = {
             "image": base_img,
             "cx": cx,
             "cy": cy,
             "radius": r,
+            "mask_radius": mask_radius,
+            "mask_offset": offset,
             "filter_type": filter_type,
             "mgn_k": mgn_k,
             "mgn_gamma": mgn_gamma,
@@ -2523,11 +2647,24 @@ class EclipseTab(QWidget):
             else:
                 self.log("Fusión HDR finalizada con alineación subpíxel y estirado Asinh.")
 
+            if hasattr(self, 'btn_bypass_tb'):
+                self.btn_bypass_tb.setEnabled(False)
+                self.btn_bypass_tb.blockSignals(True)
+                self.btn_bypass_tb.setChecked(False)
+                self.btn_bypass_tb.setText("Comparar A/B")
+                self.btn_bypass_tb.blockSignals(False)
+
         elif task_type == "apply_filters":
             self._viewing_fused = True
             self.final_filtered_img = result
             self.canvas.set_image(result)
             self._update_canvas_guide()
+            if hasattr(self, 'btn_bypass_tb'):
+                self.btn_bypass_tb.setEnabled(True)
+                self.btn_bypass_tb.blockSignals(True)
+                self.btn_bypass_tb.setChecked(False)
+                self.btn_bypass_tb.setText("B: Filtrada")
+                self.btn_bypass_tb.blockSignals(False)
             self.log("Filtros de corona aplicados con compuerta radial (fondo limpio).")
 
         elif task_type == "export_coronal_psd":
@@ -2708,11 +2845,16 @@ class EclipseTab(QWidget):
 
         self.log(f"Iniciando cálculo de {len(selected_configs)} capas coronales para el Revelador...")
 
+        offset = self.spin_mask_offset.value() if hasattr(self, 'spin_mask_offset') else -2.5
+        mask_radius = max(1.0, r + offset)
+
         params = {
             "base_image": base_img,
             "cx": cx,
             "cy": cy,
             "radius": r,
+            "mask_radius": mask_radius,
+            "mask_offset": offset,
             "selected_configs": selected_configs,
             "out_base_path": out_base_path,
         }
