@@ -2612,6 +2612,152 @@ def apply_wow_edge_aware(
     return np.clip(final, 0.0, 1.0).astype(np.float32)
 
 
+def compute_dark_structure_mask(
+    image: np.ndarray,
+    center_x: float,
+    center_y: float,
+    radius_mask: float,
+    radius_max_factor: float = 3.5,
+    layers: int = 5,
+    denoise_fine_scales: int = 1,
+    threshold_sigma: float = 0.0,
+    prominence_mask: Optional[np.ndarray] = None
+) -> np.ndarray:
+    """
+    Calcula una máscara normalizada [0.0, 1.0] que aísla selectivamente las estructuras
+    oscuras (cavidades coronales, canales inter-streamers, valles de absorción).
+
+    Utiliza la descomposición multiescala à-trous B3 acelerada en Rust.
+    """
+    img = np.clip(np.asarray(image, dtype=np.float32), 0.0, 1.0)
+    if img.ndim == 3:
+        lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
+    else:
+        lum = img.copy()
+
+    h, w = lum.shape[:2]
+    y_coords, x_coords = np.indices((h, w), dtype=np.float32)
+    r_map = np.hypot(x_coords - center_x, y_coords - center_y)
+
+    r_max = radius_mask * max(1.2, float(radius_max_factor))
+    disk_valid = (r_map >= radius_mask * 0.98) & (r_map <= r_max * 1.05)
+
+    # 1. Descomposición multiescala à-trous B3 para fondo regional
+    current = lum.copy()
+    for s in range(max(1, int(layers))):
+        step = 1 << s
+        current = _b3_normalized(current, disk_valid, step)
+    base_smooth = current
+
+    # 2. Suavizado fino de alta frecuencia para descartar ruido de disparo
+    if denoise_fine_scales > 0:
+        fine = lum.copy()
+        for s in range(int(denoise_fine_scales)):
+            step = 1 << s
+            fine = _b3_normalized(fine, disk_valid, step)
+    else:
+        fine = lum
+
+    # 3. Aislamiento del residuo de valles / estructuras por debajo del fondo
+    dark_delta = np.maximum(0.0, base_smooth - fine)
+
+    # 4. Umbral adaptativo por MAD si se requiere supresión extra de ruido
+    if threshold_sigma > 0.0:
+        valid_deltas = dark_delta[disk_valid]
+        if len(valid_deltas) > 0:
+            median_d = np.median(valid_deltas)
+            mad = np.median(np.abs(valid_deltas - median_d))
+            tau = float(threshold_sigma) * 1.4826 * mad
+            dark_delta = np.maximum(0.0, dark_delta - tau)
+
+    # 5. Compuerta radial suave (protege disco lunar interior y cielo exterior)
+    radial_gate = (
+        (1.0 - _smoothstep(r_map, r_max * 0.85, r_max))
+        * _smoothstep(r_map, radius_mask * 0.98, radius_mask * 1.05)
+    )
+    mask = dark_delta * radial_gate
+
+    # 6. Protección de protuberancias H-alfa cromáticas
+    if prominence_mask is not None:
+        p_mask = np.clip(prominence_mask.astype(np.float32), 0.0, 1.0)
+        mask *= (1.0 - p_mask)
+
+    # Normalización al rango [0, 1] basada en el percentil 99.8 para evitar saturación
+    valid_vals = mask[disk_valid]
+    if len(valid_vals) > 0:
+        p99 = float(np.percentile(valid_vals, 99.8))
+        if p99 > 1e-6:
+            mask = np.clip(mask / p99, 0.0, 1.0)
+
+    return mask.astype(np.float32)
+
+
+def apply_dark_structure_enhancement(
+    image: np.ndarray,
+    amount: float = 0.40,
+    center_x: float = 0.0,
+    center_y: float = 0.0,
+    radius_mask: float = 100.0,
+    radius_max_factor: float = 3.5,
+    layers: int = 5,
+    method: str = "mtf",
+    denoise_fine_scales: int = 1,
+    threshold_sigma: float = 0.0,
+    prominence_mask: Optional[np.ndarray] = None
+) -> np.ndarray:
+    """
+    Aplica realce selectivo de estructuras oscuras (Dark Structure Enhancement / DSE)
+    sobre la corona solar en espacio float32 [0.0, 1.0].
+
+    Métodos:
+      - 'mtf': Ajuste racional de tonos medios (Midtones Transfer Function). Imposible causar black-clipping.
+      - 'subtractive': Modulación sustractiva ponderada por la luminancia local.
+    """
+    if amount <= 0.001:
+        return image.copy()
+
+    img = np.clip(np.asarray(image, dtype=np.float32), 0.0, 1.0)
+    is_rgb = img.ndim == 3 and img.shape[2] == 3
+
+    if is_rgb:
+        lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
+    else:
+        lum = img.copy()
+
+    mask = compute_dark_structure_mask(
+        image=lum,
+        center_x=center_x,
+        center_y=center_y,
+        radius_mask=radius_mask,
+        radius_max_factor=radius_max_factor,
+        layers=layers,
+        denoise_fine_scales=denoise_fine_scales,
+        threshold_sigma=threshold_sigma,
+        prominence_mask=prominence_mask
+    )
+
+    amt = float(np.clip(amount, 0.0, 1.0))
+
+    if method == "mtf":
+        m = 0.5 + (0.45 * amt * mask)
+        m_clamped = np.clip(m, 1e-4, 1.0 - 1e-4).astype(np.float32)
+        denom = (2.0 * m_clamped - 1.0) * lum - m_clamped
+        denom = np.where(np.abs(denom) < 1e-7, 1e-7, denom)
+        lum_new = np.clip((m_clamped - 1.0) * lum / denom, 0.0, 1.0)
+    elif method == "subtractive":
+        lum_new = np.maximum(0.0, lum * (1.0 - amt * mask))
+    else:
+        raise ValueError(f"Método de realce desconocido: {method}")
+
+    if is_rgb:
+        ratio = lum_new / np.maximum(lum, 1e-6)
+        enhanced = np.clip(img * ratio[..., None], 0.0, 1.0)
+    else:
+        enhanced = np.clip(lum_new, 0.0, 1.0)
+
+    return enhanced.astype(np.float32)
+
+
 def nafe_neighbourhood(n: int = 129) -> np.ndarray:
     """
     Vecindario difuso de NAFE (Druckmüller 2013, ApJS 207, 25, eq. 12-14).
@@ -2844,6 +2990,12 @@ def export_coronal_layers_psd(
         _log("[PSD CORONAL] Procesando capa 16 - Filtro SWAP PROBA2...")
         data["swap"] = apply_swap_filter(base_rgb, center_x, center_y, radius_min=radius_min, blend_ratio=1.0)
 
+    if "dark_structure" in data and data["dark_structure"] is None:
+        _log("[PSD CORONAL] Procesando capa 08b - Estructuras Oscuras (Cavidades)...")
+        data["dark_structure"] = apply_dark_structure_enhancement(
+            base_rgb, center_x=center_x, center_y=center_y, radius_mask=radius_min, amount=0.40
+        )
+
     def _prep_rgb(arr: np.ndarray) -> np.ndarray:
         clipped = np.clip(arr, 0.0, 1.0).astype(np.float32)
         if clipped.ndim == 2:
@@ -2904,6 +3056,17 @@ def export_coronal_layers_psd(
         "visible": False,
         "rgb": _prep_rgb(data["nafe"])
     })
+
+    # 08b. Estructuras Oscuras (Cavidades)
+    if "dark_structure" in data and data["dark_structure"] is not None:
+        layer_records.append({
+            "name": "08b - Estructuras Oscuras (Cavidades)",
+            "top": 0, "left": 0, "bottom": h, "right": w,
+            "blend_mode": "mul",
+            "opacity": 102,  # 40%
+            "visible": False,
+            "rgb": _prep_rgb(data["dark_structure"])
+        })
 
     # 03. MGN Multiescala
     layer_records.append({

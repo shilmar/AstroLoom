@@ -59,6 +59,7 @@ from core.eclipse import (
     apply_nafe,
     apply_wow_edge_aware,
     apply_fnrgf,
+    apply_dark_structure_enhancement,
     export_coronal_layers_psd
 )
 from core.stacking import load_image_as_float32
@@ -887,6 +888,27 @@ class EclipseWorker(QThread):
                         use_detail_rings=use_detail_rings
                     )
 
+                use_dark = self.params.get("use_dark_structure", False)
+                dark_amount = self.params.get("dark_amount", 0.0)
+                dark_layers = self.params.get("dark_layers", 5)
+                dark_protect_prom = self.params.get("dark_protect_prominences", True)
+
+                if use_dark and dark_amount > 0.001:
+                    self.progress.emit(85, "Realzando estructuras oscuras y cavidades coronales...")
+                    prom_m = None
+                    if dark_protect_prom and filtered.ndim == 3:
+                        prom_m = compute_red_excess_mask(filtered, cx, cy, radius_min=mask_r)
+                    filtered = apply_dark_structure_enhancement(
+                        filtered,
+                        amount=dark_amount,
+                        center_x=cx,
+                        center_y=cy,
+                        radius_mask=mask_r,
+                        radius_max_factor=reach,
+                        layers=dark_layers,
+                        prominence_mask=prom_m
+                    )
+
                 self.progress.emit(100, "Filtros de corona aplicados con éxito.")
                 self.finished.emit(filtered, "apply_filters")
 
@@ -966,6 +988,14 @@ class EclipseWorker(QThread):
                         filtered = apply_larson_sekanina(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.20)
                     elif flt_id == "swap":
                         filtered = apply_swap_filter(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=1.0)
+                    elif flt_id == "dark_structure":
+                        filtered = apply_dark_structure_enhancement(
+                            base_rgb,
+                            center_x=cx,
+                            center_y=cy,
+                            radius_mask=mask_r,
+                            amount=0.40
+                        )
 
                     if filtered is not None:
                         computed_layers.append({
@@ -1710,6 +1740,29 @@ class EclipseTab(QWidget):
         )
         self.lbl_hp_val = self.slider_hp.spin  # compatibilidad
         nrgf_layout.addWidget(self.slider_hp)
+
+        self.chk_dark_structure = QCheckBox("Realce de estructuras oscuras (cavidades y canales)")
+        self.chk_dark_structure.setChecked(False)
+        self.chk_dark_structure.setToolTip("Aísla y profundiza cavidades coronales, canales de filamentos y valles de absorción inter-streamer mediante descomposición multiescala B3 y transferencia racional MTF.")
+        nrgf_layout.addWidget(self.chk_dark_structure)
+
+        self.slider_dark_amount = PrecisionSliderRow(
+            title="Fuerza Cavidades",
+            min_val=0,
+            max_val=100,
+            default_val=40,
+            unit="%",
+            decimals=0,
+            label_width=135
+        )
+        self.slider_dark_amount.setToolTip("Intensidad de realce y oscurecimiento selectivo de cavidades y valles coronales.")
+        nrgf_layout.addWidget(self.slider_dark_amount)
+
+        self.chk_dark_protect_prom = QCheckBox("Proteger protuberancias en cavidades")
+        self.chk_dark_protect_prom.setChecked(True)
+        self.chk_dark_protect_prom.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        self.chk_dark_protect_prom.setToolTip("Evita que las protuberancias de hidrógeno alfa sean atenuadas por el realce de estructuras oscuras.")
+        nrgf_layout.addWidget(self.chk_dark_protect_prom)
 
         self.chk_proxy_preview = QCheckBox("Previsualización rápida Proxy 50% (4x más veloz)")
         self.chk_proxy_preview.setChecked(True)
@@ -2819,6 +2872,10 @@ class EclipseTab(QWidget):
         use_hp = self.chk_highpass.isChecked()
         hp_strength = (self.slider_hp.value() / 100.0) if use_hp else 0.0
 
+        use_dark = self.chk_dark_structure.isChecked() if hasattr(self, 'chk_dark_structure') else False
+        dark_amount = (self.slider_dark_amount.value() / 100.0) if use_dark else 0.0
+        dark_protect_prom = self.chk_dark_protect_prom.isChecked() if hasattr(self, 'chk_dark_protect_prom') else True
+
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.btn_apply_filters.setEnabled(False)
@@ -2860,6 +2917,9 @@ class EclipseTab(QWidget):
             "reach": reach,
             "use_highpass": use_hp,
             "hp_strength": hp_strength,
+            "use_dark_structure": use_dark,
+            "dark_amount": dark_amount,
+            "dark_protect_prominences": dark_protect_prom,
             "use_detail_rings": self.chk_detail_rings.isChecked(),
             "ls_delta_theta": self.spin_ls_dtheta.value(),
             "ls_protect_prominences": self.chk_ls_prominences.isChecked(),

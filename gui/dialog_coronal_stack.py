@@ -67,6 +67,14 @@ DEFAULT_CORONAL_FILTERS = [
         "checked": True,
     },
     {
+        "id": "dark_structure",
+        "name": "08b - Estructuras Oscuras (Cavidades)",
+        "desc": "Realce selectivo de cavidades coronales y canales inter-streamers.",
+        "blend_mode": BLEND_MODE_MULTIPLY,
+        "opacity": 30,
+        "checked": False,
+    },
+    {
         "id": "wow",
         "name": "02 - WOW Bilateral Guiado",
         "desc": "Filtro edge-aware que preserva bordes sutiles sin producir halos.",
