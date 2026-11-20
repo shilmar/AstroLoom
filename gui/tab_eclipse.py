@@ -660,6 +660,7 @@ class EclipseWorker(QThread):
                 hp_strength = self.params.get("hp_strength", 0.5)
                 reach = self.params.get("reach", 3.5)
 
+                blend = self.params.get("blend", 0.50)
                 use_detail_rings = self.params.get("use_detail_rings", True)
                 if filter_type == "steerable_g2":
                     self.progress.emit(25, "Calculando filtro Steerable G2 (Freeman & Adelson / tensor de estructura)...")
@@ -754,6 +755,7 @@ class EclipseWorker(QThread):
                 elif filter_type == "fnrgf":
                     self.progress.emit(25, "Calculando FNRGF azimutal de Fourier (Morgan & Druckmüller)...")
                     order = self.params.get("fnrgf_order", 4)
+                    blend = self.params.get("blend", 0.55)
                     filtered = apply_fnrgf(
                         base_img,
                         center_x=cx,
