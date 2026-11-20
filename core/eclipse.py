@@ -1577,31 +1577,29 @@ def apply_fnrgf(
     use_detail_rings: bool = False
 ) -> np.ndarray:
     """
-    Fourier Normalizing Radial Graded Filter (FNRGF) (Morgan, Habbal & Woo 2006).
+    Fourier Normalizing Radial Graded Filter (FNRGF) (Druckmüllerová, Morgan & Habbal 2011).
     Modela la variación azimutal suave de los streamers y agujeros coronales mediante
-    series de Fourier de orden N en cada anillo concéntrico:
+    descomposición espectral angular ortogonal libre del efecto de cuadrícula cartesiana:
         B(r, theta) = a0(r) + sum_{k=1}^N [ ak(r) cos(k theta) + bk(r) sin(k theta) ]
 
-    A diferencia de NRGF (que aplasta los streamers ecuatoriales al restar una media isotrópica),
-    FNRGF preserva la auténtica estructura a gran escala de los rayos solares mientras extrae
-    los filamentos magnéticos más finos con máximo microcontraste.
+    A diferencia de una integración continua sobre píxeles cartesianos (que resuena con la 
+    simetría cuádruple de la rejilla cuadrada del sensor creando cruces espurias a 45°),
+    este método muestrea la corona en M sectores angulares equiespaciados uniformemente,
+    garantizando ortogonalidad trigonométrica exacta y modulando el detalle de filamentos
+    de forma relativa para preservar intacto el fondo estelar y la estructura global.
     """
+    if image is None:
+        return None
+
     img = np.asarray(image, dtype=np.float32)
     h, w = img.shape[:2]
 
-    # 1. Coordenadas polares continuas
+    # 1. Coordenadas polares
     y_coords, x_coords = np.indices((h, w), dtype=np.float32)
     dx = x_coords - float(center_x)
     dy = y_coords - float(center_y)
     r_map = np.sqrt(dx * dx + dy * dy)
-    theta_map = np.arctan2(dy, dx).astype(np.float32)
-
-    # 2. Compuerta radial continua en la periferia de la corona
-    r_max = float(radius_min) * max(1.2, float(radius_max_factor))
-    gate_start = float(radius_min) * (1.0 + (float(radius_max_factor) - 1.0) * 0.75)
-    t = np.clip((r_map - gate_start) / max(r_max - gate_start, 1.0), 0.0, 1.0)
-    radial_gate = 1.0 - (t * t * (3.0 - 2.0 * t))
-    radial_gate = np.where(r_map > r_max, 0.0, radial_gate)
+    theta_map = (np.arctan2(dy, dx) + (2.0 * np.pi)) % (2.0 * np.pi)
 
     if img.ndim == 3:
         lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
@@ -1609,90 +1607,85 @@ def apply_fnrgf(
         lum = img.copy()
     lum = lum.astype(np.float32)
 
-    # 3. Estimación de ruido de fondo
+    r_min = max(float(radius_min), 1.0)
+    r_max = r_min * max(1.2, float(radius_max_factor))
+    disk_mask = r_map >= r_min
+
+    # 2. Estimación de ruido de cielo exterior
     sky_mask = (r_map >= r_max)
     if np.sum(sky_mask) > 100:
         sky_samples = lum[sky_mask]
         sky_bg = float(np.median(sky_samples))
         sky_noise = float(1.4826 * np.median(np.abs(sky_samples - sky_bg)))
     else:
-        far_r = np.percentile(r_map, 90.0)
+        far_r = np.percentile(r_map, 85.0)
         sky_samples = lum[r_map >= far_r]
         sky_bg = float(np.median(sky_samples))
         sky_noise = float(1.4826 * np.median(np.abs(sky_samples - sky_bg)))
     sky_noise = max(sky_noise, 1e-4)
 
-    # 4. Descomposición en series de Fourier por anillos radiales
-    N = int(np.clip(fourier_order, 1, 8))
+    # 3. Discretización angular uniforme (M sectores para ortogonalidad exacta anti-rejilla)
+    M = 180  # 180 sectores = paso de 2.0 grados
     bin_size = max(float(bin_px), 0.5)
-    bins = (r_map / bin_size).astype(np.int32)
-    max_bin = int(bins.max()) + 2
+    r_bins = np.clip((r_map / bin_size).astype(np.int32), 0, None)
+    max_bin = int(r_bins.max()) + 1
+    th_bins = np.clip((theta_map / (2.0 * np.pi) * M).astype(np.int32), 0, M - 1)
 
-    flat_bins = bins.ravel()
+    cell_idx = r_bins * M + th_bins
+    flat_cells = cell_idx.ravel()
     flat_lum = lum.ravel()
-    counts = np.bincount(flat_bins, minlength=max_bin)
+    total_cells = max_bin * M
 
-    # Coeficiente a0(r): media por anillo
-    sum_lum = np.bincount(flat_bins, weights=flat_lum, minlength=max_bin)
-    a0_prof = np.where(counts >= 30, sum_lum / np.maximum(counts, 1), 0.0).astype(np.float32)
+    cell_counts = np.bincount(flat_cells, minlength=total_cells)
+    cell_sums = np.bincount(flat_cells, weights=flat_lum, minlength=total_cells)
 
-    # Armónicos azimutales ak(r), bk(r)
-    ak_profs = []
-    bk_profs = []
-    flat_theta = theta_map.ravel()
+    sec_grid = np.where(cell_counts >= 1, cell_sums / np.maximum(cell_counts, 1), 0.0).reshape(max_bin, M)
 
-    for k in range(1, N + 1):
-        cos_k = np.cos(k * flat_theta).astype(np.float32)
-        sin_k = np.sin(k * flat_theta).astype(np.float32)
+    # Rellenar sectores vacíos por interpolación circular para radios con cobertura parcial
+    for b in range(max_bin):
+        valid = cell_counts.reshape(max_bin, M)[b] >= 1
+        if not np.all(valid) and np.any(valid):
+            row = sec_grid[b]
+            angles = np.arange(M)
+            row[~valid] = np.interp(angles[~valid], angles[valid], row[valid], period=M)
 
-        sum_cos = np.bincount(flat_bins, weights=flat_lum * cos_k, minlength=max_bin)
-        sum_sin = np.bincount(flat_bins, weights=flat_lum * sin_k, minlength=max_bin)
-        sum_cos2 = np.bincount(flat_bins, weights=cos_k * cos_k, minlength=max_bin)
-        sum_sin2 = np.bincount(flat_bins, weights=sin_k * sin_k, minlength=max_bin)
+    # 4. Transformada de Fourier 1D por fila (armónicos azimutales puros)
+    N = int(np.clip(fourier_order, 1, 8))
+    rfft = np.fft.rfft(sec_grid, axis=1)
 
-        ak = np.where(sum_cos2 > 1e-4, sum_cos / np.maximum(sum_cos2, 1e-6), 0.0).astype(np.float32)
-        bk = np.where(sum_sin2 > 1e-4, sum_sin / np.maximum(sum_sin2, 1e-6), 0.0).astype(np.float32)
+    # Filtramos todo armónico superior a N
+    if rfft.shape[1] > (N + 1):
+        rfft[:, (N + 1):] = 0.0
 
-        ak_profs.append(ak)
-        bk_profs.append(bk)
+    # Reconstrucción del fondo azimutal suave en la rejilla angular
+    smooth_grid = np.fft.irfft(rfft, n=M, axis=1).astype(np.float32)
 
-    # Suavizado radial de coeficientes de Fourier para evitar cualquier banda concéntrica
+    # Suavizado radial gaussiano para asegurar continuidad sin bandas concéntricas
     if max_bin > 15:
-        a0_prof = cv2.GaussianBlur(a0_prof[:, None], (1, 25), 6).ravel()
-        for k in range(N):
-            ak_profs[k] = cv2.GaussianBlur(ak_profs[k][:, None], (1, 25), 6).ravel()
-            bk_profs[k] = cv2.GaussianBlur(bk_profs[k][:, None], (1, 25), 6).ravel()
+        smooth_grid = cv2.GaussianBlur(smooth_grid, (1, 25), 6.0)
 
-    # Reconstrucción del fondo azimutal suave B(r, theta) en 2D
-    bin_centers = np.arange(max_bin, dtype=np.float32)
-    r_bins_cont = (r_map / bin_size).ravel()
+    # Muestreo del fondo azimutal para cada píxel de la imagen
+    bkg_fourier = smooth_grid[r_bins, th_bins]
 
-    a0_map = np.interp(r_bins_cont, bin_centers, a0_prof).reshape(h, w).astype(np.float32)
-    bkg_fourier = a0_map.copy()
-
-    for k in range(1, N + 1):
-        ak_map = np.interp(r_bins_cont, bin_centers, ak_profs[k - 1]).reshape(h, w).astype(np.float32)
-        bk_map = np.interp(r_bins_cont, bin_centers, bk_profs[k - 1]).reshape(h, w).astype(np.float32)
-        bkg_fourier += ak_map * np.cos(k * theta_map) + bk_map * np.sin(k * theta_map)
-
-    # 5. Extracción de detalle y estimación de dispersión sigma(r)
-    disk_mask = r_map >= float(radius_min)
+    # 5. Extracción de detalle y dispersión local
     diff = np.where(disk_mask, lum - bkg_fourier, 0.0).astype(np.float32)
 
-    # Dispersión residual robusta
+    # Estimación de dispersión robusta sigma(r) por anillos
+    flat_r = r_bins.ravel()
     flat_diff = np.abs(diff).ravel()
-    sum_diff_sq = np.bincount(flat_bins, weights=flat_diff.astype(np.float64) ** 2, minlength=max_bin)
-    var_vals = np.where(counts >= 30, sum_diff_sq / np.maximum(counts, 1), 0.0)
+    counts_r = np.bincount(flat_r, minlength=max_bin)
+    sum_diff_sq = np.bincount(flat_r, weights=flat_diff.astype(np.float64) ** 2, minlength=max_bin)
+    var_vals = np.where(counts_r >= 30, sum_diff_sq / np.maximum(counts_r, 1), 0.0)
     sigma_prof = np.sqrt(np.maximum(var_vals, 1e-8)).astype(np.float32)
 
     if max_bin > 15:
-        sigma_prof = cv2.GaussianBlur(sigma_prof[:, None], (1, 25), 6).ravel()
+        sigma_prof = cv2.GaussianBlur(sigma_prof[:, None], (1, 25), 6.0).ravel()
 
-    min_sigma = max(sky_noise * 2.0, 0.0025)
+    min_sigma = max(sky_noise * 1.5, 0.002)
     sigma_prof = np.maximum(sigma_prof, min_sigma)
-    sigma_map = np.interp(r_bins_cont, bin_centers, sigma_prof).reshape(h, w).astype(np.float32)
+    sigma_map = sigma_prof[r_bins]
 
-    raw_detail = np.where(disk_mask, diff / sigma_map, 0.0).astype(np.float32)
+    raw_detail = np.where(disk_mask, diff / np.maximum(sigma_map, 1e-5), 0.0).astype(np.float32)
     clean_detail = cv2.bilateralFilter(raw_detail, d=7, sigmaColor=0.35, sigmaSpace=4.0)
 
     if use_detail_rings:
@@ -1702,19 +1695,31 @@ def apply_fnrgf(
             center_x=float(center_x),
             center_y=float(center_y)
         )
-        clipped_detail = (rings_norm - 0.5) * 2.0
+        detail_factor = np.tanh((rings_norm - 0.5) * 3.0)
     else:
-        clipped_detail = np.clip(clean_detail, -2.5, 2.5) / 2.5
+        detail_factor = np.tanh(clean_detail / 2.0)
 
-    # 6. Modulación de detalle con compuerta radial y protección de margen superior
+    # 6. Compuerta radial suave y modulación fotométrica relativa
+    gate_start = r_min * (1.0 + (float(radius_max_factor) - 1.0) * 0.70)
+    t = np.clip((r_map - gate_start) / max(r_max - gate_start, 1.0), 0.0, 1.0)
+    radial_gate = 1.0 - (t * t * (3.0 - 2.0 * t))
+    radial_gate = np.where(r_map > r_max, 0.0, radial_gate)
+
     snr_factor = np.clip((sigma_map - 1.2 * sky_noise) / (sigma_map + 1e-6), 0.0, 1.0)
     blend = float(np.clip(blend_ratio, 0.0, 1.0))
-    streamer_mod = clipped_detail * radial_gate * snr_factor * blend
+    mod_strength = blend * radial_gate * snr_factor
 
-    upper_headroom = np.where(streamer_mod > 0, np.maximum(1.0 - lum, 0.0), 1.0)
-    final_mod = streamer_mod * (0.4 + 0.6 * np.sqrt(upper_headroom))
+    # Modo científico 100% mapa de contraste FNRGF
+    if blend >= 0.98:
+        map_fnrgf = np.clip(0.5 + 0.5 * detail_factor, 0.0, 1.0)
+        map_fnrgf = np.where(disk_mask, map_fnrgf, 0.0).astype(np.float32)
+        if img.ndim == 3:
+            return np.repeat(map_fnrgf[..., None], 3, axis=2)
+        return map_fnrgf
 
-    new_lum = np.clip(lum + final_mod, 0.0, 1.0)
+    # Modo fotográfico (realce relativo sin black-clipping ni alteración del fondo)
+    new_lum = lum * (1.0 + 0.80 * detail_factor * mod_strength)
+    new_lum = np.clip(new_lum, 0.0, 1.0)
     new_lum = np.where(disk_mask, new_lum, 0.0).astype(np.float32)
 
     # 7. Recomposición cromática lineal exacta
@@ -1722,6 +1727,7 @@ def apply_fnrgf(
         ratio = np.divide(new_lum, np.maximum(lum, 1e-4), out=np.zeros_like(lum), where=lum > 1e-6)
         ratio = np.clip(ratio, 0.0, 4.0)
         result = img * ratio[..., None]
+        result = np.where(disk_mask[..., None], result, 0.0)
     else:
         result = new_lum
 
