@@ -660,16 +660,19 @@ class EclipseWorker(QThread):
                 hp_strength = self.params.get("hp_strength", 0.5)
                 reach = self.params.get("reach", 3.5)
 
+                scale = float(self.params.get("scale", 1.0))
                 blend = self.params.get("blend", 0.50)
                 use_detail_rings = self.params.get("use_detail_rings", True)
                 if filter_type == "steerable_g2":
                     self.progress.emit(25, "Calculando filtro Steerable G2 (Freeman & Adelson / tensor de estructura)...")
                     blend = self.params.get("blend", 0.50)
+                    sigmas = tuple(max(0.75, s * scale) for s in (1.5, 3.0, 6.0, 12.0))
                     filtered = apply_steerable_g2(
                         base_img,
                         center_x=cx,
                         center_y=cy,
                         radius_min=mask_r,
+                        sigmas=sigmas,
                         blend_ratio=blend,
                         radius_max_factor=reach,
                         use_detail_rings=use_detail_rings
@@ -710,12 +713,13 @@ class EclipseWorker(QThread):
                     mgn_gamma = self.params.get("mgn_gamma", 2.8)
                     blend = self.params.get("blend", 0.50)
                     noise_floor = self.params.get("mgn_noise_floor", 0.003)
-                    chroma_denoise = self.params.get("mgn_chroma_denoise", 16.0)
+                    chroma_denoise = self.params.get("mgn_chroma_denoise", 16.0) * scale
                     lunar_mask = (cx, cy, mask_r) if mask_r > 5 else None
+                    sigmas = tuple(max(0.75, s * scale) for s in (1.5, 3.0, 6.0, 12.0, 24.0, 48.0))
 
                     filtered = apply_mgn(
                         base_img,
-                        sigmas=(1.5, 3.0, 6.0, 12.0, 24.0, 48.0),
+                        sigmas=sigmas,
                         k=mgn_k,
                         gamma=mgn_gamma,
                         blend_ratio=blend,
@@ -756,18 +760,20 @@ class EclipseWorker(QThread):
                     self.progress.emit(25, "Calculando FNRGF azimutal de Fourier (Morgan & Druckmüller)...")
                     order = self.params.get("fnrgf_order", 4)
                     blend = self.params.get("blend", 0.55)
+                    bin_px = max(0.5, self.params.get("bin_px", 1.0) * scale)
                     filtered = apply_fnrgf(
                         base_img,
                         center_x=cx,
                         center_y=cy,
                         fourier_order=order,
+                        bin_px=bin_px,
                         blend_ratio=blend,
                         radius_min=mask_r,
                         radius_max_factor=reach,
                         use_detail_rings=use_detail_rings
                     )
                 else:
-                    bin_px = self.params.get("bin_px", 2.0)
+                    bin_px = max(0.5, self.params.get("bin_px", 2.0) * scale)
                     robust = self.params.get("robust", True)
                     blend = self.params.get("blend", 0.55)
                     part_annuli = self.params.get("nrgf_partial_annuli", "observed")
@@ -905,6 +911,8 @@ class EclipseTab(QWidget):
         self.current_preview_img = None # Imagen float32 visible
         self.raw_fused_hdr = None       # Flujo puro HDR sin estirar
         self.fused_hdr_img = None       # Imagen HDR con estirado
+        self.proxy_hdr_img = None       # Imagen proxy al 50% para previsualización rápida
+        self._current_is_proxy: bool = False # Flag que indica si la imagen en el visor es un proxy
         self.fused_hdr_geom = None      # Geometría local (cx, cy, r) de la imagen fusionada/recortada
         self._viewing_fused: bool = False
         self.final_filtered_img = None   # Imagen tras aplicar filtros de corona
@@ -1620,7 +1628,17 @@ class EclipseTab(QWidget):
         self.lbl_hp_val = self.slider_hp.spin  # compatibilidad
         nrgf_layout.addWidget(self.slider_hp)
 
-        self.btn_apply_filters = QPushButton("APLICAR FILTROS DE CORONA")
+        self.chk_proxy_preview = QCheckBox("Previsualización rápida Proxy 50% (4x más veloz)")
+        self.chk_proxy_preview.setChecked(True)
+        self.chk_proxy_preview.setStyleSheet("color: #80d8ff; font-weight: bold; font-size: 11px;")
+        self.chk_proxy_preview.setToolTip(
+            "Ejecuta los filtros coronales sobre una matriz proxy al 50% para previsualizar y calibrar "
+            "deslizadores con máxima fluidez. Pulsa 'RENDER FINAL 1:1' para procesar la resolución nativa completa."
+        )
+        self.chk_proxy_preview.toggled.connect(self._on_proxy_preview_toggled)
+        nrgf_layout.addWidget(self.chk_proxy_preview)
+
+        self.btn_apply_filters = QPushButton("APLICAR FILTROS (VISTA PREVIA 50%)")
         self.btn_apply_filters.setIcon(get_icon("sparkles", color="#ffffff"))
         self.btn_apply_filters.setFixedHeight(40)
         self.btn_apply_filters.setCursor(Qt.PointingHandCursor)
@@ -1646,8 +1664,38 @@ class EclipseTab(QWidget):
                 border: 1px solid #1e293b;
             }
         """)
-        self.btn_apply_filters.clicked.connect(self._on_apply_filters_clicked)
+        self.btn_apply_filters.clicked.connect(self._on_apply_filters_btn_clicked)
         nrgf_layout.addWidget(self.btn_apply_filters)
+
+        self.btn_render_full = QPushButton("RENDER FINAL 1:1 (RESOLUCIÓN COMPLETA)")
+        self.btn_render_full.setIcon(get_icon("zap", color="#ffffff"))
+        self.btn_render_full.setFixedHeight(34)
+        self.btn_render_full.setCursor(Qt.PointingHandCursor)
+        self.btn_render_full.setStyleSheet("""
+            QPushButton {
+                font-weight: bold;
+                font-size: 11px;
+                background-color: #1e3a5f;
+                color: #e0f2fe;
+                border-radius: 6px;
+                border: 1px solid #0284c7;
+            }
+            QPushButton:hover {
+                background-color: #0284c7;
+                color: white;
+            }
+            QPushButton:pressed {
+                background-color: #0369a1;
+            }
+            QPushButton:disabled {
+                background-color: #152238;
+                color: #546e7a;
+                border: 1px solid #1e293b;
+            }
+        """)
+        self.btn_render_full.setToolTip("Aplica los filtros coronales a resolución completa 1:1 sobre la matriz nativa de 32 bits.")
+        self.btn_render_full.clicked.connect(self._on_render_full_clicked)
+        nrgf_layout.addWidget(self.btn_render_full)
 
         lbl_credits = QLabel(
             "✦ Algoritmos de corona inspirados en las investigaciones de M. Druckmüller y "
@@ -1841,14 +1889,17 @@ class EclipseTab(QWidget):
         if self.fused_hdr_img is None or self.final_filtered_img is None:
             return
 
+        is_proxy = getattr(self, "_current_is_proxy", False)
+        base_to_show = self.proxy_hdr_img if (is_proxy and getattr(self, "proxy_hdr_img", None) is not None) else self.fused_hdr_img
+
         if checked:
-            self.canvas.set_image(self.fused_hdr_img)
-            self.btn_bypass_tb.setText("A: Base HDR")
-            self.lbl_canvas_status.setText("Mostrando: Base HDR (Bypass activo)")
+            self.canvas.set_image(base_to_show)
+            self.btn_bypass_tb.setText("A: Base HDR" + (" [Proxy]" if is_proxy else ""))
+            self.lbl_canvas_status.setText(f"Mostrando: Base HDR ({'Proxy 50%' if is_proxy else 'Nativo 1:1'}, Bypass activo)")
         else:
             self.canvas.set_image(self.final_filtered_img)
-            self.btn_bypass_tb.setText("B: Filtrada")
-            self.lbl_canvas_status.setText("Mostrando: Filtros Coronales")
+            self.btn_bypass_tb.setText("B: Filtrada" + (" [Proxy]" if is_proxy else " [1:1]"))
+            self.lbl_canvas_status.setText(f"Mostrando: Filtros Coronales ({'Proxy 50%' if is_proxy else 'Nativo 1:1'})")
 
         self._update_canvas_guide()
 
@@ -1941,9 +1992,21 @@ class EclipseTab(QWidget):
         r = self.spin_radius.value()
         offset = self.spin_mask_offset.value() if hasattr(self, 'spin_mask_offset') else -2.5
         show = self.chk_show_guide.isChecked()
+
+        # Si el lienzo tiene asignada una imagen proxy al 50%, escalamos la guía visual
+        if getattr(self.canvas, "orig_f32", None) is not None and self.fused_hdr_img is not None:
+            cw = self.canvas.orig_f32.shape[1]
+            fw = self.fused_hdr_img.shape[1]
+            if cw > 0 and fw > 0 and abs(cw - fw) > 5:
+                scale = cw / fw
+                cx *= scale
+                cy *= scale
+                r *= scale
+                offset *= scale
+
         self.canvas.set_guide_params(cx, cy, r, show=show, mask_offset=offset)
         if hasattr(self, 'lbl_mask_r_disp'):
-            self.lbl_mask_r_disp.setText(f"R_mask: {max(0.0, r + offset):.1f} px")
+            self.lbl_mask_r_disp.setText(f"R_mask: {max(0.0, self.spin_radius.value() + (self.spin_mask_offset.value() if hasattr(self, 'spin_mask_offset') else -2.5)):.1f} px")
 
     def _on_mask_offset_changed(self):
         self._update_canvas_guide()
@@ -1952,6 +2015,7 @@ class EclipseTab(QWidget):
         """Devuelve (cx, cy, r) de la imagen objetivo (fusión HDR recortada o toma individual)."""
         is_fused = (self.fused_hdr_img is not None and 
                     (base_img is self.fused_hdr_img or 
+                     base_img is getattr(self, "proxy_hdr_img", None) or
                      (self.final_filtered_img is not None and base_img is self.final_filtered_img)))
         if is_fused:
             if getattr(self, "fused_hdr_geom", None) is not None:
@@ -2075,6 +2139,8 @@ class EclipseTab(QWidget):
         self.current_preview_img = None
         self.raw_fused_hdr = None
         self.fused_hdr_img = None
+        self.proxy_hdr_img = None
+        self._current_is_proxy = False
         self.fused_hdr_geom = None
         self._viewing_fused = False
         self.final_filtered_img = None
@@ -2351,6 +2417,11 @@ class EclipseTab(QWidget):
         if self.raw_fused_hdr is not None:
             self._viewing_fused = True
             self.fused_hdr_img = apply_asinh_stretch(self.raw_fused_hdr, stretch_factor=factor) if factor > 1.0 else self.raw_fused_hdr.copy()
+            if self.fused_hdr_img.shape[0] >= 500 and self.fused_hdr_img.shape[1] >= 500:
+                self.proxy_hdr_img = cv2.resize(self.fused_hdr_img, (0, 0), fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
+            else:
+                self.proxy_hdr_img = None
+            self._current_is_proxy = False
             self.canvas.set_image(self.fused_hdr_img)
             if getattr(self, "fused_hdr_geom", None) is not None:
                 self._set_geom_spin_values(*self.fused_hdr_geom)
@@ -2455,7 +2526,20 @@ class EclipseTab(QWidget):
         self.container_fnrgf.setVisible(idx == 7)
         self.chk_detail_rings.setVisible(idx in (0, 2, 4, 6, 7))
 
-    def _on_apply_filters_clicked(self):
+    def _on_proxy_preview_toggled(self, checked: bool):
+        if checked:
+            self.btn_apply_filters.setText("APLICAR FILTROS (VISTA PREVIA 50%)")
+        else:
+            self.btn_apply_filters.setText("APLICAR FILTROS DE CORONA (1:1)")
+
+    def _on_apply_filters_btn_clicked(self):
+        use_proxy = self.chk_proxy_preview.isChecked() if hasattr(self, 'chk_proxy_preview') else False
+        self._on_apply_filters_clicked(use_proxy=use_proxy)
+
+    def _on_render_full_clicked(self):
+        self._on_apply_filters_clicked(use_proxy=False)
+
+    def _on_apply_filters_clicked(self, use_proxy: bool = True):
         if self.worker is not None and self.worker.isRunning():
             return
         base_img = self.fused_hdr_img if self.fused_hdr_img is not None else self.current_preview_img
@@ -2468,6 +2552,24 @@ class EclipseTab(QWidget):
         if r <= 5:
             QMessageBox.warning(self, "Atención", "Define o auto-detecta el radio del limbo antes de aplicar los filtros.")
             return
+
+        h_orig, w_orig = base_img.shape[:2]
+        is_proxy = use_proxy and (h_orig >= 500 and w_orig >= 500)
+        scale = 0.5 if is_proxy else 1.0
+
+        if is_proxy:
+            expected_shape = (int(round(h_orig * 0.5)), int(round(w_orig * 0.5)))
+            if (self.proxy_hdr_img is None or self.proxy_hdr_img.shape[:2] != expected_shape):
+                self.proxy_hdr_img = cv2.resize(base_img, (0, 0), fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
+            proc_img = self.proxy_hdr_img
+            proc_cx = cx * scale
+            proc_cy = cy * scale
+            proc_r = r * scale
+        else:
+            proc_img = base_img
+            proc_cx = cx
+            proc_cy = cy
+            proc_r = r
 
         idx = self.combo_filter_algo.currentIndex()
         reach = 3.5
@@ -2519,19 +2621,23 @@ class EclipseTab(QWidget):
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.btn_apply_filters.setEnabled(False)
+        if hasattr(self, 'btn_render_full'):
+            self.btn_render_full.setEnabled(False)
         self.btn_fuse_hdr.setEnabled(False)
         self.btn_detect_all.setEnabled(False)
 
-        offset = self.spin_mask_offset.value() if hasattr(self, 'spin_mask_offset') else -2.5
-        mask_radius = max(1.0, r + offset)
+        offset = (self.spin_mask_offset.value() if hasattr(self, 'spin_mask_offset') else -2.5) * scale
+        mask_radius = max(1.0, proc_r + offset)
 
         params = {
-            "image": base_img,
-            "cx": cx,
-            "cy": cy,
-            "radius": r,
+            "image": proc_img,
+            "cx": proc_cx,
+            "cy": proc_cy,
+            "radius": proc_r,
             "mask_radius": mask_radius,
             "mask_offset": offset,
+            "scale": scale,
+            "is_proxy": is_proxy,
             "filter_type": filter_type,
             "mgn_k": mgn_k,
             "mgn_gamma": mgn_gamma,
@@ -2633,6 +2739,8 @@ class EclipseTab(QWidget):
         self.btn_detect_all.setEnabled(True)
         self.btn_fuse_hdr.setEnabled(True)
         self.btn_apply_filters.setEnabled(True)
+        if hasattr(self, 'btn_render_full'):
+            self.btn_render_full.setEnabled(True)
 
         if task_type == "batch_detect":
             self.cached_aligned_data = None
@@ -2669,6 +2777,11 @@ class EclipseTab(QWidget):
             self._viewing_fused = True
             self.raw_fused_hdr = result["hdr_raw"]
             self.fused_hdr_img = result["hdr_image"]
+            if self.fused_hdr_img.shape[0] >= 500 and self.fused_hdr_img.shape[1] >= 500:
+                self.proxy_hdr_img = cv2.resize(self.fused_hdr_img, (0, 0), fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
+            else:
+                self.proxy_hdr_img = None
+            self._current_is_proxy = False
             self.canvas.set_image(self.fused_hdr_img)
 
             raw_centers = result.get("raw_centers", result["centers"])
@@ -2739,15 +2852,19 @@ class EclipseTab(QWidget):
         elif task_type == "apply_filters":
             self._viewing_fused = True
             self.final_filtered_img = result
+            is_proxy = self.worker.params.get("is_proxy", False) if self.worker else False
+            self._current_is_proxy = is_proxy
             self.canvas.set_image(result)
             self._update_canvas_guide()
             if hasattr(self, 'btn_bypass_tb'):
                 self.btn_bypass_tb.setEnabled(True)
                 self.btn_bypass_tb.blockSignals(True)
                 self.btn_bypass_tb.setChecked(False)
-                self.btn_bypass_tb.setText("B: Filtrada")
+                self.btn_bypass_tb.setText("B: Filtrada" + (" [Proxy]" if is_proxy else " [1:1]"))
                 self.btn_bypass_tb.blockSignals(False)
-            self.log("Filtros de corona aplicados con compuerta radial (fondo limpio).")
+            status_tag = "[Proxy 50%]" if is_proxy else "[Nativo 1:1]"
+            self.lbl_canvas_status.setText(f"Mostrando: Filtros Coronales {status_tag}")
+            self.log(f"Filtros de corona aplicados {status_tag} con compuerta radial.")
 
         elif task_type == "export_coronal_psd":
             filepath, desc = result
@@ -2773,6 +2890,8 @@ class EclipseTab(QWidget):
         self.btn_detect_all.setEnabled(True)
         self.btn_fuse_hdr.setEnabled(True)
         self.btn_apply_filters.setEnabled(True)
+        if hasattr(self, 'btn_render_full'):
+            self.btn_render_full.setEnabled(True)
         if hasattr(self, 'btn_send_coronal_stack_to_dev'):
             self.btn_send_coronal_stack_to_dev.setEnabled(True)
         QMessageBox.critical(self, "Error de Procesado", err_msg)
@@ -2827,6 +2946,21 @@ class EclipseTab(QWidget):
         if ext == ".psd" or ("Photoshop" in selected_filter and ext not in ['.tif', '.tiff', '.jpg', '.jpeg']):
             self._on_export_psd_clicked(out_path=path)
             return
+
+        # Si la imagen a guardar proviene de un proxy 50%, advertir al usuario para máxima calidad
+        if getattr(self, "_current_is_proxy", False):
+            resp = QMessageBox.question(
+                self,
+                "Aviso de Previsualización Proxy (50%)",
+                "La imagen actual en el visor es un borrador Proxy al 50%.\n\n"
+                "Para obtener la máxima resolución nativa (1:1), se recomienda generar primero el 'RENDER FINAL 1:1'.\n\n"
+                "¿Deseas cancelar el guardado para pulsar 'RENDER FINAL 1:1' primero?\n"
+                "(Pulsa 'Sí' para volver y hacer Render 1:1, o 'No' para continuar guardando el proxy al 50%).",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            if resp == QMessageBox.Yes:
+                return
 
         if os.path.exists(path):
             try:
