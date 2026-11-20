@@ -82,6 +82,7 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(eclipse::paired_b3_step_rs, m)?)?;
     m.add_function(wrap_pyfunction!(eclipse::b3_normalized_rs, m)?)?;
     m.add_function(wrap_pyfunction!(eclipse::apply_wow_edge_aware_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(eclipse::apply_nafe_rs, m)?)?;
     m.add_function(wrap_pyfunction!(eclipse::apply_asinh_stretch_rs, m)?)?;
     m.add_function(wrap_pyfunction!(eclipse::balance_coronal_white_balance_rs, m)?)?;
     m.add_function(wrap_pyfunction!(eclipse::optimize_center_circular_flux_rs, m)?)?;

@@ -2641,7 +2641,23 @@ def apply_nafe(
     Noise Adaptive Fuzzy Equalization (NAFE - Miloslav Druckmüller 2013, ApJS 207, 25).
     Ecualización difusa con compuerta de ruido gaussiana a lo largo del eje de intensidad,
     calculada de forma acelerada mediante niveles de intensidad y convoluciones FFT 2D.
+    Acelerado nativamente en Rust con Rayon y realfft.
     """
+    if HAS_RUST and hasattr(astroloom_rs, "apply_nafe_rs"):
+        img_c = np.ascontiguousarray(image, dtype=np.float32)
+        res = astroloom_rs.apply_nafe_rs(
+            img_c,
+            float(center_x),
+            float(center_y),
+            float(radius_min),
+            float(sigma) if sigma is not None and sigma > 0 else None,
+            int(n),
+            float(level_step),
+            float(blend_ratio),
+            bool(use_overlay)
+        )
+        return np.asarray(res, dtype=np.float32)
+
     from scipy import fft as sfft
     from scipy.special import ndtr
 
