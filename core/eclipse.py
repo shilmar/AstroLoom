@@ -2508,7 +2508,25 @@ def apply_wow_edge_aware(
     Filtro WOW bilateral guiado (Wavelet-Optimized Whitening Edge-Aware / AEL 1.3.5 / Issue #4).
     Descompone la corona en escalas à-trous B3 con pares simétricos y pesos de rango guiados
     para mantener el limbo lunar limpio sin generar halos ni invertir estructuras sutiles.
+    Acelerado 100% de forma nativa en Rust con Rayon.
     """
+    if HAS_RUST and hasattr(astroloom_rs, "apply_wow_edge_aware_rs"):
+        img_c = np.ascontiguousarray(image, dtype=np.float32)
+        lo, hi = completeness
+        res = astroloom_rs.apply_wow_edge_aware_rs(
+            img_c,
+            float(center_x),
+            float(center_y),
+            float(radius_min),
+            int(n_scales),
+            bool(guided),
+            float(lo),
+            float(hi),
+            float(blend_ratio),
+            bool(use_detail_rings)
+        )
+        return np.asarray(res, dtype=np.float32)
+
     img = np.clip(np.asarray(image, dtype=np.float32), 0.0, 1.0)
     if img.ndim == 3:
         lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
