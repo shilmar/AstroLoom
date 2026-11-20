@@ -37,6 +37,7 @@ from core.log_hub import log_hub
 
 from gui.dialog_coronal_stack import CoronalStackDialog
 from gui.widgets.viewer_toolbar import ViewerToolbar, CanvasFooterBar
+from gui.widgets.split_view_helper import SplitViewHelper
 
 from core.eclipse import (
     extract_exposure_info,
@@ -192,6 +193,9 @@ class EclipseCanvas(QWidget):
         self.mask_offset: float = -2.5
         self.pick_center_mode: bool = False
 
+        # Comparador interactivo de cortina (Split-View)
+        self.split_helper = SplitViewHelper()
+
     @property
     def image(self) -> Optional[np.ndarray]:
         return self.orig_f32
@@ -260,6 +264,34 @@ class EclipseCanvas(QWidget):
         self.mask_offset = mask_offset
         self.update()
 
+    def set_split_view_enabled(self, enabled: bool) -> None:
+        """Activa o desactiva la cortina comparadora interactiva."""
+        if self.split_helper.set_enabled(enabled):
+            self.update()
+
+    def set_split_orientation(self, orientation: str) -> None:
+        """Establece la orientación de la cortina ('vertical' u 'horizontal')."""
+        if self.split_helper.set_orientation(orientation):
+            self.update()
+
+    def toggle_split_orientation(self) -> str:
+        """Alterna entre orientación vertical y horizontal."""
+        new_ori = self.split_helper.toggle_orientation()
+        self.update()
+        return new_ori
+
+    def set_before_image(self, img_f32: Optional[np.ndarray]) -> None:
+        """Asigna la imagen de referencia previa ('Antes') a partir de un array float32/uint8."""
+        self.split_helper.set_before_image(img_f32)
+        if self.split_helper.enabled:
+            self.update()
+
+    def set_before_pixmap(self, pixmap: Optional[QPixmap]) -> None:
+        """Asigna la imagen de referencia previa ('Antes') directamente como QPixmap."""
+        self.split_helper.set_before_pixmap(pixmap)
+        if self.split_helper.enabled:
+            self.update()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -272,11 +304,21 @@ class EclipseCanvas(QWidget):
                 self._draw_drag_feedback(painter)
             return
 
-        # Dibujar imagen con zoom y pan
+        # Dibujar imagen con zoom y pan (o cortina interactiva Antes / Después)
         iw = self.base_pixmap.width() * self.zoom_level
         ih = self.base_pixmap.height() * self.zoom_level
         target_rect = QRectF(self.pan_offset.x(), self.pan_offset.y(), iw, ih)
-        painter.drawPixmap(target_rect.toRect(), self.base_pixmap)
+
+        if self.split_helper.enabled and self.split_helper.before_pixmap and not self.split_helper.before_pixmap.isNull():
+            self.split_helper.draw(
+                painter, target_rect,
+                self.split_helper.before_pixmap,
+                self.base_pixmap,
+                badge_before="BASE HDR",
+                badge_after="FILTRADA"
+            )
+        else:
+            painter.drawPixmap(target_rect.toRect(), self.base_pixmap)
 
         # Realimentación visual al arrastrar archivos sobre el visor
         if self._drag_hover:
@@ -332,6 +374,15 @@ class EclipseCanvas(QWidget):
             self.last_mouse_pos = event.pos()
             self.setCursor(Qt.ClosedHandCursor)
         elif event.button() == Qt.LeftButton:
+            if self.base_pixmap and self.split_helper.enabled:
+                iw = self.base_pixmap.width() * self.zoom_level
+                ih = self.base_pixmap.height() * self.zoom_level
+                target_rect = QRectF(self.pan_offset.x(), self.pan_offset.y(), iw, ih)
+                if self.split_helper.handle_mouse_press(event.pos(), target_rect, is_double_click=False):
+                    self.setCursor(Qt.SplitVCursor if self.split_helper.orientation == "horizontal" else Qt.SplitHCursor)
+                    self.update()
+                    return
+
             if self.pick_center_mode and self.base_pixmap is not None:
                 img_x = (event.position().x() - self.pan_offset.x()) / self.zoom_level
                 img_y = (event.position().y() - self.pan_offset.y()) / self.zoom_level
@@ -341,17 +392,49 @@ class EclipseCanvas(QWidget):
                     self.pick_center_mode = False
                     self.setCursor(Qt.ArrowCursor)
 
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton and self.base_pixmap and self.split_helper.enabled:
+            iw = self.base_pixmap.width() * self.zoom_level
+            ih = self.base_pixmap.height() * self.zoom_level
+            target_rect = QRectF(self.pan_offset.x(), self.pan_offset.y(), iw, ih)
+            if self.split_helper.handle_mouse_press(event.pos(), target_rect, is_double_click=True):
+                self.update()
+                return
+        super().mouseDoubleClickEvent(event)
+
     def mouseMoveEvent(self, event):
         if self.is_panning:
             delta = event.pos() - self.last_mouse_pos
             self.pan_offset += delta
             self.last_mouse_pos = event.pos()
             self.update()
+            return
+
+        if self.base_pixmap and self.split_helper.enabled:
+            iw = self.base_pixmap.width() * self.zoom_level
+            ih = self.base_pixmap.height() * self.zoom_level
+            target_rect = QRectF(self.pan_offset.x(), self.pan_offset.y(), iw, ih)
+            handled, cursor = self.split_helper.handle_mouse_move(event.pos(), target_rect)
+            if handled:
+                self.update()
+                return
+            if not self.pick_center_mode:
+                if cursor is not None:
+                    self.setCursor(cursor)
+                elif not self.is_panning:
+                    self.setCursor(Qt.ArrowCursor)
 
     def mouseReleaseEvent(self, event):
         if event.button() in (Qt.MiddleButton, Qt.RightButton):
             self.is_panning = False
             self.setCursor(Qt.CrossCursor if self.pick_center_mode else Qt.ArrowCursor)
+            return
+
+        if event.button() == Qt.LeftButton and self.split_helper.is_dragging:
+            self.split_helper.handle_mouse_release()
+            self.setCursor(Qt.ArrowCursor)
+            self.update()
+            return
 
     def wheelEvent(self, event):
         if self.base_pixmap is None:
@@ -1823,6 +1906,35 @@ class EclipseTab(QWidget):
         self.btn_bypass_tb.toggled.connect(self._on_bypass_tb_toggled)
         self.toolbar.insert_custom_widget_before_stretch(self.btn_bypass_tb)
 
+        # Botón Cortina Divisoria (Split-View Antes/Después)
+        self.btn_split_view = QPushButton("Cortina")
+        self.btn_split_view.setIcon(get_icon("split", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
+        self.btn_split_view.setCheckable(True)
+        self.btn_split_view.setChecked(False)
+        self.btn_split_view.setEnabled(False)
+        self.btn_split_view.setCursor(Qt.PointingHandCursor)
+        self.btn_split_view.setToolTip(
+            "Activa la cortina divisoria interactiva para comparar la Base HDR con los Filtros Coronales.\n"
+            "Arrastra la línea divisoria con el ratón o haz doble clic para centrarla.\n"
+            "Atajo: Y"
+        )
+        self.btn_split_view.toggled.connect(self._on_split_view_toggled)
+        self.toolbar.insert_custom_widget_before_stretch(self.btn_split_view)
+
+        # Botón Orientación Cortina (Vertical / Horizontal)
+        self.btn_split_orientation = QPushButton("Vertical")
+        self.btn_split_orientation.setIcon(get_icon("sliders", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=13))
+        self.btn_split_orientation.setCursor(Qt.PointingHandCursor)
+        self.btn_split_orientation.setEnabled(False)
+        self.btn_split_orientation.setToolTip(
+            "Alterna la orientación de la cortina divisoria:\n"
+            "• Vertical: Izquierda ('Base HDR') / Derecha ('Filtros')\n"
+            "• Horizontal: Arriba ('Base HDR') / Abajo ('Filtros')\n"
+            "Atajo: Shift+Y"
+        )
+        self.btn_split_orientation.clicked.connect(self._on_toggle_split_orientation)
+        self.toolbar.insert_custom_widget_before_stretch(self.btn_split_orientation)
+
         self.toolbar.add_separator_before_stretch()
 
         # Badge de modo y estado a la derecha
@@ -1877,6 +1989,15 @@ class EclipseTab(QWidget):
         self.shortcut_backslash.setContext(Qt.WidgetWithChildrenShortcut)
         self.shortcut_backslash.activated.connect(self._toggle_bypass_shortcut)
 
+        # Atajos de Cortina Split-View
+        self.shortcut_split = QShortcut(QKeySequence(Qt.Key_Y), self)
+        self.shortcut_split.setContext(Qt.WidgetWithChildrenShortcut)
+        self.shortcut_split.activated.connect(self._toggle_split_shortcut)
+
+        self.shortcut_split_orientation = QShortcut(QKeySequence("Shift+Y"), self)
+        self.shortcut_split_orientation.setContext(Qt.WidgetWithChildrenShortcut)
+        self.shortcut_split_orientation.activated.connect(self._toggle_split_orientation_shortcut)
+
     def _toggle_bypass_shortcut(self) -> None:
         focused = QApplication.focusWidget()
         if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
@@ -1884,10 +2005,33 @@ class EclipseTab(QWidget):
         if hasattr(self, 'btn_bypass_tb') and self.btn_bypass_tb.isEnabled():
             self.btn_bypass_tb.setChecked(not self.btn_bypass_tb.isChecked())
 
+    def _toggle_split_shortcut(self) -> None:
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            return
+        if hasattr(self, 'btn_split_view') and self.btn_split_view.isEnabled():
+            self.btn_split_view.setChecked(not self.btn_split_view.isChecked())
+
+    def _toggle_split_orientation_shortcut(self) -> None:
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
+            return
+        if hasattr(self, 'btn_split_orientation') and self.btn_split_orientation.isEnabled():
+            self._on_toggle_split_orientation()
+
     def _on_bypass_tb_toggled(self, checked: bool) -> None:
         """Conmuta instantáneamente entre el HDR Base (A) y la imagen con filtros aplicados (B)."""
         if self.fused_hdr_img is None or self.final_filtered_img is None:
             return
+
+        # Si la cortina interactiva está activa, desactivarla para evitar interferencia visual
+        if checked and hasattr(self, 'btn_split_view') and self.btn_split_view.isChecked():
+            self.btn_split_view.blockSignals(True)
+            self.btn_split_view.setChecked(False)
+            self.canvas.set_split_view_enabled(False)
+            if hasattr(self, 'btn_split_orientation'):
+                self.btn_split_orientation.setEnabled(False)
+            self.btn_split_view.blockSignals(False)
 
         is_proxy = getattr(self, "_current_is_proxy", False)
         base_to_show = self.proxy_hdr_img if (is_proxy and getattr(self, "proxy_hdr_img", None) is not None) else self.fused_hdr_img
@@ -1902,6 +2046,48 @@ class EclipseTab(QWidget):
             self.lbl_canvas_status.setText(f"Mostrando: Filtros Coronales ({'Proxy 50%' if is_proxy else 'Nativo 1:1'})")
 
         self._update_canvas_guide()
+
+    def _on_split_view_toggled(self, checked: bool) -> None:
+        """Activa o desactiva la cortina divisoria interactiva Antes / Después."""
+        if checked:
+            # Desactivar bypass A/B si estaba activo
+            if hasattr(self, 'btn_bypass_tb') and self.btn_bypass_tb.isChecked():
+                self.btn_bypass_tb.blockSignals(True)
+                self.btn_bypass_tb.setChecked(False)
+                self.btn_bypass_tb.blockSignals(False)
+
+            if self.final_filtered_img is not None:
+                self.canvas.set_image(self.final_filtered_img)
+
+            self._update_before_reference()
+            self.canvas.set_split_view_enabled(True)
+            self.btn_split_orientation.setEnabled(True)
+            ori_txt = "Vertical" if self.canvas.split_helper.orientation == "vertical" else "Horizontal"
+            self.lbl_canvas_status.setText(f"Cortina interactiva ({ori_txt}): Base HDR vs Filtros")
+            self.log(f"Cortina comparadora activada ({ori_txt}). Arrastra la línea central o doble clic para centrar.")
+        else:
+            self.canvas.set_split_view_enabled(False)
+            self.btn_split_orientation.setEnabled(False)
+            self.lbl_canvas_status.setText("Listo.")
+            self.canvas.update()
+        self._update_canvas_guide()
+
+    def _on_toggle_split_orientation(self) -> None:
+        """Alterna entre orientación vertical y horizontal de la cortina."""
+        new_ori = self.canvas.toggle_split_orientation()
+        is_vert = (new_ori == "vertical")
+        self.btn_split_orientation.setText("Vertical" if is_vert else "Horizontal")
+        ori_txt = "Vertical (Izq/Der)" if is_vert else "Horizontal (Arr/Abj)"
+        self.lbl_canvas_status.setText(f"Cortina interactiva: {ori_txt}")
+        self.log(f"Orientación de cortina cambiada a: {ori_txt}")
+
+    def _update_before_reference(self) -> None:
+        """Sincroniza la imagen 'Antes' (Base HDR) en la escala correspondiente (Proxy 50% o Nativo 1:1)."""
+        if self.fused_hdr_img is None:
+            return
+        is_proxy = getattr(self, "_current_is_proxy", False)
+        base_ref = self.proxy_hdr_img if (is_proxy and getattr(self, "proxy_hdr_img", None) is not None) else self.fused_hdr_img
+        self.canvas.set_before_image(base_ref)
 
     def _on_pick_center_tb_toggled(self, checked: bool) -> None:
         if hasattr(self, 'btn_pick_center') and self.btn_pick_center.isChecked() != checked:
@@ -2144,6 +2330,21 @@ class EclipseTab(QWidget):
         self.fused_hdr_geom = None
         self._viewing_fused = False
         self.final_filtered_img = None
+        if hasattr(self, 'btn_bypass_tb'):
+            self.btn_bypass_tb.setEnabled(False)
+            self.btn_bypass_tb.blockSignals(True)
+            self.btn_bypass_tb.setChecked(False)
+            self.btn_bypass_tb.setText("Comparar A/B")
+            self.btn_bypass_tb.blockSignals(False)
+        if hasattr(self, 'btn_split_view'):
+            self.btn_split_view.setEnabled(False)
+            self.btn_split_view.blockSignals(True)
+            self.btn_split_view.setChecked(False)
+            self.btn_split_view.blockSignals(False)
+            self.canvas.set_split_view_enabled(False)
+        if hasattr(self, 'btn_split_orientation'):
+            self.btn_split_orientation.setEnabled(False)
+        self.canvas.set_before_image(None)
         self.canvas.set_image(np.zeros((100, 100, 3), dtype=np.float32))
         self.log("Serie de bracketing vaciada.")
 
@@ -2625,6 +2826,16 @@ class EclipseTab(QWidget):
             self.btn_render_full.setEnabled(False)
         self.btn_fuse_hdr.setEnabled(False)
         self.btn_detect_all.setEnabled(False)
+        if hasattr(self, 'btn_bypass_tb'):
+            self.btn_bypass_tb.setEnabled(False)
+        if hasattr(self, 'btn_split_view'):
+            self.btn_split_view.setEnabled(False)
+            self.btn_split_view.blockSignals(True)
+            self.btn_split_view.setChecked(False)
+            self.btn_split_view.blockSignals(False)
+            self.canvas.set_split_view_enabled(False)
+        if hasattr(self, 'btn_split_orientation'):
+            self.btn_split_orientation.setEnabled(False)
 
         offset = (self.spin_mask_offset.value() if hasattr(self, 'spin_mask_offset') else -2.5) * scale
         mask_radius = max(1.0, proc_r + offset)
@@ -2848,6 +3059,14 @@ class EclipseTab(QWidget):
                 self.btn_bypass_tb.setChecked(False)
                 self.btn_bypass_tb.setText("Comparar A/B")
                 self.btn_bypass_tb.blockSignals(False)
+            if hasattr(self, 'btn_split_view'):
+                self.btn_split_view.setEnabled(False)
+                self.btn_split_view.blockSignals(True)
+                self.btn_split_view.setChecked(False)
+                self.btn_split_view.blockSignals(False)
+                self.canvas.set_split_view_enabled(False)
+            if hasattr(self, 'btn_split_orientation'):
+                self.btn_split_orientation.setEnabled(False)
 
         elif task_type == "apply_filters":
             self._viewing_fused = True
@@ -2862,6 +3081,14 @@ class EclipseTab(QWidget):
                 self.btn_bypass_tb.setChecked(False)
                 self.btn_bypass_tb.setText("B: Filtrada" + (" [Proxy]" if is_proxy else " [1:1]"))
                 self.btn_bypass_tb.blockSignals(False)
+            if hasattr(self, 'btn_split_view'):
+                self.btn_split_view.setEnabled(True)
+                self.btn_split_view.blockSignals(True)
+                self.btn_split_view.setChecked(False)
+                self.btn_split_view.blockSignals(False)
+            if hasattr(self, 'btn_split_orientation'):
+                self.btn_split_orientation.setEnabled(False)
+            self._update_before_reference()
             status_tag = "[Proxy 50%]" if is_proxy else "[Nativo 1:1]"
             self.lbl_canvas_status.setText(f"Mostrando: Filtros Coronales {status_tag}")
             self.log(f"Filtros de corona aplicados {status_tag} con compuerta radial.")
