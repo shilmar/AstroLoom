@@ -57,6 +57,7 @@ from core.eclipse import (
     compute_red_excess_mask,
     apply_nafe,
     apply_wow_edge_aware,
+    apply_fnrgf,
     export_coronal_layers_psd
 )
 from core.stacking import load_image_as_float32
@@ -617,6 +618,7 @@ class EclipseWorker(QThread):
                 gradual_handover = self.params.get("gradual_handover", True)
                 corona_warmth = self.params.get("corona_warmth", 0.0)
                 sky_temp = self.params.get("sky_temp", 0.0)
+                equalize_sky = self.params.get("equalize_sky_gradient", False)
                 hdr_raw = fuse_hdr_bracketing(
                     aligned_images,
                     exposures,
@@ -628,7 +630,8 @@ class EclipseWorker(QThread):
                     auto_wb_corona=auto_wb,
                     gradual_handover=gradual_handover,
                     corona_warmth=corona_warmth,
-                    sky_temp=sky_temp
+                    sky_temp=sky_temp,
+                    equalize_sky_gradient=equalize_sky
                 )
 
                 hdr_stretched = apply_asinh_stretch(hdr_raw, stretch_factor=asinh_factor) if asinh_factor > 1.0 else hdr_raw.copy()
@@ -748,6 +751,19 @@ class EclipseWorker(QThread):
                         blend_ratio=blend,
                         use_detail_rings=use_detail_rings
                     )
+                elif filter_type == "fnrgf":
+                    self.progress.emit(25, "Calculando FNRGF azimutal de Fourier (Morgan & Druckmüller)...")
+                    order = self.params.get("fnrgf_order", 4)
+                    filtered = apply_fnrgf(
+                        base_img,
+                        center_x=cx,
+                        center_y=cy,
+                        fourier_order=order,
+                        blend_ratio=blend,
+                        radius_min=mask_r,
+                        radius_max_factor=reach,
+                        use_detail_rings=use_detail_rings
+                    )
                 else:
                     bin_px = self.params.get("bin_px", 2.0)
                     robust = self.params.get("robust", True)
@@ -851,6 +867,8 @@ class EclipseWorker(QThread):
                         filtered = apply_nafe(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.79)
                     elif flt_id == "nrgf":
                         filtered = apply_nrgf(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.55)
+                    elif flt_id == "fnrgf":
+                        filtered = apply_fnrgf(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.55)
                     elif flt_id == "steerable_g2":
                         filtered = apply_steerable_g2(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.50)
                     elif flt_id == "larson_sekanina":
@@ -1079,6 +1097,15 @@ class EclipseTab(QWidget):
         self.chk_sub_sky.setToolTip("Anivela el fondo de cielo y luz difusa en cada fotograma antes de fusionar para erradicar anillos o escalones concéntricos en las transiciones de saturación.")
         hdr_layout.addWidget(self.chk_sub_sky)
 
+        self.chk_twilight_gradient = QCheckBox("Ecualizar gradiente de cielo crepuscular (R >= 6 R)")
+        self.chk_twilight_gradient.setChecked(False)
+        self.chk_twilight_gradient.setStyleSheet("color: #80deea; font-weight: bold;")
+        self.chk_twilight_gradient.setToolTip(
+            "Modela y sustrae en espacio lineal la inclinación lumínica del horizonte o crepúsculo "
+            "en la corona lejana (R >= 6 R), eliminando fondos descompensados sin tocar la corona interior."
+        )
+        hdr_layout.addWidget(self.chk_twilight_gradient)
+
         self.chk_auto_wb = QCheckBox("Balance de blancos coronal neutro (anillo medio)")
         self.chk_auto_wb.setChecked(True)
         self.chk_auto_wb.setStyleSheet("font-weight: bold; color: #ffcc80;")
@@ -1183,7 +1210,8 @@ class EclipseTab(QWidget):
             "Filtro SWAP (Misión PROBA2 / Seaton et al.)",
             "Polar Radial NRGF",
             "NAFE Difuso (Miloslav Druckmüller 2013)",
-            "WOW Guiado Bilateral (Edge-Aware / Auchère et al.)"
+            "WOW Guiado Bilateral (Edge-Aware / Auchère et al.)",
+            "FNRGF Azimutal de Fourier (Morgan & Druckmüller)"
         ])
         self.combo_filter_algo.setStyleSheet("""
             QComboBox {
@@ -1529,6 +1557,47 @@ class EclipseTab(QWidget):
         wow_box_layout.addWidget(self.slider_blend_wow)
         nrgf_layout.addWidget(self.container_wow)
         self.container_wow.setVisible(False)
+
+        # 8. Contenedor FNRGF (Morgan, Habbal & Woo 2006)
+        self.container_fnrgf = QWidget()
+        fnrgf_box_layout = QVBoxLayout(self.container_fnrgf)
+        fnrgf_box_layout.setContentsMargins(0, 2, 0, 2)
+        fnrgf_box_layout.setSpacing(6)
+
+        row_fnrgf_order = QHBoxLayout()
+        row_fnrgf_order.addWidget(QLabel("Orden armónicos Fourier (N):"))
+        self.spin_fnrgf_order = QSpinBox()
+        self.spin_fnrgf_order.setRange(1, 8)
+        self.spin_fnrgf_order.setValue(4)
+        self.spin_fnrgf_order.setToolTip("Número de armónicos azimutales N (default 4: modela componente dipolar, cuadrupolar y sextupolar de streamers).")
+        row_fnrgf_order.addWidget(self.spin_fnrgf_order)
+        fnrgf_box_layout.addLayout(row_fnrgf_order)
+
+        self.slider_blend_fnrgf = PrecisionSliderRow(
+            title="Fuerza FNRGF",
+            min_val=0,
+            max_val=100,
+            default_val=55,
+            unit="%",
+            decimals=0,
+            label_width=135
+        )
+        self.slider_blend_fnrgf.setToolTip("Mezcla con la imagen base (55% = estándar de microcontraste armónico).")
+        fnrgf_box_layout.addWidget(self.slider_blend_fnrgf)
+
+        self.slider_reach_fnrgf = PrecisionSliderRow(
+            title="Alcance Corona",
+            min_val=12,
+            max_val=50,
+            default_val=35,
+            scale=10.0,
+            unit="x",
+            decimals=1,
+            label_width=135
+        )
+        fnrgf_box_layout.addWidget(self.slider_reach_fnrgf)
+        nrgf_layout.addWidget(self.container_fnrgf)
+        self.container_fnrgf.setVisible(False)
 
         self.combo_filter_algo.currentIndexChanged.connect(self._on_filter_algo_changed)
 
@@ -2349,6 +2418,7 @@ class EclipseTab(QWidget):
             "crop_roi": crop_roi,
             "crop_size": crop_size,
             "subtract_sky": sub_sky,
+            "equalize_sky_gradient": self.chk_twilight_gradient.isChecked() if hasattr(self, 'chk_twilight_gradient') else False,
             "auto_wb_corona": self.chk_auto_wb.isChecked(),
             "gradual_handover": self.chk_gradual_handover.isChecked(),
             "corona_warmth": float(self.slider_corona_warmth.value() / 100.0) if hasattr(self, 'slider_corona_warmth') else 0.0,
@@ -2380,7 +2450,8 @@ class EclipseTab(QWidget):
         self.container_nrgf.setVisible(idx == 4)
         self.container_nafe.setVisible(idx == 5)
         self.container_wow.setVisible(idx == 6)
-        self.chk_detail_rings.setVisible(idx in (0, 2, 4, 6))
+        self.container_fnrgf.setVisible(idx == 7)
+        self.chk_detail_rings.setVisible(idx in (0, 2, 4, 6, 7))
 
     def _on_apply_filters_clicked(self):
         if self.worker is not None and self.worker.isRunning():
@@ -2422,6 +2493,14 @@ class EclipseTab(QWidget):
             filter_type = "nafe"
             blend = self.slider_blend_nafe.value() / 100.0
             reach = 3.5
+        elif idx == 6:
+            filter_type = "wow"
+            blend = self.slider_blend_wow.value() / 100.0
+            reach = 3.5
+        elif idx == 7:
+            filter_type = "fnrgf"
+            blend = self.slider_blend_fnrgf.value() / 100.0
+            reach = self.slider_reach_fnrgf.value() / 10.0
         else:
             filter_type = "wow"
             blend = self.slider_blend_wow.value() / 100.0
@@ -2472,6 +2551,7 @@ class EclipseTab(QWidget):
             "nafe_use_overlay": self.chk_nafe_overlay.isChecked(),
             "wow_scales": self.spin_wow_scales.value(),
             "wow_guided": self.chk_wow_guided.isChecked(),
+            "fnrgf_order": self.spin_fnrgf_order.value() if hasattr(self, 'spin_fnrgf_order') else 4,
         }
 
         self.worker = EclipseWorker("apply_filters", params)

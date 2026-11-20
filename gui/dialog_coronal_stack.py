@@ -27,6 +27,14 @@ DEFAULT_CORONAL_FILTERS = [
         "checked": True,
     },
     {
+        "id": "fnrgf",
+        "name": "01b - FNRGF Azimutal (Fourier)",
+        "desc": "Fourier Normalizing Radial Graded Filter para modelar streamers y agujeros polares.",
+        "blend_mode": BLEND_MODE_SCREEN,
+        "opacity": 20,
+        "checked": True,
+    },
+    {
         "id": "swap",
         "name": "16 - Filtro SWAP PROBA2",
         "desc": "Filtro no lineal multiescala para protuberancias y cromosfera.",

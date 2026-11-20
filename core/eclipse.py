@@ -899,6 +899,110 @@ def balance_coronal_thermal_dual(
     return result.astype(np.float32)
 
 
+def subtract_twilight_gradient(
+    image: np.ndarray,
+    center_x: float,
+    center_y: float,
+    radius: float,
+    r_min_factor: float = 6.0,
+    degree: int = 1,
+    robust: bool = True
+) -> np.ndarray:
+    """
+    Modela y sustrae el plano o gradiente crepuscular 2D en el cielo exterior
+    fuera de la corona activa (distancia >= r_min_factor * radius).
+
+    Ajusta una superficie polinómica de grado 1 (plano inclinado 2D) o 2 en
+    espacio lineal fotométrico por mínimos cuadrados o regresión robusta,
+    sustrayendo la inclinación lumínica sin alterar el nivel medio del fondo.
+    """
+    if image is None:
+        return image
+
+    img = np.asarray(image, dtype=np.float32)
+    h, w = img.shape[:2]
+
+    # 1. Mapa de distancias radiales respecto al centro del eclipse
+    y_coords, x_coords = np.indices((h, w), dtype=np.float32)
+    dx = x_coords - float(center_x)
+    dy = y_coords - float(center_y)
+    r_map = np.sqrt(dx * dx + dy * dy)
+
+    r_ref = max(float(radius), 1.0)
+    r_cut = r_ref * max(float(r_min_factor), 1.2)
+
+    sky_mask = (r_map >= r_cut)
+    if np.sum(sky_mask) < 200:
+        r_cut = float(np.percentile(r_map, 85.0))
+        sky_mask = (r_map >= r_cut)
+        if np.sum(sky_mask) < 100:
+            return img.copy()
+
+    # 2. Filtrado de muestras para evitar estrellas hiperbrillantes
+    if img.ndim == 3:
+        lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
+    else:
+        lum = img
+
+    sky_lum = lum[sky_mask]
+    p_lo = float(np.percentile(sky_lum, 1.0))
+    p_hi = float(np.percentile(sky_lum, 97.0))
+    valid_sky = sky_mask & (lum >= p_lo) & (lum <= p_hi)
+    if np.sum(valid_sky) < 50:
+        valid_sky = sky_mask
+
+    # 3. Matriz de diseño polinómica 2D normalizada en [-1, 1]
+    u = ((x_coords - (w * 0.5)) / (w * 0.5)).astype(np.float32)
+    v = ((y_coords - (h * 0.5)) / (h * 0.5)).astype(np.float32)
+
+    u_sub = u[valid_sky]
+    v_sub = v[valid_sky]
+    ones = np.ones_like(u_sub)
+
+    if degree >= 2:
+        A_sub = np.column_stack([ones, u_sub, v_sub, u_sub ** 2, v_sub ** 2, u_sub * v_sub])
+        A_full = np.column_stack([
+            np.ones(h * w, dtype=np.float32),
+            u.ravel(), v.ravel(),
+            (u ** 2).ravel(), (v ** 2).ravel(), (u * v).ravel()
+        ])
+    else:
+        A_sub = np.column_stack([ones, u_sub, v_sub])
+        A_full = np.column_stack([
+            np.ones(h * w, dtype=np.float32),
+            u.ravel(), v.ravel()
+        ])
+
+    result = img.copy()
+
+    # 4. Ajuste y sustracción por canal manteniendo el nivel medio
+    channels = [img] if img.ndim == 2 else [img[..., c] for c in range(img.shape[2])]
+    for c_idx, ch in enumerate(channels):
+        y_sub = ch[valid_sky].astype(np.float64)
+        try:
+            coeffs, _, _, _ = np.linalg.lstsq(A_sub.astype(np.float64), y_sub, rcond=None)
+            if robust and len(y_sub) > 60:
+                res = y_sub - A_sub.astype(np.float64) @ coeffs
+                med_res = np.median(res)
+                mad_res = 1.4826 * np.median(np.abs(res - med_res))
+                inliers = np.abs(res - med_res) <= (2.5 * max(mad_res, 1e-5))
+                if np.sum(inliers) >= 30:
+                    coeffs, _, _, _ = np.linalg.lstsq(A_sub[inliers].astype(np.float64), y_sub[inliers], rcond=None)
+
+            surf_full = (A_full.astype(np.float64) @ coeffs).reshape(h, w).astype(np.float32)
+            mean_bg = float(np.median(surf_full[valid_sky]))
+            tilt = surf_full - mean_bg
+
+            if img.ndim == 2:
+                result = np.clip(ch - tilt, 0.0, 1.0).astype(np.float32)
+            else:
+                result[..., c_idx] = np.clip(ch - tilt, 0.0, 1.0).astype(np.float32)
+        except Exception:
+            pass
+
+    return result
+
+
 def fuse_hdr_bracketing(
     images: List[np.ndarray],
     exposures_s: List[float],
@@ -911,7 +1015,8 @@ def fuse_hdr_bracketing(
     auto_wb_corona: bool = True,
     gradual_handover: bool = True,
     corona_warmth: float = 0.0,
-    sky_temp: float = 0.0
+    sky_temp: float = 0.0,
+    equalize_sky_gradient: bool = False
 ) -> np.ndarray:
     """
     Fusión de alto rango dinámico (HDR) para tomas de bracketing de eclipses.
@@ -984,6 +1089,11 @@ def fuse_hdr_bracketing(
                 hdr_norm = balance_coronal_thermal_dual(
                     hdr_norm, mcx, mcy, mr, corona_warmth=corona_warmth, sky_temp=sky_temp
                 )
+
+            # Ecualización opcional de gradiente crepuscular 2D en espacio lineal antes del estirado
+            if equalize_sky_gradient and lunar_mask_params is not None:
+                mcx, mcy, mr = lunar_mask_params
+                hdr_norm = subtract_twilight_gradient(hdr_norm, mcx, mcy, mr, r_min_factor=6.0, degree=1)
 
             if asinh_stretch > 1.0:
                 hdr_norm = apply_asinh_stretch(hdr_norm, stretch_factor=asinh_stretch)
@@ -1104,6 +1214,11 @@ def fuse_hdr_bracketing(
         hdr_norm = balance_coronal_thermal_dual(
             hdr_norm, mcx, mcy, mr, corona_warmth=corona_warmth, sky_temp=sky_temp
         )
+
+    # Ecualización opcional de gradiente crepuscular 2D en espacio lineal antes del estirado
+    if equalize_sky_gradient and lunar_mask_params is not None:
+        mcx, mcy, mr = lunar_mask_params
+        hdr_norm = subtract_twilight_gradient(hdr_norm, mcx, mcy, mr, r_min_factor=6.0, degree=1)
 
     if asinh_stretch > 1.0:
         hdr_norm = apply_asinh_stretch(hdr_norm, stretch_factor=asinh_stretch)
@@ -1439,6 +1554,170 @@ def apply_nrgf(
     new_lum = np.where(disk_mask, new_lum, 0.0).astype(np.float32)
 
     # 6. Recomposición cromática lineal radiométrica (preserva tonos y sat exactos sin distorsión HSV)
+    if img.ndim == 3:
+        ratio = np.divide(new_lum, np.maximum(lum, 1e-4), out=np.zeros_like(lum), where=lum > 1e-6)
+        ratio = np.clip(ratio, 0.0, 4.0)
+        result = img * ratio[..., None]
+    else:
+        result = new_lum
+
+    return np.clip(result, 0.0, 1.0).astype(np.float32)
+
+
+def apply_fnrgf(
+    image: np.ndarray,
+    center_x: float,
+    center_y: float,
+    fourier_order: int = 4,
+    bin_px: float = 1.0,
+    robust: bool = True,
+    blend_ratio: float = 0.55,
+    radius_min: float = 10.0,
+    radius_max_factor: float = 3.5,
+    use_detail_rings: bool = False
+) -> np.ndarray:
+    """
+    Fourier Normalizing Radial Graded Filter (FNRGF) (Morgan, Habbal & Woo 2006).
+    Modela la variación azimutal suave de los streamers y agujeros coronales mediante
+    series de Fourier de orden N en cada anillo concéntrico:
+        B(r, theta) = a0(r) + sum_{k=1}^N [ ak(r) cos(k theta) + bk(r) sin(k theta) ]
+
+    A diferencia de NRGF (que aplasta los streamers ecuatoriales al restar una media isotrópica),
+    FNRGF preserva la auténtica estructura a gran escala de los rayos solares mientras extrae
+    los filamentos magnéticos más finos con máximo microcontraste.
+    """
+    img = np.asarray(image, dtype=np.float32)
+    h, w = img.shape[:2]
+
+    # 1. Coordenadas polares continuas
+    y_coords, x_coords = np.indices((h, w), dtype=np.float32)
+    dx = x_coords - float(center_x)
+    dy = y_coords - float(center_y)
+    r_map = np.sqrt(dx * dx + dy * dy)
+    theta_map = np.arctan2(dy, dx).astype(np.float32)
+
+    # 2. Compuerta radial continua en la periferia de la corona
+    r_max = float(radius_min) * max(1.2, float(radius_max_factor))
+    gate_start = float(radius_min) * (1.0 + (float(radius_max_factor) - 1.0) * 0.75)
+    t = np.clip((r_map - gate_start) / max(r_max - gate_start, 1.0), 0.0, 1.0)
+    radial_gate = 1.0 - (t * t * (3.0 - 2.0 * t))
+    radial_gate = np.where(r_map > r_max, 0.0, radial_gate)
+
+    if img.ndim == 3:
+        lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
+    else:
+        lum = img.copy()
+    lum = lum.astype(np.float32)
+
+    # 3. Estimación de ruido de fondo
+    sky_mask = (r_map >= r_max)
+    if np.sum(sky_mask) > 100:
+        sky_samples = lum[sky_mask]
+        sky_bg = float(np.median(sky_samples))
+        sky_noise = float(1.4826 * np.median(np.abs(sky_samples - sky_bg)))
+    else:
+        far_r = np.percentile(r_map, 90.0)
+        sky_samples = lum[r_map >= far_r]
+        sky_bg = float(np.median(sky_samples))
+        sky_noise = float(1.4826 * np.median(np.abs(sky_samples - sky_bg)))
+    sky_noise = max(sky_noise, 1e-4)
+
+    # 4. Descomposición en series de Fourier por anillos radiales
+    N = int(np.clip(fourier_order, 1, 8))
+    bin_size = max(float(bin_px), 0.5)
+    bins = (r_map / bin_size).astype(np.int32)
+    max_bin = int(bins.max()) + 2
+
+    flat_bins = bins.ravel()
+    flat_lum = lum.ravel()
+    counts = np.bincount(flat_bins, minlength=max_bin)
+
+    # Coeficiente a0(r): media por anillo
+    sum_lum = np.bincount(flat_bins, weights=flat_lum, minlength=max_bin)
+    a0_prof = np.where(counts >= 30, sum_lum / np.maximum(counts, 1), 0.0).astype(np.float32)
+
+    # Armónicos azimutales ak(r), bk(r)
+    ak_profs = []
+    bk_profs = []
+    flat_theta = theta_map.ravel()
+
+    for k in range(1, N + 1):
+        cos_k = np.cos(k * flat_theta).astype(np.float32)
+        sin_k = np.sin(k * flat_theta).astype(np.float32)
+
+        sum_cos = np.bincount(flat_bins, weights=flat_lum * cos_k, minlength=max_bin)
+        sum_sin = np.bincount(flat_bins, weights=flat_lum * sin_k, minlength=max_bin)
+        sum_cos2 = np.bincount(flat_bins, weights=cos_k * cos_k, minlength=max_bin)
+        sum_sin2 = np.bincount(flat_bins, weights=sin_k * sin_k, minlength=max_bin)
+
+        ak = np.where(sum_cos2 > 1e-4, sum_cos / np.maximum(sum_cos2, 1e-6), 0.0).astype(np.float32)
+        bk = np.where(sum_sin2 > 1e-4, sum_sin / np.maximum(sum_sin2, 1e-6), 0.0).astype(np.float32)
+
+        ak_profs.append(ak)
+        bk_profs.append(bk)
+
+    # Suavizado radial de coeficientes de Fourier para evitar cualquier banda concéntrica
+    if max_bin > 15:
+        a0_prof = cv2.GaussianBlur(a0_prof[:, None], (1, 25), 6).ravel()
+        for k in range(N):
+            ak_profs[k] = cv2.GaussianBlur(ak_profs[k][:, None], (1, 25), 6).ravel()
+            bk_profs[k] = cv2.GaussianBlur(bk_profs[k][:, None], (1, 25), 6).ravel()
+
+    # Reconstrucción del fondo azimutal suave B(r, theta) en 2D
+    bin_centers = np.arange(max_bin, dtype=np.float32)
+    r_bins_cont = (r_map / bin_size).ravel()
+
+    a0_map = np.interp(r_bins_cont, bin_centers, a0_prof).reshape(h, w).astype(np.float32)
+    bkg_fourier = a0_map.copy()
+
+    for k in range(1, N + 1):
+        ak_map = np.interp(r_bins_cont, bin_centers, ak_profs[k - 1]).reshape(h, w).astype(np.float32)
+        bk_map = np.interp(r_bins_cont, bin_centers, bk_profs[k - 1]).reshape(h, w).astype(np.float32)
+        bkg_fourier += ak_map * np.cos(k * theta_map) + bk_map * np.sin(k * theta_map)
+
+    # 5. Extracción de detalle y estimación de dispersión sigma(r)
+    disk_mask = r_map >= float(radius_min)
+    diff = np.where(disk_mask, lum - bkg_fourier, 0.0).astype(np.float32)
+
+    # Dispersión residual robusta
+    flat_diff = np.abs(diff).ravel()
+    sum_diff_sq = np.bincount(flat_bins, weights=flat_diff.astype(np.float64) ** 2, minlength=max_bin)
+    var_vals = np.where(counts >= 30, sum_diff_sq / np.maximum(counts, 1), 0.0)
+    sigma_prof = np.sqrt(np.maximum(var_vals, 1e-8)).astype(np.float32)
+
+    if max_bin > 15:
+        sigma_prof = cv2.GaussianBlur(sigma_prof[:, None], (1, 25), 6).ravel()
+
+    min_sigma = max(sky_noise * 2.0, 0.0025)
+    sigma_prof = np.maximum(sigma_prof, min_sigma)
+    sigma_map = np.interp(r_bins_cont, bin_centers, sigma_prof).reshape(h, w).astype(np.float32)
+
+    raw_detail = np.where(disk_mask, diff / sigma_map, 0.0).astype(np.float32)
+    clean_detail = cv2.bilateralFilter(raw_detail, d=7, sigmaColor=0.35, sigmaSpace=4.0)
+
+    if use_detail_rings:
+        rings_norm = display_detail_rings(
+            clean_detail,
+            valid_mask=disk_mask,
+            center_x=float(center_x),
+            center_y=float(center_y)
+        )
+        clipped_detail = (rings_norm - 0.5) * 2.0
+    else:
+        clipped_detail = np.clip(clean_detail, -2.5, 2.5) / 2.5
+
+    # 6. Modulación de detalle con compuerta radial y protección de margen superior
+    snr_factor = np.clip((sigma_map - 1.2 * sky_noise) / (sigma_map + 1e-6), 0.0, 1.0)
+    blend = float(np.clip(blend_ratio, 0.0, 1.0))
+    streamer_mod = clipped_detail * radial_gate * snr_factor * blend
+
+    upper_headroom = np.where(streamer_mod > 0, np.maximum(1.0 - lum, 0.0), 1.0)
+    final_mod = streamer_mod * (0.4 + 0.6 * np.sqrt(upper_headroom))
+
+    new_lum = np.clip(lum + final_mod, 0.0, 1.0)
+    new_lum = np.where(disk_mask, new_lum, 0.0).astype(np.float32)
+
+    # 7. Recomposición cromática lineal exacta
     if img.ndim == 3:
         ratio = np.divide(new_lum, np.maximum(lum, 1e-4), out=np.zeros_like(lum), where=lum > 1e-6)
         ratio = np.clip(ratio, 0.0, 4.0)
@@ -2488,6 +2767,10 @@ def export_coronal_layers_psd(
         _log("[PSD CORONAL] Procesando capa 01 - NRGF...")
         data["nrgf"] = apply_nrgf(base_rgb, center_x, center_y, radius_min=radius_min, blend_ratio=0.55)
 
+    if "fnrgf" not in data:
+        _log("[PSD CORONAL] Procesando capa 01b - FNRGF Azimutal de Fourier...")
+        data["fnrgf"] = apply_fnrgf(base_rgb, center_x, center_y, radius_min=radius_min, blend_ratio=0.55)
+
     if "wow" not in data:
         _log("[PSD CORONAL] Procesando capa 02 - WOW Bilateral Guiado...")
         data["wow"] = apply_wow_edge_aware(base_rgb, center_x, center_y, radius_min=radius_min, blend_ratio=0.50)
@@ -2610,6 +2893,16 @@ def export_coronal_layers_psd(
         "opacity": 140,  # ~55%
         "visible": True,
         "rgb": _prep_rgb(data["nrgf"])
+    })
+
+    # 01b. FNRGF
+    layer_records.append({
+        "name": "01b - FNRGF Azimutal de Fourier",
+        "top": 0, "left": 0, "bottom": h, "right": w,
+        "blend_mode": "over",
+        "opacity": 140,  # ~55%
+        "visible": False,
+        "rgb": _prep_rgb(data["fnrgf"])
     })
 
     # 00. Capa Cúspide de Referencia (Revelado Final)
