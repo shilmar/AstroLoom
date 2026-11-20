@@ -42,7 +42,7 @@ Este manual ha sido redactado pensando en fotógrafos y aficionados: **sin fórm
 Para iniciar AstroLoom en Windows de la manera más cómoda y sin ventanas negras de consola en segundo plano, haz **doble clic sobre el archivo `astroloom.bat`** en la carpeta principal de la aplicación:
 * El lanzador detecta automáticamente si existe un entorno virtual local (`.venv` o `venv`) y arranca la interfaz usando `pythonw.exe`.
 * Si no hay entorno virtual, recurre automáticamente a la instalación de Python del sistema.
-* En entornos Linux/macOS o desde la terminal, puedes iniciar la suite ejecutando directamente `python run_app.py`.
+* En entornos Linux/macOS o desde la terminal, puedes iniciar la suite ejecutando `./astroloom.sh` (o directamente `python run_app.py`).
 
 ### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.17.0)
 A partir de las versiones **v0.14.0** a **v0.17.0**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:

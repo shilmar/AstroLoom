@@ -268,6 +268,8 @@ def _create_inference_session(model_path: str, use_cache: bool = True, force_cpu
         providers = []
         if "CUDAExecutionProvider" in available_providers:
             providers.append("CUDAExecutionProvider")
+        if "CoreMLExecutionProvider" in available_providers:
+            providers.append("CoreMLExecutionProvider")
         if "DmlExecutionProvider" in available_providers:
             providers.append("DmlExecutionProvider")
         providers.append("CPUExecutionProvider")

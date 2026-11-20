@@ -13,4 +13,5 @@ imagecodecs>=2024.1.1
 Pillow>=10.0.0
 
 # Inferencia de IA (Detección de horizonte y Reducción de Ruido NAFNet acelerada por GPU)
-onnxruntime-directml>=1.16.0
+onnxruntime-directml>=1.16.0; sys_platform == 'win32'
+onnxruntime>=1.16.0; sys_platform != 'win32'

@@ -85,8 +85,9 @@ AstroLoom integra un sistema integral de composición profesional no destructiva
 
 ## 🚀 Instalación y Puesta en Marcha
 
-### Arranque Rápido en Windows
-Haz **doble clic en `astroloom.bat`** en la carpeta principal del proyecto. El script detectará tu entorno virtual Python o la instalación del sistema y lanzará la interfaz sin consolas secundarias.
+### Arranque Rápido
+* **En Windows:** Haz **doble clic en `astroloom.bat`** en la carpeta principal del proyecto (detectará tu entorno virtual Python o la instalación del sistema y lanzará la interfaz sin consolas secundarias).
+* **En Linux / macOS:** Ejecuta **`./astroloom.sh`** desde la terminal.
 
 ### Instalación Manual (Todas las Plataformas)
 

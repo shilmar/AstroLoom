@@ -4,6 +4,7 @@ gui/tab_settings.py - Pestaña de configuración de hardware, rutas de trabajo, 
 Diseño moderno dividido en 2 columnas: panel de configuración técnica con acordeones profesionales y panel visual de galería con resultados reales de AstroLoom.
 """
 import os
+import sys
 from typing import Optional
 from PySide6.QtCore import Qt, QRectF, QUrl
 from PySide6.QtGui import (
@@ -656,11 +657,13 @@ class SettingsTab(QWidget):
     def _browse_starnet(self) -> None:
         """Abre el explorador de archivos para localizar el ejecutable de StarNet."""
         current_val = self.txt_starnet.text().strip()
-        start_dir = os.path.dirname(current_val) if current_val and os.path.exists(os.path.dirname(current_val)) else "C:\\Program Files"
+        fallback_dir = "C:\\Program Files" if sys.platform == "win32" else os.path.expanduser("~")
+        start_dir = os.path.dirname(current_val) if current_val and os.path.exists(os.path.dirname(current_val)) else fallback_dir
+        filter_str = "Ejecutables (*.exe);;Todos (*.*)" if sys.platform == "win32" else "Todos los archivos (*);;Ejecutables (*.exe *)"
 
         f, _ = QFileDialog.getOpenFileName(
             self, "Seleccionar ejecutable de StarNet++", 
-            start_dir, "Ejecutables (*.exe);;Todos (*.*)"
+            start_dir, filter_str
         )
         if f:
             self.txt_starnet.setText(os.path.normpath(f))

@@ -17,8 +17,8 @@ import tifffile
 import numpy as np
 import cv2
 
-from PySide6.QtCore import Qt, QThread, Signal, QCoreApplication
-from PySide6.QtGui import QColor, QKeySequence, QShortcut
+from PySide6.QtCore import Qt, QThread, Signal, QCoreApplication, QUrl
+from PySide6.QtGui import QColor, QKeySequence, QShortcut, QDesktopServices
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QPushButton, QFileDialog, QMessageBox, QSlider, QRadioButton,
@@ -1394,7 +1394,7 @@ class StartrailsTab(QWidget):
         """Abre el vídeo Time-Lapse con el reproductor predeterminado del sistema operativo."""
         if self.last_timelapse_path and os.path.exists(self.last_timelapse_path):
             try:
-                os.startfile(self.last_timelapse_path)
+                QDesktopServices.openUrl(QUrl.fromLocalFile(self.last_timelapse_path))
             except Exception as e:
                 self.log(f"No se pudo reproducir el vídeo automáticamente: {e}")
                 QMessageBox.information(
