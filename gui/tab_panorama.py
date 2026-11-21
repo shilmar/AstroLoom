@@ -46,7 +46,7 @@ from core.icc_manager import save_tiff_with_icc
 from core.log_hub import log_hub
 from gui.widgets.viewer_toolbar import ViewerToolbar, CanvasFooterBar
 from gui.widgets.drop_widgets import DropTableWidget, collect_image_files_from_mime, SUPPORTED_IMAGE_EXTENSIONS
-from gui.theme import STYLE_RUN_IDLE, STYLE_CANCEL_ACTIVE, STYLE_TRANSFER_BTN
+from gui.theme import STYLE_RUN_IDLE, STYLE_CANCEL_ACTIVE, STYLE_TRANSFER_BTN, STYLE_SECONDARY_BTN
 from gui.icons import get_icon, get_svg_pixmap, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_ACCENT
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
@@ -352,6 +352,7 @@ class PanoramaTab(QWidget):
         self._stitch_worker: Optional[PanoramaStitchWorker] = None
         self._meta_worker: Optional[MetadataExtractWorker] = None
         self._last_progress_msg: str = ""
+        self._is_draft_active: bool = False
 
         self._setup_ui()
 
@@ -646,17 +647,31 @@ class PanoramaTab(QWidget):
         proc_layout = self.sec_proc.content_layout
         proc_layout.setSpacing(8)
 
-        self.btn_stitch = QPushButton("Coser Panorámica")
+        btn_action_layout = QHBoxLayout()
+        btn_action_layout.setSpacing(6)
+
+        self.btn_preview = QPushButton("Borrador (25%)")
+        self.btn_preview.setIcon(get_icon("eye", color="#ffffff"))
+        self.btn_preview.setFixedHeight(40)
+        self.btn_preview.setStyleSheet(STYLE_SECONDARY_BTN)
+        self.btn_preview.setToolTip("Genera una vista previa rápida al 25% de resolución (~2-3s) para validar costuras, proyección y curvatura.")
+
+        self.btn_stitch = QPushButton("Coser Alta Resolución")
         self.btn_stitch.setIcon(get_icon("play", color="#ffffff"))
         self.btn_stitch.setFixedHeight(40)
         self.btn_stitch.setStyleSheet(STYLE_RUN_IDLE)
+        self.btn_stitch.setToolTip("Ejecuta el cosido final completo a resolución nativa con fusión multibanda.")
+
+        btn_action_layout.addWidget(self.btn_preview, stretch=1)
+        btn_action_layout.addWidget(self.btn_stitch, stretch=1)
+        proc_layout.addLayout(btn_action_layout)
+
         self.btn_cancel = QPushButton("Cancelar")
         self.btn_cancel.setIcon(get_icon("stop", color="#ffffff"))
         self.btn_cancel.setFixedHeight(40)
         self.btn_cancel.setStyleSheet(STYLE_CANCEL_ACTIVE)
         self.btn_cancel.setVisible(False)
 
-        proc_layout.addWidget(self.btn_stitch)
         proc_layout.addWidget(self.btn_cancel)
 
         self.lbl_status = QLabel("Listo para componer.")
@@ -851,7 +866,8 @@ class PanoramaTab(QWidget):
         self.chk_vignette_auto.toggled.connect(self._on_vignette_auto_toggled)
 
         # Procesamiento
-        self.btn_stitch.clicked.connect(self._start_stitching)
+        self.btn_preview.clicked.connect(lambda: self._start_stitching(is_preview=True))
+        self.btn_stitch.clicked.connect(lambda: self._start_stitching(is_preview=False))
         self.btn_cancel.clicked.connect(self._cancel_stitching)
 
         # Exportación
@@ -889,7 +905,8 @@ class PanoramaTab(QWidget):
                 self.log(f"Aviso: Falló la estimación automática de viñeteo: {e}")
 
     def _on_burst_mode_toggled(self, checked: bool):
-        self.btn_stitch.setText("Apilar y Coser Panorámica" if checked else "Coser Panorámica")
+        self.btn_stitch.setText("Apilar y Coser en Alta Res." if checked else "Coser Alta Resolución")
+        self.btn_preview.setText("Borrador (25%)")
         self._refresh_table()
 
     def _on_layout_mode_changed(self):
@@ -1099,7 +1116,7 @@ class PanoramaTab(QWidget):
                 paths.append(self.panels_metadata[r].filepath)
         return paths
 
-    def _start_stitching(self):
+    def _start_stitching(self, is_preview: bool = False):
         paths = self._get_selected_panel_paths()
         is_burst = self.box_burst.isChecked()
         grouped = None
@@ -1123,6 +1140,9 @@ class PanoramaTab(QWidget):
                 )
                 return
 
+        self._is_draft_active = is_preview
+        scale = 0.25 if is_preview else 1.0
+
         settings = PanoramaSettings(
             projection=self.combo_projection.currentData(),
             astro_mode=self.chk_astro_mode.isChecked(),
@@ -1142,16 +1162,21 @@ class PanoramaTab(QWidget):
             mount_mode=self.combo_mount_mode.currentData() if is_burst else "tripod",
             use_auto_mask=self.chk_auto_mask_pano.isChecked(),
             vignette_amount=(self.slider_vignette.value() / 100.0) if self.chk_exposure_comp.isChecked() else 0.0,
-            arch_curvature=(self.slider_arch.value() / 100.0)
+            arch_curvature=(self.slider_arch.value() / 100.0),
+            preview_scale=scale
         )
 
         self._last_progress_msg = ""
         self._set_processing_ui(True)
         self.progress_bar.setValue(0)
-        self.lbl_status.setText("Iniciando apilado y cosido panorámico..." if is_burst else "Iniciando cosido panorámico nocturno...")
+        if is_preview:
+            self.lbl_status.setText("Generando borrador rápido (preview 25%)...")
+            self.log(f"=== INICIANDO BORRADOR RÁPIDO (PREVIEW 25%) ({len(paths)} paneles seleccionados) ===")
+        else:
+            self.lbl_status.setText("Iniciando apilado y cosido panorámico..." if is_burst else "Iniciando cosido panorámico nocturno...")
+            self.log(f"=== INICIANDO {'APILADO Y ' if is_burst else ''}COSIDO EN ALTA RESOLUCIÓN ({len(paths)} paneles seleccionados) ===")
 
         # Registro detallado de inicio y parámetros en log_hub
-        self.log(f"=== INICIANDO {'APILADO Y ' if is_burst else ''}COSIDO PANORÁMICO ({len(paths)} paneles seleccionados) ===")
         proj_name = self.combo_projection.currentText()
         layout_name = self.combo_layout_mode.currentText()
         blend_name = self.combo_blend.currentText()
@@ -1189,15 +1214,16 @@ class PanoramaTab(QWidget):
 
         w, h = result.resolution
         mp = (w * h) / 1_000_000.0
+        badge = " [Borrador 25%]" if (getattr(self, '_is_draft_active', False) or "Borrador" in result.message) else ""
         self.lbl_stats.setText(
-            f"Resolución: {w} x {h} px ({mp:.1f} MP) | "
+            f"Resolución: {w} x {h} px ({mp:.1f} MP){badge} | "
             f"Paneles: {result.panels_stitched}/{result.total_panels} | "
             f"Proyección: {result.projection.capitalize()}"
         )
         self.lbl_status.setText(f"● {result.message}")
 
         if hasattr(self, 'canvas_footer'):
-            self.canvas_footer.set_image_info(w, h, "16-bit", "sRGB")
+            self.canvas_footer.set_image_info(w, h, "16-bit (Borrador)" if badge else "16-bit", "sRGB")
             self.canvas_footer.hide_progress()
 
         # Enviar al lienzo
@@ -1208,7 +1234,7 @@ class PanoramaTab(QWidget):
         self.btn_to_developer.setEnabled(True)
 
         self.log(f"✓ {result.message}")
-        self.log(f"Resultado final: {w}x{h} px ({mp:.1f} MP) | {result.panels_stitched} de {result.total_panels} paneles integrados.")
+        self.log(f"Resultado final: {w}x{h} px ({mp:.1f} MP){badge} | {result.panels_stitched} de {result.total_panels} paneles integrados.")
         if result.crop_rect:
             cx, cy, cw, ch = result.crop_rect
             cmp = (cw * ch) / 1_000_000.0
@@ -1230,6 +1256,7 @@ class PanoramaTab(QWidget):
         QMessageBox.critical(self, "Error en Cosido Panorámico", f"Ocurrió un error al componer la panorámica:\n\n{err_msg}")
 
     def _set_processing_ui(self, is_processing: bool):
+        self.btn_preview.setVisible(not is_processing)
         self.btn_stitch.setVisible(not is_processing)
         self.btn_cancel.setVisible(is_processing)
         self.progress_bar.setVisible(is_processing)

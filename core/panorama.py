@@ -90,6 +90,7 @@ class PanoramaSettings:
     vignette_amount: float = 0.5           # Fuerza de compensación de viñeteo (0.0 a 1.0)
     star_matching: bool = True             # Alineación guiada por identificación de estrellas (asterismos)
     arch_curvature: float = 0.0            # Deformación de arco / curvatura de horizonte (-0.25 a +0.25)
+    preview_scale: float = 1.0             # 1.0 = alta resolución completa, <1.0 (ej. 0.25) = borrador rápido
 
 
 @dataclass
@@ -812,6 +813,7 @@ def stitch_nightscape_panorama(
         progress_callback(10, f"Generando vistas previas optimizadas para {n} paneles...")
 
     imgs_small = []
+    clean_imgs_small = [] if getattr(settings, 'preview_scale', 1.0) < 1.0 else None
     for i, path in enumerate(panels_paths):
         if abort_flag and abort_flag():
             raise InterruptedError("Operación cancelada por el usuario.")
@@ -834,6 +836,10 @@ def stitch_nightscape_panorama(
             u8 = (np.clip(img_f, 0.0, 1.0) * 255.0).astype(np.uint8)
             small = cv2.resize(u8, (u8.shape[1] // 4, u8.shape[0] // 4))
             del img_f, u8
+
+        # Preservar miniatura limpia para borrador rápido sin distorsión CLAHE de detección
+        if clean_imgs_small is not None:
+            clean_imgs_small.append(small.copy())
 
         # Pre-realce CLAHE para cielo estrellado y detalles en sombras
         if settings.astro_mode:
@@ -1079,12 +1085,18 @@ def stitch_nightscape_panorama(
         canvas_w = int(max_x - min_x)
         canvas_h = int(max_y - min_y)
 
-        scale_canvas = 1.0
+        base_scale = float(settings.preview_scale) if getattr(settings, 'preview_scale', 1.0) < 1.0 else 1.0
         max_dim = max(canvas_w, canvas_h)
-        if canvas_w * canvas_h > MAX_CANVAS_PIXELS or max_dim > 24000:
-            scale_mp = np.sqrt(MAX_CANVAS_PIXELS / (canvas_w * canvas_h)) if canvas_w * canvas_h > MAX_CANVAS_PIXELS else 1.0
-            scale_dim = 24000.0 / max_dim if max_dim > 24000 else 1.0
-            scale_canvas = min(scale_mp, scale_dim)
+        need_rescale = (base_scale < 1.0) or (canvas_w * canvas_h > MAX_CANVAS_PIXELS) or (max_dim > 24000)
+
+        if need_rescale:
+            if base_scale < 1.0:
+                scale_canvas = base_scale
+            else:
+                scale_mp = np.sqrt(MAX_CANVAS_PIXELS / (canvas_w * canvas_h)) if canvas_w * canvas_h > MAX_CANVAS_PIXELS else 1.0
+                scale_dim = 24000.0 / max_dim if max_dim > 24000 else 1.0
+                scale_canvas = min(scale_mp, scale_dim)
+
             focal_full *= scale_canvas
             warper = cv2.PyRotationWarper(proj_type, focal_full)
             corners = []
@@ -1107,6 +1119,8 @@ def stitch_nightscape_panorama(
             max_y = max(c[1] + s[1] for c, s in zip(corners, sizes))
             canvas_w = int(max_x - min_x)
             canvas_h = int(max_y - min_y)
+        else:
+            scale_canvas = 1.0
 
         cur_w = int(full_w * scale_canvas)
         cur_h = int(full_h * scale_canvas)
@@ -1214,9 +1228,14 @@ def stitch_nightscape_panorama(
                 prog = int(65 + 25 * (i / n))
                 progress_callback(prog, f"Proyectando y fusionando panel {i + 1}/{n}: {os.path.basename(panels_paths[i])}...")
 
-            img_f = load_image_as_float32(panels_paths[i])
-            if scale_canvas != 1.0:
-                img_f = cv2.resize(img_f, (cur_w, cur_h), interpolation=cv2.INTER_AREA)
+            if clean_imgs_small is not None and i < len(clean_imgs_small):
+                img_f = (clean_imgs_small[i].astype(np.float32) / 255.0)
+                if img_f.shape[:2] != (cur_h, cur_w):
+                    img_f = cv2.resize(img_f, (cur_w, cur_h), interpolation=cv2.INTER_AREA)
+            else:
+                img_f = load_image_as_float32(panels_paths[i])
+                if scale_canvas != 1.0:
+                    img_f = cv2.resize(img_f, (cur_w, cur_h), interpolation=cv2.INTER_AREA)
 
             ih, iw = img_f.shape[:2]
 
@@ -1325,11 +1344,13 @@ def stitch_nightscape_panorama(
         canvas_w = int(max_x - min_x)
         canvas_h = int(max_y - min_y)
 
-        scale_factor = 1.0
-        if canvas_w * canvas_h > MAX_CANVAS_PIXELS:
-            scale_factor = np.sqrt(MAX_CANVAS_PIXELS / (canvas_w * canvas_h))
-            canvas_w = int(canvas_w * scale_factor)
-            canvas_h = int(canvas_h * scale_factor)
+        base_scale = float(settings.preview_scale) if getattr(settings, 'preview_scale', 1.0) < 1.0 else 1.0
+        scale_factor = base_scale
+        if canvas_w * canvas_h * (scale_factor ** 2) > MAX_CANVAS_PIXELS:
+            scale_factor *= np.sqrt(MAX_CANVAS_PIXELS / (canvas_w * canvas_h * (scale_factor ** 2)))
+
+        canvas_w = int(canvas_w * scale_factor)
+        canvas_h = int(canvas_h * scale_factor)
 
         T = np.array([
             [scale_factor, 0, -min_x * scale_factor],
@@ -1349,10 +1370,17 @@ def stitch_nightscape_panorama(
                 prog = int(60 + 30 * (i / num_conn))
                 progress_callback(prog, f"Proyectando y fusionando panel {i + 1}/{num_conn}...")
 
-            img_f = load_image_as_float32(panels_paths[idx])
-            h, w = img_f.shape[:2]
-            mask_src = np.ones((h, w), dtype=np.uint8) * 255
-            H_final = T @ global_H[idx]
+            if clean_imgs_small is not None and idx < len(clean_imgs_small):
+                img_f = (clean_imgs_small[idx].astype(np.float32) / 255.0)
+                h, w = img_f.shape[:2]
+                mask_src = np.ones((h, w), dtype=np.uint8) * 255
+                S = np.diag([scale_to_full, scale_to_full, 1.0])
+                H_final = T @ global_H[idx] @ S
+            else:
+                img_f = load_image_as_float32(panels_paths[idx])
+                h, w = img_f.shape[:2]
+                mask_src = np.ones((h, w), dtype=np.uint8) * 255
+                H_final = T @ global_H[idx]
 
             warped_img = cv2.warpPerspective(img_f, H_final, (canvas_w, canvas_h), flags=cv2.INTER_LINEAR)
             warped_mask = cv2.warpPerspective(mask_src, H_final, (canvas_w, canvas_h), flags=cv2.INTER_NEAREST)
@@ -1416,6 +1444,7 @@ def stitch_nightscape_panorama(
     if progress_callback:
         progress_callback(100, f"Panorámica completada en {total_time:.1f}s.")
 
+    msg_prefix = "[Borrador Rápido] " if getattr(settings, 'preview_scale', 1.0) < 1.0 else ""
     return PanoramaResult(
         image=blended_img,
         cropped_image=cropped_img,
@@ -1426,7 +1455,7 @@ def stitch_nightscape_panorama(
         resolution=(canvas_w, canvas_h),
         projection=settings.projection,
         processing_time_s=total_time,
-        message=f"Se cosieron exitosamente {len(connected_indices)} de {n} paneles en {total_time:.1f} segundos."
+        message=f"{msg_prefix}Se cosieron exitosamente {len(connected_indices)} de {n} paneles en {total_time:.1f} segundos."
     )
 
 
@@ -1625,33 +1654,42 @@ def stack_and_stitch_nightscape_panorama(
     master_metas = []
 
     try:
-        for idx, group in enumerate(grouped_panels):
-            if abort_flag and abort_flag():
-                raise InterruptedError("Operación cancelada por el usuario.")
-
+        is_draft = getattr(settings, 'preview_scale', 1.0) < 1.0
+        if is_draft:
             if progress_callback:
-                prog = int(5 + 40 * (idx / total_groups))
-                progress_callback(prog, f"[Fase 1/2] Apilando tesela {idx + 1}/{total_groups} ({len(group)} tomas)...")
+                progress_callback(10, f"[Borrador] Seleccionando tomas base para {total_groups} teselas...")
+            for idx, group in enumerate(grouped_panels):
+                orig_meta = extract_panel_metadata(group[0], idx)
+                master_paths.append(group[0])
+                master_metas.append(orig_meta)
+        else:
+            for idx, group in enumerate(grouped_panels):
+                if abort_flag and abort_flag():
+                    raise InterruptedError("Operación cancelada por el usuario.")
 
-            orig_meta = extract_panel_metadata(group[0], idx)
+                if progress_callback:
+                    prog = int(5 + 40 * (idx / total_groups))
+                    progress_callback(prog, f"[Fase 1/2] Apilando tesela {idx + 1}/{total_groups} ({len(group)} tomas)...")
 
-            stacked_img = stack_panel_group(
-                group,
-                mount_mode=settings.mount_mode,
-                use_mask=settings.use_auto_mask,
-                abort_flag=abort_flag
-            )
+                orig_meta = extract_panel_metadata(group[0], idx)
 
-            master_filename = f"master_panel_{idx:03d}.tif"
-            master_filepath = os.path.join(temp_dir, master_filename)
-            tifffile.imwrite(master_filepath, stacked_img.astype(np.float32), photometric='rgb')
-            del stacked_img
-            gc.collect()
+                stacked_img = stack_panel_group(
+                    group,
+                    mount_mode=settings.mount_mode,
+                    use_mask=settings.use_auto_mask,
+                    abort_flag=abort_flag
+                )
 
-            orig_meta.filepath = master_filepath
-            orig_meta.filename = master_filename
-            master_paths.append(master_filepath)
-            master_metas.append(orig_meta)
+                master_filename = f"master_panel_{idx:03d}.tif"
+                master_filepath = os.path.join(temp_dir, master_filename)
+                tifffile.imwrite(master_filepath, stacked_img.astype(np.float32), photometric='rgb')
+                del stacked_img
+                gc.collect()
+
+                orig_meta.filepath = master_filepath
+                orig_meta.filename = master_filename
+                master_paths.append(master_filepath)
+                master_metas.append(orig_meta)
 
         def remapped_progress(p: int, msg: str):
             if progress_callback:
