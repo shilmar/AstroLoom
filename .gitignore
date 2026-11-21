@@ -85,3 +85,7 @@ astroloom_rs/target/
 *.pyd
 *.so
 *.dll
+
+# Utilidades locales / scripts no trackeados
+build_wiki.py
+

@@ -1395,9 +1395,12 @@ def apply_nrgf(
         )
         clean_detail = cv2.bilateralFilter(raw_detail, d=7, sigmaColor=0.35, sigmaSpace=4.0)
         if use_detail_rings:
+            h_im, w_im = lum.shape[:2]
+            y_coords, x_coords = np.indices((h_im, w_im), dtype=np.float32)
+            disk_mask = np.hypot(x_coords - float(center_x), y_coords - float(center_y)) >= float(radius_min)
             rings_norm = display_detail_rings(
                 clean_detail,
-                valid_mask=(raw_detail != 0.0),
+                valid_mask=disk_mask,
                 center_x=float(center_x),
                 center_y=float(center_y)
             )
@@ -1546,9 +1549,12 @@ def apply_nrgf(
 
     streamer_mod = clipped_detail * radial_gate * snr_factor * blend
 
-    # Protección de margen superior (headroom) para evitar saturación en meseta blanca
-    upper_headroom = np.where(streamer_mod > 0, np.maximum(1.0 - lum, 0.0), 1.0)
-    final_mod = streamer_mod * (0.4 + 0.6 * np.sqrt(upper_headroom))
+    # Protección bilateral de margen dinámico (headroom superior para altas luces e inferior para sombras)
+    upper = np.maximum(1.0 - lum, 0.0)
+    lower = np.maximum(lum, 0.0)
+    mod_pos = streamer_mod * (0.4 + 0.6 * np.sqrt(upper))
+    mod_neg = streamer_mod * lower * (0.3 + 0.7 * np.sqrt(lower))
+    final_mod = np.where(streamer_mod > 0, mod_pos, mod_neg)
 
     new_lum = np.clip(lum + final_mod, 0.0, 1.0)
     new_lum = np.where(disk_mask, new_lum, 0.0).astype(np.float32)
@@ -2138,8 +2144,13 @@ def apply_steerable_g2(
         clipped_detail = np.tanh(acc / max(s0 * 2.0, 1e-5))
 
     streamer_mod = clipped_detail * radial_gate * float(np.clip(blend_ratio, 0.0, 1.0))
-    upper_headroom = np.where(streamer_mod > 0, np.maximum(1.0 - lum, 0.0), 1.0)
-    final_mod = streamer_mod * (0.4 + 0.6 * np.sqrt(upper_headroom))
+    # Margen dinámico bilateral: headroom superior para altas luces y headroom inferior
+    # proporcional a la luminancia local para evitar clipping destructivo a negro (black clipping)
+    upper = np.maximum(1.0 - lum, 0.0)
+    lower = np.maximum(lum, 0.0)
+    mod_pos = streamer_mod * (0.4 + 0.6 * np.sqrt(upper))
+    mod_neg = streamer_mod * lower * (0.3 + 0.7 * np.sqrt(lower))
+    final_mod = np.where(streamer_mod > 0, mod_pos, mod_neg)
 
     new_lum = np.clip(lum + final_mod, 0.0, 1.0)
     new_lum = np.where(r_map >= (radius_min - 2.5), new_lum, 0.0).astype(np.float32)
@@ -2187,7 +2198,15 @@ def apply_larson_sekanina(
             img, center_x, center_y, radius_min=radius_min, radius_max=radius_min * 1.4
         )
 
-    lum_c = np.ascontiguousarray(lum, dtype=np.float32)
+    # Suavizado gaussiano multiescala según SNR radial (Larson & Sekanina 1984 / AEL 1.4.2)
+    # Suprime el ruido de disparo y fluctuaciones estocásticas que causan speckles, islas y huecos oscuros
+    r_norm = r_map / max(float(radius_min), 1.0)
+    g1 = cv2.GaussianBlur(lum, (0, 0), 1.0)
+    g2 = cv2.GaussianBlur(lum, (0, 0), 2.5)
+    w_g = np.clip((r_norm - 1.2) / 1.5, 0.0, 1.0)
+    lum_eval = (g1 * (1.0 - w_g) + g2 * w_g).astype(np.float32)
+
+    lum_c = np.ascontiguousarray(lum_eval, dtype=np.float32)
     if HAS_RUST and hasattr(astroloom_rs, "compute_larson_sekanina_rs"):
         mask_c = np.ascontiguousarray(prom_mask) if prom_mask is not None else None
         ls = np.asarray(astroloom_rs.compute_larson_sekanina_rs(
@@ -2243,15 +2262,19 @@ def apply_larson_sekanina(
                 sampled += row_sum * wy[m]
             return sampled
 
-        val_p = np.maximum(_sample_keys_np(lum, xp, yp), 1e-4)
-        val_m = np.maximum(_sample_keys_np(lum, xm, ym), 1e-4)
-        val_c = np.maximum(lum, 1e-4)
+        val_p = np.maximum(_sample_keys_np(lum_eval, xp, yp), 1e-4)
+        val_m = np.maximum(_sample_keys_np(lum_eval, xm, ym), 1e-4)
+        val_c = np.maximum(lum_eval, 1e-4)
 
         ls = 2.0 * np.log(val_c) - np.log(val_p) - np.log(val_m)
-        r_min_eff = max(float(radius_min) - 2.5, 0.0)
+        r_min_eff = max(float(radius_min), 0.0)
         excl = (r_map < r_min_eff)
         if prom_mask is not None:
-            excl = excl | prom_mask
+            ix_p = np.clip(np.round(xp).astype(np.int32), 0, w - 1)
+            iy_p = np.clip(np.round(yp).astype(np.int32), 0, h - 1)
+            ix_m = np.clip(np.round(xm).astype(np.int32), 0, w - 1)
+            iy_m = np.clip(np.round(ym).astype(np.int32), 0, h - 1)
+            excl = excl | prom_mask | prom_mask[iy_p, ix_p] | prom_mask[iy_m, ix_m]
         ls = np.where(excl, 0.0, ls).astype(np.float32)
 
     r_max = radius_min * max(1.2, float(radius_max_factor))
@@ -2272,18 +2295,26 @@ def apply_larson_sekanina(
         s0 = float(np.std(ls[valid_mask])) if np.any(valid_mask) else 1.0
         clipped_detail = np.tanh(ls / max(s0 * 2.0, 1e-5))
 
-    streamer_mod = clipped_detail * radial_gate * float(np.clip(blend_ratio, 0.0, 1.0))
-    upper_headroom = np.where(streamer_mod > 0, np.maximum(1.0 - lum, 0.0), 1.0)
-    final_mod = streamer_mod * (0.4 + 0.6 * np.sqrt(upper_headroom))
+    # Realce asimétrico de crestas (AEL / Larson-Sekanina): destaca filamentos y chorros
+    # coronales positivos sin sustraer luz destructiva de valles, cavidades o absorciones de nubes
+    pos_detail = np.maximum(clipped_detail, 0.0)
+    streamer_mod = pos_detail * radial_gate * float(np.clip(blend_ratio, 0.0, 1.0))
+    upper = np.maximum(1.0 - lum, 0.0)
+    final_mod = streamer_mod * (0.4 + 0.6 * np.sqrt(upper))
 
-    new_lum = np.clip(lum + final_mod, 0.0, 1.0)
-    new_lum = np.where(r_map >= (radius_min - 2.5), new_lum, 0.0).astype(np.float32)
+    # Compensación de déficit azimutal (nubes y valles difusos): evita colapso a mancha oscura frente a filamentos
+    bg_env = cv2.GaussianBlur(lum, (0, 0), sigmaX=max(float(radius_min) * 0.10, 25.0))
+    cloud_deficit = np.maximum(bg_env - lum, 0.0) * radial_gate
+    lum_base = lum + 0.50 * cloud_deficit
+
+    new_lum = np.clip(lum_base + final_mod, 0.0, 1.0)
+    new_lum[r_map < radius_min] = 0.0
 
     if img.ndim == 3:
         ratio = np.divide(new_lum, np.maximum(lum, 1e-4), out=np.zeros_like(lum), where=lum > 1e-6)
         ratio = np.clip(ratio, 0.0, 4.0)
         result = img * ratio[..., None]
-        result = np.where((r_map >= (radius_min - 2.5))[..., None], result, 0.0)
+        result[r_map < radius_min] = 0.0
     else:
         result = new_lum
 
@@ -2297,7 +2328,8 @@ def apply_swap_filter(
     radius_min: float = 10.0,
     window_deg: float = 15.0,
     c0: float = 0.75,
-    blend_ratio: float = 1.0
+    blend_ratio: float = 1.0,
+    radius_max_factor: float = 3.5
 ) -> np.ndarray:
     """
     Filtro de compresión angular y radial SWAP (Seaton et al. 2023, Solar Physics / PROBA2).
@@ -2314,12 +2346,15 @@ def apply_swap_filter(
     max_r = int(np.hypot(max(center_x, w - center_x), max(center_y, h - center_y))) + 2
     n_theta = 1440
 
-    # 1. Mapeo a coordenadas polares (r, theta) con buffer pre-inicializado (evita basura de memoria/NaN en OpenCV 5.0)
-    dst_polar = np.zeros((max_r, n_theta), dtype=np.float32)
-    polar = cv2.warpPolar(lum, (n_theta, max_r), (center_x, center_y), max_r, cv2.WARP_POLAR_LINEAR, dst=dst_polar)
-    polar = np.nan_to_num(polar, copy=False)
+    # 1. Mapeo a coordenadas polares (r, theta)
+    # cv2.warpPolar con dsize=(max_r, n_theta) asigna cols -> r y rows -> theta.
+    # Al transponer (.T), la matriz polar queda con shape (max_r, n_theta)
+    # donde las filas corresponden al radio r y las columnas al ángulo theta.
+    dst_polar = np.zeros((n_theta, max_r), dtype=np.float32)
+    raw_polar = cv2.warpPolar(lum, (max_r, n_theta), (center_x, center_y), max_r, cv2.WARP_POLAR_LINEAR, dst=dst_polar)
+    polar = np.nan_to_num(raw_polar.T, copy=False)
 
-    # 2. Mediana móvil a lo largo de theta (ventana angular +- window_deg)
+    # 2. Mediana móvil a lo largo de theta (columnas) para cada círculo de radio r (filas)
     win = int(round(2.0 * window_deg / 360.0 * n_theta))
     if win % 2 == 0:
         win += 1
@@ -2333,29 +2368,44 @@ def apply_swap_filter(
         f_polar = median_filter(polar, size=(1, win), mode="wrap")
 
     # 3. Remapeo inverso a coordenadas cartesianas y suavizado cartesiano (sigma = 4.0 px)
+    # f_polar.T tiene shape (n_theta, max_r) como espera WARP_INVERSE_MAP
     dst_cart = np.zeros((h, w), dtype=np.float32)
-    cart_f = cv2.warpPolar(f_polar, (w, h), (center_x, center_y), max_r, cv2.WARP_POLAR_LINEAR + cv2.WARP_INVERSE_MAP, dst=dst_cart)
+    cart_f = cv2.warpPolar(np.ascontiguousarray(f_polar.T), (w, h), (center_x, center_y), max_r, cv2.WARP_POLAR_LINEAR + cv2.WARP_INVERSE_MAP, dst=dst_cart)
     cart_f = np.nan_to_num(cart_f, copy=False)
     f_bg = cv2.GaussianBlur(cart_f, (0, 0), 4.0)
 
-    # 4. Potencia reducida I / (F + t0)^c0
+    # 4. Potencia reducida I / (F + t0)^c0 y compuerta radial continua
     y_coords, x_coords = np.indices((h, w), dtype=np.float32)
     r_map = np.hypot(x_coords - center_x, y_coords - center_y)
     mask_solar = (r_map >= max(radius_min - 2.5, 0.0))
 
-    valid_f = f_bg[mask_solar & (f_bg > 0)]
+    r_max = radius_min * max(1.2, float(radius_max_factor))
+    gate_start = radius_min * (1.0 + (float(radius_max_factor) - 1.0) * 0.75)
+    t = np.clip((r_map - gate_start) / max(r_max - gate_start, 1.0), 0.0, 1.0)
+    radial_gate = 1.0 - (t * t * (3.0 - 2.0 * t))
+    radial_gate = np.where(r_map > r_max, 0.0, radial_gate)
+
+    corona_mask = mask_solar & (r_map <= r_max)
+    valid_f = f_bg[corona_mask & (f_bg > 0)]
     t0 = float(np.median(valid_f)) if valid_f.size > 0 else 1e-4
 
     denom = np.power(np.maximum(f_bg + t0, 1e-6), float(c0))
     i_swap = np.where(mask_solar, lum / denom, 0.0).astype(np.float32)
 
-    # 5. Normalización por raíz cuarta y mapeo al rango visual
-    valid_swap = i_swap[mask_solar & (i_swap > 0)]
-    med_swap = float(np.median(valid_swap)) if valid_swap.size > 0 else 1.0
-    i_norm = np.power(np.maximum(i_swap / max(med_swap, 1e-6), 0.0), 0.25)
+    # 5. Normalización de alto contraste y transición suave hacia el cielo exterior
+    c_vals = i_swap[corona_mask & (i_swap > 0)]
+    if c_vals.size > 10:
+        p_low = float(np.percentile(c_vals, 2.0))
+        p_high = float(np.percentile(c_vals, 98.0))
+        scaled_c = np.clip((i_swap - p_low) / max(p_high - p_low, 1e-4), 0.0, 1.0)
+    else:
+        valid_swap = i_swap[mask_solar & (i_swap > 0)]
+        med_swap = float(np.median(valid_swap)) if valid_swap.size > 0 else 1.0
+        i_norm = np.power(np.maximum(i_swap / max(med_swap, 1e-6), 0.0), 0.25)
+        scaled_c = np.clip((i_norm - 0.5) / 1.5, 0.0, 1.0)
 
-    scaled = np.clip((i_norm - 0.5) / (2.0 - 0.5), 0.0, 1.0)
-    scaled = np.where(mask_solar, scaled, 0.0).astype(np.float32)
+    eff_scaled = scaled_c * radial_gate + lum * (1.0 - radial_gate)
+    scaled = np.where(mask_solar, eff_scaled, 0.0).astype(np.float32)
 
     # Recomposición cromática o autónoma
     if img.ndim == 3:

@@ -4,7 +4,7 @@
 
 **Suite y Estación de Trabajo Integral para Astrofotografía de Paisaje, Cielo Profundo y Eventos Astronómicos**
 
-[![Version](https://img.shields.io/badge/version-v0.17.0-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
+[![Version](https://img.shields.io/badge/version-v0.17.1-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -46,7 +46,31 @@ Impulsada por una arquitectura híbrida que combina una interfaz gráfica reacti
 
 ---
 
-## 🚀 Novedades de la Versión v0.17.0
+## 🚀 Novedades de la Versión v0.17.1
+
+* **Arsenal Coronal Avanzado para Eclipses Solares (HDR & Coronal):**
+  - **Realce de Estructuras Oscuras (*Dark Structure Enhancement*):** Detección y contraste de cavidades coronales, canales de filamentos y corredores magnéticos sin alterar el disco lunar ni sobreexponer los bucles brillantes de plasma.
+  - **Comparador Interactivo en Pantalla Dividida (*Split-View Comparison*):** Modo de pantalla dividida vertical u horizontal en tiempo real con línea divisoria arrastrable (`SplitViewHelper`) para comparar instantáneamente el antes y después en el lienzo.
+  - **Filtro Armónico FNRGF Libre de Aliasing:** Supresión de artefactos de rejilla cartesiana en FNRGF mediante transformada de Fourier en sectores angulares equidistantes.
+  - **Ecualización Crepuscular Asimétrica:** Eliminación matemática del gradiente asimétrico de cielo crepuscular durante la totalidad.
+  - **Conmutación A/B, Radio Lunar Dual y Balance Térmico Dual:** Bypass A/B instantáneo, control independiente de radios lunares interior/exterior y compensación térmica solar dual.
+
+* **Aceleración Nativa en Rust para Filtros Coronales (`astroloom_rs`):**
+  - **Filtro NAFE en Rust:** Convolución 2D FFT nativa (`realfft`) y paralelización multinivel con Rayon en memoria compartida, acelerando drásticamente el filtrado difuso adaptativo al ruido.
+  - **Filtro WOW en Rust:** Blanqueamiento de ondículas (*Wavelet-Optimised Whitening*) nativo con filtrado gaussiano recursivo IIR.
+  - **Pipeline Reactivo Proxy 50% y Render 1:1:** Interacción fluida sobre proxy a media resolución y renderizado final automático 1:1 de alta fidelidad.
+
+* **Documentación Científica y Catálogo Bibliográfico Riguroso (`MANUAL_DE_USUARIO.md`):**
+  - Nueva Sección 11 con fundamentos matemáticos de los módulos principales (TPS, Kappa-Sigma ponderado por FWHM, SDF, RBF, MTF invertible, GHS, PCC Gaia DR3 Theil-Sen, Wavelets B3-Spline, Steerable G2, Larson-Sekanina, SWAP, WOW, NAFE, NRGF, MGN).
+  - Reconocimiento formal a Pere Guerra Serra (autor de Agentic Eclipse Library - AEL y *"A Faithful Corona"*), Raúl Hussein (@rahusga), Miloslav Druckmüller, Chris Gilly, Martin Broser, Nikita Misiura y agencias espaciales ESA/Megvii.
+  - Catálogo bibliográfico con 15 papers revisados por pares en astrofísica y visión por computador.
+
+* **Barra de Progreso en Lienzo Mejorada (`CanvasFooterBar`):**
+  - Widget ampliado a 290x16 px con borde de alto contraste (`#475569`) y tipografía más nítida integrada directamente en la base del visor.
+
+---
+
+## 🌟 Novedades de la Versión v0.17.0
 
 * **Purga Inteligente Anti-Satélites por Transformada de Hough (Startrails):** Detección geométrica lineal rápida a escala 50% con evaluación monocanal de alta velocidad; suprime con precisión estelas de satélites artificiales y aviones en circumpolares preservando las trazas estelares naturales.
 * **Integración de Tecnologías Seti Astro en el Revelador:** Estirado Estadístico Adaptativo (Statistical Stretch) basado en MAD, Claridad de Textura (Texture Clarity) para realce de micro-contraste en nebulosas y polvo galáctico, Extracción Automática de Fondo (ABE) mediante superficie polinomial 2D y modulación fotométrica de capas.

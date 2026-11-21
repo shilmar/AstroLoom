@@ -402,12 +402,13 @@ pub fn apply_nrgf_continuous_rs<'py>(
                         let clipped_detail = (clean_row[x].clamp(-2.5, 2.5)) / 2.5;
 
                         let streamer_mod = clipped_detail * radial_gate * snr_factor * blend;
-                        let upper_headroom = if streamer_mod > 0.0 {
-                            (1.0 - lum).max(0.0)
+                        let final_mod = if streamer_mod > 0.0 {
+                            let upper = (1.0 - lum).max(0.0);
+                            streamer_mod * (0.4 + 0.6 * upper.sqrt())
                         } else {
-                            1.0
+                            let lower = lum.max(0.0);
+                            streamer_mod * lower * (0.3 + 0.7 * lower.sqrt())
                         };
-                        let final_mod = streamer_mod * (0.4 + 0.6 * upper_headroom.sqrt());
                         let new_lum = (lum + final_mod).clamp(0.0, 1.0);
 
                         let ratio = if lum > 1e-6 {
@@ -468,12 +469,13 @@ pub fn apply_nrgf_continuous_rs<'py>(
                         let clipped_detail = (clean_row[x].clamp(-2.5, 2.5)) / 2.5;
 
                         let streamer_mod = clipped_detail * radial_gate * snr_factor * blend;
-                        let upper_headroom = if streamer_mod > 0.0 {
-                            (1.0 - lum).max(0.0)
+                        let final_mod = if streamer_mod > 0.0 {
+                            let upper = (1.0 - lum).max(0.0);
+                            streamer_mod * (0.4 + 0.6 * upper.sqrt())
                         } else {
-                            1.0
+                            let lower = lum.max(0.0);
+                            streamer_mod * lower * (0.3 + 0.7 * lower.sqrt())
                         };
-                        let final_mod = streamer_mod * (0.4 + 0.6 * upper_headroom.sqrt());
                         row_out[x] = (lum + final_mod).clamp(0.0, 1.0);
                     }
                 });
@@ -1343,7 +1345,7 @@ pub fn compute_larson_sekanina_rs<'py>(
     let cos_a = rad.cos();
     let sin_a = rad.sin();
     let eps = epsilon.max(1e-8);
-    let r_min_sq = (radius_min.max(0.0) - 2.5).max(0.0).powi(2);
+    let r_min_sq = radius_min.max(0.0).powi(2);
 
     let mut out = vec![0.0f32; h * w];
 
@@ -1376,6 +1378,25 @@ pub fn compute_larson_sekanina_rs<'py>(
 
                     let xm = center_x + dx * cos_a + dy * sin_a;
                     let ym = center_y - dx * sin_a + dy * cos_a;
+
+                    if let Some(mask) = mask_slice {
+                        let ix_p = xp.round() as isize;
+                        let iy_p = yp.round() as isize;
+                        if ix_p >= 0 && ix_p < w as isize && iy_p >= 0 && iy_p < h as isize {
+                            if mask[iy_p as usize * w + ix_p as usize] {
+                                row_out[x] = 0.0;
+                                continue;
+                            }
+                        }
+                        let ix_m = xm.round() as isize;
+                        let iy_m = ym.round() as isize;
+                        if ix_m >= 0 && ix_m < w as isize && iy_m >= 0 && iy_m < h as isize {
+                            if mask[iy_m as usize * w + ix_m as usize] {
+                                row_out[x] = 0.0;
+                                continue;
+                            }
+                        }
+                    }
 
                     let val_c = lum_row[x].max(eps);
                     let val_p = sample_bicubic_keys(lum_slice, h, w, xp, yp).max(eps);

@@ -44,12 +44,13 @@ Para iniciar AstroLoom en Windows de la manera más cómoda y sin ventanas negra
 * Si no hay entorno virtual, recurre automáticamente a la instalación de Python del sistema.
 * En entornos Linux/macOS o desde la terminal, puedes iniciar la suite ejecutando `./astroloom.sh` (o directamente `python run_app.py`).
 
-### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.17.0)
-A partir de las versiones **v0.14.0** a **v0.17.0**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
+### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.17.1)
+A partir de las versiones **v0.14.0** a **v0.17.1**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
 * **Fluidez Total a 60-160+ FPS:** El renderizado del lienzo (`MaskCanvas`) vuelca directamente a búferes de memoria continua `BGRA8888` compatibles de forma nativa con `QImage(Format_RGB32)`. Las alertas de clipping (`J`) y el comparador Antes/Después con cortina (`Y`) se procesan en microsegundos sin crear copias intermedias en NumPy ni capas secundarias de `QPixmap`.
-* **Pipeline de Exportación Zero-Copy e In-Place en Rust (v0.17.0):** El grafo de capas se evalúa y fusiona en registros de CPU en un único bucle paralelo multihilo de Rayon en Rust, eliminando arrays temporales de NumPy y volcando a enteros `uint16` in-place, lo que acelera entre un 40% y 60% la exportación de proyectos `.devloom` y archivos PSD multicapa.
+* **Filtros Coronales NAFE y WOW Nativos en Rust (v0.17.1):** Evaluación de ecualización difusa adaptativa NAFE con convolución FFT 2D en memoria nativa (`realfft`) y paralelización Rayon multinivel, junto al blanqueamiento de ondículas WOW con suavizado recursivo IIR acelerado al 100% en CPU.
+* **Pipeline de Exportación Zero-Copy e In-Place en Rust (v0.17.0 / v0.17.1):** El grafo de capas se evalúa y fusiona en registros de CPU en un único bucle paralelo multihilo de Rayon en Rust, eliminando arrays temporales de NumPy y volcando a enteros `uint16` in-place, lo que acelera entre un 40% y 60% la exportación de proyectos `.devloom` y archivos PSD multicapa.
 * **Purga Inteligente Anti-Satélites por Transformada de Hough (v0.17.0):** Escaneo geométrico de trazas lineales a escala 50% con evaluación monocanal de alta velocidad en circumpolares (`Startrails`), suprimiendo satélites artificiales y aviones mientras se preservan con fidelidad las estrellas y trazas circulares.
-* **Barra de Progreso Unificada en Lienzo (`CanvasFooterBar`, v0.17.0):** Integración homogénea de barras de progreso contextuales directamente sobre la base del lienzo en todos los visores y módulos (Revelador, Circumpolares, Meteoros, Panorámicas, Eclipses y Apilador), con cancelación reactiva instantánea.
+* **Barra de Progreso Unificada en Lienzo (`CanvasFooterBar`, v0.17.0 / v0.17.1):** Integración homogénea de barras de progreso contextuales directamente sobre la base del lienzo en todos los visores y módulos (Revelador, Circumpolares, Meteoros, Panorámicas, Eclipses y Apilador), con cancelación reactiva instantánea y dimensiones ampliadas de alto contraste (290x16 px).
 * **Purga Integral de Numba y Mapeo LUT 16 a 8 Bits en Rust (v0.16.0):** Eliminación total de dependencias LLVM/Numba, reduciendo 2.36 s en el arranque en frío. El estirado interactivo MTF, GHS y curvas tonales se evalúa en Rust Rayon (`apply_display_lut16_rs`, `apply_display_lut16_dual_rs`) a más de 4.000 FPS (0.24 ms por frame de 2 MP), con cálculo de histograma multihilo en OpenCV C++ AVX2/SSE.
 * **Aceleración Nativa para Eclipses Solares (v0.16.0):** Centrado solar automático de sub-milisegundo por momentos (`center_solar_disc_rs`), estirado Asinh Luma preservando el color (`asinh_stretch_luma_rs`) y fusión coronal HDR adaptativa multiescala (`coronal_hdr_fusion_rs`) ejecutados en registros paralelos de CPU.
 * **Caché LRU de Búferes con Presupuesto de RAM (v0.16.0):** Gestor inteligente de memoria para hitos del pipeline con cuota máxima configurable en MB/GB, purgando búferes antiguos y manteniendo el consumo de memoria acotado incluso en proyectos de alta densidad.
@@ -67,9 +68,9 @@ A partir de las versiones **v0.14.0** a **v0.17.0**, AstroLoom incorpora un moto
 * **Tiling ONNX y Filtro Guiado O(1):** Pre y post-procesado acelerado para StarNet++ v2 y NAFNet con ventanas 2D de Hann continuas, y refinado de bordes de horizonte con imágenes integrales (SAT) en ~21 ms.
 * **Resiliencia Automática (*Drop-in Fallback*):** Si en algún entorno el módulo binario no estuviera presente, AstroLoom conmuta de forma transparente y automática a su motor de reserva en Python/NumPy sin que el usuario experimente errores.
 
-### 🖥️ Cabecera de Telemetría Superior y Espacio Útil (v0.16.0 / v0.17.0)
+### 🖥️ Cabecera de Telemetría Superior y Espacio Útil (v0.16.0 / v0.17.1)
 Para maximizar el área de trabajo vertical dedicada al lienzo de revelado y apilado, se ha suprimido la barra de estado inferior (*status bar*), reubicando toda la información de diagnóstico y monitorización en la esquina superior derecha de la barra de pestañas:
-* **Insignia del Motor:** Identifica en todo momento la versión activa de la suite (`● AstroLoom Engine v0.17.0`).
+* **Insignia del Motor:** Identifica en todo momento la versión activa de la suite (`● AstroLoom Engine v0.17.1`).
 * **Píldora de Alerta Fallback GPU $\rightarrow$ CPU:** Si tu tarjeta gráfica se satura de memoria (VRAM) durante la ejecución de StarNet++ o AI Denoise, se enciende una píldora ámbar (`⚠️ Fallback CPU (VRAM)`) indicando que el proceso continuó en CPU de forma segura. Puedes pinchar en ella para ocultarla.
 * **Monitor de RAM en Tiempo Real:** Muestra el porcentaje y los gigabytes de memoria en uso del sistema operativo (`RAM: XX% (used / total GB)`), actualizado mediante telemetría cada 2.5 segundos.
 * **Botón de Registro de Actividad:** Abre una ventana flotante con el histórico cronológico de operaciones, advertencias, tiempos de ejecución y telemetría de depuración.
@@ -582,29 +583,43 @@ Durante un eclipse total de sol o de luna, el rango dinámico de la corona y el 
    * **Filtro SWAP / Misión PROBA2 de la ESA (Seaton et al. 2023):** Filtrado polar de mediana móvil ($\pm 15^\circ$) y compresión de potencia $I / (F + t_0)^{c_0}$ con reescalado por raíz cuarta en $[0.5, 2.0]$. **Genera una imagen solar autónoma completa**, revelando al mismo tiempo la estructura interna brillante y los filamentos externos tenues sin requerir mezclas adicionales.
      - *Ventana angular:* Sector azimutal de suavizado de fondo (por defecto $15.0^\circ$).
      - *Factor $c_0$:* Grado de compresión radial de la corona (por defecto $0.75$).
-   * **WOW Bilateral Guiado Edge-Aware (AEL 1.3.5):** Descomposición à-trous con spline B3 normalizado, pares simétricos y pesos de rango calculados a partir de una guía sin bilateral, erradicando la inversión de signo en filamentos tenues y acelerado **819×** en Rust.
+   * **WOW Bilateral Guiado Edge-Aware (AEL 1.3.5 / Nativo en Rust en v0.17.1):** Descomposición à-trous con spline B3 normalizado, pares simétricos y pesos de rango calculados a partir de una guía sin bilateral, erradicando la inversión de signo en filamentos tenues y acelerado nativamente en Rust Rayon con filtrado gaussiano recursivo IIR.
      - *Escalas:* Número de niveles de descomposición de ondículas (por defecto 5).
      - *Casilla "Pesos de rango guiados":* Garantiza que el detalle fino mantenga siempre su signo fotométrico positivo y elimina halos en el limbo.
-   * **NAFE (Noise Adaptive Fuzzy Equalization - Miloslav Druckmüller 2013):** Ecualización difusa con vecindario de 129 px (12 componentes gaussianas), convoluciones FFT 2D y compuerta de ruido adaptativa en el eje de intensidad ($12\times$ el ruido medido en la corona lejana).
+   * **NAFE (Noise Adaptive Fuzzy Equalization - Miloslav Druckmüller 2013 / Nativo en Rust en v0.17.1):** Ecualización difusa con vecindario de 129 px (12 componentes gaussianas), convoluciones FFT 2D nativas con `realfft` y compuerta de ruido adaptativa en el eje de intensidad ($12\times$ el ruido medido en la corona lejana), ejecutada en paralelo con Rust Rayon.
      - *Deslizador Sigma:* Umbral de adaptación de ruido difuso (por defecto $12.0$).
      - *Casilla "Modo de mezcla Overlay":* Combina el microcontraste NAFE en modo Superposición sobre la imagen base o muestra la salida directa.
+   * **FNRGF Armónico Libre de Aliasing (Novedad v0.17.1):** Filtro de gradiente radial normalizado con descomposición armónica en frecuencia angular; procesa sectores equidistantes mediante FFT evitando completamente los patrones de muaré y aliasing de rejilla cartesiana en la corona media y exterior.
+   * **Realce de Estructuras Oscuras / Cavidades y Canales de Filamentos (Novedad v0.17.1):** Deslizador dedicado para acentuar selectivamente las cavidades coronales oscuras y los canales de filamentos magnéticos donde la densidad del plasma es mínima, sin empastar el fondo ni saturar los bucles brillantes de plasma.
+   * **Ecualización de Gradiente Crepuscular Asimétrico (Novedad v0.17.1):** Modela y neutraliza el gradiente asimétrico de cielo en el horizonte crepuscular durante la totalidad solar, permitiendo homogeneizar el fondo astronómico sin deformar la corona lejana.
+   * **Ajustes de Precisión (Novedad v0.17.1):** Control independiente de **Radio Lunar Dual** (disco interno y limbo externo), **Balance Térmico Dual** para compensar gradientes térmicos del sensor, y botón de **Bypass A/B Instantáneo** para conmutar con un solo clic entre la vista procesada y la imagen original.
    * **NRGF Continuo (Normalizing Radial Gradient Filter):** Normalización radial $1/r^2$ con compuerta radial suave (*Radial Gate*).
      - *Casilla "Encadenar sectores angulares (chain)":* Restringe los perfiles a sectores angulares compartidos, evitando saltos de brillo en tomas con Luna descentrada o recortada por el encuadre.
    * **MGN Invariante (Morgan & Druckmüller 2014):** Descomposición multiescala en 6 frecuencias espaciales con adaptación dinámica a la escala de datos flotante (`data_scale`), eliminando variaciones de contraste por normalizaciones externas.
    * **Casilla "Normalización de detalle por anillos (Anti-quemado en Limbo)":** Mide la mediana y la dispersión MAD ($1.4826 \cdot \text{MAD}$) en anillos concéntricos de 2 px en torno al centro solar e interpola radialmente con función sigmoidal $\tanh$. Evita que el limbo solar brillante se sature en blanco puro o que el cielo exterior se empaste.
 
-4. **Exportación Nativa a Photoshop PSD Multicapa (16 Bits):**
+4. **Comparador Interactivo de Pantalla Dividida (Split-View, Novedad v0.17.1):**
+   * Incorpora un modo de inspección en pantalla dividida interactiva con cortina deslizable en tiempo real:
+     - **División Vertical:** Permite contrastar el antes (izquierda) y después (derecha) arrastrando la línea divisoria por el lienzo.
+     - **División Horizontal:** Divide superior e inferior para evaluar la corona en diferentes elevaciones.
+   * Totalmente fluido y reactivo, facilitando la calibración milimétrica de cualquier filtro coronal antes de consolidarlo.
+
+5. **Pipeline Reactivo de Doble Fase (Proxy 50% y Render Final 1:1, Novedad v0.17.1):**
+   * Mientras ajustas deslizadores y parámetros, el cálculo se evalúa instantáneamente sobre un proxy reactivo al 50% de resolución, reduciendo el tiempo de respuesta a décimas de segundo.
+   * Al pulsar el botón de exportación o confirmar el procesado, AstroLoom ejecuta automáticamente el renderizado a máxima fidelidad 1:1 a resolución completa nativa.
+
+6. **Exportación Nativa a Photoshop PSD Multicapa (16 Bits):**
    * Pulsa el botón **"Exportar PSD Multicapa"** para generar automáticamente un proyecto `.psd` de 16 bits por canal listo para Photoshop, GIMP o PixInsight.
    * Incluye todas las capas maestras estandarizadas (`Fondo HDR Base`, `01 NRGF`, `02 WOW Edge-Aware`, `09 NAFE`, `11 Steerable G2`, `15 Larson-Sekanina`, `16 SWAP`) con sus modos de mezcla nativos (`Normal`, `Overlay`), permitiendo ajustar la opacidad de cada filtro de forma no destructiva.
 
-5. **Transferencia Directa de la Pila Coronal al Revelador:**
+7. **Transferencia Directa de la Pila Coronal al Revelador:**
    * Pulsa el botón **«Transferir Pila Coronal al Revelador»** en la barra de acciones de la pestaña de Eclipses.
    * Se abrirá el diálogo interactivo de **Configuración de Pila Coronal Multicapa**, permitiéndote seleccionar qué filtros astronómicos computar (NRGF, SWAP, Larson-Sekanina, Steerable G2, NAFE, WOW Bilateral Guiado y MGN Multiescala).
    * Cada filtro viene preconfigurado con su modo de fusión óptimo (`Luminosidad`, `Trama`, `Luz Suave`, `Normal`) y su opacidad recomendada por defecto para un revelado físico equilibrado.
    * Un proceso en segundo plano asíncrono (`QThread`) calculará secuencialmente los filtros seleccionados sin bloquear la interfaz y conmutará automáticamente a la pestaña **2. Revelador / Editor**, montando toda la composición multicapa en el lienzo.
    * En el Revelador dispondrás de control total no destructivo: graduar opacidades, conmutar visibilidad con un clic, cambiar modos de fusión, retocar con el pincel de máscara o aplicar curvas tonales específicas a cada filtro.
 
-6. **Calibración Espectral y Flujo de Trabajo:**
+8. **Calibración Espectral y Flujo de Trabajo:**
    * **Balance de Blancos Coronal Automático:** Muestrea fotométricamente el anillo coronal intermedio ($1.2 - 1.8 R_\odot$) para neutralizar dominantes de dispersión atmosférica manteniendo intacta la crominancia roja de las protuberancias solares ($H\alpha$).
    * **Reducción de Ruido Cromático Local:** Suavizado selectivo en los canales de color ($A, B$) guiado por la señal coronal con máscara protectora del limbo para suprimir grano térmico sin emborronar estructuras.
    * **Exportación y Envío:** Guarda directamente en formato **TIFF de 16 bits** de máxima calidad o pulsa **Enviar al Revelador** para transferir una imagen aplanada rápida o la pila completa multicapa.
@@ -783,5 +798,121 @@ AstroLoom incorpora un visor de inspección secuencial (*Blink Viewer*) diseñad
 
 > [!TIP]
 > **Consejo de Oro para Revelado:** No intentes estirar la imagen al máximo en un solo paso. Realiza primero un estirado moderado con GHS (Sección 3), mitiga la luz del horizonte (Sección 2), desacopla las estrellas con StarNet++ (Sección 5), y luego dale el volumen final al polvo galáctico mediante el Glow Orton y la Claridad.
+
+## 11. Fundamentos Científicos, Algoritmos y Agradecimientos
+
+AstroLoom integra una base de cálculo numérico rigurosa que combina algoritmos clásicos de astrofotografía, modelos de visión por computador, redes neuronales y formulaciones científicas punteras procedentes de misiones espaciales y literatura astrofísica revisada por pares. A continuación se desglosan los fundamentos matemáticos de los módulos principales y el catálogo bibliográfico de referencia.
+
+---
+
+### 11.1 Módulo 1: Apilador (Stacker)
+
+* **Detección y Emparejamiento de Asterismos (Star Triangle Matching):**
+  * Localiza centroides estelares mediante ajuste gaussiano bidimensional subpíxel. Para la correspondencia entre tomas, construye polígonos invariantes a rotación, escala y traslación basados en triángulos de estrellas con indexación espacial mediante árbol k-d 4D acelerado en Rust (`build_star_asterisms_rs`), resolviendo emparejamientos en menos de 2 ms incluso con estrellas deformadas por seeing.
+* **Alineación No Rígida por Splines de Placa Delgada (Thin Plate Splines - TPS):**
+  * Corrige la distorsión periférica causada por rotación de campo en tomas gran angular o desalineación polar del tracker. Ajusta una función de deformación elástica biparalela interpolada con kernel Lanczos de 4 lóbulos (`cv2.INTER_LANCZOS4`), eliminando aberraciones marginales en las esquinas.
+* **Normalización Fotométrica Previa (Linear Fit):**
+  * Para compensar variaciones de transparencia atmosférica, pasos de nubes tenues o viñeteo diferencial, se aplica un ajuste por regresión lineal en cada canal:
+    $$I'_k(x, y) = a_k \cdot I_k(x, y) + b_k$$
+    donde la pendiente $a_k$ iguala la dispersión fotométrica y el pedestal $b_k$ unifica el nivel de fondo respecto a la toma de referencia.
+* **Integración Kappa-Sigma Adaptativa Ponderada por Calidad:**
+  * Cada píxel se evalúa a lo largo del eje temporal. Se calculan la mediana y la dispersión absoluta de la mediana ($\text{MAD}$):
+    $$\sigma = 1.4826 \cdot \text{MAD}$$
+    Los valores que caen fuera de $[\text{mediana} - \kappa \cdot \sigma, \, \text{mediana} + \kappa \cdot \sigma]$ se rechazan (eliminando trazas de satélites y rayos cósmicos). Los píxeles supervivientes se promedian ponderando cada fotograma en proporción inversa a su dispersión estelar ($w_i = 1 / \text{FWHM}_i^2$), maximizando la nitidez y la relación señal/ruido final.
+* **Fusión de Suelo Anti-Ghosting y Transición SDF:**
+  * Para escenas nocturnas con paisaje terrestre, el suelo se combina mediante percentil mínimo ($P_{10}$) para suprimir elementos móviles (ramas mecidas por viento, personas). La unión con el cielo estrellado se modela mediante campos de distancia con signo (*Signed Distance Fields*, SDF), produciendo una transición continua de 5 px sin halos oscuros ni bordes dobles.
+
+---
+
+### 11.2 Módulo 2: Revelador (Developer)
+
+* **Modelado y Extracción de Gradientes por Muestreo RBF 2D:**
+  * Modela la contaminación lumínica caótica mediante Funciones de Base Radial multiescala evaluadas en paralelo en Rust (`fit_and_eval_rbf_proxy`). A diferencia de polinomios de bajo orden que divergen en los bordes, el RBF interpola suavemente la radiometría del cielo excluyendo estrellas y suelo con complejidad de memoria acotada.
+* **Estirado Analítico MTF Invertible y GHS:**
+  * **Midtone Transfer Function (MTF):** Curva de transferencia de tonos medios analítica dada por:
+    $$MTF(x, m) = \frac{(m - 1) \cdot x}{(2m - 1) \cdot x - m}$$
+    AstroLoom implementa su inversa matemática estricta para garantizar que la compresión y descompresión de datos lineales en etapas neuronales no altere la escala fotométrica original.
+  * **Generalised Hyperbolic Stretch (GHS):** Estiramiento hiperbólico local que expande el contraste en torno a un punto de simetría $S$ con factor de estirado $D$ y protección de luces altas $b$, permitiendo levantar nebulosas tenues sin quemar los centros galácticos ni engrosar núcleos estelares.
+* **Calibración Fotométrica del Color (PCC contra Gaia DR3):**
+  * Realiza fotometría de apertura circular sobre las estrellas del campo y cruza los flujos observados con los colores $(BP - RP)$ del catálogo estelar espacial **Gaia DR3** de la ESA. La recta de regresión de calibración de ganancia cromática ($k_r, k_b$) se ajusta mediante el estimador no paramétrico robusto **Theil-Sen** en Rust ($O(N^2)$), insensible hasta un 29% de outliers producidos por estrellas saturadas o nebulosidad local.
+* **Deconvolución Óptica Richardson-Lucy:**
+  * Restauración bayesiana iterativa que des-convoluciona la función de dispersión de punto (PSF) estelar estimada, incorporando amortiguación en altas frecuencias para evitar la formación de anillos de artefacto (*ringing*).
+* **Ondículas Multiescala À Trous (B3-Spline Wavelets):**
+  * Descompone la imagen en escalas diádicas mediante el kernel cúbico $B_3 = \frac{1}{16}[1, 4, 6, 4, 1]$, permitiendo realzar o atenuar de forma selectiva estructuras de gas y polvo galáctico sin amplificar el grano de alta frecuencia.
+* **Reducción de Ruido Neuronal NAFNet:**
+  * Arquitectura sin funciones de activación no lineales (*Nonlinear Activation Free Network*) ejecutada sobre ONNX Runtime. Opera en un pipeline desacoplado que filtra el croma en espacio $YCrCb$ y preserva las altas frecuencias de luminancia ($>2.5\sigma$) para conservar la microtextura astrofísica.
+
+---
+
+### 11.3 Módulo 3: Eclipses (Filtros Coronales y HDR)
+
+Durante un eclipse total de Sol, el brillo superficial de la corona decae más de seis órdenes de magnitud desde el limbo solar ($1.0 \, R_\odot$) hasta el límite del campo ($>5.0 \, R_\odot$). AstroLoom incorpora un conjunto especializado de filtros matemáticos diseñados específicamente para resolver esta enorme dinámica:
+
+* **Centrado Subpíxel y Delimitación ROI:**
+  * Localización ultrarrápida del centro del disco solar mediante momentos geométricos espaciales calculados en Rust (`center_solar_disc_rs`), delimitando una región de interés circular/elíptica que optimiza el cálculo polar.
+* **Fusión HDR Coronal con Traspaso Suave (Anti-Anillos):**
+  * Combina la serie de exposiciones (desde $1/4000\text{ s}$ hasta varias decenas de segundos). Para evitar saltos en la varianza del ruido en el límite de saturación de cada fotograma (que se traducen en falsos anillos concéntricos al aplicar filtros de microcontraste), la ponderación modula progresivamente la transición entre tomas adyacentes según el cociente de exposiciones $t_i / t_{i-1}$.
+* **Filtros Coronales Implementados:**
+  1. **Filtro Direccionable Steerable G2 (Freeman & Adelson 1991 / Weickert 1999):**
+     * Evalúa el tensor de estructura local de la imagen mediante segundas derivadas gaussianas direccionables. En lugar de proyectar diferencias en ángulos fijos, orienta analíticamente la respuesta del filtro a lo largo de las líneas de inducción magnética del plasma coronal, reduciendo más de un 50% del grano aleatorio frente a filtros tangenciales convencionales.
+  2. **Gradiente Rotacional de Larson–Sekanina (Larson & Sekanina 1984):**
+     * Calcula la segunda derivada angular en coordenadas polares en torno al centro del Sol:
+       $$\text{LS}(r, \theta) = 2\ell(r, \theta) - \ell(r, \theta + \Delta\theta) - \ell(r, \theta - \Delta\theta)$$
+       con $\ell = \ln L$. El muestreo subpíxel rotado se realiza con convolución cúbica de Keys ($a = -0.5$). Incorpora un detector automático de protuberancias solares ($R/G > 1.12 \times \text{mediana}$ cromosférica) que las excluye del cálculo para impedir la generación de sombras fantasma a $\pm\Delta\theta$.
+  3. **Filtro SWAP (Misión PROBA2 / ESA, Seaton et al. 2023):**
+     * Normaliza la imagen dividiéndola por un fondo de mediana móvil polar a lo largo de un sector angular de $\pm 15^\circ$: $I / (F + t_0)^{c_0}$ (con $c_0 = 0.75$). Aplica compresión por raíz cuarta en el rango $[0.5, 2.0]$, generando una imagen de contraste equilibrado lista para visualización directa que desvela tanto la corona interna como las eyecciones lejanas.
+  4. **WOW Edge-Aware Guiado (Auchère et al. 2023 / AEL 1.3.5):**
+     * Descomposición por blanqueamiento optimizado de ondículas (*Wavelet-Optimised Whitening*). Utiliza pesos de rango obtenidos a partir de una guía sin componente bilateral para evitar la inversión de signo fotométrico en filamentos tenues y suprimir halos espurios en el limbo lunar.
+  5. **NAFE - Noise Adaptive Fuzzy Equalization (Druckmüller 2013):**
+     * Ecualización difusa no lineal calculada mediante convoluciones FFT en un vecindario extendido de 129 px (suma de 12 funciones gaussianas). La comparación de intensidades está regulada por una compuerta de ruido gaussiana de $12\sigma$ calibrada sobre el ruido residual de la corona exterior ($>4 \, R_\odot$).
+  6. **NRGF Continuo y Robusto (Morgan, Habbal & Woo 2006):**
+     * Normalización radial del gradiente mediante el cálculo de la mediana y la dispersión robusta ($1.4826 \cdot \text{MAD}$) a lo largo de anillos concéntricos continuos. Implementa encadenamiento angular (`partial_annuli='chain'`) para mantener la coherencia fotométrica cuando el limbo de la Luna o el sensor cortan parcialmente los anillos.
+  7. **MGN Multiescala Invariante (Morgan & Druckmüller 2014):**
+     * Normalización gaussiana multiescala en 6 bandas de frecuencia espacial, con adaptación automática a la escala del rango dinámico del flujo de entrada flotante.
+
+---
+
+### 11.4 Agradecimientos y Reconocimientos
+
+El desarrollo de los módulos científicos de AstroLoom ha sido posible gracias al trabajo pionero de investigadores, astrofotógrafos y desarrolladores de código abierto de la comunidad astronómica internacional:
+
+* **Pere Guerra Serra:**
+  * Reconocimiento y agradecimiento especial a **Pere Guerra Serra**, creador y autor de la librería **Agentic Eclipse Library (AEL)** y autor del estudio y paper *"A Faithful Corona"* sobre el eclipse total de Sol del 12 de agosto de 2026. Sus investigaciones sobre la física de la corona, sus formulaciones analíticas en coordenadas polares, las recetas operativas de calibración de capas y sus métodos de preservación de la señal fotométrica real frente a la invención de contraste han servido de pilar conceptual y matemático para los módulos de eclipses solares de AstroLoom.
+* **Raúl Hussein (@rahusga):**
+  * Por el desarrollo de los skills de integración, automatización y protocolos de verificación operativa del ecosistema AEL.
+* **Miloslav Druckmüller (Brno University of Technology):**
+  * Pionero mundial indiscutible en el procesado matemático de la corona solar y eclipses totales, por sus algoritmos fundamentales NAFE, MGN y ACHF.
+* **Chris Gilly (NorthWest Research Associates / University of Colorado Boulder):**
+  * Por sus investigaciones en normalización radial armónica e histogramas polares locales (filtro RHEF) y sus revisiones sobre las matemáticas de filtrado coronal.
+* **Martin Broser:**
+  * Por el diseño del algoritmo *StarPolygonMatcher* (coincidencia de constelaciones por polígonos estelares y trigonometría esférica en OpenCV), referencia clave para el desarrollo del módulo de mosaicos y panorámicas astronómicas nocturnas.
+* **Nikita Misiura:**
+  * Creador de la red neuronal **StarNet / StarNet++**, herramienta de referencia para la desestelarización de astrofotografías.
+* **Misión Espacial Gaia (Agencia Espacial Europea - ESA):**
+  * Por el acceso público al catálogo estelar astronómico de máxima precisión **Gaia DR3**, base de la calibración fotométrica estelar (PCC).
+* **Equipo de Investigación de Megvii:**
+  * Por la arquitectura abierta de restauración de imagen **NAFNet** (*Simple Baselines for Image Restoration*).
+
+---
+
+### 11.5 Referencias Bibliográficas (Papers y Publicaciones)
+
+1. **Morgan, H., Habbal, S. R., & Woo, R. (2006).** *The Expanding Search for the Solar Corona: Normalizing Radial Gradient Filter.* Solar Physics, 236(2), 263–283.
+2. **Morgan, H., & Druckmüller, M. (2014).** *Multi-scale Gaussian Normalization for Solar Image Processing.* Solar Physics, 289(8), 2945–2955.
+3. **Druckmüller, M. (2013).** *A Noise Adaptive Fuzzy Equalization Method for Processing Extreme Ultraviolet Solar Images.* The Astrophysical Journal Supplement Series (ApJS), 207(2), 25.
+4. **Druckmüller, M., Rušin, V., & Minarovjech, M. (2006).** *Adaptive Contrast High-pass Filter.* Contributions of the Astronomical Observatory Skalnaté Pleso, 36, 131–148.
+5. **Gilly, C., & Cranmer, S. R. (2025).** *Radial Harmonic and Histogram Equalization Filter for Solar Coronal Imaging.*
+6. **Auchère, F., Soubrié, É., Pelouze, C., & Buchlin, É. (2023).** *Image enhancement with wavelet-optimized whitening (WOW).* Astronomy & Astrophysics (A&A), 670, A66.
+7. **Larson, S. M., & Sekanina, Z. (1984).** *Coma morphology and dust-emission pattern of periodic Comet Halley. I - High-resolution images taken at Mount Wilson in 1910.* The Astronomical Journal (AJ), 89, 571–578.
+8. **Seaton, D. B., Berghmans, D., West, M. S., et al. (2023).** *The SWAP EUV Imaging Telescope on PROBA2: Image Processing and Calibration Algorithms.* Solar Physics, 298, 92.
+9. **Freeman, W. T., & Adelson, E. H. (1991).** *The Design and Use of Steerable Filters.* IEEE Transactions on Pattern Analysis and Machine Intelligence (PAMI), 13(9), 891–906.
+10. **Weickert, J. (1999).** *Coherence-Enhancing Diffusion of Colour Images.* Image and Vision Computing, 17(3-4), 201–212.
+11. **Chen, L., Chu, X., Zhang, X., & Sun, J. (2022).** *Simple Baselines for Image Restoration.* In European Conference on Computer Vision (ECCV), pp. 17–33. Springer.
+12. **He, K., Sun, J., & Tang, X. (2013).** *Guided Image Filtering.* IEEE Transactions on Pattern Analysis and Machine Intelligence, 35(6), 1397–1409.
+13. **Bookstein, F. L. (1989).** *Principal Warps: Thin-Plate Splines and the Decomposition of Deformations.* IEEE Transactions on Pattern Analysis and Machine Intelligence, 11(6), 567–585.
+14. **Starck, J.-L., & Murtagh, F. (2002).** *Astronomical Image and Data Analysis.* Springer-Verlag.
+15. **Gaia Collaboration (Brown, A. G. A., et al.) (2023).** *Gaia Data Release 3: Summary of the content and survey properties.* Astronomy & Astrophysics, 674, A1.
+
+---
 
 ¡Disfruta capturando y revelando el cosmos con **AstroLoom**! 🌌🔭

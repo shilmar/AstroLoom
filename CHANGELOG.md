@@ -3,6 +3,39 @@
 Todas las novedades, mejoras y correcciones notables de **AstroLoom** (anteriormente *Apilator*) se documentan en este archivo.
 El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.17.1] - 2026-11-21
+
+### Añadido
+* **Arsenal Coronal Avanzado y Filtros Matemáticos Especializados en Eclipses Solares (`core/eclipse.py`, `astroloom_rs/src/eclipse.rs`, `gui/tab_eclipse.py`):**
+  - **Realce de Estructuras Oscuras (*Dark Structure Enhancement*):** Detección y acentuación selectiva de cavidades coronales, canales de filamentos y corredores magnéticos sin empastar las sombras del disco lunar ni generar artefactos de saturación sobre los bucles brillantes de plasma.
+  - **Comparador Interactivo en Pantalla Dividida (*Split-View Comparison*):** Modo de previsualización dividida interactiva vertical u horizontal sobre el lienzo principal con deslizador en tiempo real (`SplitViewHelper`), permitiendo contrastar de forma directa el antes y después de cualquier filtro coronal.
+  - **Filtro Armónico FNRGF y Supresión de Aliasing Cartesiano:** Eliminación completa de artefactos de rejilla cartesiana en FNRGF mediante transformada de Fourier en sectores angulares equidistantes.
+  - **Ecualización de Gradiente Crepuscular (*Twilight Sky Gradient Equalization*):** Supresión matemática del gradiente asimétrico de cielo crepuscular durante la totalidad solar.
+  - **Conmutación A/B Instantánea, Radio Lunar Dual y Balance Térmico Solar Dual:** Alternancia de visualización A/B directa, control independiente de radios lunares interior/exterior y compensación térmica solar dual.
+
+* **Documentación Científica y Fundamentos Algorítmicos (`MANUAL_DE_USUARIO.md`):**
+  - **Nueva Sección 11: Fundamentos Científicos, Algoritmos y Agradecimientos:** Desglose matemático riguroso de los módulos de Apilador (TPS, Kappa-Sigma ponderado por FWHM, SDF), Revelador (RBF, MTF invertible, GHS, PCC Gaia DR3 Theil-Sen, Wavelets B3-Spline) y Eclipses (Steerable G2, Larson-Sekanina, SWAP, WOW, NAFE, NRGF, MGN).
+  - **Agradecimientos Institucionales y Personales:** Reconocimiento expreso a Pere Guerra Serra (autor de Agentic Eclipse Library - AEL y *"A Faithful Corona"*), Raúl Hussein (@rahusga), Miloslav Druckmüller, Chris Gilly, Martin Broser, Nikita Misiura y a las misiones espaciales ESA Gaia y Megvii.
+  - **Catálogo Bibliográfico de Referencia:** Incorporación de 15 referencias de papers científicos revisados por pares en astrofísica, procesamiento coronal y visión por computador.
+
+### Rendimiento y Optimización
+* **Migración Completa de Filtro NAFE a Rust Nativo (`astroloom_rs/src/eclipse.rs`, `core/eclipse.py`):**
+  - Convolución bidimensional nativa mediante `realfft` y evaluación paralela multinivel con Rayon en memoria compartida, acelerando drásticamente el cálculo de la ecualización difusa adaptativa al ruido.
+* **Migración Completa de Filtro WOW a Rust Nativo (`astroloom_rs/src/eclipse.rs`, `core/eclipse.py`):**
+  - Filtrado de blanqueamiento optimizado de ondículas (*Wavelet-Optimised Whitening*) nativo en Rayon con suavizado gaussiano recursivo IIR.
+* **Pipeline Reactivo de Doble Fase (Proxy 50% y Render Final 1:1, `core/eclipse.py`, `gui/tab_eclipse.py`):**
+  - Generación de proxy reactivo a media resolución durante el arrastre de deslizadores y renderizado automático 1:1 a resolución completa al confirmar o exportar.
+
+### Modificado
+* **Barra de Progreso Unificada en Lienzo (`CanvasFooterBar`, `gui/widgets/viewer_toolbar.py`):**
+  - Dimensiones optimizadas a 290x16 px con borde de alto contraste (`#475569`) y tipografía de legibilidad mejorada en todos los módulos de visor.
+* **Refinamiento de Filtros SWAP y Larson-Sekanina (`core/eclipse.py`, `astroloom_rs/src/eclipse.rs`):**
+  - Incorporada compuerta radial continua de transición y parámetro `radius_max_factor` en SWAP; protección estricta con máscara de disco para prevenir fugas y sombras fantasma en Larson-Sekanina.
+* **Sincronización Global de Versión:**
+  - Actualización transversal a `v0.17.1` en motor Rust (`Cargo.toml`, `Cargo.lock`, `pyproject.toml`), ventana principal, pantalla splash, diálogos y localizaciones multilingües (`es.json`, `en.json`).
+* **Infraestructura y CI/CD:**
+  - Actualización a Node 24 en GitHub Actions, soporte de compilación Linux y pipeline de release directo vía pip.
+
 ## [0.17.0] - 2026-11-19
 
 ### Añadido

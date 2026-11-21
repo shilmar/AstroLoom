@@ -356,13 +356,13 @@ class CanvasFooterBar(QWidget):
 
         # 3. Barra de Progreso Compacta Estilo Photoshop (oculta por defecto)
         self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedHeight(14)
-        self.progress_bar.setFixedWidth(210)
+        self.progress_bar.setFixedHeight(16)
+        self.progress_bar.setFixedWidth(290)
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setVisible(False)
         self.progress_bar.setStyleSheet("""
             QProgressBar {
-                border: 1px solid #232738;
+                border: 1px solid #475569;
                 border-radius: 4px;
                 background-color: #0b0f19;
                 text-align: center;

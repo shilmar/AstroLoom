@@ -789,7 +789,8 @@ class EclipseWorker(QThread):
                         radius_min=mask_r,
                         window_deg=swap_win,
                         c0=swap_c0,
-                        blend_ratio=blend
+                        blend_ratio=blend,
+                        radius_max_factor=reach
                     )
                 elif filter_type == "mgn":
                     self.progress.emit(25, "Calculando filtro multiescala MGN (Morgan & Druckmüller)...")

@@ -68,7 +68,7 @@ class AstroSplashScreen(QSplashScreen):
         f_ver = QFont("Segoe UI", 8, QFont.Bold)
         painter.setFont(f_ver)
         painter.setPen(QColor("#64748b"))
-        painter.drawText(QRectF(0, 138, self.w, 18), Qt.AlignCenter, "v0.17.0 • Rust Rayon Engine")
+        painter.drawText(QRectF(0, 138, self.w, 18), Qt.AlignCenter, "v0.17.1 • Rust Rayon Engine")
 
         # 6. Barra de progreso moderna
         bar_w = 340
