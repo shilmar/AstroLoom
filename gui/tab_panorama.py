@@ -43,6 +43,7 @@ from core.panorama import (
     load_panorama_session
 )
 from core.icc_manager import save_tiff_with_icc
+from core.log_hub import log_hub
 from gui.widgets.viewer_toolbar import ViewerToolbar, CanvasFooterBar
 from gui.widgets.drop_widgets import DropTableWidget, collect_image_files_from_mime, SUPPORTED_IMAGE_EXTENSIONS
 from gui.theme import STYLE_RUN_IDLE, STYLE_CANCEL_ACTIVE, STYLE_TRANSFER_BTN
@@ -350,8 +351,13 @@ class PanoramaTab(QWidget):
         self.current_result: Optional[PanoramaResult] = None
         self._stitch_worker: Optional[PanoramaStitchWorker] = None
         self._meta_worker: Optional[MetadataExtractWorker] = None
+        self._last_progress_msg: str = ""
 
         self._setup_ui()
+
+    def log(self, message: str) -> None:
+        """Registra un evento del módulo de Panorámicas en el Registro de Actividad."""
+        log_hub.log("Panorámicas", message)
 
     def _setup_ui(self):
         main_layout = QHBoxLayout(self)
@@ -878,8 +884,9 @@ class PanoramaTab(QWidget):
                 val_pct = int(round(est * 100))
                 self.slider_vignette.setValue(val_pct)
                 self.chk_vignette_auto.setText(f"Auto ({val_pct}%)")
-            except Exception:
-                pass
+                self.log(f"Estimación de viñeteo óptico: compensación radial fijada en {val_pct}%.")
+            except Exception as e:
+                self.log(f"Aviso: Falló la estimación automática de viñeteo: {e}")
 
     def _on_burst_mode_toggled(self, checked: bool):
         self.btn_stitch.setText("Apilar y Coser Panorámica" if checked else "Coser Panorámica")
@@ -928,6 +935,7 @@ class PanoramaTab(QWidget):
             self.panels_metadata.append(meta)
 
         self._refresh_table()
+        self.log(f"Añadidos {len(new_paths)} paneles a la lista (total: {len(self.panels_metadata)} tomas).")
 
         # Iniciar extracción de metadatos en segundo plano
         self._meta_worker = MetadataExtractWorker(new_paths)
@@ -945,14 +953,20 @@ class PanoramaTab(QWidget):
                 break
 
     def _on_all_metadata_ready(self):
+        focals = [m.focal_length_mm for m in self.panels_metadata if m.focal_length_mm is not None and m.focal_length_mm > 0]
         # Actualizar focal estimada solo si está en modo Auto
         if self.chk_focal_auto.isChecked():
-            focals = [m.focal_length_mm for m in self.panels_metadata if m.focal_length_mm is not None and m.focal_length_mm > 0]
             if focals:
                 med_focal = float(np.median(focals))
                 self.spin_focal.setValue(int(round(med_focal)))
                 self.chk_focal_auto.setText(f"Focal Auto ({med_focal:.0f} mm):")
         self._update_ingest_summary()
+        if focals:
+            med_focal = float(np.median(focals))
+            self.log(f"Metadatos EXIF leídos ({len(self.panels_metadata)} paneles). Distancia focal estimada: {med_focal:.1f} mm.")
+        else:
+            self.log(f"Metadatos EXIF leídos ({len(self.panels_metadata)} paneles). Sin datos EXIF de distancia focal.")
+
         if self.chk_vignette_auto.isChecked():
             self._auto_estimate_vignetting()
 
@@ -1050,6 +1064,7 @@ class PanoramaTab(QWidget):
             if 0 <= r < len(self.panels_metadata):
                 del self.panels_metadata[r]
         self._refresh_table()
+        self.log(f"Eliminados {len(selected_rows)} paneles seleccionados (restantes: {len(self.panels_metadata)}).")
 
     def _on_clear_panels(self):
         self.panels_metadata.clear()
@@ -1058,6 +1073,7 @@ class PanoramaTab(QWidget):
         self.lbl_stats.setText("Sin panorámica generada")
         self.btn_save_tiff.setEnabled(False)
         self.btn_to_developer.setEnabled(False)
+        self.log("--- Lista de paneles vaciada. Sesión restablecida ---")
 
     def _move_row(self, delta: int):
         selected_rows = sorted(set(idx.row() for idx in self.table_panels.selectedIndexes()))
@@ -1073,6 +1089,7 @@ class PanoramaTab(QWidget):
     def _sort_panels_by_time(self):
         self.panels_metadata.sort(key=lambda m: (m.timestamp, m.filename))
         self._refresh_table()
+        self.log("Paneles ordenados cronológicamente según marcas temporales EXIF.")
 
     def _get_selected_panel_paths(self) -> List[str]:
         paths = []
@@ -1128,9 +1145,21 @@ class PanoramaTab(QWidget):
             arch_curvature=(self.slider_arch.value() / 100.0)
         )
 
+        self._last_progress_msg = ""
         self._set_processing_ui(True)
         self.progress_bar.setValue(0)
         self.lbl_status.setText("Iniciando apilado y cosido panorámico..." if is_burst else "Iniciando cosido panorámico nocturno...")
+
+        # Registro detallado de inicio y parámetros en log_hub
+        self.log(f"=== INICIANDO {'APILADO Y ' if is_burst else ''}COSIDO PANORÁMICO ({len(paths)} paneles seleccionados) ===")
+        proj_name = self.combo_projection.currentText()
+        layout_name = self.combo_layout_mode.currentText()
+        blend_name = self.combo_blend.currentText()
+        focal_str = f"{settings.focal_length_override:.1f} mm" if settings.focal_length_override else "Auto EXIF"
+        self.log(f"Configuración: Proyección={proj_name} | Disposición={layout_name} | Fusión={blend_name} ({settings.blend_bands} bandas) | Focal={focal_str}")
+        self.log(f"Ajustes Astro: Modo Astro={'Sí' if settings.astro_mode else 'No'}, Alineación estelar={'Sí' if settings.star_matching else 'No'} (mín inliers: {settings.min_inliers}), Viñeteo: {settings.vignette_amount*100:.0f}%, Curvatura arco: {settings.arch_curvature*100:.0f}%")
+        if is_burst:
+            self.log(f"Modo Ráfaga: {len(grouped)} teselas x {self.combo_burst_count.currentData()} tomas (Montura: {settings.mount_mode}, Máscara cielo: {'Sí' if settings.use_auto_mask else 'No'}).")
 
         self._stitch_worker = PanoramaStitchWorker(paths, settings, grouped_panels=grouped)
         self._stitch_worker.progress.connect(self._on_stitch_progress)
@@ -1142,6 +1171,7 @@ class PanoramaTab(QWidget):
     def _cancel_stitching(self):
         if self._stitch_worker:
             self.lbl_status.setText("Cancelando procesamiento...")
+            self.log("Solicitando cancelación del proceso de cosido...")
             self._stitch_worker.cancel()
 
     def _on_stitch_progress(self, pct: int, msg: str):
@@ -1149,6 +1179,9 @@ class PanoramaTab(QWidget):
         self.lbl_status.setText(msg)
         if hasattr(self, 'canvas_footer'):
             self.canvas_footer.set_progress(pct, msg)
+        if msg and msg != self._last_progress_msg:
+            self._last_progress_msg = msg
+            self.log(f"[{pct}%] {msg}")
 
     def _on_stitch_finished(self, result: PanoramaResult):
         self._set_processing_ui(False)
@@ -1174,17 +1207,26 @@ class PanoramaTab(QWidget):
         self.btn_save_tiff.setEnabled(True)
         self.btn_to_developer.setEnabled(True)
 
+        self.log(f"✓ {result.message}")
+        self.log(f"Resultado final: {w}x{h} px ({mp:.1f} MP) | {result.panels_stitched} de {result.total_panels} paneles integrados.")
+        if result.crop_rect:
+            cx, cy, cw, ch = result.crop_rect
+            cmp = (cw * ch) / 1_000_000.0
+            self.log(f"Recorte máximo inscrito (auto-crop): {cw}x{ch} px ({cmp:.1f} MP) [x={cx}, y={cy}].")
+
     def _on_stitch_cancelled(self):
         self._set_processing_ui(False)
         self.lbl_status.setText("Proceso cancelado por el usuario.")
         if hasattr(self, 'canvas_footer'):
             self.canvas_footer.hide_progress()
+        self.log("⚠ Cosido panorámico cancelado por el usuario.")
 
     def _on_stitch_error(self, err_msg: str):
         self._set_processing_ui(False)
         if hasattr(self, 'canvas_footer'):
             self.canvas_footer.hide_progress()
         self.lbl_status.setText(f"Error: {err_msg}")
+        self.log(f"❌ [ERROR COSIDO] {err_msg}")
         QMessageBox.critical(self, "Error en Cosido Panorámico", f"Ocurrió un error al componer la panorámica:\n\n{err_msg}")
 
     def _set_processing_ui(self, is_processing: bool):
@@ -1200,9 +1242,10 @@ class PanoramaTab(QWidget):
         if self.current_result is None:
             return
 
+        is_cropped = self.btn_toggle_crop.isChecked() and self.current_result.cropped_image is not None
         img_to_save = (
             self.current_result.cropped_image
-            if (self.btn_toggle_crop.isChecked() and self.current_result.cropped_image is not None)
+            if is_cropped
             else self.current_result.image
         )
 
@@ -1217,17 +1260,22 @@ class PanoramaTab(QWidget):
 
         try:
             save_tiff_with_icc(path, img_to_save, compression='zlib', photometric='rgb')
+            h, w = img_to_save.shape[:2]
+            mode_crop = "recortada" if is_cropped else "completa"
+            self.log(f"Panorámica guardada exitosamente ({mode_crop}, {w}x{h} px): {path}")
             QMessageBox.information(self, "Panorámica Guardada", f"Panorámica guardada exitosamente en:\n{path}")
         except Exception as e:
+            self.log(f"❌ [ERROR GUARDADO] No se pudo guardar la imagen: {e}")
             QMessageBox.critical(self, "Error al Guardar", f"No se pudo guardar la imagen:\n{e}")
 
     def _on_export_to_developer(self):
         if self.current_result is None:
             return
 
+        is_cropped = self.btn_toggle_crop.isChecked() and self.current_result.cropped_image is not None
         img_to_export = (
             self.current_result.cropped_image
-            if (self.btn_toggle_crop.isChecked() and self.current_result.cropped_image is not None)
+            if is_cropped
             else self.current_result.image
         )
 
@@ -1235,7 +1283,11 @@ class PanoramaTab(QWidget):
             temp_path = os.path.join(tempfile.gettempdir(), f"astroloom_panorama_{int(time.time())}.tif")
             save_tiff_with_icc(temp_path, img_to_export, compression='zlib', photometric='rgb')
             self.export_to_developer.emit(temp_path)
+            h, w = img_to_export.shape[:2]
+            mode_crop = "recortada" if is_cropped else "completa"
+            self.log(f"Panorámica ({mode_crop}, {w}x{h} px) exportada exitosamente al Revelador: {temp_path}")
         except Exception as e:
+            self.log(f"❌ [ERROR TRANSFERENCIA REVELADOR] {e}")
             QMessageBox.critical(self, "Error de Transferencia", f"No se pudo transferir la panorámica al Revelador:\n{e}")
 
     def _on_save_session(self):
@@ -1290,8 +1342,10 @@ class PanoramaTab(QWidget):
         }
 
         if save_panorama_session(path, session_data):
+            self.log(f"Sesión de panorámica guardada ({len(self.panels_metadata)} paneles): {path}")
             QMessageBox.information(self, "Sesión Guardada", f"Sesión guardada en:\n{path}")
         else:
+            self.log(f"❌ [ERROR SESIÓN] No se pudo guardar la sesión en: {path}")
             QMessageBox.critical(self, "Error", "No se pudo guardar el archivo de sesión.")
 
     def _on_load_session(self):
@@ -1306,6 +1360,7 @@ class PanoramaTab(QWidget):
 
         data = load_panorama_session(path)
         if not data:
+            self.log(f"❌ [ERROR SESIÓN] No se pudo leer el archivo de sesión: {path}")
             QMessageBox.critical(self, "Error", "No se pudo cargar o interpretar el archivo de sesión.")
             return
 
@@ -1376,4 +1431,5 @@ class PanoramaTab(QWidget):
         self.chk_auto_crop.setChecked(data.get("auto_crop", True))
 
         self._update_ingest_summary()
+        self.log(f"Sesión de panorámica cargada exitosamente: {path} ({len(paths)} paneles restaurados).")
         QMessageBox.information(self, "Sesión Cargada", f"Sesión cargada exitosamente.")

@@ -19,6 +19,7 @@ import os
 import gc
 import json
 import time
+import logging
 import tempfile
 import shutil
 from typing import Optional, List, Tuple, Dict, Any, Callable
@@ -28,6 +29,8 @@ import cv2
 import numpy as np
 import tifffile
 from PIL import Image, ExifTags
+
+logger = logging.getLogger("AstroLoom.Panorámicas")
 
 # Aceleración nativa en Rust vía PyO3 / Rayon (máxima prioridad)
 try:
@@ -790,6 +793,8 @@ def stitch_nightscape_panorama(
     if n < 2:
         raise ValueError("Se requieren al menos 2 imágenes para componer una panorámica.")
 
+    logger.info(f"Iniciando cosido de {n} paneles (proyección={settings.projection}, astro_mode={settings.astro_mode})...")
+
     # -------------------------------------------------------------
     # 1. Extracción de metadatos de los paneles
     # -------------------------------------------------------------
@@ -1156,6 +1161,7 @@ def stitch_nightscape_panorama(
 
         if progress_callback:
             progress_callback(60, f"Calculando partición óptima de costuras ({canvas_w}x{canvas_h}, {canvas_w*canvas_h/1e6:.1f} MP)...")
+        logger.info(f"Lienzo proyectado: {canvas_w}x{canvas_h} px ({canvas_w*canvas_h/1e6:.1f} MP, escala={scale_canvas:.3f}).")
 
         # -------------------------------------------------------------
         # 6. Partición Voronoi y Fusión Multibanda Calibrada
@@ -1405,6 +1411,7 @@ def stitch_nightscape_panorama(
         cropped_img = blended_img[ry:ry+rh, rx:rx+rw].copy()
 
     total_time = time.time() - t0
+    logger.info(f"Cosido completado: {len(connected_indices)}/{n} paneles integrados en {total_time:.1f}s.")
 
     if progress_callback:
         progress_callback(100, f"Panorámica completada en {total_time:.1f}s.")
@@ -1609,6 +1616,9 @@ def stack_and_stitch_nightscape_panorama(
     total_groups = len(grouped_panels)
     if total_groups < 2:
         raise ValueError("Se requieren al menos 2 teselas para componer una panorámica.")
+
+    total_burst_shots = sum(len(g) for g in grouped_panels)
+    logger.info(f"Iniciando apilado en ráfaga + cosido: {total_groups} teselas ({total_burst_shots} tomas totales)...")
 
     temp_dir = tempfile.mkdtemp(prefix="astroloom_pano_burst_")
     master_paths = []
