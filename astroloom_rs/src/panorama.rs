@@ -1,6 +1,10 @@
-use numpy::ndarray::{Array1, Array2};
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray2};
+use numpy::ndarray::{Array1, Array2, Array3};
+use numpy::{
+    IntoPyArray, PyArray1, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3,
+    PyReadwriteArray3,
+};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 // ============================================================================
@@ -321,4 +325,230 @@ pub fn match_star_asterisms_rs<'py>(
     let arr_m2 = Array1::from_vec(out_m2);
 
     Ok((arr_m1.into_pyarray(py), arr_m2.into_pyarray(py)))
+}
+
+// ============================================================================
+// COMPENSACIÓN RADIAL DE VIÑETEO Y GANANCIA FOTOMÉTRICA (IN-PLACE)
+// ============================================================================
+
+#[pyfunction]
+#[pyo3(signature = (img_rgb, vignette_amount=0.5, panel_gain=1.0))]
+pub fn apply_vignette_and_gain_rs<'py>(
+    py: Python<'py>,
+    mut img_rgb: PyReadwriteArray3<'py, f32>,
+    vignette_amount: f32,
+    panel_gain: f32,
+) -> PyResult<()> {
+    let (h, w, c) = img_rgb.as_array().dim();
+    if h == 0 || w == 0 || c == 0 {
+        return Ok(());
+    }
+
+    if vignette_amount.abs() <= 0.01 && (panel_gain - 1.0).abs() <= 1e-4 {
+        return Ok(());
+    }
+
+    let slice = img_rgb.as_slice_mut().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("img_rgb must be C-contiguous: {:?}", e))
+    })?;
+
+    let cx = w as f32 / 2.0;
+    let cy = h as f32 / 2.0;
+    let r_max_sq = (cx * cx + cy * cy).max(1.0);
+    let inv_r_max_sq = 1.0 / r_max_sq;
+    let apply_vig = vignette_amount.abs() > 0.01;
+    let vig_factor = vignette_amount;
+    let gain = panel_gain;
+
+    py.allow_threads(|| {
+        slice
+            .par_chunks_exact_mut(w * c)
+            .enumerate()
+            .for_each(|(y, row)| {
+                let dy = y as f32 - cy;
+                let dy_sq = dy * dy;
+
+                for x in 0..w {
+                    let factor = if apply_vig {
+                        let dx = x as f32 - cx;
+                        let r_sq = (dx * dx + dy_sq) * inv_r_max_sq;
+                        let corr = 1.0 + vig_factor * r_sq + 0.05 * (r_sq * r_sq);
+                        gain * corr
+                    } else {
+                        gain
+                    };
+
+                    let base = x * c;
+                    for k in 0..c {
+                        let val = row[base + k] * factor;
+                        row[base + k] = val.clamp(0.0, 1.0);
+                    }
+                }
+            });
+    });
+
+    Ok(())
+}
+
+// ============================================================================
+// DEFORMACIÓN PARABÓLICA DE ARCO / HORIZONTE SIN MALLAS DE COORDENADAS
+// ============================================================================
+
+#[inline(always)]
+fn cubic_keys_weights(t: f32) -> (f32, f32, f32, f32) {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let w0 = -0.5 * t3 + t2 - 0.5 * t;
+    let w1 = 1.5 * t3 - 2.5 * t2 + 1.0;
+    let w2 = -1.5 * t3 + 2.0 * t2 + 0.5 * t;
+    let w3 = 0.5 * t3 - 0.5 * t2;
+    (w0, w1, w2, w3)
+}
+
+#[pyfunction]
+pub fn apply_arch_curvature_rgb_rs<'py>(
+    py: Python<'py>,
+    image: PyReadonlyArray3<'py, f32>,
+    curvature: f32,
+) -> PyResult<Bound<'py, PyArray3<f32>>> {
+    let (h, w, c) = image.as_array().dim();
+    if h == 0 || w == 0 || c == 0 {
+        let empty = Array3::<f32>::zeros((0, 0, 0));
+        return Ok(empty.into_pyarray(py));
+    }
+
+    let in_slice = image.as_slice().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("image must be C-contiguous: {:?}", e))
+    })?;
+
+    if curvature.abs() < 1e-5 {
+        let out_arr = Array3::from_shape_vec((h, w, c), in_slice.to_vec()).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("Shape error: {:?}", e))
+        })?;
+        return Ok(out_arr.into_pyarray(py));
+    }
+
+    // Precalcular el desplazamiento vertical dy por columna (vector 1D de tamaño W)
+    let half_w = w as f32 / 2.0;
+    let h_f32 = h as f32;
+    let dy_cols: Vec<f32> = (0..w)
+        .map(|x| {
+            let nx = (x as f32 - half_w) / half_w;
+            curvature * h_f32 * (1.0 - nx * nx)
+        })
+        .collect();
+
+    let mut out_vec = vec![0.0f32; h * w * c];
+
+    py.allow_threads(|| {
+        out_vec
+            .par_chunks_exact_mut(w * c)
+            .enumerate()
+            .for_each(|(y, row_out)| {
+                let y_f = y as f32;
+
+                for x in 0..w {
+                    let y_src = y_f - dy_cols[x];
+                    if y_src < -2.0 || y_src >= h_f32 + 1.0 {
+                        continue;
+                    }
+
+                    let y0 = y_src.floor() as isize;
+                    let t = y_src - y0 as f32;
+                    let (w0, w1, w2, w3) = cubic_keys_weights(t);
+                    let ys = [y0 - 1, y0, y0 + 1, y0 + 2];
+                    let ws = [w0, w1, w2, w3];
+
+                    let base_out = x * c;
+                    for k in 0..c {
+                        let mut sum = 0.0f32;
+                        for i in 0..4 {
+                            let yi = ys[i];
+                            if yi >= 0 && yi < h as isize {
+                                let idx = (yi as usize * w + x) * c + k;
+                                sum += ws[i] * in_slice[idx];
+                            }
+                        }
+                        row_out[base_out + k] = sum.clamp(0.0, 1.0);
+                    }
+                }
+            });
+    });
+
+    let out_arr = Array3::from_shape_vec((h, w, c), out_vec).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("Shape error: {:?}", e))
+    })?;
+    Ok(out_arr.into_pyarray(py))
+}
+
+#[pyfunction]
+pub fn apply_arch_curvature_mask_rs<'py>(
+    py: Python<'py>,
+    mask: PyReadonlyArray2<'py, u8>,
+    curvature: f32,
+) -> PyResult<Bound<'py, PyArray2<u8>>> {
+    let (h, w) = mask.as_array().dim();
+    if h == 0 || w == 0 {
+        let empty = Array2::<u8>::zeros((0, 0));
+        return Ok(empty.into_pyarray(py));
+    }
+
+    let in_slice = mask.as_slice().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("mask must be C-contiguous: {:?}", e))
+    })?;
+
+    if curvature.abs() < 1e-5 {
+        let out_arr = Array2::from_shape_vec((h, w), in_slice.to_vec()).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("Shape error: {:?}", e))
+        })?;
+        return Ok(out_arr.into_pyarray(py));
+    }
+
+    let half_w = w as f32 / 2.0;
+    let h_f32 = h as f32;
+    let dy_cols: Vec<f32> = (0..w)
+        .map(|x| {
+            let nx = (x as f32 - half_w) / half_w;
+            curvature * h_f32 * (1.0 - nx * nx)
+        })
+        .collect();
+
+    let mut out_vec = vec![0u8; h * w];
+
+    py.allow_threads(|| {
+        out_vec
+            .par_chunks_exact_mut(w)
+            .enumerate()
+            .for_each(|(y, row_out)| {
+                let y_f = y as f32;
+
+                for x in 0..w {
+                    let y_src = y_f - dy_cols[x];
+                    if y_src < -2.0 || y_src >= h_f32 + 1.0 {
+                        continue;
+                    }
+
+                    let y0 = y_src.floor() as isize;
+                    let t = y_src - y0 as f32;
+                    let (w0, w1, w2, w3) = cubic_keys_weights(t);
+                    let ys = [y0 - 1, y0, y0 + 1, y0 + 2];
+                    let ws = [w0, w1, w2, w3];
+
+                    let mut sum = 0.0f32;
+                    for i in 0..4 {
+                        let yi = ys[i];
+                        if yi >= 0 && yi < h as isize {
+                            let idx = yi as usize * w + x;
+                            sum += ws[i] * in_slice[idx] as f32;
+                        }
+                    }
+                    row_out[x] = sum.round().clamp(0.0, 255.0) as u8;
+                }
+            });
+    });
+
+    let out_arr = Array2::from_shape_vec((h, w), out_vec).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("Shape error: {:?}", e))
+    })?;
+    Ok(out_arr.into_pyarray(py))
 }

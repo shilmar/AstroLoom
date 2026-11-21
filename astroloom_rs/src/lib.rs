@@ -88,9 +88,12 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(eclipse::optimize_center_circular_flux_rs, m)?)?;
     m.add_function(wrap_pyfunction!(eclipse::fuse_hdr_bracketing_solar_rs, m)?)?;
 
-    // 8. Alineación por Asterismos y Triángulos Estelares - Prioridad 6 (core/panorama.py)
+    // 8. Alineación por Asterismos, Viñeteo y Curvatura de Panorámicas (core/panorama.py)
     m.add_function(wrap_pyfunction!(panorama::build_star_asterisms_rs, m)?)?;
     m.add_function(wrap_pyfunction!(panorama::match_star_asterisms_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(panorama::apply_vignette_and_gain_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(panorama::apply_arch_curvature_rgb_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(panorama::apply_arch_curvature_mask_rs, m)?)?;
 
     // 9. Fotometría Gaia (PCC), Paletas Dual-Band y Reparación Estelar - Prioridad 7 (core/dualband.py y core/pcc.py)
     m.add_function(wrap_pyfunction!(photometry::fit_theil_sen_pcc_rs, m)?)?;

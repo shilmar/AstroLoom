@@ -612,12 +612,24 @@ def apply_arch_curvature_deformation(image: np.ndarray, curvature: float = 0.0) 
     """
     if abs(curvature) < 1e-4 or image is None or image.size == 0:
         return image
+
+    if HAS_RUST:
+        try:
+            if image.ndim == 3 and image.dtype == np.float32 and hasattr(astroloom_rs, "apply_arch_curvature_rgb_rs"):
+                img_c = np.ascontiguousarray(image)
+                return astroloom_rs.apply_arch_curvature_rgb_rs(img_c, float(curvature))
+            elif image.ndim == 2 and image.dtype == np.uint8 and hasattr(astroloom_rs, "apply_arch_curvature_mask_rs"):
+                mask_c = np.ascontiguousarray(image)
+                return astroloom_rs.apply_arch_curvature_mask_rs(mask_c, float(curvature))
+        except Exception:
+            pass
+
+    # Fallback sin meshgrid (ahorro de memoria 1D broadcasting)
     h, w = image.shape[:2]
-    xs, ys = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
-    nx = (xs - w / 2.0) / (w / 2.0)
-    dy = curvature * h * (1.0 - nx ** 2)
-    map_x = xs
-    map_y = ys - dy
+    map_x = np.tile(np.arange(w, dtype=np.float32), (h, 1))
+    nx = (np.arange(w, dtype=np.float32) - w / 2.0) / (w / 2.0)
+    dy = np.float32(curvature * h) * (1.0 - nx ** 2)
+    map_y = np.arange(h, dtype=np.float32)[:, None] - dy[None, :]
     return cv2.remap(image, map_x, map_y, cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
 
@@ -1202,20 +1214,32 @@ def stitch_nightscape_panorama(
 
             ih, iw = img_f.shape[:2]
 
-            # Compensación adaptativa de caída óptica / viñeteo calibrada
+            # Compensación adaptativa de caída óptica / viñeteo calibrada y ganancia fotométrica
             v_amt = getattr(settings, 'vignette_amount', 0.5) if settings.exposure_comp else 0.0
-            if v_amt > 0.01:
-                vig_factor = float(v_amt) * 1.0
-                Y_g, X_g = np.ogrid[:ih, :iw]
-                cx_img, cy_img = iw / 2.0, ih / 2.0
-                r_sq = ((X_g - cx_img)**2 + (Y_g - cy_img)**2) / float(cx_img**2 + cy_img**2)
-                vignette_corr = (1.0 + vig_factor * r_sq + 0.05 * (r_sq**2)).astype(np.float32)[..., np.newaxis]
-                img_f = np.clip(img_f * vignette_corr, 0.0, 1.0)
+            p_gain = float(panel_gains[i]) if i < len(panel_gains) else 1.0
+
+            applied_in_rust = False
+            if HAS_RUST and hasattr(astroloom_rs, "apply_vignette_and_gain_rs"):
+                try:
+                    img_f = np.ascontiguousarray(img_f, dtype=np.float32)
+                    astroloom_rs.apply_vignette_and_gain_rs(img_f, float(v_amt), p_gain)
+                    applied_in_rust = True
+                except Exception:
+                    applied_in_rust = False
+
+            if not applied_in_rust:
+                if v_amt > 0.01:
+                    vig_factor = float(v_amt) * 1.0
+                    Y_g, X_g = np.ogrid[:ih, :iw]
+                    cx_img, cy_img = iw / 2.0, ih / 2.0
+                    r_sq = ((X_g - cx_img)**2 + (Y_g - cy_img)**2) / float(cx_img**2 + cy_img**2)
+                    vignette_corr = (1.0 + vig_factor * r_sq + 0.05 * (r_sq**2)).astype(np.float32)[..., np.newaxis]
+                    img_f = np.clip(img_f * vignette_corr, 0.0, 1.0)
 
             corner, w_img = warper.warp(img_f, K, rmats_corr[i].astype(np.float32), cv2.INTER_LINEAR, cv2.BORDER_CONSTANT)
             del img_f
 
-            if abs(panel_gains[i] - 1.0) > 1e-4:
+            if not applied_in_rust and abs(panel_gains[i] - 1.0) > 1e-4:
                 w_img = np.clip(w_img * panel_gains[i], 0.0, 1.0)
 
             gx = corner[0] - min_x
