@@ -44,7 +44,7 @@ from core.panorama import (
 )
 from core.icc_manager import save_tiff_with_icc
 from gui.widgets.viewer_toolbar import ViewerToolbar, CanvasFooterBar
-from gui.widgets.drop_widgets import DropTableWidget, collect_image_files_from_mime
+from gui.widgets.drop_widgets import DropTableWidget, collect_image_files_from_mime, SUPPORTED_IMAGE_EXTENSIONS
 from gui.theme import STYLE_RUN_IDLE, STYLE_CANCEL_ACTIVE, STYLE_TRANSFER_BTN
 from gui.icons import get_icon, get_svg_pixmap, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_ACCENT
 from gui.widgets.collapsible_section import CollapsibleSection
@@ -345,6 +345,7 @@ class PanoramaTab(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setAcceptDrops(True)
         self.panels_metadata: List[PanoramaPanelMetadata] = []
         self.current_result: Optional[PanoramaResult] = None
         self._stitch_worker: Optional[PanoramaStitchWorker] = None
@@ -767,6 +768,29 @@ class PanoramaTab(QWidget):
         self.shortcut_bracket.setContext(Qt.WidgetWithChildrenShortcut)
         self.shortcut_bracket.activated.connect(lambda: self.toggle_left_panel())
 
+        # Conexiones
+        self._connect_signals()
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        paths = collect_image_files_from_mime(event.mimeData())
+        if paths:
+            self.load_filepaths(paths)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
     def toggle_left_panel(self, visible: Optional[bool] = None) -> None:
         """Muestra u oculta el panel lateral izquierdo de controles de panorámica (Atajo: F7 o [)."""
         if not hasattr(self, 'scroll_area'):
@@ -796,9 +820,6 @@ class PanoramaTab(QWidget):
             event.accept()
             return
         super().keyPressEvent(event)
-
-        # Conexiones
-        self._connect_signals()
 
     def _connect_signals(self):
         # Ingesta
@@ -873,7 +894,7 @@ class PanoramaTab(QWidget):
             self,
             "Seleccionar Paneles de la Panorámica",
             "",
-            "Archivos de Imagen (*.nef *.cr2 *.cr3 *.arw *.dng *.raw *.tif *.tiff *.jpg *.jpeg *.png);;Todos (*.*)"
+            "Archivos de Imagen (*.nef *.cr2 *.cr3 *.arw *.dng *.raw *.raf *.orf *.rw2 *.tif *.tiff *.fits *.fit *.fts *.jpg *.jpeg *.png);;Todos (*.*)"
         )
         if paths:
             self.load_filepaths(paths)
@@ -885,7 +906,7 @@ class PanoramaTab(QWidget):
             for root, _, filenames in os.walk(directory):
                 for f in sorted(filenames):
                     ext = os.path.splitext(f)[1].lower()
-                    if ext in ('.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw', '.tif', '.tiff', '.jpg', '.jpeg', '.png'):
+                    if ext in SUPPORTED_IMAGE_EXTENSIONS:
                         files.append(os.path.join(root, f))
             if files:
                 self.load_filepaths(files)
