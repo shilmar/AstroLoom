@@ -1307,8 +1307,7 @@ class CanvasToolsMixin:
             )
             show_overlay = bool(
                 hasattr(self, 'mask_layers_widget') and 
-                hasattr(self.mask_layers_widget, 'btn_preview_mask') and 
-                self.mask_layers_widget.btn_preview_mask.isChecked()
+                self.mask_layers_widget.is_mask_preview_active()
             )
             if layer.brush_mask is not None and self.image_32bit is not None:
                 h_f, w_f = self.image_32bit.shape[:2]
@@ -1328,8 +1327,8 @@ class CanvasToolsMixin:
                 sel_layer is not None and 
                 sel_layer.enabled and 
                 not sel_layer.is_system_layer and 
-                hasattr(self.mask_layers_widget, 'btn_preview_mask') and 
-                self.mask_layers_widget.btn_preview_mask.isChecked()
+                hasattr(self, 'mask_layers_widget') and 
+                self.mask_layers_widget.is_mask_preview_active()
             )
             if not is_preview_valid:
                 if self.canvas.enable_masking and self.current_mask is not None:
@@ -1355,7 +1354,7 @@ class CanvasToolsMixin:
                 self.mask_layers_widget.invalidate_layer_thumbnail(layer.id)
             # Si el botón de previsualización NO está activado expresamente, retirar el overlay temporal
             # del trazo para que el usuario pueda apreciar de inmediato los cambios tonales en la imagen
-            if hasattr(self, 'mask_layers_widget') and not self.mask_layers_widget.btn_preview_mask.isChecked():
+            if hasattr(self, 'mask_layers_widget') and not self.mask_layers_widget.is_mask_preview_active():
                 self.canvas.set_refined_mask(None)
                 self.canvas.set_mask_visible(False)
             self._commit_action()
@@ -2172,6 +2171,15 @@ class CanvasToolsMixin:
         if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox)):
             super().keyPressEvent(event)
             return
+
+        if hasattr(self, 'canvas') and getattr(self.canvas, 'layer_move_active', False):
+            if event.key() == Qt.Key_Escape:
+                if hasattr(self, 'mask_layers_widget') and hasattr(self.mask_layers_widget, 'grp_transform'):
+                    self.mask_layers_widget.grp_transform.btn_toggle_move.setChecked(False)
+                else:
+                    self.canvas.set_layer_move_enabled(False)
+                event.accept()
+                return
 
         if hasattr(self, 'canvas') and self.canvas.enable_masking:
             if event.key() == Qt.Key_Escape:

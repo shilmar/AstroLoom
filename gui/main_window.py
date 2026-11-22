@@ -23,7 +23,7 @@ from gui.tab_settings import SettingsTab
 class MainWindow(QMainWindow):
     """Ventana principal de la interfaz gráfica de AstroLoom."""
 
-    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.17.1)"
+    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.17.2)"
     gpu_fallback_signal = Signal(str)
 
     def __init__(self, splash: Optional[object] = None):
@@ -71,7 +71,7 @@ class MainWindow(QMainWindow):
         corner_layout.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
 
         # 1. Píldora del Motor AstroLoom (versión)
-        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.17.1")
+        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.17.2")
         self.lbl_engine_badge.setStyleSheet(STYLE_STATUS_PILL)
         corner_layout.addWidget(self.lbl_engine_badge)
 
@@ -134,7 +134,7 @@ class MainWindow(QMainWindow):
         """Actualiza todos los textos estáticos principales al cambiar de idioma."""
         self.setWindowTitle(tr("app.title", self.BASE_TITLE))
         if hasattr(self, 'lbl_engine_badge'):
-            self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.17.1"))
+            self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.17.2"))
         if hasattr(self, 'btn_activity_log'):
             self.btn_activity_log.setText(tr("app.log_btn", " Registro"))
             self.btn_activity_log.setToolTip(tr("app.log_btn_tooltip", "Abrir Registro de Actividad y Telemetría"))

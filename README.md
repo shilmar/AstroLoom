@@ -4,7 +4,7 @@
 
 **Suite y Estación de Trabajo Integral para Astrofotografía de Paisaje, Cielo Profundo y Eventos Astronómicos**
 
-[![Version](https://img.shields.io/badge/version-v0.17.1-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
+[![Version](https://img.shields.io/badge/version-v0.17.2-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -46,7 +46,22 @@ Impulsada por una arquitectura híbrida que combina una interfaz gráfica reacti
 
 ---
 
-## 🚀 Novedades de la Versión v0.17.1
+## 🚀 Novedades de la Versión v0.17.2
+
+* **Aceleración Nativa en Rust para Panorámicas y Corrección Geométrica (`astroloom_rs`, `core/panorama.py`):**
+  - **Kernels In-Place de Viñeteo y Ganancia:** Evaluación polinomial continua de viñeteo radial (orden 4/6) y ganancia directamente en memoria nativa sobre los paneles del mosaico, eliminando copias intermedias en Python.
+  - **Curvatura de Arco Zero-Mesh:** Algoritmo analítico de curvatura en Rust multihilo con Rayon para modelar la comba del arco galáctico o el horizonte terrestre con deformación geométrica continua y sin malla triangular.
+  - **Previsualización Rápida Borrador (*Fast Draft Preview* al 25%):** Flujo de trabajo acelerado que genera el mosaico previo a un cuarto de escala en segundos, permitiendo validar la alineación de teselas, solapes y curvatura antes de lanzar el cosido final de gigapíxeles.
+  - **Fusión Multibanda Robusta con Headroom (8192 niveles):** Prevención de desbordamiento de enteros con signo de 16 bits en `MultiBandBlender`, garantizando transiciones suaves y continuas en zonas de alta luminosidad y núcleos galácticos.
+  - **Arrastre de Archivos (Drag & Drop) y Telemetría en Panorámicas:** Soporte completo para arrastrar imágenes directamente al lienzo del mosaico y registro detallado de cada fase en `LogHub`.
+
+* **Refactorización Modular y Alta Resiliencia en el Revelador (`gui/developer/`):**
+  - **Desacoplamiento Modular de `DeveloperTab`:** Descomposición limpia en 6 mixins especializados (`RenderMixin`, `AIWorkersMixin`, `CanvasToolsMixin`, `LayerSyncMixin`, `HistoryPresetsMixin` y `ProjectIOMixin`), reduciendo la complejidad ciclomática y optimizando el ciclo de vida de los eventos.
+  - **Preservación Robusta de Cachés IA y Capas de Máscaras:** Protección de las cachés de inferencia de StarNet++ v2 y AI Denoise frente a operaciones de recorte (*crop*) y la pila de deshacer/rehacer (*undo/redo*), eliminando esperas y recomputaciones innecesarias.
+
+---
+
+## 🌟 Novedades de la Versión v0.17.1
 
 * **Arsenal Coronal Avanzado para Eclipses Solares (HDR & Coronal):**
   - **Realce de Estructuras Oscuras (*Dark Structure Enhancement*):** Detección y contraste de cavidades coronales, canales de filamentos y corredores magnéticos sin alterar el disco lunar ni sobreexponer los bucles brillantes de plasma.

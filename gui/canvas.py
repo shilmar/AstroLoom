@@ -215,6 +215,7 @@ class MaskCanvas(QWidget):
             self.eyedropper_active = False
             self.magnifier_active = False
             self.enable_masking = False
+            self.layer_move_active = False
             self.show_mask_overlay = True
         else:
             self._brush_drawing = False
@@ -237,6 +238,7 @@ class MaskCanvas(QWidget):
         else:
             self._layer_move_dragging = False
             self._layer_move_start_pt = None
+            self._layer_move_drag_button = None
             self.setCursor(Qt.ArrowCursor)
         self.update()
 
@@ -247,6 +249,8 @@ class MaskCanvas(QWidget):
         self.active_gradient_layer = layer if is_grad else None
         self._gradient_dragging_handle = None
         self._gradient_drag_start_norm = None
+        if is_grad:
+            self.layer_move_active = False
         if not is_grad and self.cursor().shape() in (Qt.SizeAllCursor, Qt.CrossCursor, Qt.PointingHandCursor):
             self.setCursor(Qt.ArrowCursor)
         self.update()
@@ -611,6 +615,7 @@ class MaskCanvas(QWidget):
             if active:
                 if self.magnifier_active:
                     self.set_magnifier_active(False)
+                self.layer_move_active = False
                 self.setCursor(Qt.CrossCursor)
             else:
                 self._hover_pos = None
@@ -629,6 +634,7 @@ class MaskCanvas(QWidget):
             if active:
                 if self.eyedropper_active:
                     self.set_eyedropper_active(False)
+                self.layer_move_active = False
                 self.setCursor(Qt.CrossCursor)
             else:
                 self._hover_pos = None
@@ -687,6 +693,7 @@ class MaskCanvas(QWidget):
                 self.set_eyedropper_active(False)
             if self.layer_brush_active:
                 self.set_layer_brush_enabled(False)
+            self.layer_move_active = False
             self.setCursor(Qt.CrossCursor)
         else:
             self._bg_hovered_idx = None
@@ -723,6 +730,7 @@ class MaskCanvas(QWidget):
                 self.set_bg_sample_mode(False)
             if getattr(self, 'layer_brush_active', False):
                 self.set_layer_brush_enabled(False)
+            self.layer_move_active = False
             self.setCursor(Qt.CrossCursor)
         else:
             self._dust_hovered_idx = None
@@ -1061,6 +1069,33 @@ class MaskCanvas(QWidget):
         img_y = max(0, min(self.base_pixmap.height() - 1, img_y))
         return QPoint(img_x, img_y)
 
+    def _toggle_right_click_zoom(self, pt: QPoint) -> None:
+        """Alterna el zoom 1:1 centrado en la posición de coordenadas del lienzo dada."""
+        if not self.base_pixmap or self.base_pixmap.isNull():
+            return
+        ipt = self.widget_to_image_coords(pt)
+        w_i = float(self.base_pixmap.width())
+        h_i = float(self.base_pixmap.height())
+
+        if not self.is_zoomed:
+            self._zoom_background_pixmap = self.base_pixmap.copy()
+            self.is_zoomed = True
+            self.zoom_center_img = ipt if ipt else QPoint(int(w_i / 2), int(h_i / 2))
+            rel_x = self.zoom_center_img.x() / max(1.0, w_i)
+            rel_y = self.zoom_center_img.y() / max(1.0, h_i)
+            self.zoom_toggled.emit(True, rel_x, rel_y)
+        else:
+            self.is_zoomed = False
+            self.zoom_center_img = None
+            self._zoom_background_pixmap = None
+            self._pan_visual_offset = QPoint(0, 0)
+            self.is_panning = False
+            self.setCursor(Qt.ArrowCursor)
+            self.zoom_toggled.emit(False, 0.5, 0.5)
+
+        if not self.external_zoom_handler:
+            self.update()
+
     def mousePressEvent(self, event) -> None:
         if not self.base_pixmap or self.base_pixmap.isNull():
             return
@@ -1092,9 +1127,12 @@ class MaskCanvas(QWidget):
                 return
 
         # -4. Manejo de Transformación Espacial de Capa Ráster (Mover)
-        if self.layer_move_active and event.button() == Qt.LeftButton:
+        if self.layer_move_active and event.button() in (Qt.LeftButton, Qt.RightButton):
             self._layer_move_dragging = True
+            self._layer_move_drag_button = event.button()
             self._layer_move_start_pt = event.position().toPoint()
+            self._layer_move_press_pt = event.position().toPoint()
+            self._layer_move_has_dragged = False
             self.setCursor(Qt.ClosedHandCursor)
             event.accept()
             return
@@ -1239,29 +1277,7 @@ class MaskCanvas(QWidget):
 
         # 2. Alternar Zoom con Clic Derecho
         if event.button() == Qt.RightButton:
-            ipt = self.widget_to_image_coords(event.position().toPoint())
-            w_i = float(self.base_pixmap.width())
-            h_i = float(self.base_pixmap.height())
-
-            if not self.is_zoomed:
-                if self.base_pixmap and not self.base_pixmap.isNull():
-                    self._zoom_background_pixmap = self.base_pixmap.copy()
-                self.is_zoomed = True
-                self.zoom_center_img = ipt if ipt else QPoint(int(w_i / 2), int(h_i / 2))
-                rel_x = self.zoom_center_img.x() / max(1.0, w_i)
-                rel_y = self.zoom_center_img.y() / max(1.0, h_i)
-                self.zoom_toggled.emit(True, rel_x, rel_y)
-            else:
-                self.is_zoomed = False
-                self.zoom_center_img = None
-                self._zoom_background_pixmap = None
-                self._pan_visual_offset = QPoint(0, 0)
-                self.is_panning = False
-                self.setCursor(Qt.ArrowCursor)
-                self.zoom_toggled.emit(False, 0.5, 0.5)
-
-            if not self.external_zoom_handler:
-                self.update()
+            self._toggle_right_click_zoom(event.position().toPoint())
             event.accept()
             return
 
@@ -1443,6 +1459,19 @@ class MaskCanvas(QWidget):
             dx = pt.x() - self._layer_move_start_pt.x()
             dy = pt.y() - self._layer_move_start_pt.y()
             self._layer_move_start_pt = pt
+
+            press_pt = getattr(self, '_layer_move_press_pt', pt)
+            if abs(pt.x() - press_pt.x()) > 3 or abs(pt.y() - press_pt.y()) > 3:
+                self._layer_move_has_dragged = True
+
+            is_scale_drag = (getattr(self, '_layer_move_drag_button', Qt.LeftButton) == Qt.RightButton) or bool(event.modifiers() & Qt.ShiftModifier)
+            if is_scale_drag:
+                drag_val = -dy if abs(dy) >= abs(dx) else dx
+                if drag_val != 0:
+                    scale_factor = 1.0 + (float(drag_val) * 0.01)
+                    self.layer_move_scale_wheel.emit(float(np.clip(scale_factor, 0.70, 1.30)))
+                event.accept()
+                return
 
             if self.is_zoomed and getattr(self, 'external_full_shape', None) is not None:
                 h_f, w_f = self.external_full_shape
@@ -1631,11 +1660,16 @@ class MaskCanvas(QWidget):
             event.accept()
             return
 
-        if self.layer_move_active and self._layer_move_dragging and event.button() == Qt.LeftButton:
+        if self.layer_move_active and self._layer_move_dragging:
+            was_right_click = (getattr(self, '_layer_move_drag_button', None) == Qt.RightButton)
+            has_dragged = getattr(self, '_layer_move_has_dragged', False)
             self._layer_move_dragging = False
             self._layer_move_start_pt = None
+            self._layer_move_drag_button = None
             self.setCursor(Qt.SizeAllCursor if self.layer_move_active else Qt.ArrowCursor)
             self.layer_move_finished.emit()
+            if was_right_click and not has_dragged:
+                self._toggle_right_click_zoom(event.position().toPoint())
             event.accept()
             return
 
@@ -1897,6 +1931,12 @@ class MaskCanvas(QWidget):
         return self._apply_brush_line(pt, pt, native_radius)
 
     def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Escape:
+            if self.layer_move_active:
+                self.set_layer_move_enabled(False)
+                self.layer_move_finished.emit()
+                event.accept()
+                return
         if event.key() == Qt.Key_Space and not event.isAutoRepeat():
             self._space_held = True
             if self.is_zoomed and not self.is_panning:
@@ -2975,6 +3015,7 @@ class MaskCanvas(QWidget):
         if self.crop_mode != enabled:
             self.crop_mode = enabled
             if enabled:
+                self.layer_move_active = False
                 if self.eyedropper_active:
                     self.set_eyedropper_active(False)
                 if self.magnifier_active:

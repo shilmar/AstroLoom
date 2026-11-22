@@ -3,6 +3,36 @@
 Todas las novedades, mejoras y correcciones notables de **AstroLoom** (anteriormente *Apilator*) se documentan en este archivo.
 El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.17.2] - 2026-11-22
+
+### Añadido
+* **Aceleración Nativa en Rust para Panorámicas y Corrección Geométrica (`astroloom_rs/src/panorama.rs`, `core/panorama.py`):**
+  - **Kernels In-Place de Viñeteo y Ganancia:** Evaluación continua en memoria del modelo polinomial radial de viñeteo (órdenes 4 y 6) y ganancia (`apply_vignette_gain_inplace_rs`), eliminando asignaciones intermedias de arrays en Python.
+  - **Curvatura de Arco Zero-Mesh:** Algoritmo analítico de curvatura en Rust Rayon multihilo que modela la deformación vertical suave del arco galáctico o el horizonte terrestre sin discretización por mallas poligonales.
+  - **Previsualización Rápida Borrador (*Fast Draft Preview* al 25%, `gui/tab_panorama.py`):** Flujo de trabajo interactivo que computa el mosaico previo a un cuarto de escala en segundos, permitiendo validar alineación, balance de costuras y curvatura antes de ejecutar el cosido final a resolución completa.
+  - **Soporte de Arrastre de Archivos (*Drag & Drop*) en Panorámicas:** Habilitada la carga directa de imágenes arrastrándolas sobre la lista de teselas o el lienzo del módulo.
+  - **Registro Exhaustivo en LogHub:** Trazabilidad detallada en tiempo real de cada hito del proceso panorámico (detección de puntos clave, emparejamiento, cálculo de homografías, curvatura y fusión).
+
+### Modificado
+* **Refactorización Modular de la Arquitectura del Revelador (`gui/developer/`, `gui/tab_developer.py`):**
+  - Descomposición limpia del módulo `DeveloperTab` en 6 Mixins especializados con responsabilidades desacopladas:
+    - `RenderMixin` (`gui/developer/render_engine.py`): Motor de render asíncrono, pirámide multi-escala de proxies y actualización LUT 1D ultrarrápida.
+    - `AIWorkersMixin` (`gui/developer/ai_workers_controller.py`): Orquestación de workers y ciclo de vida para StarNet++ v2, NAFNet denoise cielo/suelo, ABE y calibración PCC.
+    - `CanvasToolsMixin` (`gui/developer/canvas_tools.py`): Herramientas interactivas de lienzo, barras flotantes, recorte, máscaras manuales y pipetas.
+    - `LayerSyncMixin` (`gui/developer/layer_sync_bridge.py`): Sincronización bidireccional entre capas, máscaras y lienzo, reseteos selectivos y gestión de motas de polvo.
+    - `HistoryPresetsMixin` (`gui/developer/history_presets.py`): Pila transaccional de Undo/Redo y gestión de presets.
+    - `ProjectIOMixin` (`gui/developer/io_project_manager.py`): Entrada/salida de proyectos `.devloom`, capas ráster y exportación multipropósito PSD/TIFF.
+* **Sincronización Global de Versión:**
+  - Actualización transversal a `v0.17.2` en motor Rust (`Cargo.toml`, `Cargo.lock`, `pyproject.toml`), ventana principal, pantalla splash, diálogos y localizaciones multilingües (`es.json`, `en.json`).
+
+### Corregido
+* **Prevención de Desbordamiento Aritmético en Fusión Multibanda (`core/panorama.py`):**
+  - Incorporado un margen de seguridad (*headroom*) de 8192 niveles en `MultiBandBlender` para evitar desbordamiento de enteros con signo de 16 bits en zonas de alta luminosidad y núcleos galácticos.
+* **Preservación de Cachés IA y Capas de Máscaras en el Revelador (`gui/developer/pipeline.py`, `gui/tab_developer.py`):**
+  - Corregida la invalidación indeseada de las cachés de inferencia StarNet++ / AI Denoise y capas de máscaras durante operaciones de recorte (*crop*) y la navegación por el historial de deshacer/rehacer (*undo/redo*).
+* **Conexión de Señales en Panorámicas (`gui/tab_panorama.py`):**
+  - Restauradas conexiones de señales que quedaban desconectadas durante la inicialización de la interfaz gráfica.
+
 ## [0.17.1] - 2026-11-21
 
 ### Añadido

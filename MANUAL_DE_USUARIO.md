@@ -44,13 +44,15 @@ Para iniciar AstroLoom en Windows de la manera más cómoda y sin ventanas negra
 * Si no hay entorno virtual, recurre automáticamente a la instalación de Python del sistema.
 * En entornos Linux/macOS o desde la terminal, puedes iniciar la suite ejecutando `./astroloom.sh` (o directamente `python run_app.py`).
 
-### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.17.1)
-A partir de las versiones **v0.14.0** a **v0.17.1**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
+### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.17.2)
+A partir de las versiones **v0.14.0** a **v0.17.2**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
 * **Fluidez Total a 60-160+ FPS:** El renderizado del lienzo (`MaskCanvas`) vuelca directamente a búferes de memoria continua `BGRA8888` compatibles de forma nativa con `QImage(Format_RGB32)`. Las alertas de clipping (`J`) y el comparador Antes/Después con cortina (`Y`) se procesan en microsegundos sin crear copias intermedias en NumPy ni capas secundarias de `QPixmap`.
+* **Viñeteo, Ganancia In-Place y Curvatura de Arco Zero-Mesh en Rust (v0.17.2):** Corrección analítica continua de caída perimétrica de luz y deformación geométrica vertical del arco panorámico en Rust multihilo con Rayon, evaluada *in-place* en memoria contigua sin copias intermedias.
+* **Fusión Robusta y Previsualización Rápida Borrador en Panorámicas (v0.17.2):** Generación ultrarrápida del mosaico previo a escala 25% (*Draft*) para validación ágil de teselas antes del cosido final, y margen de seguridad de 8192 niveles en `MultiBandBlender` contra desbordamiento en zonas hiperluminosas.
 * **Filtros Coronales NAFE y WOW Nativos en Rust (v0.17.1):** Evaluación de ecualización difusa adaptativa NAFE con convolución FFT 2D en memoria nativa (`realfft`) y paralelización Rayon multinivel, junto al blanqueamiento de ondículas WOW con suavizado recursivo IIR acelerado al 100% en CPU.
 * **Pipeline de Exportación Zero-Copy e In-Place en Rust (v0.17.0 / v0.17.1):** El grafo de capas se evalúa y fusiona en registros de CPU en un único bucle paralelo multihilo de Rayon en Rust, eliminando arrays temporales de NumPy y volcando a enteros `uint16` in-place, lo que acelera entre un 40% y 60% la exportación de proyectos `.devloom` y archivos PSD multicapa.
 * **Purga Inteligente Anti-Satélites por Transformada de Hough (v0.17.0):** Escaneo geométrico de trazas lineales a escala 50% con evaluación monocanal de alta velocidad en circumpolares (`Startrails`), suprimiendo satélites artificiales y aviones mientras se preservan con fidelidad las estrellas y trazas circulares.
-* **Barra de Progreso Unificada en Lienzo (`CanvasFooterBar`, v0.17.0 / v0.17.1):** Integración homogénea de barras de progreso contextuales directamente sobre la base del lienzo en todos los visores y módulos (Revelador, Circumpolares, Meteoros, Panorámicas, Eclipses y Apilador), con cancelación reactiva instantánea y dimensiones ampliadas de alto contraste (290x16 px).
+* **Barra de Progreso Unificada en Lienzo (`CanvasFooterBar`, v0.17.0 / v0.17.2):** Integración homogénea de barras de progreso contextuales directamente sobre la base del lienzo en todos los visores y módulos (Revelador, Circumpolares, Meteoros, Panorámicas, Eclipses y Apilador), con cancelación reactiva instantánea y dimensiones ampliadas de alto contraste (290x16 px).
 * **Purga Integral de Numba y Mapeo LUT 16 a 8 Bits en Rust (v0.16.0):** Eliminación total de dependencias LLVM/Numba, reduciendo 2.36 s en el arranque en frío. El estirado interactivo MTF, GHS y curvas tonales se evalúa en Rust Rayon (`apply_display_lut16_rs`, `apply_display_lut16_dual_rs`) a más de 4.000 FPS (0.24 ms por frame de 2 MP), con cálculo de histograma multihilo en OpenCV C++ AVX2/SSE.
 * **Aceleración Nativa para Eclipses Solares (v0.16.0):** Centrado solar automático de sub-milisegundo por momentos (`center_solar_disc_rs`), estirado Asinh Luma preservando el color (`asinh_stretch_luma_rs`) y fusión coronal HDR adaptativa multiescala (`coronal_hdr_fusion_rs`) ejecutados en registros paralelos de CPU.
 * **Caché LRU de Búferes con Presupuesto de RAM (v0.16.0):** Gestor inteligente de memoria para hitos del pipeline con cuota máxima configurable en MB/GB, purgando búferes antiguos y manteniendo el consumo de memoria acotado incluso en proyectos de alta densidad.
@@ -68,9 +70,9 @@ A partir de las versiones **v0.14.0** a **v0.17.1**, AstroLoom incorpora un moto
 * **Tiling ONNX y Filtro Guiado O(1):** Pre y post-procesado acelerado para StarNet++ v2 y NAFNet con ventanas 2D de Hann continuas, y refinado de bordes de horizonte con imágenes integrales (SAT) en ~21 ms.
 * **Resiliencia Automática (*Drop-in Fallback*):** Si en algún entorno el módulo binario no estuviera presente, AstroLoom conmuta de forma transparente y automática a su motor de reserva en Python/NumPy sin que el usuario experimente errores.
 
-### 🖥️ Cabecera de Telemetría Superior y Espacio Útil (v0.16.0 / v0.17.1)
+### 🖥️ Cabecera de Telemetría Superior y Espacio Útil (v0.16.0 / v0.17.2)
 Para maximizar el área de trabajo vertical dedicada al lienzo de revelado y apilado, se ha suprimido la barra de estado inferior (*status bar*), reubicando toda la información de diagnóstico y monitorización en la esquina superior derecha de la barra de pestañas:
-* **Insignia del Motor:** Identifica en todo momento la versión activa de la suite (`● AstroLoom Engine v0.17.1`).
+* **Insignia del Motor:** Identifica en todo momento la versión activa de la suite (`● AstroLoom Engine v0.17.2`).
 * **Píldora de Alerta Fallback GPU $\rightarrow$ CPU:** Si tu tarjeta gráfica se satura de memoria (VRAM) durante la ejecución de StarNet++ o AI Denoise, se enciende una píldora ámbar (`⚠️ Fallback CPU (VRAM)`) indicando que el proceso continuó en CPU de forma segura. Puedes pinchar en ella para ocultarla.
 * **Monitor de RAM en Tiempo Real:** Muestra el porcentaje y los gigabytes de memoria en uso del sistema operativo (`RAM: XX% (used / total GB)`), actualizado mediante telemetría cada 2.5 segundos.
 * **Botón de Registro de Actividad:** Abre una ventana flotante con el histórico cronológico de operaciones, advertencias, tiempos de ejecución y telemetría de depuración.
@@ -750,10 +752,11 @@ Permite ensamblar mosaicos gigantes del cielo nocturno (por ejemplo, el arco com
   * *Esférica:* Recomendada para grandes campos con distorsión angular acentuada y arcos de horizonte amplio.
   * *Cilíndrica:* Recomendada para panorámicas lineales con horizonte plano.
   * *Corrección de Ondulación (Wave Correction):* Nivela automáticamente la línea del horizonte.
-  * *Curvatura de Arco (Arch Curvature):* Permite ajustar la convexidad o concavidad vertical del arco galáctico para una composición armoniosa.
+  * *Curvatura de Arco Zero-Mesh (Arch Curvature, Novedad v0.17.2):* Algoritmo analítico nativo en Rust Rayon que deforma armónicamente el arco galáctico o el horizonte de manera continua y sin mallas poligonales, evitando artefactos angulares.
 * **Fotometría y Fusión:**
-  * *Compensación Automática de Viñeteo:* Muestrea el cielo de fondo de la serie para modelar y compensar la caída perimétrica de luz en bordes, eliminando bandas oscuras en las uniones.
-  * *Fusión Multibanda Laplaciana:* Descompone las teselas en múltiples bandas de frecuencia espacial (por defecto 5 niveles) para una transición suave y continua de iluminación sin saltos visibles.
+  * *Compensación de Viñeteo y Ganancia In-Place en Rust (Novedad v0.17.2):* Modela la atenuación perimétrica radial (polinomio de orden 4/6) y aplica la corrección *in-place* sobre búferes compartidos, acelerando la homogeneización fotométrica de teselas.
+  * *Fusión Multibanda Robusta con Headroom (Novedad v0.17.2):* Descomposición Laplaciana multinivel con reserva de 8192 niveles contra desbordamiento aritmético de 16 bits en `MultiBandBlender`, garantizando transiciones continuas sin artefactos en núcleos brillantes.
+  * *Previsualización Rápida Borrador (Fast Draft Preview al 25%, Novedad v0.17.2):* Generación interactiva a cuarto de escala para inspeccionar el mosaico completo, validar costuras y calibrar la curvatura en pocos segundos antes de iniciar el cosido final de gigapíxeles.
   * *Recorte Automático Acelerado en Rust:* Encuentra y extrae el rectángulo máximo inscrito completamente cubierto de datos mediante un algoritmo nativo de programación dinámica sobre histogramas $O(H \times W)$ en menos de 2 ms, garantizando un recorte limpio y sin marcos negros en panorámicas gigapíxel.
 * **Gestión de Sesiones (`.astropano`):**
   * Guarda y restaura todas las teselas cargadas, casillas de inclusión, disposición de cuadrícula y parámetros de procesado para retomar proyectos en cualquier momento.

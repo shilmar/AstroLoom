@@ -260,9 +260,8 @@ class AIWorkersMixin:
         if hasattr(self, 'panel_ground_sky') and self.panel_ground_sky is not None:
             if hasattr(self.panel_ground_sky, 'slider_gnd_dn') and self.panel_ground_sky.slider_gnd_dn.value() != val:
                 self.panel_ground_sky.slider_gnd_dn.setValue(val)
-        if hasattr(self, 'mask_layers_widget') and hasattr(self.mask_layers_widget, 'slider_gnd_special_dn'):
-            if self.mask_layers_widget.slider_gnd_special_dn.value() != val:
-                self.mask_layers_widget.slider_gnd_special_dn.setValue(val)
+        if hasattr(self, 'mask_layers_widget'):
+            self.mask_layers_widget.set_ground_denoise_value(val)
         self.update_stretch_preview()
 
     def on_run_ground_ai_denoise_requested(self):
@@ -371,8 +370,8 @@ class AIWorkersMixin:
             # Activar fuerza recomendada (70%) si estaba en cero
             if getattr(self, 'gnd_denoise_val', 0.0) <= 1e-4:
                 self.gnd_denoise_val = 0.70
-                if hasattr(self, 'mask_layers_widget') and hasattr(self.mask_layers_widget, 'slider_gnd_special_dn'):
-                    self.mask_layers_widget.slider_gnd_special_dn.setValue(70)
+                if hasattr(self, 'mask_layers_widget'):
+                    self.mask_layers_widget.set_ground_denoise_value(70)
 
             if hasattr(self, 'mask_layers_widget'):
                 self.mask_layers_widget.set_ground_ai_denoise_active(True)
@@ -537,9 +536,9 @@ class AIWorkersMixin:
             # Ajustar fuerza sugerida (70%) si el control estaba en cero
             if hasattr(self, 'slider_denoise') and self.slider_denoise.value() == 0:
                 self.slider_denoise.setValue(70)
-            if hasattr(self, 'mask_layers_widget') and hasattr(self.mask_layers_widget, 'slider_sl_denoise'):
-                if self.mask_layers_widget.slider_sl_denoise.value() == 0:
-                    self.mask_layers_widget.slider_sl_denoise.setValue(70)
+            if hasattr(self, 'mask_layers_widget'):
+                if getattr(self.mask_layers_widget, 'slider_sl_denoise', None) and self.mask_layers_widget.slider_sl_denoise.value() == 0:
+                    self.mask_layers_widget.set_starless_denoise_value(70)
 
             # Notificar al botón para reflejar estado activo
             if hasattr(self, 'panel_starnet'):

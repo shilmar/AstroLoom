@@ -136,7 +136,7 @@ from gui.developer.render_engine import RenderMixin
 
 
 
-class DeveloperTab(QWidget, RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasToolsMixin, LayerSyncMixin, AIWorkersMixin):
+class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasToolsMixin, LayerSyncMixin, AIWorkersMixin, QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.image_32bit = None       # Imagen nativa base (float32)

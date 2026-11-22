@@ -969,7 +969,7 @@ class RenderMixin:
         if hasattr(self, 'curve_widget') and self.curve_widget.isVisible():
             self.curve_widget.set_histogram_from_image(stretched)
         if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.isVisible():
-            if getattr(self.mask_layers_widget, 'sec_layer_curve', None) and self.mask_layers_widget.sec_layer_curve.is_expanded:
+            if self.mask_layers_widget.is_curve_editor_expanded():
                 self.mask_layers_widget.update_active_layer_histogram()
 
     def _is_lut_preview_applicable(self) -> bool:

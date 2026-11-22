@@ -1056,11 +1056,11 @@ class HistoryPresetsMixin:
                 self.canvas.set_active_gradient_layer(sel_layer)
             elif sel_layer and (sel_layer.mask_type == "brush" or sel_layer.mask_type == MASK_TYPE_IMAGE_RASTER) and sel_layer.enabled:
                 self.canvas.set_active_gradient_layer(None)
-                show_overlay = self.mask_layers_widget.btn_preview_mask.isChecked()
+                show_overlay = self.mask_layers_widget.is_mask_preview_active()
                 self.canvas.set_active_layer_mask(sel_layer.brush_mask, show_overlay=show_overlay)
             else:
                 self.canvas.set_active_gradient_layer(None)
-                if not self.mask_layers_widget.btn_preview_mask.isChecked():
+                if not self.mask_layers_widget.is_mask_preview_active():
                     self.canvas.set_refined_mask(None)
                     self.canvas.set_mask_visible(False)
 
