@@ -1,11 +1,17 @@
 # Reglas de navegación para el agente (AstroLoom)
 
 1. **NO leas archivos completos mayores de 1.000 líneas.** Usa siempre búsqueda de símbolos o rangos de líneas (`read_file` con `StartLine`/`EndLine` o comandos `Select-String`/`grep`) antes de volcar archivos.
-2. **NO leas `CHANGELOG.md`, `MANUAL_DE_USUARIO.md` ni `INDEX.md`** salvo que la tarea pida explícitamente redactar o actualizar documentación.
+2. **NO leas `CHANGELOG.md` ni `MANUAL_DE_USUARIO.md`.** No vuelques `INDEX.md` completo (usa únicamente búsqueda por patrón con `Select-String` o `grep` sobre él para localizar métodos y clases rápidamente sin abrir archivos fuente).
 3. **Arquitectura:**
    - `astroloom_rs/`: Núcleo numérico en Rust compilado con PyO3/Maturin.
    - `core/`: Pipelines matemáticos en Python (apilado, calibración, estirado MTF/GHS, inferencia ONNX).
    - `gui/`: Interfaz PySide6 (`main_window.py` es el orquestador principal de ~300 líneas; los tabs son widgets modulares).
+
+## Reglas para Mixins en `gui/developer/`
+1. **Confía en `self` sin explorar el resto:** Los Mixins (`RenderMixin`, `CanvasToolsMixin`, `AIWorkersMixin`, `ProjectIOMixin`, `HistoryPresetsMixin`, `LayerSyncMixin`) se heredan en `DeveloperTab` (`gui/tab_developer.py`). Asume que todos los atributos de instancia (`self.image_32bit`, `self.canvas`, `self.panel_*`, `self.mask_layers_widget`, etc.) ya existen en `self`. NO leas `tab_developer.py` completo ni los demás Mixins para verificar si un atributo existe.
+2. **Prohibido importar `DeveloperTab` dentro de un Mixin:** Nunca hagas `from gui.tab_developer import DeveloperTab` a nivel de módulo en un Mixin (provoca importaciones circulares). Si necesitas tipado estático, usa `from __future__ import annotations` junto con `if TYPE_CHECKING:` o comentarios de tipo simples.
+3. **Resolución de métodos cruzados:** Si un método de un Mixin llama a otro método de `self` que no está en ese archivo, busca su ubicación exacta con `Select-String` o `grep` en `INDEX.md` en lugar de escanear todos los archivos de `gui/developer/`.
+4. **Regeneración de `INDEX.md`:** Tras mover, añadir o renombrar métodos o clases entre `tab_developer.py` y los Mixins, ejecuta `python scripts/update_index.py` antes de dar la tarea por terminada.
 
 ## Mapa estructural de archivos grandes en `gui/`
 
