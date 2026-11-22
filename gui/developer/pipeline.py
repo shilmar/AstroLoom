@@ -505,25 +505,42 @@ def apply_developer_pipeline(
         if gnd_dn > 1e-4 and precomputed_mask is not None:
             if cached_ground_ai is not None:
                 gnd_ai = cached_ground_ai
-                if gnd_ai.shape[:2] != stretched.shape[:2]:
-                    if crop_rect is not None and full_shape is not None:
-                        x1, y1, x2, y2 = crop_rect
-                        h_f, w_f = full_shape
-                        h_g, w_g = gnd_ai.shape[:2]
-                        sx = w_g / float(w_f)
-                        sy = h_g / float(h_f)
-                        sx1 = max(0, min(w_g, int(round(x1 * sx))))
-                        sy1 = max(0, min(h_g, int(round(y1 * sy))))
-                        sx2 = max(0, min(w_g, int(round(x2 * sx))))
-                        sy2 = max(0, min(h_g, int(round(y2 * sy))))
-                        gnd_sub = gnd_ai[sy1:sy2, sx1:sx2]
-                        if gnd_sub.shape[:2] != stretched.shape[:2]:
-                            gnd_ai = cv2.resize(gnd_sub, (stretched.shape[1], stretched.shape[0]), interpolation=cv2.INTER_LINEAR)
+                if full_shape is not None:
+                    h_f, w_f = full_shape
+                    h_g, w_g = gnd_ai.shape[:2]
+                    ratio_g = w_g / float(h_g) if h_g > 0 else 1.0
+                    ratio_f = w_f / float(h_f) if h_f > 0 else 1.0
+                    if abs(ratio_g - ratio_f) > 0.05 and crop_rect is None:
+                        gnd_ai = None
+                if gnd_ai is not None:
+                    if gnd_ai.shape[:2] != stretched.shape[:2]:
+                        if crop_rect is not None and full_shape is not None:
+                            x1, y1, x2, y2 = crop_rect
+                            h_f, w_f = full_shape
+                            h_g, w_g = gnd_ai.shape[:2]
+                            sx = w_g / float(w_f)
+                            sy = h_g / float(h_f)
+                            sx1 = max(0, min(w_g, int(round(x1 * sx))))
+                            sy1 = max(0, min(h_g, int(round(y1 * sy))))
+                            sx2 = max(0, min(w_g, int(round(x2 * sx))))
+                            sy2 = max(0, min(h_g, int(round(y2 * sy))))
+                            gnd_sub = gnd_ai[sy1:sy2, sx1:sx2]
+                            if gnd_sub.shape[:2] != stretched.shape[:2]:
+                                gnd_ai = cv2.resize(gnd_sub, (stretched.shape[1], stretched.shape[0]), interpolation=cv2.INTER_LINEAR)
+                            else:
+                                gnd_ai = gnd_sub
                         else:
-                            gnd_ai = gnd_sub
-                    else:
-                        gnd_ai = cv2.resize(gnd_ai, (stretched.shape[1], stretched.shape[0]), interpolation=cv2.INTER_AREA)
-                denoised_gnd = cv2.addWeighted(gnd_ai, gnd_dn, stretched, 1.0 - gnd_dn, 0.0)
+                            gnd_ai = cv2.resize(gnd_ai, (stretched.shape[1], stretched.shape[0]), interpolation=cv2.INTER_AREA)
+                    denoised_gnd = cv2.addWeighted(gnd_ai, gnd_dn, stretched, 1.0 - gnd_dn, 0.0)
+                else:
+                    from core.denoise import apply_astro_denoise
+                    denoised_gnd = apply_astro_denoise(
+                        stretched,
+                        strength=gnd_dn,
+                        color_strength=0.5,
+                        is_draft=is_scrubbing,
+                        is_full_res=is_full_res
+                    )
             else:
                 from core.denoise import apply_astro_denoise
                 denoised_gnd = apply_astro_denoise(

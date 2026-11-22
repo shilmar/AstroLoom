@@ -1683,6 +1683,9 @@ class DeveloperTab(QWidget):
             "starless_is_stretched": getattr(self, "starless_is_stretched", False),
             "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
             "current_mask": self.current_mask.copy() if self.current_mask is not None else None,
+            "_cache_starless_ai": self._cache_starless_ai.copy() if getattr(self, "_cache_starless_ai", None) is not None else None,
+            "_cache_ground_ai": self._cache_ground_ai.copy() if getattr(self, "_cache_ground_ai", None) is not None else None,
+            "mask_layers": [l.shallow_snapshot() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
         }
         self.undo_stack.append(undo_item)
         if len(self.undo_stack) > self.MAX_UNDO_STEPS:
@@ -1717,6 +1720,28 @@ class DeveloperTab(QWidget):
             self.image_stars = rotate_and_crop(self.image_stars)
         if self.current_mask is not None:
             self.current_mask = rotate_and_crop(self.current_mask, is_mask=True)
+            self.canvas.set_refined_mask(self.current_mask, mode="bicolor")
+        if getattr(self, "_cache_starless_ai", None) is not None:
+            if self._cache_starless_ai.shape[:2] == (orig_h, orig_w):
+                self._cache_starless_ai = rotate_and_crop(self._cache_starless_ai)
+            else:
+                self._cache_starless_ai = None
+        if getattr(self, "_cache_ground_ai", None) is not None:
+            if self._cache_ground_ai.shape[:2] == (orig_h, orig_w):
+                self._cache_ground_ai = rotate_and_crop(self._cache_ground_ai)
+            else:
+                self._cache_ground_ai = None
+
+        if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers:
+            for l in self.mask_layers_widget.layers:
+                if getattr(l, 'brush_mask', None) is not None:
+                    if l.brush_mask.shape[:2] == (orig_h, orig_w):
+                        l.brush_mask = rotate_and_crop(l.brush_mask, is_mask=True)
+                        l.invalidate_brush_proxies()
+                    else:
+                        l.set_brush_mask(None)
+            self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
+            self.mask_layers_widget.update_active_layer_histogram()
 
         self.btn_crop.setChecked(False)
         if hasattr(self, 'slider_crop_angle'):
@@ -4102,10 +4127,16 @@ class DeveloperTab(QWidget):
                 cached_ai = getattr(self, '_cache_starless_ai', None)
                 use_ai = getattr(self, 'starless_ai_denoise_enabled', False) and (cached_ai is not None)
                 if use_ai:
+                    h_f, w_f = self.image_32bit.shape[:2] if self.image_32bit is not None else cached_ai.shape[:2]
+                    h_c, w_c = cached_ai.shape[:2]
+                    ratio_c = w_c / float(h_c) if h_c > 0 else 1.0
+                    ratio_f = w_f / float(h_f) if h_f > 0 else 1.0
+                    if abs(ratio_c - ratio_f) > 0.05 and crop_rect is None:
+                        self._cache_starless_ai = None
+                        use_ai = False
+                if use_ai:
                     if crop_rect is not None:
                         x1, y1, x2, y2 = crop_rect
-                        h_f, w_f = self.image_32bit.shape[:2] if self.image_32bit is not None else cached_ai.shape[:2]
-                        h_c, w_c = cached_ai.shape[:2]
                         sx = w_c / float(w_f)
                         sy = h_c / float(h_f)
                         sx1 = max(0, min(w_c, int(round(x1 * sx))))
@@ -7708,6 +7739,9 @@ class DeveloperTab(QWidget):
                     "starless_is_stretched": getattr(self, "starless_is_stretched", False),
                     "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
                     "current_mask": self.current_mask.copy() if self.current_mask is not None else None,
+                    "_cache_starless_ai": self._cache_starless_ai.copy() if getattr(self, "_cache_starless_ai", None) is not None else None,
+                    "_cache_ground_ai": self._cache_ground_ai.copy() if getattr(self, "_cache_ground_ai", None) is not None else None,
+                    "mask_layers": [l.shallow_snapshot() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
                 }
                 self.redo_stack.append(redo_item)
                 self.image_32bit = target["image_32bit"]
@@ -7716,11 +7750,19 @@ class DeveloperTab(QWidget):
                 self.starless_is_stretched = target.get("starless_is_stretched", False)
                 self.image_stars = target["image_stars"]
                 self.current_mask = target["current_mask"]
+                self._cache_starless_ai = target.get("_cache_starless_ai")
+                self._cache_ground_ai = target.get("_cache_ground_ai")
+                if "mask_layers" in target and hasattr(self, 'mask_layers_widget'):
+                    self.mask_layers_widget.blockSignals(True)
+                    self.mask_layers_widget.set_state(target["mask_layers"] or [])
+                    self.mask_layers_widget.blockSignals(False)
 
                 self.snapshot_before_pixmap = None
                 self.has_custom_snapshot = False
                 h, w = self.image_32bit.shape[:2]
                 self.canvas.set_native_image_size((w, h))
+                if self.current_mask is not None:
+                    self.canvas.set_refined_mask(self.current_mask, mode="bicolor")
                 self._generate_preview_proxy()
                 self._generate_before_reference()
                 self.update_stretch_preview(immediate=True)
@@ -7873,6 +7915,9 @@ class DeveloperTab(QWidget):
                     "starless_is_stretched": getattr(self, "starless_is_stretched", False),
                     "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
                     "current_mask": self.current_mask.copy() if self.current_mask is not None else None,
+                    "_cache_starless_ai": self._cache_starless_ai.copy() if getattr(self, "_cache_starless_ai", None) is not None else None,
+                    "_cache_ground_ai": self._cache_ground_ai.copy() if getattr(self, "_cache_ground_ai", None) is not None else None,
+                    "mask_layers": [l.shallow_snapshot() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
                 }
                 self.undo_stack.append(undo_item)
                 self.image_32bit = target["image_32bit"]
@@ -7881,11 +7926,19 @@ class DeveloperTab(QWidget):
                 self.starless_is_stretched = target.get("starless_is_stretched", False)
                 self.image_stars = target["image_stars"]
                 self.current_mask = target["current_mask"]
+                self._cache_starless_ai = target.get("_cache_starless_ai")
+                self._cache_ground_ai = target.get("_cache_ground_ai")
+                if "mask_layers" in target and hasattr(self, 'mask_layers_widget'):
+                    self.mask_layers_widget.blockSignals(True)
+                    self.mask_layers_widget.set_state(target["mask_layers"] or [])
+                    self.mask_layers_widget.blockSignals(False)
 
                 self.snapshot_before_pixmap = None
                 self.has_custom_snapshot = False
                 h, w = self.image_32bit.shape[:2]
                 self.canvas.set_native_image_size((w, h))
+                if self.current_mask is not None:
+                    self.canvas.set_refined_mask(self.current_mask, mode="bicolor")
                 self._generate_preview_proxy()
                 self._generate_before_reference()
                 self.update_stretch_preview(immediate=True)
