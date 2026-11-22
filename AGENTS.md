@@ -9,7 +9,7 @@
 
 ## Mapa estructural de archivos grandes en `gui/`
 
-### 1. `gui/tab_developer.py` (~8.800 líneas) - Tab de Revelado
+### 1. `gui/tab_developer.py` (~7.490 líneas) - Tab de Revelado (Orquestador)
 - **L1–364**: Imports, constantes y `DeveloperTab.__init__` (estado, pipeline, timers).
 - **L365–1520**: `_setup_ui`, layout principal, docks laterales, footer y `_create_canvas_toolbar`.
 - **L1521–2030**: Recorte / Crop (`_create_crop_toolbar`, `_on_toggle_crop`, rotaciones y ratios).
@@ -17,11 +17,16 @@
 - **L2811–3550**: Accesos directos, pipetas (WB, GHS, LP), split-view (antes/después), zoom y clipping.
 - **L3551–4500**: Carga/importación de imagen, proxy de preview, coronal stack, capas ráster y drag & drop.
 - **L4501–6000**: Inferencia IA (StarNet, NAFNet denoise), deconvolución PSF, motas de polvo y curvas.
-- **L6001–7500**: Sliders de ajuste, balances, estirado y reseteos globales / individuales.
-- **L7501–8220**: Motor de Undo/Redo e historial (`_capture_state`, `_restore_state`, `undo`, `redo`).
-- **L8221–8868**: Gestión de presets (`DeveloperPreset`), guardado/carga de sesión y estado dirty.
+- **L6001–7200**: Sliders de ajuste, balances, estirado y exportación de imágenes.
+- **L7201–7490**: Guardado/carga de sesión y proyectos .devloom (`save_project`, `load_project`).
+*(Nota: Pila Undo/Redo, presets y reseteos extraídos a `gui/developer/history_presets.py`)*
 
-### 2. `gui/widgets/mask_layers_widget.py` (~4.700 líneas) - Gestor de Capas y Máscaras
+### 2. `gui/developer/history_presets.py` (~1.450 líneas) - Historial y Presets (`HistoryPresetsMixin`)
+- Pila Undo/Redo (`_capture_state`, `_restore_state`, `undo`, `redo`, `_commit_action`).
+- Presets de revelado (`apply_preset`, `_populate_presets_combo`, diálogos de preset).
+- Reseteos globales e individuales (`reset_all_parameters`, `clear_session`, `reset_*`).
+
+### 3. `gui/widgets/mask_layers_widget.py` (~4.700 líneas) - Gestor de Capas y Máscaras
 - **L1–121**: `LayerListResizeHandle` (frame de redimensionado interactivo).
 - **L122–1816**: `MaskLayersWidget.__init__` y `_setup_ui` (árbol de capas, sliders, botones de mezcla y opacidad).
 - **L1817–3200**: Conexión de sliders, sincronización de capas base/starnet/ráster y eventos de lista.
