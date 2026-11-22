@@ -1215,6 +1215,10 @@ def stitch_nightscape_panorama(
         blender_sky = cv2.detail_MultiBandBlender(0, num_bands)
         blender_sky.prepare((0, 0, canvas_w, canvas_h))
 
+        # Escala segura int16 (CV_16S) con margen de seguridad (headroom) para evitar overflow
+        # en la reconstrucción y suma de octavas de la pirámide laplaciana de OpenCV
+        BLENDER_SCALE = 8192.0
+
         has_ground = (sky_masks_sm is not None)
         if has_ground:
             ground_canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.float32)
@@ -1281,7 +1285,7 @@ def stitch_nightscape_panorama(
             local_seam[iy1:iy2, ix1:ix2] = np.where(local_part, 255, 0).astype(np.uint8)
             seam_dilated = cv2.dilate(local_seam, None)
 
-            w_img_16s = (np.clip(w_img, 0.0, 1.0) * 32767.0).astype(np.int16)
+            w_img_16s = (np.clip(w_img, 0.0, 1.0) * BLENDER_SCALE).astype(np.int16)
             blender_sky.feed(w_img_16s, seam_dilated, (gx, gy))
             del w_img_16s, local_seam, seam_dilated
 
@@ -1296,7 +1300,7 @@ def stitch_nightscape_panorama(
             gc.collect()
 
         dst_sky, _ = blender_sky.blend(None, None)
-        stitched_sky = np.clip(dst_sky.astype(np.float32) / 32767.0, 0.0, 1.0)
+        stitched_sky = np.clip(dst_sky.astype(np.float32) / BLENDER_SCALE, 0.0, 1.0)
         del blender_sky, dst_sky
 
         total_mask = (best_idx >= 0).astype(np.uint8) * 255
