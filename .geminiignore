@@ -1,0 +1,29 @@
+# Entornos, caché y compilación
+.venv/
+__pycache__/
+.pytest_cache/
+.archify/
+build/
+dist/
+astroloom_rs/target/
+*.pyd
+*.so
+*.dll
+
+# Datasets de astrofotografía, modelos y salidas de usuario
+bias/
+bkgnd/
+darks/
+flats/
+fotos_prueba/
+exportaciones/
+imagenes/
+models/
+sesiones/
+scratch/
+samples/
+
+# Documentación histórica masiva (evita que el indexador / grep lean >400 KB en cada búsqueda)
+CHANGELOG.md
+MANUAL_DE_USUARIO.md
+INDEX.md
