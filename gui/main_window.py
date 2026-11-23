@@ -75,10 +75,10 @@ class MainWindow(QMainWindow):
         self.lbl_engine_badge.setStyleSheet(STYLE_STATUS_PILL)
         corner_layout.addWidget(self.lbl_engine_badge)
 
-        # 2. Píldora de aviso de Fallback GPU -> CPU (naranja/amarillo, junto al monitor de RAM)
+        # 2. Píldora de aviso de Fallback GPU -> CPU
         self.lbl_gpu_fallback = QLabel("⚠️ Fallback CPU (VRAM)")
         self.lbl_gpu_fallback.setStyleSheet(
-            "background-color: #3e2723; border: 1px solid #ff9800; border-radius: 4px; padding: 2px 8px; color: #ffb74d; font-weight: bold; font-size: 10px;"
+            "background-color: #2c2c32; border: 1px solid #d97706; border-radius: 4px; padding: 2px 8px; color: #fbbf24; font-weight: bold; font-size: 10px;"
         )
         self.lbl_gpu_fallback.setToolTip("La GPU se quedó sin memoria (VRAM). Se continuó en CPU de forma segura.")
         self.lbl_gpu_fallback.setVisible(False)
@@ -88,24 +88,22 @@ class MainWindow(QMainWindow):
 
         # 3. Píldora de Monitor de Memoria RAM en tiempo real
         self.lbl_ram_monitor = QLabel("RAM: --")
-        self.lbl_ram_monitor.setStyleSheet(
-            "background-color: #141724; border: 1px solid #232738; border-radius: 4px; padding: 2px 8px; color: #ffd54f; font-weight: bold; font-size: 10px;"
-        )
+        self.lbl_ram_monitor.setStyleSheet(STYLE_STATUS_PILL)
         corner_layout.addWidget(self.lbl_ram_monitor)
 
         # 4. Botón de Registro de Actividad y Telemetría
         self.btn_activity_log = QPushButton(tr("app.log_btn", " Registro"))
-        self.btn_activity_log.setIcon(get_icon("activity", size=13, color="#00e5ff"))
+        self.btn_activity_log.setIcon(get_icon("activity", size=13))
         self.btn_activity_log.setStyleSheet(
             "QPushButton {"
-            "  background-color: #141724; border: 1px solid #232738; border-radius: 4px;"
-            "  padding: 2px 8px; color: #80d8ff; font-weight: bold; font-size: 10px;"
+            "  background-color: #2c2c32; border: 1px solid #2e2e35; border-radius: 4px;"
+            "  padding: 2px 8px; color: #e4e4e7; font-weight: bold; font-size: 10px;"
             "}"
             "QPushButton:hover {"
-            "  background-color: #1c2032; border-color: #00e5ff; color: #ffffff;"
+            "  background-color: #383840; border-color: #2f81f7; color: #ffffff;"
             "}"
             "QPushButton:pressed {"
-            "  background-color: #0d101a;"
+            "  background-color: #222227;"
             "}"
         )
         self.btn_activity_log.setCursor(Qt.PointingHandCursor)

@@ -14,6 +14,10 @@ from PySide6.QtCore import Qt, Signal
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.icons import get_icon
 from gui.developer.panels.panel_effects import EffectsPanel
+from gui.theme import (
+    STYLE_SPECIAL_ACTION_BTN, STYLE_SECONDARY_BTN,
+    BG_CARD, BORDER_BASE, TEXT_PRIMARY, TEXT_SECONDARY
+)
 
 
 class StarNetPanel(QWidget):
@@ -36,7 +40,7 @@ class StarNetPanel(QWidget):
         main_layout.setSpacing(0)
 
         # --- SECCIÓN 5: StarNet++ AI - Desacoplo y Procesado de Capas ---
-        self.sec_starnet = CollapsibleSection("5. Desacoplo Estelar y Fondo", is_expanded=False, icon_name="star")
+        self.sec_starnet = CollapsibleSection("5. Desacoplo Estelar y Fondo", is_expanded=False, icon_name="star", domain="ai")
         w_starnet = QWidget()
         layout_starnet = QVBoxLayout(w_starnet)
         layout_starnet.setContentsMargins(6, 4, 6, 6)
@@ -57,8 +61,8 @@ class StarNetPanel(QWidget):
         row_sn.addWidget(self.spin_stride)
 
         self.btn_starnet = QPushButton("Separar Estrellas con StarNet")
-        self.btn_starnet.setIcon(get_icon("star", color="#b388ff", size=13))
-        self.btn_starnet.setStyleSheet("font-weight: bold; color: #b388ff;")
+        self.btn_starnet.setIcon(get_icon("star", color="#8B5CF6", size=13))
+        self.btn_starnet.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_starnet.clicked.connect(self.run_starnet_requested.emit)
         row_sn.addWidget(self.btn_starnet)
         layout_starnet.addLayout(row_sn)
@@ -71,19 +75,19 @@ class StarNetPanel(QWidget):
             "de 1-2 píxeles típicas de grandes angulares (14-35 mm).\n\n"
             "ADVERTENCIA: Multiplica por 4 el número de bloques y el tiempo de cálculo."
         )
-        self.chk_upsample.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        self.chk_upsample.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
         row_opts.addWidget(self.chk_upsample)
         layout_starnet.addLayout(row_opts)
 
         # 2. Tarjeta informativa y acceso directo al Gestor de Capas
         self.card_starnet_info = QFrame()
-        self.card_starnet_info.setStyleSheet("""
-            QFrame {
-                background-color: #1a1e2d;
-                border: 1px solid #33384c;
+        self.card_starnet_info.setStyleSheet(f"""
+            QFrame {{
+                background-color: {BG_CARD};
+                border: 1px solid {BORDER_BASE};
                 border-radius: 6px;
                 padding: 6px;
-            }
+            }}
         """)
         layout_card_sn = QVBoxLayout(self.card_starnet_info)
         layout_card_sn.setContentsMargins(8, 8, 8, 8)
@@ -95,28 +99,13 @@ class StarNetPanel(QWidget):
             "donde podrás ajustar de forma contextual su presencia, claridad, contraste y reducción de ruido."
         )
         self.lbl_starnet_info.setWordWrap(True)
-        self.lbl_starnet_info.setStyleSheet("color: #b0bec5; font-size: 11px; line-height: 1.4;")
+        self.lbl_starnet_info.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; line-height: 1.4;")
         layout_card_sn.addWidget(self.lbl_starnet_info)
 
         self.btn_go_to_masks_starnet = QPushButton("Gestionar Capas en Columna 3")
-        self.btn_go_to_masks_starnet.setIcon(get_icon("layers", color="#b388ff", size=13))
+        self.btn_go_to_masks_starnet.setIcon(get_icon("layers", color="#e4e4e7", size=13))
         self.btn_go_to_masks_starnet.setCursor(Qt.PointingHandCursor)
-        self.btn_go_to_masks_starnet.setStyleSheet("""
-            QPushButton {
-                background-color: #2b1f3d;
-                color: #ce93d8;
-                border: 1px solid #7b1fa2;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #3b2854;
-                border-color: #ba68c8;
-                color: #ffffff;
-            }
-        """)
+        self.btn_go_to_masks_starnet.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_go_to_masks_starnet.clicked.connect(lambda: self.jump_to_masks_requested.emit("image_starless"))
         self.btn_go_to_masks_starnet.setVisible(False)
         layout_card_sn.addWidget(self.btn_go_to_masks_starnet)
@@ -140,34 +129,19 @@ class StarNetPanel(QWidget):
         row_view.addSpacing(10)
         row_view.addWidget(self._make_resettable_label(QLabel("Estrellas:"), lambda: self.slider_stars.setValue(100), "100%"))
         self.lbl_stars = QLabel("100%")
-        self.lbl_stars.setStyleSheet("color: #ffd54f; font-weight: bold;")
+        self.lbl_stars.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_view.addWidget(self.lbl_stars)
         tools_layout.addLayout(row_view)
 
         # Botón Estirado Adaptativo RGB para Starless
         self.btn_auto_stretch_starless = QPushButton("Estirado Adaptativo RGB")
-        self.btn_auto_stretch_starless.setIcon(get_icon("sparkles", color="#ce93d8", size=13))
+        self.btn_auto_stretch_starless.setIcon(get_icon("sparkles", color="#2f81f7", size=13))
         self.btn_auto_stretch_starless.setCursor(Qt.PointingHandCursor)
         self.btn_auto_stretch_starless.setToolTip(
             "Aplica el algoritmo de estirado no lineal adaptativo MTF sobre la capa sin estrellas,\n"
             "aislando el cálculo estadístico del fondo celeste respecto al suelo."
         )
-        self.btn_auto_stretch_starless.setStyleSheet("""
-            QPushButton {
-                background-color: #2b1f3d;
-                color: #ce93d8;
-                border: 1px solid #7b1fa2;
-                border-radius: 4px;
-                padding: 5px 10px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #3b2854;
-                border-color: #ba68c8;
-                color: #ffffff;
-            }
-        """)
+        self.btn_auto_stretch_starless.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_auto_stretch_starless.clicked.connect(self.auto_stretch_starless_requested.emit)
         tools_layout.addWidget(self.btn_auto_stretch_starless)
 
@@ -185,7 +159,7 @@ class StarNetPanel(QWidget):
         row_cl_lbl = QHBoxLayout()
         row_cl_lbl.addWidget(self._make_resettable_label(QLabel("Claridad (Gauss):"), lambda: self.slider_clarity.setValue(0), "0.00"))
         self.lbl_clarity = QLabel("0.00")
-        self.lbl_clarity.setStyleSheet("color: #80d8ff; font-weight: bold;")
+        self.lbl_clarity.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_cl_lbl.addWidget(self.lbl_clarity)
         col_clarity.addLayout(row_cl_lbl)
         self.slider_clarity = QSlider(Qt.Horizontal)
@@ -200,7 +174,7 @@ class StarNetPanel(QWidget):
         row_tc_lbl = QHBoxLayout()
         row_tc_lbl.addWidget(self._make_resettable_label(QLabel("Claridad Textura (Seti):"), lambda: self.slider_texture_clarity.setValue(0), "0.00"))
         self.lbl_texture_clarity = QLabel("0.00")
-        self.lbl_texture_clarity.setStyleSheet("color: #b388ff; font-weight: bold;")
+        self.lbl_texture_clarity.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_tc_lbl.addWidget(self.lbl_texture_clarity)
         col_tex_clarity.addLayout(row_tc_lbl)
         self.slider_texture_clarity = QSlider(Qt.Horizontal)
@@ -218,7 +192,7 @@ class StarNetPanel(QWidget):
         row_dh_lbl = QHBoxLayout()
         row_dh_lbl.addWidget(self._make_resettable_label(QLabel("Borrar Neblina:"), lambda: self.slider_dehaze.setValue(0), "0.00"))
         self.lbl_dehaze = QLabel("0.00")
-        self.lbl_dehaze.setStyleSheet("color: #80d8ff; font-weight: bold;")
+        self.lbl_dehaze.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_dh_lbl.addWidget(self.lbl_dehaze)
         col_dehaze.addLayout(row_dh_lbl)
         self.slider_dehaze = QSlider(Qt.Horizontal)
@@ -237,7 +211,7 @@ class StarNetPanel(QWidget):
         row_ond_lbl = QHBoxLayout()
         row_ond_lbl.addWidget(self._make_resettable_label(QLabel("Estructura (Ondículas):"), lambda: self.slider_ond_est.setValue(0), "0.00"))
         self.lbl_ond_est = QLabel("0.00")
-        self.lbl_ond_est.setStyleSheet("color: #b388ff; font-weight: bold;")
+        self.lbl_ond_est.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_ond_lbl.addWidget(self.lbl_ond_est)
         col_ond.addLayout(row_ond_lbl)
         self.slider_ond_est = QSlider(Qt.Horizontal)
@@ -251,7 +225,7 @@ class StarNetPanel(QWidget):
         row_ondbg_lbl = QHBoxLayout()
         row_ondbg_lbl.addWidget(self._make_resettable_label(QLabel("Atenuar Fondo:"), lambda: self.slider_ond_bg.setValue(0), "0%"))
         self.lbl_ond_bg = QLabel("0%")
-        self.lbl_ond_bg.setStyleSheet("color: #b388ff; font-weight: bold;")
+        self.lbl_ond_bg.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_ondbg_lbl.addWidget(self.lbl_ond_bg)
         col_ond_bg.addLayout(row_ondbg_lbl)
         self.slider_ond_bg = QSlider(Qt.Horizontal)
@@ -270,7 +244,7 @@ class StarNetPanel(QWidget):
         row_cs_lbl = QHBoxLayout()
         row_cs_lbl.addWidget(self._make_resettable_label(QLabel("Contraste Fondo:"), lambda: self.slider_contrast_starless.setValue(0), "0.00"))
         self.lbl_contrast_starless = QLabel("0.00")
-        self.lbl_contrast_starless.setStyleSheet("color: #a5d6a7; font-weight: bold;")
+        self.lbl_contrast_starless.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_cs_lbl.addWidget(self.lbl_contrast_starless)
         col_cs.addLayout(row_cs_lbl)
         self.slider_contrast_starless = QSlider(Qt.Horizontal)
@@ -284,7 +258,7 @@ class StarNetPanel(QWidget):
         row_dn_lbl = QHBoxLayout()
         row_dn_lbl.addWidget(self._make_resettable_label(QLabel("Reducción Ruido:"), lambda: self.slider_denoise.setValue(0), "0%"))
         self.lbl_denoise = QLabel("0%")
-        self.lbl_denoise.setStyleSheet("color: #a5d6a7; font-weight: bold;")
+        self.lbl_denoise.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_dn_lbl.addWidget(self.lbl_denoise)
 
         self.btn_ai_denoise = QPushButton("✨ IA")
@@ -295,17 +269,16 @@ class StarNetPanel(QWidget):
         self.btn_ai_denoise.setToolTip("Ejecutar Reducción de Ruido Profunda con IA (NAFNet)")
         self.btn_ai_denoise.setStyleSheet("""
             QPushButton {
-                background-color: #2b1f3d;
-                color: #ce93d8;
-                border: 1px solid #7b1fa2;
+                background-color: rgba(47, 129, 247, 0.12);
+                color: #e4e4e7;
+                border: 1px solid #2f81f7;
                 border-radius: 3px;
                 padding: 1px 6px;
                 font-weight: bold;
                 font-size: 10px;
             }
             QPushButton:hover {
-                background-color: #3b2854;
-                border-color: #ba68c8;
+                background-color: rgba(47, 129, 247, 0.22);
                 color: #ffffff;
             }
         """)
@@ -313,14 +286,14 @@ class StarNetPanel(QWidget):
         row_dn_lbl.addWidget(self.btn_ai_denoise)
 
         self.btn_denoise_expand = QPushButton()
-        self.btn_denoise_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#a5d6a7", size=11))
+        self.btn_denoise_expand.setIcon(get_icon("settings", color="#a1a1aa", active_color="#2f81f7", size=11))
         self.btn_denoise_expand.setCheckable(True)
         self.btn_denoise_expand.setChecked(False)
         self.btn_denoise_expand.setFixedSize(18, 18)
         self.btn_denoise_expand.setStyleSheet("""
-            QPushButton { border: none; background: transparent; padding: 0px; border-radius: 3px; }
-            QPushButton:hover { background: #262a3a; }
-            QPushButton:checked { background: #2e3846; }
+            QPushButton { border: 1px solid #2e2e35; background: #2c2c32; padding: 0px; border-radius: 3px; }
+            QPushButton:hover { background: #3f3f46; }
+            QPushButton:checked { background: rgba(47, 129, 247, 0.15); border: 1px solid #2f81f7; }
         """)
         self.btn_denoise_expand.setToolTip("Ajustes avanzados: Ruido de Color (Croma) y Máscara de Enfoque en Sombras / Protección de Bordes")
         row_dn_lbl.addWidget(self.btn_denoise_expand)
@@ -339,15 +312,15 @@ class StarNetPanel(QWidget):
         layout_dn_adv = QVBoxLayout(self.w_denoise_advanced)
         layout_dn_adv.setContentsMargins(6, 4, 6, 6)
         layout_dn_adv.setSpacing(6)
-        self.w_denoise_advanced.setStyleSheet("background-color: #171a25; border-radius: 4px; border: 1px solid #232738;")
+        self.w_denoise_advanced.setStyleSheet("background-color: #26262c; border-radius: 4px; border: 1px solid #2e2e35;")
 
         # Fila 1: Ruido Cromático (Color)
         row_dnc = QHBoxLayout()
         row_dnc_lbl = self._make_resettable_label(QLabel("Ruido Color (Croma):"), lambda: self.slider_denoise_color.setValue(50), "50%")
-        row_dnc_lbl.setStyleSheet("font-size: 11px; color: #cfd8dc;")
+        row_dnc_lbl.setStyleSheet(f"font-size: 11px; color: {TEXT_SECONDARY};")
         row_dnc.addWidget(row_dnc_lbl)
         self.lbl_denoise_color = QLabel("50%")
-        self.lbl_denoise_color.setStyleSheet("font-size: 11px; color: #80cbc4; font-weight: bold;")
+        self.lbl_denoise_color.setStyleSheet("font-size: 11px; color: #2f81f7; font-weight: bold;")
         row_dnc.addWidget(self.lbl_denoise_color)
         layout_dn_adv.addLayout(row_dnc)
 
@@ -360,10 +333,10 @@ class StarNetPanel(QWidget):
         # Fila 2: Máscara de Sombras / Protección de Bordes
         row_dnm = QHBoxLayout()
         row_dnm_lbl = self._make_resettable_label(QLabel("Máscara Bordes/Sombras:"), lambda: self.slider_denoise_mask.setValue(50), "50%")
-        row_dnm_lbl.setStyleSheet("font-size: 11px; color: #cfd8dc;")
+        row_dnm_lbl.setStyleSheet(f"font-size: 11px; color: {TEXT_SECONDARY};")
         row_dnm.addWidget(row_dnm_lbl)
         self.lbl_denoise_mask = QLabel("50%")
-        self.lbl_denoise_mask.setStyleSheet("font-size: 11px; color: #80cbc4; font-weight: bold;")
+        self.lbl_denoise_mask.setStyleSheet("font-size: 11px; color: #2f81f7; font-weight: bold;")
         row_dnm.addWidget(self.lbl_denoise_mask)
         layout_dn_adv.addLayout(row_dnm)
 
@@ -376,17 +349,17 @@ class StarNetPanel(QWidget):
         # Fila 3: Banding CMOS de Sensor
         row_band = QHBoxLayout()
         row_band_lbl = self._make_resettable_label(QLabel("Banding CMOS:"), lambda: self.slider_banding.setValue(0), "0%")
-        row_band_lbl.setStyleSheet("font-size: 11px; color: #cfd8dc;")
+        row_band_lbl.setStyleSheet(f"font-size: 11px; color: {TEXT_SECONDARY};")
         row_band.addWidget(row_band_lbl)
 
         self.combo_banding_dir = QComboBox()
         self.combo_banding_dir.addItems(["Horizontal", "Vertical", "Ambos"])
         self.combo_banding_dir.setFixedSize(84, 20)
-        self.combo_banding_dir.setStyleSheet("font-size: 10px; background-color: #1e2230; color: #cfd8dc; border: 1px solid #33394d;")
+        self.combo_banding_dir.setStyleSheet("font-size: 10px; background-color: #2c2c32; color: #e4e4e7; border: 1px solid #2e2e35; border-radius: 3px;")
         row_band.addWidget(self.combo_banding_dir)
 
         self.lbl_banding = QLabel("0%")
-        self.lbl_banding.setStyleSheet("font-size: 11px; color: #80cbc4; font-weight: bold;")
+        self.lbl_banding.setStyleSheet("font-size: 11px; color: #2f81f7; font-weight: bold;")
         row_band.addWidget(self.lbl_banding)
         layout_dn_adv.addLayout(row_band)
 
@@ -443,16 +416,16 @@ class StarNetPanel(QWidget):
             self.btn_ai_denoise.setText("✓ IA")
             self.btn_ai_denoise.setStyleSheet("""
                 QPushButton {
-                    background-color: #1b3a2b;
-                    color: #a5d6a7;
-                    border: 1px solid #2e7d32;
+                    background-color: rgba(47, 129, 247, 0.25);
+                    color: #ffffff;
+                    border: 1px solid #2f81f7;
                     border-radius: 3px;
                     padding: 1px 6px;
                     font-weight: bold;
                     font-size: 10px;
                 }
                 QPushButton:hover {
-                    background-color: #2e593e;
+                    background-color: rgba(47, 129, 247, 0.35);
                     color: #ffffff;
                 }
             """)
@@ -461,17 +434,16 @@ class StarNetPanel(QWidget):
             self.btn_ai_denoise.setText("✨ IA")
             self.btn_ai_denoise.setStyleSheet("""
                 QPushButton {
-                    background-color: #2b1f3d;
-                    color: #ce93d8;
-                    border: 1px solid #7b1fa2;
+                    background-color: rgba(47, 129, 247, 0.12);
+                    color: #e4e4e7;
+                    border: 1px solid #2f81f7;
                     border-radius: 3px;
                     padding: 1px 6px;
                     font-weight: bold;
                     font-size: 10px;
                 }
                 QPushButton:hover {
-                    background-color: #3b2854;
-                    border-color: #ba68c8;
+                    background-color: rgba(47, 129, 247, 0.22);
                     color: #ffffff;
                 }
             """)

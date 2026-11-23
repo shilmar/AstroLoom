@@ -1116,7 +1116,7 @@ def compute_effective_layer_mask(
 ) -> np.ndarray:
     """
     Calcula la máscara final efectiva considerando su tipo, parámetros e inversión.
-    En el modelo de capas de Photoshop, el ámbito de afectación lo determina de forma
+    En el modelo de capas el ámbito de afectación lo determina de forma
     natural la posición de la capa en la pila (afecta y lee del lienzo que tiene debajo).
     """
     m_base = compute_layer_mask(
@@ -1200,7 +1200,7 @@ def apply_screen_blend(canvas: np.ndarray, top: np.ndarray, weight: Union[float,
 
 def apply_luminosity_blend(canvas: np.ndarray, top: np.ndarray, weight: Union[float, np.ndarray]) -> np.ndarray:
     """
-    Mezcla de Luminosidad (Photoshop / W3C Compositing):
+    Mezcla de Luminosidad:
     Preserva el tono y saturación de la base (canvas) e inyecta la luminancia del filtro (top).
     Aplica el algoritmo estándar ClipColor para preservar el gamut sin viraje cromático.
     """
@@ -1225,7 +1225,7 @@ def apply_luminosity_blend(canvas: np.ndarray, top: np.ndarray, weight: Union[fl
     d = (l_top - l_base)[..., np.newaxis]
     c = canvas + d
 
-    # ClipColor W3C / Photoshop standard
+    # ClipColor W3C standard
     l = l_top[..., np.newaxis]
     n = np.min(c, axis=-1, keepdims=True)
     x = np.max(c, axis=-1, keepdims=True)
@@ -1250,7 +1250,7 @@ def apply_luminosity_blend(canvas: np.ndarray, top: np.ndarray, weight: Union[fl
 
 def apply_soft_light_blend(canvas: np.ndarray, top: np.ndarray, weight: Union[float, np.ndarray]) -> np.ndarray:
     """
-    Mezcla de Luz Suave (Soft Light - W3C / Photoshop):
+    Mezcla de Luz Suave (Soft Light - W3C):
     Realza el microcontraste y gradientes coronales sin quemar luces ni empastar sombras.
     """
     if HAS_RUST and hasattr(astroloom_rs, "soft_light_blend_rs") and canvas.ndim == 3 and top.ndim == 3 and canvas.shape == top.shape:
@@ -1433,7 +1433,7 @@ def apply_all_mask_layers(
     abort_flag: Optional[Callable[[], bool]] = None,
 ) -> Optional[np.ndarray]:
     """
-    Aplica secuencialmente la composición de capas (estilo Photoshop),
+    Aplica secuencialmente la composición de capas,
     integrando capas de imagen (Fondo Starless, Suelo, Estrellas) y capas de ajuste locales.
     Soporta modo Zoom 100% mediante crop_rect y full_image_shape para alineación exacta 1:1.
     """
@@ -1463,7 +1463,7 @@ def apply_all_mask_layers(
         return img
 
     # =========================================================================
-    # MODO COMPOSITOR MULTICAPA COMPLETO (Estilo Photoshop: evaluación Bottom-Up)
+    # MODO COMPOSITOR MULTICAPA COMPLETO (evaluación Bottom-Up)
     # =========================================================================
     # Aceleración incremental: reutilizar prefijo ya compuesto si está en caché
     start_cut = len(mask_layers)
@@ -1585,7 +1585,7 @@ def apply_all_mask_layers(
                     st_layer.tint = 0.0
                     st = apply_local_adjustments_to_image(st, np.ones((img_h, img_w), dtype=np.float32), st_layer, fast_draft=fast_draft)
 
-                # Mezcla Screen (Trama estilo Photoshop): 1 - (1 - canvas) * (1 - st * opacity)
+                # Mezcla Screen (Trama): 1 - (1 - canvas) * (1 - st * opacity)
                 # Garantiza que las estrellas no quemen núcleos y se fundan de forma natural
                 if HAS_RUST:
                     st_c = np.ascontiguousarray(st, dtype=np.float32)
@@ -1808,7 +1808,7 @@ def get_canvas_below_layer(
 ) -> np.ndarray:
     """
     Calcula el estado del lienzo directamente por debajo de la capa indicada (target_layer_id).
-    En el modelo de Photoshop, una capa evalúa su máscara (ej. Luminancia/Color) y sus ajustes
+    Una capa evalúa su máscara (ej. Luminancia/Color) y sus ajustes
     sobre el lienzo compuesto por todas las capas que tiene situadas por debajo en la pila.
     """
     if not mask_layers or not target_layer_id:

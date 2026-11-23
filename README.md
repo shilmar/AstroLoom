@@ -61,66 +61,7 @@ Impulsada por una arquitectura híbrida que combina una interfaz gráfica reacti
 
 ---
 
-## 🌟 Novedades de la Versión v0.17.1
 
-* **Arsenal Coronal Avanzado para Eclipses Solares (HDR & Coronal):**
-  - **Realce de Estructuras Oscuras (*Dark Structure Enhancement*):** Detección y contraste de cavidades coronales, canales de filamentos y corredores magnéticos sin alterar el disco lunar ni sobreexponer los bucles brillantes de plasma.
-  - **Comparador Interactivo en Pantalla Dividida (*Split-View Comparison*):** Modo de pantalla dividida vertical u horizontal en tiempo real con línea divisoria arrastrable (`SplitViewHelper`) para comparar instantáneamente el antes y después en el lienzo.
-  - **Filtro Armónico FNRGF Libre de Aliasing:** Supresión de artefactos de rejilla cartesiana en FNRGF mediante transformada de Fourier en sectores angulares equidistantes.
-  - **Ecualización Crepuscular Asimétrica:** Eliminación matemática del gradiente asimétrico de cielo crepuscular durante la totalidad.
-  - **Conmutación A/B, Radio Lunar Dual y Balance Térmico Dual:** Bypass A/B instantáneo, control independiente de radios lunares interior/exterior y compensación térmica solar dual.
-
-* **Aceleración Nativa en Rust para Filtros Coronales (`astroloom_rs`):**
-  - **Filtro NAFE en Rust:** Convolución 2D FFT nativa (`realfft`) y paralelización multinivel con Rayon en memoria compartida, acelerando drásticamente el filtrado difuso adaptativo al ruido.
-  - **Filtro WOW en Rust:** Blanqueamiento de ondículas (*Wavelet-Optimised Whitening*) nativo con filtrado gaussiano recursivo IIR.
-  - **Pipeline Reactivo Proxy 50% y Render 1:1:** Interacción fluida sobre proxy a media resolución y renderizado final automático 1:1 de alta fidelidad.
-
-* **Documentación Científica y Catálogo Bibliográfico Riguroso (`MANUAL_DE_USUARIO.md`):**
-  - Nueva Sección 11 con fundamentos matemáticos de los módulos principales (TPS, Kappa-Sigma ponderado por FWHM, SDF, RBF, MTF invertible, GHS, PCC Gaia DR3 Theil-Sen, Wavelets B3-Spline, Steerable G2, Larson-Sekanina, SWAP, WOW, NAFE, NRGF, MGN).
-  - Reconocimiento formal a Pere Guerra Serra (autor de Agentic Eclipse Library - AEL y *"A Faithful Corona"*), Raúl Hussein (@rahusga), Miloslav Druckmüller, Chris Gilly, Martin Broser, Nikita Misiura y agencias espaciales ESA/Megvii.
-  - Catálogo bibliográfico con 15 papers revisados por pares en astrofísica y visión por computador.
-
-* **Barra de Progreso en Lienzo Mejorada (`CanvasFooterBar`):**
-  - Widget ampliado a 290x16 px con borde de alto contraste (`#475569`) y tipografía más nítida integrada directamente en la base del visor.
-
----
-
-## 🌟 Novedades de la Versión v0.17.0
-
-* **Purga Inteligente Anti-Satélites por Transformada de Hough (Startrails):** Detección geométrica lineal rápida a escala 50% con evaluación monocanal de alta velocidad; suprime con precisión estelas de satélites artificiales y aviones en circumpolares preservando las trazas estelares naturales.
-* **Integración de Tecnologías Seti Astro en el Revelador:** Estirado Estadístico Adaptativo (Statistical Stretch) basado en MAD, Claridad de Textura (Texture Clarity) para realce de micro-contraste en nebulosas y polvo galáctico, Extracción Automática de Fondo (ABE) mediante superficie polinomial 2D y modulación fotométrica de capas.
-* **Ondículas Multiescala (Wavelets B3-Spline):** Panel de enfoque ampliado con descomposición frecuencial multiescala: deslizador de *Estructura* para enfatizar filamentos y estructuras medias sin levantar ruido, y *Atenuar Fondo* para profundizar los negros cósmicos.
-* **Pipeline de Exportación Zero-Copy en Rust e In-Place:** Grafo de capas evaluado en registros nativos de CPU en Rust (`astroloom_rs`), eliminando copias intermedias de memoria y volcando a enteros `uint16` in-place para una exportación ultrarrápida de proyectos `.devloom` y archivos PSD multicapa de 16 bits.
-* **Barra de Progreso Unificada en Lienzo (`CanvasFooterBar`):** Estandarización ergonómica transversal en todos los visores y módulos (Revelador, Circumpolares, Meteoros, Panorámicas, Eclipses, Collage y Apilador), con seguimiento porcentual en tiempo real y cancelación reactiva inmediata.
-* **Visor de Inspección Secuencial (*Blink Viewer*):** Inspección rápida fotograma a fotograma de series temporales con ajuste de cadencia (FPS), zoom/pan sincronizado y descarte ágil de tomas con nubes o defectos.
-* **Discriminación de Balizas Aeronáuticas y Resalte Multitrazas (Meteoros):** Detección inteligente de luces de navegación y balizas intermitentes para evitar falsos positivos, junto a previsualización global sincronizada de múltiples trazas sobre la imagen compuesta.
-
----
-
-## 🌟 Novedades de la Versión v0.16.0
-
-* **Máscara de Enfoque y Nitidez (Sharpening / USM):** Nuevo motor de microcontraste y altas frecuencias espaciales en el Revelador con controles de *Cantidad*, *Radio*, *Detalle* y *Máscara* de bordes estilo Lightroom, incluyendo previsualización monocroma interactiva (`Alt`-drag) y restricción por ámbito (`Solo Suelo`, `Cielo sin Estrellas` o `Global`).
-* **Purga Integral de Numba y Unificación en Rust Rayon:** Eliminación definitiva de dependencias LLVM/Numba con reducción neta de 2.36 s en el arranque en frío, LUT display mapping a >4.000 FPS en Rust y cálculo de histograma multihilo en OpenCV C++.
-* **Aceleración Nativa en Rust para Eclipses:** Centrado de disco solar (`center_solar_disc_rs`), estirado Asinh Luma preservando color y fusión coronal HDR adaptativa multiescala en paralelo.
-* **Resiliencia de Hardware y Caché de Búferes LRU:** Fallback en caliente GPU $\rightarrow$ CPU ante saturación de VRAM, caché persistente de grafos ONNX y presupuesto estricto de memoria RAM en el pipeline para evitar fugas al procesar archivos 4K/8K.
-* **Cabecera de Telemetría y Supresión de Barra de Estado:** Monitor de RAM en tiempo real (% y GB), alerta de degradación de hardware y acceso al Registro de Actividad ubicados directamente en la esquina superior de pestañas, ganando valiosa superficie vertical de lienzo.
-* **Galería Visual de Presets:** Panel rediseñado por tarjetas interactivas y guardado seguro que excluye máscaras locales de usuario para prevenir colisiones.
-
----
-
-## 🎨 Compositor Multicapa, Máscaras Vectoriales y Transformación 2D (v0.15.0 / v0.15.1)
-
-AstroLoom integra un sistema integral de composición profesional no destructiva con capas ráster y de ajuste:
-* **Máscaras Vectoriales Analíticas en Rust:** Filtros de **Gradiente Lineal** (polución lumínica, viñeteo) y **Gradiente Radial / Elíptico** (centro galáctico, nebulosas) con gizmos interactivos directos sobre el lienzo a 60 FPS y restricción espacial automática a Cielo o Suelo (*Edge-Snapping*).
-* **Pincel Acelerado en Rust y Dirty-Rects a 60–144 FPS (v0.15.1):** Estampado continuo interpolado mediante `stamp_brush_stroke_rs` y actualización selectiva *in-place* por rectángulos sucios (*dirty rects*) en el lienzo, eliminando lag y tirones de GPU/CPU al pintar sobre imágenes de alta resolución.
-* **Curvas Selectivas Hue/Luma Fusionadas en Rust (v0.15.1):** Evaluación en registros paralelos (`apply_hue_luma_curves_fused_rs`) más de $10\times$ más rápida al prescindir de conversiones de color intermedias.
-* **Transformación Espacial 2D de Capas Ráster:** Desplazamiento interactivo en el lienzo, escalado (con rueda de ratón o parámetros numéricos) y rotación libre para capas ráster importadas.
-* **Miniaturas Duales Estilo Pro:** Edición independiente de la imagen o de su máscara con un solo clic.
-* **Gestor Avanzado de Presets:** Modulación continua de intensidad (0% a 150%), previsualización en tiempo real y detección automática de dependencias (StarNet++ y máscara de horizonte).
-* **Reducción de Ruido IA Multiescala:** NAFNet optimizado con descomposición de croma en dos escalas (1.0x luminancia, 0.5x color YCrCb), pre-estirado analítico MTF invertible para preservar fotometría lineal y caché de sesiones ONNX.
-* **Modos de Fusión Profesionales y Exportación PSD:** *Normal*, *Trama (Screen)*, *Luminosidad*, *Luz Suave*, *Superponer* y *Multiplicar* en Rust Rayon; exportación completa a PSD de 16 bits preservando transformaciones espaciales y máscaras.
-
----
 
 ## 🚀 Instalación y Puesta en Marcha
 

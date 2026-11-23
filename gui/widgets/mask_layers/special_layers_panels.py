@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from core.mask_layers import MaskLayer
 from gui.icons import get_icon
+from gui.theme import STYLE_SECONDARY_BTN, STYLE_SPECIAL_ACTION_BTN
 from gui.widgets.precision_slider import PrecisionSliderRow
 from gui.widgets.mask_layers.common import make_box_qss
 
@@ -49,7 +50,7 @@ class RasterTransformPanel(QGroupBox):
         trans_layout.setSpacing(6)
 
         self.btn_toggle_move = QPushButton(" Mover y Redimensionar en Lienzo")
-        self.btn_toggle_move.setIcon(get_icon("maximize", color="#80d8ff", size=13))
+        self.btn_toggle_move.setIcon(get_icon("maximize", color="#2f81f7", size=13))
         self.btn_toggle_move.setCheckable(True)
         self.btn_toggle_move.setCursor(Qt.PointingHandCursor)
         self.btn_toggle_move.setToolTip(
@@ -59,16 +60,16 @@ class RasterTransformPanel(QGroupBox):
         )
         self.btn_toggle_move.setStyleSheet("""
             QPushButton {
-                background-color: #1a2736;
-                color: #80d8ff;
-                border: 1px solid #0288d1;
+                background-color: rgba(47, 129, 247, 0.12);
+                color: #2f81f7;
+                border: 1px solid #2f81f7;
                 border-radius: 4px;
                 padding: 5px;
                 font-size: 11px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #243447; border-color: #03a9f4; }
-            QPushButton:checked { background-color: #0288d1; color: #ffffff; }
+            QPushButton:hover { background-color: rgba(47, 129, 247, 0.22); border-color: #388bfd; }
+            QPushButton:checked { background-color: #2f81f7; color: #ffffff; }
         """)
         self.btn_toggle_move.toggled.connect(self._on_toggle_move_mode)
         trans_layout.addWidget(self.btn_toggle_move)
@@ -87,7 +88,7 @@ class RasterTransformPanel(QGroupBox):
 
         self.chk_link_scales = QCheckBox("Vincular relación de aspecto (Escala X = Y)")
         self.chk_link_scales.setChecked(True)
-        self.chk_link_scales.setStyleSheet("color: #80d8ff; font-size: 11px; margin-top: 2px; margin-bottom: 2px;")
+        self.chk_link_scales.setStyleSheet("color: #a1a1aa; font-size: 11px; margin-top: 2px; margin-bottom: 2px;")
         trans_layout.addWidget(self.chk_link_scales)
 
         self.row_trans_scale_x = PrecisionSliderRow("Escala X:", 10, 400, 100, scale=1.0, unit=" %", decimals=0, label_width=115)
@@ -113,9 +114,9 @@ class RasterTransformPanel(QGroupBox):
         trans_layout.addWidget(self.row_trans_angle)
 
         self.btn_reset_transform = QPushButton(" Restablecer Posición y Escala")
-        self.btn_reset_transform.setIcon(get_icon("rotate-ccw", color="#80d8ff", size=12))
+        self.btn_reset_transform.setIcon(get_icon("rotate-ccw", color="#a1a1aa", size=12))
         self.btn_reset_transform.setCursor(Qt.PointingHandCursor)
-        self.btn_reset_transform.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        self.btn_reset_transform.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_reset_transform.clicked.connect(self._reset_layer_transform)
         trans_layout.addWidget(self.btn_reset_transform)
 
@@ -279,7 +280,7 @@ class GroundSpecialPanel(QGroupBox):
         gnd_spec_layout.setSpacing(6)
 
         lbl_gnd_notice = QLabel("Ajustes lineales pre-estirado (EV lineal, sombras, anti-halo y reducción de ruido).")
-        lbl_gnd_notice.setStyleSheet("color: #a5d6a7; font-size: 11px; font-style: italic;")
+        lbl_gnd_notice.setStyleSheet("color: #a1a1aa; font-size: 11px; font-style: italic;")
         gnd_spec_layout.addWidget(lbl_gnd_notice)
 
         self.row_gnd_special_ev = PrecisionSliderRow("Exposición Suelo:", -200, 300, 0, scale=100.0, decimals=2, unit=" EV", force_sign=True, label_width=120)
@@ -311,10 +312,10 @@ class GroundSpecialPanel(QGroupBox):
         self.btn_gnd_ai_denoise.setToolTip("Reducción de Ruido Profunda con IA (NAFNet) para la superficie terrestre")
         self.btn_gnd_ai_denoise.setStyleSheet("""
             QPushButton {
-                background-color: #1b3822; color: #a5d6a7; border: 1px solid #43a047;
+                background-color: rgba(139, 92, 246, 0.12); color: #8B5CF6; border: 1px solid #8B5CF6;
                 border-radius: 3px; padding: 1px 6px; font-weight: bold; font-size: 10px;
             }
-            QPushButton:hover { background-color: #254d2f; border-color: #81c784; color: #ffffff; }
+            QPushButton:hover { background-color: rgba(139, 92, 246, 0.22); border-color: #A78BFA; color: #ffffff; }
         """)
         self.btn_gnd_ai_denoise.clicked.connect(self.ground_ai_denoise_requested.emit)
 
@@ -330,6 +331,7 @@ class GroundSpecialPanel(QGroupBox):
         self.row_gnd_special_antihalo = PrecisionSliderRow(
             "Anti-Halo Frontera:", 0, 100, 0, scale=1.0, decimals=0, unit="%", label_width=120
         )
+        self.row_gnd_special_antihalo.set_track_gradient("qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #9B4B8E, stop:1.0 #18181B)")
         self.slider_gnd_special_antihalo = self.row_gnd_special_antihalo.slider
         self.lbl_gnd_special_antihalo = self.row_gnd_special_antihalo.lbl_value
         self.slider_gnd_special_antihalo.valueChanged.connect(self._on_gnd_special_antihalo_changed)
@@ -346,8 +348,9 @@ class GroundSpecialPanel(QGroupBox):
         gnd_spec_layout.addWidget(self.row_gnd_special_edge_shift)
 
         self.btn_reset_gnd_special = QPushButton("Restablecer Tono Suelo")
-        self.btn_reset_gnd_special.setIcon(get_icon("rotate_ccw", color="#a5d6a7", size=13))
+        self.btn_reset_gnd_special.setIcon(get_icon("rotate_ccw", color="#a1a1aa", size=13))
         self.btn_reset_gnd_special.setCursor(Qt.PointingHandCursor)
+        self.btn_reset_gnd_special.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_reset_gnd_special.clicked.connect(self.ground_reset_requested.emit)
         gnd_spec_layout.addWidget(self.btn_reset_gnd_special)
 
@@ -413,13 +416,13 @@ class GroundSpecialPanel(QGroupBox):
         if active:
             self.btn_gnd_ai_denoise.setText("✓ IA")
             self.btn_gnd_ai_denoise.setStyleSheet("""
-                QPushButton { background-color: #2e7d32; color: #ffffff; border: 1px solid #81c784; border-radius: 3px; padding: 1px 6px; font-weight: bold; font-size: 10px; }
+                QPushButton { background-color: #8B5CF6; color: #ffffff; border: 1px solid #8B5CF6; border-radius: 3px; padding: 1px 6px; font-weight: bold; font-size: 10px; }
             """)
         else:
             self.btn_gnd_ai_denoise.setText("✨ IA")
             self.btn_gnd_ai_denoise.setStyleSheet("""
-                QPushButton { background-color: #1b3822; color: #a5d6a7; border: 1px solid #43a047; border-radius: 3px; padding: 1px 6px; font-weight: bold; font-size: 10px; }
-                QPushButton:hover { background-color: #254d2f; border-color: #81c784; color: #ffffff; }
+                QPushButton { background-color: rgba(139, 92, 246, 0.12); color: #8B5CF6; border: 1px solid #8B5CF6; border-radius: 3px; padding: 1px 6px; font-weight: bold; font-size: 10px; }
+                QPushButton:hover { background-color: rgba(139, 92, 246, 0.22); border-color: #A78BFA; color: #ffffff; }
             """)
 
     def apply_theme(self, border_col: str, title_col: str, bg_col: str, title: str) -> None:
@@ -450,7 +453,7 @@ class StarsSpecialPanel(QGroupBox):
         stars_spec_layout.setSpacing(6)
 
         lbl_stars_notice = QLabel("Ajuste de densidad y presencia estelar separada.")
-        lbl_stars_notice.setStyleSheet("color: #80d8ff; font-size: 11px; font-style: italic;")
+        lbl_stars_notice.setStyleSheet("color: #a1a1aa; font-size: 11px; font-style: italic;")
         stars_spec_layout.addWidget(lbl_stars_notice)
 
         self.row_stars_special = PrecisionSliderRow("Intensidad Estrellas:", 0, 200, 100, unit="%", label_width=130)
@@ -466,12 +469,12 @@ class StarsSpecialPanel(QGroupBox):
         self.box_sl_star_diff.setObjectName("sl_star_diff_box")
         self.box_sl_star_diff.setStyleSheet("""
             QGroupBox#sl_star_diff_box {
-                font-weight: bold; border: 1px solid #fbc02d; border-radius: 6px;
-                margin-top: 14px; padding-top: 14px; background-color: #1e1b12; color: #ffe082;
+                font-weight: bold; border: 1px solid #2e2e35; border-radius: 6px;
+                margin-top: 14px; padding-top: 14px; background-color: #222227; color: #e4e4e7;
             }
             QGroupBox#sl_star_diff_box::title {
-                subcontrol-origin: margin; subcontrol-position: top left; left: 10px; padding: 0 6px;
-                color: #fff9c4; font-weight: bold; font-size: 11px; background-color: #16130c; border-radius: 3px;
+                subcontrol-origin: margin; subcontrol-position: top left; left: 10px; top: 2px; padding: 2px 8px;
+                color: #e4e4e7; font-weight: bold; font-size: 10px; background-color: #1a1a1e; border: 1px solid #2e2e35; border-radius: 4px; text-transform: uppercase;
             }
         """)
         sl_sd_layout = QVBoxLayout(self.box_sl_star_diff)
@@ -527,8 +530,9 @@ class StarsSpecialPanel(QGroupBox):
         stars_spec_layout.addWidget(self.box_sl_star_diff)
 
         self.btn_reset_stars_special = QPushButton("Restablecer Estrellas")
-        self.btn_reset_stars_special.setIcon(get_icon("rotate_ccw", color="#80d8ff", size=13))
+        self.btn_reset_stars_special.setIcon(get_icon("rotate_ccw", color="#a1a1aa", size=13))
         self.btn_reset_stars_special.setCursor(Qt.PointingHandCursor)
+        self.btn_reset_stars_special.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_reset_stars_special.clicked.connect(self.stars_reset_requested.emit)
         self.btn_reset_stars_special.clicked.connect(self.slider_released.emit)
         stars_spec_layout.addWidget(self.btn_reset_stars_special)
@@ -636,7 +640,7 @@ class StarlessSpecialPanel(QGroupBox):
         sl_layout.setSpacing(6)
 
         lbl_sl_notice = QLabel("Ajustes avanzados para resaltar estructuras nebulares y contraste galáctico.")
-        lbl_sl_notice.setStyleSheet("color: #ce93d8; font-size: 11px; font-style: italic;")
+        lbl_sl_notice.setStyleSheet("color: #a1a1aa; font-size: 11px; font-style: italic;")
         sl_layout.addWidget(lbl_sl_notice)
 
         self.row_sl_clarity = PrecisionSliderRow("Claridad (Gauss):", -200, 200, 0, scale=100.0, decimals=2, force_sign=True, label_width=130)
@@ -683,14 +687,14 @@ class StarlessSpecialPanel(QGroupBox):
 
         # Reducción Ruido con botón IA y expandir
         self.btn_sl_denoise_expand = QPushButton()
-        self.btn_sl_denoise_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#ce93d8", size=11))
+        self.btn_sl_denoise_expand.setIcon(get_icon("settings", color="#a1a1aa", active_color="#2f81f7", size=11))
         self.btn_sl_denoise_expand.setCheckable(True)
         self.btn_sl_denoise_expand.setChecked(False)
         self.btn_sl_denoise_expand.setFixedSize(18, 18)
         self.btn_sl_denoise_expand.setStyleSheet("""
-            QPushButton { border: none; background: transparent; padding: 0px; border-radius: 3px; }
-            QPushButton:hover { background: #262a3a; }
-            QPushButton:checked { background: #3b284c; }
+            QPushButton { border: 1px solid #2e2e35; background: #2c2c32; padding: 0px; border-radius: 3px; }
+            QPushButton:hover { background: #383840; border-color: #3f3f46; }
+            QPushButton:checked { background: #2f81f7; border: 1px solid #2f81f7; }
         """)
 
         self.btn_sl_ai_denoise = QPushButton("✨ IA")
@@ -701,10 +705,10 @@ class StarlessSpecialPanel(QGroupBox):
         self.btn_sl_ai_denoise.setToolTip("Ejecutar Reducción de Ruido Profunda con IA (NAFNet)")
         self.btn_sl_ai_denoise.setStyleSheet("""
             QPushButton {
-                background-color: #2b1f3d; color: #ce93d8; border: 1px solid #7b1fa2;
+                background-color: rgba(139, 92, 246, 0.12); color: #8B5CF6; border: 1px solid #8B5CF6;
                 border-radius: 3px; padding: 1px 6px; font-weight: bold; font-size: 10px;
             }
-            QPushButton:hover { background-color: #3b2854; border-color: #ba68c8; color: #ffffff; }
+            QPushButton:hover { background-color: rgba(139, 92, 246, 0.22); border-color: #A78BFA; color: #ffffff; }
         """)
         self.btn_sl_ai_denoise.clicked.connect(self.starless_ai_denoise_requested.emit)
 
@@ -729,7 +733,7 @@ class StarlessSpecialPanel(QGroupBox):
         layout_sl_dn_adv = QVBoxLayout(self.w_sl_denoise_advanced)
         layout_sl_dn_adv.setContentsMargins(8, 6, 8, 6)
         layout_sl_dn_adv.setSpacing(4)
-        self.w_sl_denoise_advanced.setStyleSheet("background-color: #171420; border-radius: 5px; border: 1px solid #3b284c;")
+        self.w_sl_denoise_advanced.setStyleSheet("background-color: #26262c; border-radius: 5px; border: 1px solid #2e2e35;")
 
         self.row_sl_denoise_color = PrecisionSliderRow("Ruido Color (Croma):", 0, 100, 50, unit="%", label_width=130)
         self.slider_sl_denoise_color = self.row_sl_denoise_color.slider
@@ -753,12 +757,12 @@ class StarlessSpecialPanel(QGroupBox):
         self.box_sl_orton.setObjectName("sl_orton_box")
         self.box_sl_orton.setStyleSheet("""
             QGroupBox#sl_orton_box {
-                font-weight: bold; border: 1px solid #8e24aa; border-radius: 6px;
-                margin-top: 14px; padding-top: 14px; background-color: #191424; color: #ce93d8;
+                font-weight: bold; border: 1px solid #2e2e35; border-radius: 6px;
+                margin-top: 14px; padding-top: 14px; background-color: #222227; color: #e4e4e7;
             }
             QGroupBox#sl_orton_box::title {
-                subcontrol-origin: margin; subcontrol-position: top left; left: 10px; padding: 0 6px;
-                color: #f3e5f5; font-weight: bold; font-size: 11px; background-color: #130f1b; border-radius: 3px;
+                subcontrol-origin: margin; subcontrol-position: top left; left: 10px; top: 2px; padding: 2px 8px;
+                color: #e4e4e7; font-weight: bold; font-size: 10px; background-color: #1a1a1e; border: 1px solid #2e2e35; border-radius: 4px; text-transform: uppercase;
             }
         """)
         orton_layout = QVBoxLayout(self.box_sl_orton)
@@ -820,27 +824,27 @@ class StarlessSpecialPanel(QGroupBox):
         row_as_header.setSpacing(4)
 
         self.btn_sl_autostretch = QPushButton("Estirado Adaptativo RGB")
-        self.btn_sl_autostretch.setIcon(get_icon("sparkles", color="#ce93d8", size=13))
+        self.btn_sl_autostretch.setIcon(get_icon("sparkles", color="#2f81f7", size=13))
         self.btn_sl_autostretch.setCursor(Qt.PointingHandCursor)
         self.btn_sl_autostretch.setStyleSheet("""
             QPushButton {
-                background-color: #2b1f3d; color: #ce93d8; border: 1px solid #7b1fa2;
+                background-color: rgba(47, 129, 247, 0.12); color: #2f81f7; border: 1px solid #2f81f7;
                 border-radius: 4px; padding: 6px 12px; font-weight: bold; font-size: 11px;
             }
-            QPushButton:hover { background-color: #3b2854; border-color: #ba68c8; color: #ffffff; }
+            QPushButton:hover { background-color: rgba(47, 129, 247, 0.22); border-color: #388bfd; color: #ffffff; }
         """)
         self.btn_sl_autostretch.clicked.connect(self.auto_stretch_starless_requested.emit)
         row_as_header.addWidget(self.btn_sl_autostretch, stretch=1)
 
         self.btn_sl_autostretch_expand = QPushButton()
-        self.btn_sl_autostretch_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#ce93d8", size=12))
+        self.btn_sl_autostretch_expand.setIcon(get_icon("settings", color="#a1a1aa", active_color="#2f81f7", size=12))
         self.btn_sl_autostretch_expand.setCheckable(True)
         self.btn_sl_autostretch_expand.setChecked(False)
         self.btn_sl_autostretch_expand.setFixedSize(28, 28)
         self.btn_sl_autostretch_expand.setStyleSheet("""
-            QPushButton { font-size: 11px; padding: 2px; border-radius: 4px; background: #262933; color: #cfd8dc; border: 1px solid #3b4252; }
-            QPushButton:hover { background: #323846; border-color: #7b1fa2; }
-            QPushButton:checked { background: #4a148c; color: #e1bee7; border: 1px solid #ba68c8; }
+            QPushButton { font-size: 11px; padding: 2px; border-radius: 4px; background: #2c2c32; color: #e4e4e7; border: 1px solid #2e2e35; }
+            QPushButton:hover { background: #383840; border-color: #3f3f46; }
+            QPushButton:checked { background: #2f81f7; color: #ffffff; border: 1px solid #2f81f7; }
         """)
         row_as_header.addWidget(self.btn_sl_autostretch_expand)
         sl_layout.addLayout(row_as_header)
@@ -858,6 +862,7 @@ class StarlessSpecialPanel(QGroupBox):
         w_as_layout.addWidget(self.row_sl_as_sigma)
 
         self.row_sl_as_sat = PrecisionSliderRow("Saturación:", 10, 40, 25, scale=10.0, decimals=1, unit="x", label_width=130)
+        self.row_sl_as_sat.set_saturation_style()
         w_as_layout.addWidget(self.row_sl_as_sat)
 
         self.row_sl_as_feather = PrecisionSliderRow("Suavizado Borde:", 0, 10, 2, unit=" px", label_width=130)
@@ -865,15 +870,16 @@ class StarlessSpecialPanel(QGroupBox):
 
         self.chk_sl_as_unlinked = QCheckBox("Canales RGB independientes (neutraliza dominante)")
         self.chk_sl_as_unlinked.setChecked(True)
-        self.chk_sl_as_unlinked.setStyleSheet("color: #ce93d8; font-size: 11px; margin-left: 12px; margin-top: 2px;")
+        self.chk_sl_as_unlinked.setStyleSheet("color: #a1a1aa; font-size: 11px; margin-left: 12px; margin-top: 2px;")
         w_as_layout.addWidget(self.chk_sl_as_unlinked)
 
         self.btn_sl_autostretch_expand.toggled.connect(self.w_sl_autostretch_advanced.setVisible)
         sl_layout.addWidget(self.w_sl_autostretch_advanced)
 
         self.btn_reset_sl_special = QPushButton("Restablecer Ajustes de Fondo")
-        self.btn_reset_sl_special.setIcon(get_icon("rotate_ccw", color="#ce93d8", size=13))
+        self.btn_reset_sl_special.setIcon(get_icon("rotate_ccw", color="#a1a1aa", size=13))
         self.btn_reset_sl_special.setCursor(Qt.PointingHandCursor)
+        self.btn_reset_sl_special.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_reset_sl_special.clicked.connect(self.starless_reset_requested.emit)
         sl_layout.addWidget(self.btn_reset_sl_special)
 
@@ -950,13 +956,13 @@ class StarlessSpecialPanel(QGroupBox):
         if active:
             self.btn_sl_ai_denoise.setText("✓ IA")
             self.btn_sl_ai_denoise.setStyleSheet("""
-                QPushButton { background-color: #4a148c; color: #ffffff; border: 1px solid #ba68c8; border-radius: 3px; padding: 1px 6px; font-weight: bold; font-size: 10px; }
+                QPushButton { background-color: #8B5CF6; color: #ffffff; border: 1px solid #8B5CF6; border-radius: 3px; padding: 1px 6px; font-weight: bold; font-size: 10px; }
             """)
         else:
             self.btn_sl_ai_denoise.setText("✨ IA")
             self.btn_sl_ai_denoise.setStyleSheet("""
-                QPushButton { background-color: #2b1f3d; color: #ce93d8; border: 1px solid #7b1fa2; border-radius: 3px; padding: 1px 6px; font-weight: bold; font-size: 10px; }
-                QPushButton:hover { background-color: #3b2854; border-color: #ba68c8; color: #ffffff; }
+                QPushButton { background-color: rgba(139, 92, 246, 0.12); color: #8B5CF6; border: 1px solid #8B5CF6; border-radius: 3px; padding: 1px 6px; font-weight: bold; font-size: 10px; }
+                QPushButton:hover { background-color: rgba(139, 92, 246, 0.22); border-color: #A78BFA; color: #ffffff; }
             """)
 
     def set_starless_tone_values(

@@ -36,16 +36,16 @@ class CropToolbar(QWidget):
 
         # 1. Indicador / Icono de modo
         lbl_icon = QLabel()
-        lbl_icon.setPixmap(get_icon("crop", color="#80d8ff", size=15).pixmap(15, 15))
+        lbl_icon.setPixmap(get_icon("crop", size=15).pixmap(15, 15))
         tb_layout.addWidget(lbl_icon)
 
         lbl_title = QLabel("RECORTE:")
-        lbl_title.setStyleSheet("color: #80d8ff; font-weight: bold; font-size: 11px;")
+        lbl_title.setStyleSheet("color: #e4e4e7; font-weight: bold; font-size: 11px; text-transform: uppercase;")
         tb_layout.addWidget(lbl_title)
 
         # 2. Selector de Proporción (Aspect Ratio)
         lbl_prop = QLabel("Proporción:")
-        lbl_prop.setStyleSheet("color: #c0caf5; font-size: 11px;")
+        lbl_prop.setStyleSheet("color: #a1a1aa; font-size: 11px;")
         tb_layout.addWidget(lbl_prop)
         self.combo_crop_ratio = QComboBox()
         self.combo_crop_ratio.setToolTip("Define la relación de aspecto del marco de recorte")
@@ -77,12 +77,12 @@ class CropToolbar(QWidget):
         sep1 = QFrame()
         sep1.setFrameShape(QFrame.VLine)
         sep1.setFrameShadow(QFrame.Sunken)
-        sep1.setStyleSheet("color: #3b4252; margin: 4px 2px;")
+        sep1.setStyleSheet("color: #2e2e35; margin: 4px 2px;")
         tb_layout.addWidget(sep1)
 
         # 4. Nivelación de Horizonte / Ángulo de rotación
         lbl_ang = self._make_resettable_label(QLabel("Ángulo:"), lambda: self.slider_crop_angle.setValue(0), "0.0°")
-        lbl_ang.setStyleSheet("color: #c0caf5; font-size: 11px;")
+        lbl_ang.setStyleSheet("color: #a1a1aa; font-size: 11px;")
         tb_layout.addWidget(lbl_ang)
         self.slider_crop_angle = QSlider(Qt.Horizontal)
         self.slider_crop_angle.setRange(-450, 450)  # -45.0° a +45.0°
@@ -93,7 +93,7 @@ class CropToolbar(QWidget):
         tb_layout.addWidget(self.slider_crop_angle)
 
         self.lbl_crop_angle_val = QLabel("0.0°")
-        self.lbl_crop_angle_val.setStyleSheet("color: #88c0d0; font-weight: bold; min-width: 38px; font-size: 11px;")
+        self.lbl_crop_angle_val.setStyleSheet("color: #2f81f7; font-weight: bold; min-width: 38px; font-size: 11px;")
         tb_layout.addWidget(self.lbl_crop_angle_val)
 
         self.btn_crop_reset_angle = QPushButton("0°")
@@ -107,12 +107,12 @@ class CropToolbar(QWidget):
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.VLine)
         sep2.setFrameShadow(QFrame.Sunken)
-        sep2.setStyleSheet("color: #3b4252; margin: 4px 2px;")
+        sep2.setStyleSheet("color: #2e2e35; margin: 4px 2px;")
         tb_layout.addWidget(sep2)
 
         # 5. Guías de composición
         lbl_gui = QLabel("Guías:")
-        lbl_gui.setStyleSheet("color: #c0caf5; font-size: 11px;")
+        lbl_gui.setStyleSheet("color: #a1a1aa; font-size: 11px;")
         tb_layout.addWidget(lbl_gui)
         self.combo_crop_guides = QComboBox()
         self.combo_crop_guides.addItems([
@@ -125,7 +125,7 @@ class CropToolbar(QWidget):
 
         # 6. Etiqueta informativa de dimensiones
         self.lbl_crop_dimensions = QLabel("0 × 0 px")
-        self.lbl_crop_dimensions.setStyleSheet("color: #ffd54f; font-weight: bold; font-size: 11px; margin-left: 4px;")
+        self.lbl_crop_dimensions.setStyleSheet("color: #e4e4e7; font-weight: bold; font-size: 11px; margin-left: 4px;")
         tb_layout.addWidget(self.lbl_crop_dimensions)
 
         tb_layout.addStretch()
@@ -139,28 +139,31 @@ class CropToolbar(QWidget):
         tb_layout.addWidget(self.btn_crop_reset)
 
         self.btn_crop_cancel = QPushButton("Cancelar (Esc)")
-        self.btn_crop_cancel.setIcon(get_icon("x", color="#f87171", size=13))
+        self.btn_crop_cancel.setIcon(get_icon("x", size=13))
         self.btn_crop_cancel.setToolTip("Cancela el recorte y descarta los cambios (Esc)")
         self.btn_crop_cancel.setCursor(Qt.PointingHandCursor)
         self.btn_crop_cancel.clicked.connect(self.cancel_clicked.emit)
         tb_layout.addWidget(self.btn_crop_cancel)
 
         self.btn_crop_apply = QPushButton("Aplicar Recorte (Intro)")
-        self.btn_crop_apply.setIcon(get_icon("check", color="#4ade80", size=13))
+        self.btn_crop_apply.setIcon(get_icon("check", color="#ffffff", size=13))
         self.btn_crop_apply.setToolTip("Aplica permanentemente el recorte y la rotación seleccionados (Intro)")
         self.btn_crop_apply.setCursor(Qt.PointingHandCursor)
         self.btn_crop_apply.setStyleSheet("""
             QPushButton {
-                background-color: #14532d;
-                color: #86efac;
+                background-color: #2f81f7;
+                color: #ffffff;
                 font-weight: bold;
-                border: 1px solid #16a34a;
+                border: 1px solid #2f81f7;
                 border-radius: 4px;
-                padding: 4px 10px;
+                padding: 4px 12px;
             }
             QPushButton:hover {
-                background-color: #166534;
-                color: #ffffff;
+                background-color: #388bfd;
+                border-color: #388bfd;
+            }
+            QPushButton:pressed {
+                background-color: #1f6feb;
             }
         """)
         self.btn_crop_apply.clicked.connect(self.apply_clicked.emit)

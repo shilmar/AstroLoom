@@ -67,7 +67,7 @@ from core.icc_manager import save_tiff_with_icc
 from core.config_manager import get_config_val
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from gui.widgets.drop_widgets import DropTableWidget, collect_image_files_from_mime
-from gui.theme import STYLE_RUN_IDLE, STYLE_TRANSFER_BTN
+from gui.theme import STYLE_RUN_IDLE, STYLE_TRANSFER_BTN, STYLE_SECONDARY_BTN, STYLE_SPECIAL_ACTION_BTN
 from gui.icons import get_icon, get_svg_pixmap, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_ACCENT
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
@@ -101,9 +101,9 @@ class EclipseModeToggle(QWidget):
                 font-size: 11px;
                 font-weight: bold;
                 padding: 7px 12px;
-                background-color: #10121a;
-                color: #78909c;
-                border: 1px solid #1e2230;
+                background-color: #1a1a1e;
+                color: #a1a1aa;
+                border: 1px solid #2e2e35;
                 border-bottom: 2px solid transparent;
                 border-top-left-radius: 5px;
                 border-top-right-radius: 5px;
@@ -111,14 +111,14 @@ class EclipseModeToggle(QWidget):
                 border-bottom-right-radius: 0px;
             }
             QPushButton:hover:!checked {
-                background-color: #151822;
-                color: #eceff4;
+                background-color: #222227;
+                color: #e4e4e7;
             }
             QPushButton:checked {
-                background-color: #171a26;
-                color: #00e5ff;
-                border-color: #232738;
-                border-bottom: 2px solid #00e5ff;
+                background-color: #222227;
+                color: #ffffff;
+                border-color: #2e2e35;
+                border-bottom: 2px solid #2f81f7;
             }
         """
         self.btn_solar.setStyleSheet(tab_style)
@@ -141,12 +141,12 @@ class EclipseModeToggle(QWidget):
         self._is_solar = solar
         if solar:
             self.btn_solar.setChecked(True)
-            self.btn_solar.setIcon(get_icon("sun", color="#ffd54f"))
-            self.btn_lunar.setIcon(get_icon("moon", color="#64748b"))
+            self.btn_solar.setIcon(get_icon("sun", color="#2f81f7"))
+            self.btn_lunar.setIcon(get_icon("moon", color="#71717a"))
         else:
             self.btn_lunar.setChecked(True)
-            self.btn_solar.setIcon(get_icon("sun", color="#64748b"))
-            self.btn_lunar.setIcon(get_icon("moon", color="#00e5ff"))
+            self.btn_solar.setIcon(get_icon("sun", color="#71717a"))
+            self.btn_lunar.setIcon(get_icon("moon", color="#2f81f7"))
 
     def is_solar(self) -> bool:
         return self._is_solar
@@ -461,17 +461,17 @@ class EclipseCanvas(QWidget):
         """Dibuja un marco delimitador punteado y una insignia informativa durante el arrastre."""
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(QColor("#80d8ff"), 2, Qt.DashLine)
+        pen = QPen(QColor("#2f81f7"), 2, Qt.DashLine)
         painter.setPen(pen)
-        painter.setBrush(QBrush(QColor(20, 35, 55, 130)))
+        painter.setBrush(QBrush(QColor(18, 18, 20, 180)))
         painter.drawRoundedRect(QRectF(self.rect()).adjusted(6, 6, -6, -6), 8.0, 8.0)
 
         cw, ch = 270, 42
         cx = (self.width() - cw) / 2
         cy = (self.height() - ch) / 2
         pill_rect = QRectF(cx, cy, cw, ch)
-        painter.setPen(QPen(QColor("#80d8ff"), 1.5))
-        painter.setBrush(QBrush(QColor(16, 26, 38, 235)))
+        painter.setPen(QPen(QColor("#2f81f7"), 1.5))
+        painter.setBrush(QBrush(QColor(26, 26, 30, 240)))
         painter.drawRoundedRect(pill_rect, 6.0, 6.0)
         painter.setPen(QColor("#ffffff"))
         f = painter.font()
@@ -1076,15 +1076,21 @@ class EclipseTab(QWidget):
 
         btn_row_files = QHBoxLayout()
         self.btn_load_brack = QPushButton("Cargar Bracketing...")
-        self.btn_load_brack.setIcon(get_icon("folder", color="#80d8ff"))
-        self.btn_load_brack.setStyleSheet("font-weight: bold; color: #80d8ff;")
+        self.btn_load_brack.setIcon(get_icon("folder"))
+        self.btn_load_brack.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_load_brack.clicked.connect(self._on_load_bracketing_clicked)
         self.btn_clear_brack = QPushButton("Limpiar")
-        self.btn_clear_brack.setIcon(get_icon("trash", color="#ff8a80"))
-        self.btn_clear_brack.setStyleSheet("font-weight: bold; color: #ff8a80;")
+        self.btn_clear_brack.setIcon(get_icon("trash"))
+        self.btn_clear_brack.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_clear_brack.clicked.connect(self._on_clear_bracketing_clicked)
+        self.btn_blink = QPushButton("Visor Blink")
+        self.btn_blink.setIcon(get_icon("eye"))
+        self.btn_blink.setStyleSheet(STYLE_SECONDARY_BTN)
+        self.btn_blink.setToolTip("Abre el visor interactivo Blink para revisar tomas de bracketing y cribar con teclado (X/P)")
+        self.btn_blink.clicked.connect(self.open_blink_viewer)
         btn_row_files.addWidget(self.btn_load_brack)
         btn_row_files.addWidget(self.btn_clear_brack)
+        btn_row_files.addWidget(self.btn_blink)
         brack_layout.addLayout(btn_row_files)
 
         self.table_brack = DropTableWidget(0, 7)
@@ -1100,6 +1106,7 @@ class EclipseTab(QWidget):
         self.table_brack.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
         self.table_brack.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table_brack.setMinimumHeight(160)
+        self.table_brack.itemChanged.connect(self._on_table_brack_item_changed)
         self.table_brack.itemSelectionChanged.connect(self._on_table_selection_changed)
         self.table_brack.cellDoubleClicked.connect(self._on_table_cell_double_clicked)
         self.table_brack.files_dropped.connect(self.add_bracketing_paths)
@@ -1107,14 +1114,14 @@ class EclipseTab(QWidget):
 
         btn_align_row = QHBoxLayout()
         self.btn_detect_all = QPushButton("Detectar Limbo en Lote")
-        self.btn_detect_all.setIcon(get_icon("target", color="#80d8ff"))
-        self.btn_detect_all.setStyleSheet("font-weight: bold; color: #80d8ff;")
+        self.btn_detect_all.setIcon(get_icon("target"))
+        self.btn_detect_all.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_detect_all.setToolTip("Analiza el limbo con escáner radial subpíxel en cada imagen")
         self.btn_detect_all.clicked.connect(self._on_detect_all_clicked)
 
         self.btn_set_ref = QPushButton("Marcar REF")
-        self.btn_set_ref.setIcon(get_icon("pin", color="#a5d6a7"))
-        self.btn_set_ref.setStyleSheet("font-weight: bold; color: #a5d6a7;")
+        self.btn_set_ref.setIcon(get_icon("pin"))
+        self.btn_set_ref.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_set_ref.setToolTip("Establece la toma seleccionada como centro de referencia de alineación")
         self.btn_set_ref.clicked.connect(self._on_set_ref_clicked)
 
@@ -1130,21 +1137,39 @@ class EclipseTab(QWidget):
 
         btn_auto_row = QHBoxLayout()
         self.btn_detect_disk = QPushButton("Auto-detectar")
-        self.btn_detect_disk.setIcon(get_icon("target", color="#80d8ff"))
-        self.btn_detect_disk.setStyleSheet("font-weight: bold; color: #80d8ff;")
+        self.btn_detect_disk.setIcon(get_icon("target"))
+        self.btn_detect_disk.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_detect_disk.setToolTip("Detección global del disco lunar/solar")
         self.btn_detect_disk.clicked.connect(self._on_auto_detect_clicked)
 
         self.btn_refine_subpixel = QPushButton("Ajuste Fino Subpíxel")
-        self.btn_refine_subpixel.setIcon(get_icon("search", color="#b388ff"))
-        self.btn_refine_subpixel.setStyleSheet("color: #b388ff; font-weight: bold;")
+        self.btn_refine_subpixel.setIcon(get_icon("search"))
+        self.btn_refine_subpixel.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_refine_subpixel.setToolTip("Ajusta el círculo exactamente al borde del limbo ignorando protuberancias")
         self.btn_refine_subpixel.clicked.connect(self._on_refine_subpixel_clicked)
 
         self.btn_pick_center = QPushButton("Clic Canvas")
-        self.btn_pick_center.setIcon(get_icon("crosshair", color="#ffd54f"))
+        self.btn_pick_center.setIcon(get_icon("crosshair"))
         self.btn_pick_center.setCheckable(True)
-        self.btn_pick_center.setStyleSheet("font-weight: bold; color: #ffd54f;")
+        self.btn_pick_center.setStyleSheet("""
+            QPushButton {
+                background-color: #2c2c32;
+                color: #e4e4e7;
+                border: 1px solid #2e2e35;
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #35353d;
+                border-color: #3f3f46;
+            }
+            QPushButton:checked {
+                background-color: rgba(47, 129, 247, 0.15);
+                border-color: #2f81f7;
+                color: #2f81f7;
+            }
+        """)
         self.btn_pick_center.setToolTip("Haz clic en el canvas para situar el centro")
         self.btn_pick_center.toggled.connect(self._on_pick_center_toggled)
 
@@ -1201,7 +1226,7 @@ class EclipseTab(QWidget):
         row_mask.addWidget(self.spin_mask_offset)
 
         self.lbl_mask_r_disp = QLabel("R_mask: 97.5 px")
-        self.lbl_mask_r_disp.setStyleSheet("color: #ffb74d; font-size: 11px; font-weight: bold;")
+        self.lbl_mask_r_disp.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: bold;")
         row_mask.addWidget(self.lbl_mask_r_disp)
         geom_layout.addLayout(row_mask)
 
@@ -1213,7 +1238,6 @@ class EclipseTab(QWidget):
 
         self.chk_auto_align = QCheckBox("Alinear tomas por limbo antes de fusionar")
         self.chk_auto_align.setChecked(True)
-        self.chk_auto_align.setStyleSheet("font-weight: bold; color: #b9f6ca;")
         hdr_layout.addWidget(self.chk_auto_align)
 
         self.chk_sub_sky = QCheckBox("Sustracción de pedestal / cielo por toma")
@@ -1223,7 +1247,6 @@ class EclipseTab(QWidget):
 
         self.chk_twilight_gradient = QCheckBox("Ecualizar gradiente de cielo crepuscular (R >= 6 R)")
         self.chk_twilight_gradient.setChecked(False)
-        self.chk_twilight_gradient.setStyleSheet("color: #80deea; font-weight: bold;")
         self.chk_twilight_gradient.setToolTip(
             "Modela y sustrae en espacio lineal la inclinación lumínica del horizonte o crepúsculo "
             "en la corona lejana (R >= 6 R), eliminando fondos descompensados sin tocar la corona interior."
@@ -1232,7 +1255,6 @@ class EclipseTab(QWidget):
 
         self.chk_auto_wb = QCheckBox("Balance de blancos coronal neutro (anillo medio)")
         self.chk_auto_wb.setChecked(True)
-        self.chk_auto_wb.setStyleSheet("font-weight: bold; color: #ffcc80;")
         self.chk_auto_wb.setToolTip("Neutraliza la dominante cálida/crepuscular en el anillo medio de la corona (1.2 - 1.8 R) según AEL, manteniendo intactas las protuberancias H-alfa.")
         hdr_layout.addWidget(self.chk_auto_wb)
 
@@ -1264,7 +1286,6 @@ class EclipseTab(QWidget):
         row_roi = QHBoxLayout()
         self.chk_crop_roi = QCheckBox("Recorte ROI centrado en limbo")
         self.chk_crop_roi.setChecked(False)
-        self.chk_crop_roi.setStyleSheet("font-weight: bold; color: #80cbc4;")
         self.chk_crop_roi.setToolTip("Recorta automáticamente un recuadro optimizado alrededor del limbo detectado en cada toma (reduciendo de 24MP a ~9MP). Ahorra 65% de RAM y triplica la velocidad de procesado.")
         row_roi.addWidget(self.chk_crop_roi)
 
@@ -1306,7 +1327,7 @@ class EclipseTab(QWidget):
             "Atenúa la caída abrupta de varianza distribuyendo el peso con la exposición más corta (AEL 1.4.0), "
             "eliminando discontinuidades y falsos anillos en las isófotas de transición."
         )
-        self.chk_gradual_handover.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        self.chk_gradual_handover.setStyleSheet("color: #a1a1aa; font-size: 11px;")
         hdr_layout.addWidget(self.chk_gradual_handover)
 
         self.btn_fuse_hdr = QPushButton("FUSIONAR BRACKETING HDR")
@@ -1323,7 +1344,7 @@ class EclipseTab(QWidget):
         nrgf_layout = self.grp_nrgf.content_layout
 
         lbl_algo = QLabel("Algoritmo de Corona Solar:")
-        lbl_algo.setStyleSheet("font-weight: bold; color: #eceff4; font-size: 11px;")
+        lbl_algo.setStyleSheet("font-weight: bold; color: #e4e4e7; font-size: 11px;")
         nrgf_layout.addWidget(lbl_algo)
 
         self.combo_filter_algo = QComboBox()
@@ -1337,25 +1358,6 @@ class EclipseTab(QWidget):
             "WOW Guiado Bilateral (Edge-Aware / Auchère et al.)",
             "FNRGF Azimutal de Fourier (Morgan & Druckmüller)"
         ])
-        self.combo_filter_algo.setStyleSheet("""
-            QComboBox {
-                background-color: #1e293b;
-                color: #eceff4;
-                border: 1px solid #334155;
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #1e293b;
-                color: #eceff4;
-                selection-background-color: #0d47a1;
-            }
-        """)
         nrgf_layout.addWidget(self.combo_filter_algo)
 
         self.chk_detail_rings = QCheckBox("Normalización de detalle por anillos (anti-quemado en limbo)")
@@ -1364,7 +1366,7 @@ class EclipseTab(QWidget):
             "Normaliza el detalle coronal anillo por anillo con mediana y MAD radiales continuas (AEL 1.3.4 / Issue #9), "
             "evitando la saturación a blanco/negro puro cerca del limbo solar."
         )
-        self.chk_detail_rings.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        self.chk_detail_rings.setStyleSheet("color: #a1a1aa; font-size: 11px;")
         nrgf_layout.addWidget(self.chk_detail_rings)
 
         # 1. Contenedor Steerable G2
@@ -1487,7 +1489,7 @@ class EclipseTab(QWidget):
         self.chk_ls_prominences = QCheckBox("Proteger protuberancias H-alfa (anti-fantasmas)")
         self.chk_ls_prominences.setChecked(True)
         self.chk_ls_prominences.setToolTip("Enmascara el exceso cromático R/G en el limbo para evitar que protuberancias intensas creen réplicas oscuras (AEL 1.4.2).")
-        self.chk_ls_prominences.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        self.chk_ls_prominences.setStyleSheet("color: #a1a1aa; font-size: 11px;")
         ls_box_layout.addWidget(self.chk_ls_prominences)
 
         self.slider_blend_ls = PrecisionSliderRow(
@@ -1761,13 +1763,13 @@ class EclipseTab(QWidget):
 
         self.chk_dark_protect_prom = QCheckBox("Proteger protuberancias en cavidades")
         self.chk_dark_protect_prom.setChecked(True)
-        self.chk_dark_protect_prom.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        self.chk_dark_protect_prom.setStyleSheet("color: #a1a1aa; font-size: 11px;")
         self.chk_dark_protect_prom.setToolTip("Evita que las protuberancias de hidrógeno alfa sean atenuadas por el realce de estructuras oscuras.")
         nrgf_layout.addWidget(self.chk_dark_protect_prom)
 
         self.chk_proxy_preview = QCheckBox("Previsualización rápida Proxy 50% (4x más veloz)")
         self.chk_proxy_preview.setChecked(True)
-        self.chk_proxy_preview.setStyleSheet("color: #80d8ff; font-weight: bold; font-size: 11px;")
+        self.chk_proxy_preview.setStyleSheet("color: #a1a1aa; font-size: 11px;")
         self.chk_proxy_preview.setToolTip(
             "Ejecuta los filtros coronales sobre una matriz proxy al 50% para previsualizar y calibrar "
             "deslizadores con máxima fluidez. Pulsa 'RENDER FINAL 1:1' para procesar la resolución nativa completa."
@@ -1776,60 +1778,18 @@ class EclipseTab(QWidget):
         nrgf_layout.addWidget(self.chk_proxy_preview)
 
         self.btn_apply_filters = QPushButton("APLICAR FILTROS (VISTA PREVIA 50%)")
-        self.btn_apply_filters.setIcon(get_icon("sparkles", color="#ffffff"))
+        self.btn_apply_filters.setIcon(get_icon("sparkles"))
         self.btn_apply_filters.setFixedHeight(40)
         self.btn_apply_filters.setCursor(Qt.PointingHandCursor)
-        self.btn_apply_filters.setStyleSheet("""
-            QPushButton {
-                font-weight: bold;
-                font-size: 12px;
-                background-color: #1565c0;
-                color: white;
-                border-radius: 6px;
-                border: 1px solid #1976d2;
-            }
-            QPushButton:hover {
-                background-color: #1976d2;
-                border-color: #42a5f5;
-            }
-            QPushButton:pressed {
-                background-color: #0d47a1;
-            }
-            QPushButton:disabled {
-                background-color: #152238;
-                color: #546e7a;
-                border: 1px solid #1e293b;
-            }
-        """)
+        self.btn_apply_filters.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_apply_filters.clicked.connect(self._on_apply_filters_btn_clicked)
         nrgf_layout.addWidget(self.btn_apply_filters)
 
         self.btn_render_full = QPushButton("RENDER FINAL 1:1 (RESOLUCIÓN COMPLETA)")
-        self.btn_render_full.setIcon(get_icon("zap", color="#ffffff"))
+        self.btn_render_full.setIcon(get_icon("zap"))
         self.btn_render_full.setFixedHeight(34)
         self.btn_render_full.setCursor(Qt.PointingHandCursor)
-        self.btn_render_full.setStyleSheet("""
-            QPushButton {
-                font-weight: bold;
-                font-size: 11px;
-                background-color: #1e3a5f;
-                color: #e0f2fe;
-                border-radius: 6px;
-                border: 1px solid #0284c7;
-            }
-            QPushButton:hover {
-                background-color: #0284c7;
-                color: white;
-            }
-            QPushButton:pressed {
-                background-color: #0369a1;
-            }
-            QPushButton:disabled {
-                background-color: #152238;
-                color: #546e7a;
-                border: 1px solid #1e293b;
-            }
-        """)
+        self.btn_render_full.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_render_full.setToolTip("Aplica los filtros coronales a resolución completa 1:1 sobre la matriz nativa de 32 bits.")
         self.btn_render_full.clicked.connect(self._on_render_full_clicked)
         nrgf_layout.addWidget(self.btn_render_full)
@@ -1838,7 +1798,7 @@ class EclipseTab(QWidget):
             "✦ Algoritmos de corona inspirados en las investigaciones de M. Druckmüller y "
             "la librería Agentic-Eclipse-Library de Pere Guerra (PeterWar)."
         )
-        lbl_credits.setStyleSheet("color: #80cbc4; font-size: 10px; font-style: italic; padding: 4px 2px;")
+        lbl_credits.setStyleSheet("color: #71717a; font-size: 10px; font-style: italic; padding: 4px 2px;")
         lbl_credits.setWordWrap(True)
         lbl_credits.setToolTip(
             "Multi-scale Gaussian Normalization (MGN), balance de blancos coronal y "
@@ -1853,14 +1813,10 @@ class EclipseTab(QWidget):
         export_layout = self.sec_export.content_layout
 
         self.btn_save_image = QPushButton("Guardar Imagen...")
-        self.btn_save_image.setIcon(get_icon("save", color="#80cbc4"))
+        self.btn_save_image.setIcon(get_icon("save"))
         self.btn_save_image.setFixedHeight(38)
         self.btn_save_image.setCursor(Qt.PointingHandCursor)
-        self.btn_save_image.setStyleSheet(
-            "QPushButton { font-weight: bold; background: #162624; color: #80cbc4; "
-            "border: 1px solid #00897b; padding: 6px; border-radius: 4px; }"
-            "QPushButton:hover { background: #1f3633; color: #b2dfdb; }"
-        )
+        self.btn_save_image.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_save_image.setToolTip(
             "Guarda la imagen procesada en disco.\n"
             "Formatos soportados según filtro o extensión:\n"
@@ -1879,13 +1835,10 @@ class EclipseTab(QWidget):
         self.btn_export_psd = self.btn_save_image
 
         self.btn_send_coronal_stack_to_dev = QPushButton("Enviar Multicapa Coronal al Revelador...")
-        self.btn_send_coronal_stack_to_dev.setIcon(get_icon("layers", color="#ffe082"))
+        self.btn_send_coronal_stack_to_dev.setIcon(get_icon("layers"))
         self.btn_send_coronal_stack_to_dev.setFixedHeight(38)
         self.btn_send_coronal_stack_to_dev.setCursor(Qt.PointingHandCursor)
-        self.btn_send_coronal_stack_to_dev.setStyleSheet(
-            "font-weight: bold; background: #2e2414; color: #ffe082; "
-            "border: 1px solid #ffa000; padding: 6px; border-radius: 4px;"
-        )
+        self.btn_send_coronal_stack_to_dev.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_send_coronal_stack_to_dev.setToolTip(
             "Transfiere la imagen base HDR junto con los filtros coronales seleccionados "
             "(MGN, WOW, NAFE, NRGF, etc.) como capas ráster independientes con modos de fusión al Revelador."
@@ -1894,7 +1847,7 @@ class EclipseTab(QWidget):
         export_layout.addWidget(self.btn_send_coronal_stack_to_dev)
 
         self.btn_send_to_dev = QPushButton("Enviar al Revelador / Editor")
-        self.btn_send_to_dev.setIcon(get_icon("arrow_right", color="#ffffff"))
+        self.btn_send_to_dev.setIcon(get_icon("arrow_right"))
         self.btn_send_to_dev.setFixedHeight(38)
         self.btn_send_to_dev.setCursor(Qt.PointingHandCursor)
         self.btn_send_to_dev.setStyleSheet(STYLE_TRANSFER_BTN)
@@ -1994,12 +1947,12 @@ class EclipseTab(QWidget):
         # Badge de modo y estado a la derecha
         self.lbl_mode_badge = QLabel("● Modo: Solar (HDR)")
         self.lbl_mode_badge.setStyleSheet(
-            "background-color: #141724; border: 1px solid #ff4081; border-radius: 4px; padding: 2px 8px; color: #ff4081; font-weight: bold; font-size: 11px;"
+            "background-color: #222227; border: 1px solid #2e2e35; border-radius: 4px; padding: 2px 8px; color: #2f81f7; font-weight: bold; font-size: 11px;"
         )
         self.toolbar.add_widget(self.lbl_mode_badge)
 
         self.lbl_canvas_status = QLabel("Listo.")
-        self.lbl_canvas_status.setStyleSheet("color: #90a4ae; font-size: 11px;")
+        self.lbl_canvas_status.setStyleSheet("color: #a1a1aa; font-size: 11px;")
         self.toolbar.add_widget(self.lbl_canvas_status)
 
         right_layout.addWidget(self.toolbar)
@@ -2282,7 +2235,7 @@ class EclipseTab(QWidget):
             if hasattr(self, "lbl_mode_badge"):
                 self.lbl_mode_badge.setText("● Modo: Solar (HDR)")
                 self.lbl_mode_badge.setStyleSheet(
-                    "background-color: #141724; border: 1px solid #ff4081; border-radius: 4px; padding: 2px 8px; color: #ff4081; font-weight: bold; font-size: 11px;"
+                    "background-color: #222227; border: 1px solid #2e2e35; border-radius: 4px; padding: 2px 8px; color: #2f81f7; font-weight: bold; font-size: 11px;"
                 )
         else:
             self.grp_hdr.setTitle("3. Fusión HDR (Mertens Multiescala)")
@@ -2290,7 +2243,7 @@ class EclipseTab(QWidget):
             if hasattr(self, "lbl_mode_badge"):
                 self.lbl_mode_badge.setText("● Modo: Lunar (Mertens)")
                 self.lbl_mode_badge.setStyleSheet(
-                    "background-color: #141724; border: 1px solid #00e5ff; border-radius: 4px; padding: 2px 8px; color: #00e5ff; font-weight: bold; font-size: 11px;"
+                    "background-color: #222227; border: 1px solid #2e2e35; border-radius: 4px; padding: 2px 8px; color: #2f81f7; font-weight: bold; font-size: 11px;"
                 )
 
     def add_bracketing_paths(self, paths: list):
@@ -2414,7 +2367,7 @@ class EclipseTab(QWidget):
             item_ref = QTableWidgetItem(ref_txt)
             item_ref.setTextAlignment(Qt.AlignCenter)
             if item.get("is_ref", False):
-                item_ref.setForeground(QColor("#4CAF50"))
+                item_ref.setForeground(QColor("#2f81f7"))
                 font = item_ref.font()
                 font.setBold(True)
                 item_ref.setFont(font)
@@ -2441,8 +2394,8 @@ class EclipseTab(QWidget):
             self.table_brack.setItem(row, 5, item_shift)
 
             chk_item = QTableWidgetItem()
-            chk_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            chk_item.setCheckState(Qt.Checked)
+            chk_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            chk_item.setCheckState(Qt.Checked if item.get("is_included", True) else Qt.Unchecked)
             self.table_brack.setItem(row, 6, chk_item)
 
         self.table_brack.blockSignals(False)
@@ -2451,6 +2404,65 @@ class EclipseTab(QWidget):
             self.table_brack.blockSignals(True)
             self.table_brack.selectRow(prev_idx)
             self.table_brack.blockSignals(False)
+
+    def _on_table_brack_item_changed(self, item: QTableWidgetItem):
+        if item.column() == 6:
+            row = item.row()
+            if 0 <= row < len(self.bracketing_files):
+                self.bracketing_files[row]["is_included"] = (item.checkState() == Qt.Checked)
+
+    def open_blink_viewer(self):
+        """Abre el visor interactivo Blink para revisar tomas del bracketing de eclipse."""
+        if not self.bracketing_files:
+            QMessageBox.information(
+                self,
+                "Visor Blink",
+                "No hay tomas cargadas para inspeccionar.\n\n"
+                "Carga primero tomas de bracketing antes de abrir el visor Blink."
+            )
+            return
+
+        from gui.dialog_blink import BlinkDialog
+
+        file_list = [f["filepath"] for f in self.bracketing_files]
+        excluded = {f["filepath"] for f in self.bracketing_files if not f.get("is_included", True)}
+
+        curr_idx = 0
+        rows = self.table_brack.selectionModel().selectedRows()
+        if rows:
+            curr_idx = rows[0].row()
+        elif 0 <= self.ref_file_idx < len(self.bracketing_files):
+            curr_idx = self.ref_file_idx
+
+        dlg = BlinkDialog(
+            file_list=file_list,
+            excluded_files=excluded,
+            current_index=curr_idx,
+            parent=self
+        )
+        dlg.exclusion_changed.connect(self._on_blink_exclusion_changed)
+        dlg.selection_applied.connect(self._on_blink_selection_applied)
+        dlg.exec()
+
+    def _on_blink_exclusion_changed(self, filepath: str, is_included: bool):
+        for row, f in enumerate(self.bracketing_files):
+            if f["filepath"] == filepath:
+                f["is_included"] = is_included
+                item = self.table_brack.item(row, 6)
+                if item:
+                    self.table_brack.blockSignals(True)
+                    item.setCheckState(Qt.Checked if is_included else Qt.Unchecked)
+                    self.table_brack.blockSignals(False)
+                break
+
+    def _on_blink_selection_applied(self, excluded_set: set):
+        self.table_brack.blockSignals(True)
+        for row, f in enumerate(self.bracketing_files):
+            f["is_included"] = (f["filepath"] not in excluded_set)
+            item = self.table_brack.item(row, 6)
+            if item:
+                item.setCheckState(Qt.Checked if f["is_included"] else Qt.Unchecked)
+        self.table_brack.blockSignals(False)
 
     def _recalculate_shifts(self):
         """Calcula los desplazamientos de cada toma respecto al centro de la referencia."""

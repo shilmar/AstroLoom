@@ -12,7 +12,7 @@ Implementa:
 """
 import os
 import time
-from typing import Optional, List, Dict, Any, Callable
+from typing import Optional, List, Dict, Any, Callable, Set
 import tifffile
 import numpy as np
 import cv2
@@ -25,19 +25,23 @@ from PySide6.QtWidgets import (
     QButtonGroup, QComboBox, QCheckBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QProgressBar, QScrollArea,
     QSplitter, QFrame, QSizePolicy, QProgressDialog, QApplication,
-    QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox
+    QLineEdit, QTextEdit, QPlainTextEdit, QDoubleSpinBox, QSpinBox,
+    QTabWidget, QListWidget, QListWidgetItem
 )
 
 from core.log_hub import log_hub
 
 from core.stacking import load_image_as_float32, scan_raw_batch_metadata
-from core.startrails import generate_startrail, enhance_star_trails_color
+from core.startrails import generate_startrail, enhance_star_trails_color, extract_shot_exif
 from core.icc_manager import save_tiff_with_icc
 from gui.canvas import MaskCanvas
 from gui.widgets.viewer_toolbar import ViewerToolbar, CanvasFooterBar
-from gui.widgets.drop_widgets import DropTableWidget
+from gui.widgets.drop_widgets import DropTableWidget, DropListWidget
+from gui.widgets.mask_layers.layer_thumbnails import LayerListResizeHandle
 from gui.theme import (
-    STYLE_RUN_IDLE, STYLE_RUN_ACTIVE, STYLE_RUN_CANCELLING, STYLE_TRANSFER_BTN
+    STYLE_RUN_IDLE, STYLE_RUN_ACTIVE, STYLE_RUN_CANCELLING, STYLE_TRANSFER_BTN,
+    STYLE_SPECIAL_ACTION_BTN, STYLE_SECONDARY_BTN, TEXT_PRIMARY, TEXT_SECONDARY,
+    BORDER_BASE, BG_CANVAS, BG_PANEL, BG_CARD, BG_INPUT, ACCENT_COBALT
 )
 from gui.icons import get_icon, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_MUTED
 from gui.widgets.collapsible_section import CollapsibleSection
@@ -66,6 +70,7 @@ class StartrailWorker(QThread):
                 mode=self.params.get("mode", "lighten"),
                 comet_params=self.params.get("comet_params"),
                 dark_files=self.params.get("dark_files"),
+                flat_files=self.params.get("flat_files"),
                 use_clean_ground=self.params.get("use_clean_ground", False),
                 mask=self.params.get("mask"),
                 ground_mode=self.params.get("ground_mode", "average"),
@@ -96,6 +101,35 @@ class StartrailWorker(QThread):
                 self.error.emit(str(e))
 
 
+class CalibrationFileRow(QWidget):
+    """Fila para tomas de calibración (Darks y Flats) con nombre y botón de borrado individual."""
+    delete_requested = Signal(str, str)  # (tab_name, filepath)
+
+    def __init__(self, filepath: str, tab_name: str, parent=None):
+        super().__init__(parent)
+        self.filepath = filepath
+        self.tab_name = tab_name
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 2, 6, 2)
+        layout.setSpacing(6)
+
+        lbl_name = QLabel(os.path.basename(filepath))
+        lbl_name.setToolTip(filepath)
+        lbl_name.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 11px;")
+        lbl_name.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        layout.addWidget(lbl_name)
+
+        btn_del = QPushButton("×")
+        btn_del.setFixedSize(18, 18)
+        btn_del.setToolTip("Eliminar esta toma")
+        btn_del.setStyleSheet(
+            "QPushButton { color: #a1a1aa; background: transparent; border: 1px solid #2e2e35; border-radius: 3px; font-weight: bold; font-size: 13px; line-height: 14px; padding: 0px; } "
+            "QPushButton:hover { background: #b91c1c; color: #ffffff; border-color: #ef4444; }"
+        )
+        btn_del.clicked.connect(lambda: self.delete_requested.emit(self.tab_name, self.filepath))
+        layout.addWidget(btn_del)
+
 
 class StartrailsTab(QWidget):
     """Pestaña maestra para la creación y posprocesado de circumpolares y trazas de estrellas."""
@@ -104,7 +138,10 @@ class StartrailsTab(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.files_list: List[str] = []
+        self.excluded_files: Set[str] = set()
         self.dark_files: List[str] = []
+        self.flat_files: List[str] = []
+        self._metadata_cache: Dict[str, Dict[str, Any]] = {}
         self.ref_idx: int = 0
         self.current_mask: Optional[np.ndarray] = None
         self.current_preview_img: Optional[np.ndarray] = None
@@ -134,8 +171,8 @@ class StartrailsTab(QWidget):
         # PANEL IZQUIERDO: Controles en ScrollArea
         # -------------------------------------------------------------
         left_container = QWidget()
-        left_container.setMinimumWidth(420)
-        left_container.setMaximumWidth(520)
+        left_container.setMinimumWidth(380)
+        left_container.setMaximumWidth(950)
         left_container_layout = QVBoxLayout(left_container)
         left_container_layout.setContentsMargins(4, 4, 4, 4)
         left_container_layout.setSpacing(6)
@@ -151,69 +188,209 @@ class StartrailsTab(QWidget):
         left_layout.setContentsMargins(4, 4, 10, 4)
         left_layout.setSpacing(12)
 
-        # 1. GRUPO: SERIE TEMPORAL DE TOMAS
-        grp_files = CollapsibleSection("1. Serie Temporal de Tomas (Lights)", icon_name="camera")
+        # 1. GRUPO: CALIBRACIÓN Y TOMAS
+        grp_files = CollapsibleSection("1. Calibración y Tomas", icon_name="camera")
         files_layout = grp_files.content_layout
         files_layout.setContentsMargins(10, 8, 10, 10)
         files_layout.setSpacing(8)
 
-        btn_row_files = QHBoxLayout()
-        self.btn_load_series = QPushButton("Cargar Serie...")
-        self.btn_load_series.setIcon(get_icon("folder", size=13, color="#80d8ff"))
-        self.btn_load_series.setStyleSheet("font-weight: bold; color: #80d8ff;")
-        self.btn_load_series.clicked.connect(self._on_load_series_clicked)
+        # Botonera de acciones superiores
+        btn_box = QHBoxLayout()
+        btn_box.setSpacing(6)
 
-        self.btn_clear_series = QPushButton("Limpiar")
-        self.btn_clear_series.setIcon(get_icon("trash", size=13, color="#ff8a80"))
-        self.btn_clear_series.clicked.connect(self._on_clear_series_clicked)
+        self.btn_add_files = QPushButton("Añadir Tomas...")
+        self.btn_add_files.setIcon(get_icon("plus", size=13, color="#a1a1aa"))
+        self.btn_add_files.setStyleSheet(STYLE_SECONDARY_BTN)
+        self.btn_add_files.setToolTip("Añade tomas a la pestaña activa (Lights, Darks o Flats)")
+        self.btn_add_files.clicked.connect(self._on_add_current_tab_files)
+
+        self.btn_clear_files = QPushButton("Limpiar Pestaña")
+        self.btn_clear_files.setIcon(get_icon("trash", size=13, color="#a1a1aa"))
+        self.btn_clear_files.setStyleSheet(STYLE_SECONDARY_BTN)
+        self.btn_clear_files.setToolTip("Descarta los archivos de la pestaña activa")
+        self.btn_clear_files.clicked.connect(self._on_clear_current_tab_files)
+
+        # Aliases retrocompatibles
+        self.btn_load_series = self.btn_add_files
+        self.btn_clear_series = self.btn_clear_files
+        self.btn_load_darks = self.btn_add_files
+        self.btn_clear_darks = self.btn_clear_files
 
         self.btn_set_ref = QPushButton("Marcar REF")
-        self.btn_set_ref.setIcon(get_icon("target", size=13, color="#00e5ff"))
+        self.btn_set_ref.setIcon(get_icon("target", size=13, color="#a1a1aa"))
+        self.btn_set_ref.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_set_ref.setToolTip("Establece la toma seleccionada como referencia para el suelo y previsualización")
         self.btn_set_ref.clicked.connect(self._on_set_ref_clicked)
 
-        btn_row_files.addWidget(self.btn_load_series)
-        btn_row_files.addWidget(self.btn_clear_series)
-        btn_row_files.addWidget(self.btn_set_ref)
-        files_layout.addLayout(btn_row_files)
+        self.btn_blink = QPushButton("Visor Blink")
+        self.btn_blink.setIcon(get_icon("eye", size=13, color="#a1a1aa"))
+        self.btn_blink.setStyleSheet(STYLE_SECONDARY_BTN)
+        self.btn_blink.setToolTip("Abre el visor interactivo Blink para revisar la serie, estirar al vuelo y cribar tomas (X/P)")
+        self.btn_blink.clicked.connect(self.open_blink_viewer)
 
-        self.table_files = DropTableWidget(0, 3)
-        self.table_files.setHorizontalHeaderLabels(["REF", "Archivo", "Ubicación"])
+        btn_box.addWidget(self.btn_add_files)
+        btn_box.addWidget(self.btn_clear_files)
+        btn_box.addWidget(self.btn_set_ref)
+        btn_box.addWidget(self.btn_blink)
+        files_layout.addLayout(btn_box)
+
+        # Pestañas de Archivos (Lights / Darks / Flats) al estilo unificado del Apilador
+        self.tabs_files = QTabWidget()
+        self.tabs_files.setMinimumHeight(170)
+        self.tabs_files.setDocumentMode(True)
+        self.tabs_files.setUsesScrollButtons(False)
+        self.tabs_files.tabBar().setExpanding(True)
+        self.tabs_files.setStyleSheet(f"""
+            QTabWidget::pane {{
+                border: 1px solid {BORDER_BASE};
+                background-color: {BG_CANVAS};
+                border-radius: 4px;
+                top: -1px;
+            }}
+            QTabBar::tab {{
+                background-color: {BG_PANEL};
+                color: {TEXT_SECONDARY};
+                padding: 6px 10px;
+                border: 1px solid {BORDER_BASE};
+                border-bottom: 2px solid transparent;
+                font-weight: 600;
+                font-size: 11px;
+                margin-right: 2px;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {BG_CARD};
+                color: {TEXT_PRIMARY};
+                border-color: {BORDER_BASE};
+                border-bottom: 2px solid {ACCENT_COBALT};
+            }}
+            QTabBar::tab:hover:!selected {{
+                background-color: {BG_INPUT};
+                color: {TEXT_PRIMARY};
+            }}
+        """)
+
+        table_compact_style = f"""
+            QTableWidget {{
+                background-color: {BG_CANVAS};
+                border: 1px solid {BORDER_BASE};
+                border-radius: 4px;
+                gridline-color: #1a1a1e;
+                font-size: 11px;
+            }}
+            QTableWidget::item {{
+                padding: 1px 4px;
+                color: {TEXT_PRIMARY};
+            }}
+            QTableWidget::item:selected {{
+                background-color: #1e293b;
+                color: #ffffff;
+            }}
+            QHeaderView::section {{
+                background-color: {BG_PANEL};
+                color: {TEXT_SECONDARY};
+                padding: 2px 4px;
+                font-size: 10px;
+                font-weight: 600;
+                border: 1px solid {BORDER_BASE};
+            }}
+        """
+
+        # Pestaña 1: Lights (Serie temporal)
+        tab_lights = QWidget()
+        tab_lights_layout = QVBoxLayout(tab_lights)
+        tab_lights_layout.setContentsMargins(4, 4, 4, 4)
+        tab_lights_layout.setSpacing(4)
+
+        self.table_files = DropTableWidget(0, 6)
+        self.table_files.setHorizontalHeaderLabels(["Usar", "REF", "Archivo", "Exp.", "ISO", "f/"])
         self.table_files.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table_files.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table_files.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.table_files.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table_files.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table_files.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table_files.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.table_files.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.table_files.verticalHeader().setVisible(False)
+        self.table_files.verticalHeader().setDefaultSectionSize(22)
         self.table_files.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table_files.setMinimumHeight(150)
+        self.table_files.setMinimumHeight(140)
+        self.table_files.setStyleSheet(table_compact_style)
+        self.table_files.itemChanged.connect(self._on_table_item_changed)
         self.table_files.itemSelectionChanged.connect(self._on_table_selection_changed)
         self.table_files.files_dropped.connect(self.add_series_files)
-        files_layout.addWidget(self.table_files)
+        tab_lights_layout.addWidget(self.table_files)
 
         self.lbl_files_summary = QLabel("0 tomas cargadas")
-        self.lbl_files_summary.setStyleSheet("color: #ffd54f; font-weight: bold; font-size: 11px;")
-        files_layout.addWidget(self.lbl_files_summary)
+        self.lbl_files_summary.setStyleSheet("color: #2f81f7; font-weight: bold; font-size: 11px;")
+        tab_lights_layout.addWidget(self.lbl_files_summary)
 
-        # Fila compacta de Darks
-        row_dark = QHBoxLayout()
-        lbl_darks_title = QLabel("Darks (opcional):")
-        lbl_darks_title.setStyleSheet("font-size: 11px;")
-        row_dark.addWidget(lbl_darks_title)
-        self.lbl_darks_count = QLabel("0 darks")
-        self.lbl_darks_count.setStyleSheet("color: #90a4ae; font-size: 11px;")
-        row_dark.addWidget(self.lbl_darks_count)
-        row_dark.addStretch()
+        self.tabs_files.addTab(tab_lights, get_icon("star", size=14, color="#a1a1aa"), "Lights")
 
-        self.btn_load_darks = QPushButton("Añadir Darks...")
-        self.btn_load_darks.setIcon(get_icon("plus", size=11, color="#90a4ae"))
-        self.btn_load_darks.setStyleSheet("font-size: 11px; padding: 3px 8px;")
-        self.btn_load_darks.clicked.connect(self._on_load_darks_clicked)
-        row_dark.addWidget(self.btn_load_darks)
+        # Pestaña 2: Darks (Sustracción térmica)
+        tab_darks = QWidget()
+        tab_darks_layout = QVBoxLayout(tab_darks)
+        tab_darks_layout.setContentsMargins(4, 4, 4, 4)
+        tab_darks_layout.setSpacing(4)
 
-        self.btn_clear_darks = QPushButton("Quitar")
-        self.btn_clear_darks.setIcon(get_icon("trash", size=11, color="#ff8a80"))
-        self.btn_clear_darks.setStyleSheet("font-size: 11px; padding: 3px 8px;")
-        self.btn_clear_darks.clicked.connect(self._on_clear_darks_clicked)
-        row_dark.addWidget(self.btn_clear_darks)
-        files_layout.addLayout(row_dark)
+        self.table_darks = DropTableWidget(0, 4)
+        self.table_darks.setHorizontalHeaderLabels(["Archivo", "Exp.", "ISO", ""])
+        self.table_darks.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table_darks.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table_darks.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.table_darks.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table_darks.verticalHeader().setVisible(False)
+        self.table_darks.verticalHeader().setDefaultSectionSize(22)
+        self.table_darks.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table_darks.setMinimumHeight(140)
+        self.table_darks.setStyleSheet(table_compact_style)
+        self.table_darks.files_dropped.connect(self.add_darks_files)
+        tab_darks_layout.addWidget(self.table_darks)
+        self.list_darks = self.table_darks  # alias retrocompatible
+
+        self.lbl_darks_count = QLabel("0 darks cargados")
+        self.lbl_darks_count.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        tab_darks_layout.addWidget(self.lbl_darks_count)
+
+        self.tabs_files.addTab(tab_darks, get_icon("moon", size=14, color="#a1a1aa"), "Darks")
+
+        # Pestaña 3: Flats (Corrección de viñeteo y motas de polvo)
+        tab_flats = QWidget()
+        tab_flats_layout = QVBoxLayout(tab_flats)
+        tab_flats_layout.setContentsMargins(4, 4, 4, 4)
+        tab_flats_layout.setSpacing(4)
+
+        self.table_flats = DropTableWidget(0, 5)
+        self.table_flats.setHorizontalHeaderLabels(["Archivo", "Exp.", "ISO", "f/", ""])
+        self.table_flats.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table_flats.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table_flats.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.table_flats.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table_flats.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.table_flats.verticalHeader().setVisible(False)
+        self.table_flats.verticalHeader().setDefaultSectionSize(22)
+        self.table_flats.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table_flats.setMinimumHeight(140)
+        self.table_flats.setStyleSheet(table_compact_style)
+        self.table_flats.files_dropped.connect(self.add_flats_files)
+        tab_flats_layout.addWidget(self.table_flats)
+        self.list_flats = self.table_flats  # alias retrocompatible
+
+        self.lbl_flats_count = QLabel("0 flats cargados")
+        self.lbl_flats_count.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        tab_flats_layout.addWidget(self.lbl_flats_count)
+
+        self.tabs_files.addTab(tab_flats, get_icon("sun", size=14, color="#a1a1aa"), "Flats")
+
+        self.tabs_files.currentChanged.connect(self._on_files_tab_changed)
+        files_layout.addWidget(self.tabs_files)
+
+        # Tirador de arrastre libre para redimensionar verticalmente la altura de las tablas
+        self.tabs_resize_handle = LayerListResizeHandle(self)
+        self.tabs_resize_handle.setToolTip("Arrastra verticalmente para ajustar la altura de las tablas | Doble clic para auto-ajustar")
+        self.tabs_resize_handle.height_adjusted.connect(self._on_tabs_height_adjusted)
+        self.tabs_resize_handle.reset_auto_fit.connect(self._on_reset_tabs_auto_fit)
+        files_layout.addWidget(self.tabs_resize_handle)
 
         left_layout.addWidget(grp_files)
 
@@ -291,7 +468,7 @@ class StartrailsTab(QWidget):
 
         # Supresión de satélites y aviones
         self.chk_suppress_streaks = QCheckBox("Suprimir satélites y aviones automáticamente")
-        self.chk_suppress_streaks.setStyleSheet("font-weight: bold; color: #80cbc4;")
+        self.chk_suppress_streaks.setStyleSheet(f"font-weight: bold; color: {TEXT_PRIMARY};")
         self.chk_suppress_streaks.setToolTip(
             "Detecta trazas lineales transitorias (satélites artificiales y aviones con luces estroboscópicas)\n"
             "mediante comparación temporal diferencial y las elimina sin afectar a las estrellas."
@@ -329,7 +506,7 @@ class StartrailsTab(QWidget):
 
         # Relleno de pausas entre tomas (Gap Filling)
         self.chk_fill_gaps = QCheckBox("Rellenar pausas entre tomas (Gap Filling)")
-        self.chk_fill_gaps.setStyleSheet("font-weight: bold; color: #ffb74d;")
+        self.chk_fill_gaps.setStyleSheet(f"font-weight: bold; color: {TEXT_PRIMARY};")
         self.chk_fill_gaps.setToolTip(
             "Elimina la apariencia de línea punteada o saltos conectando de forma continua\n"
             "las estrellas entre fotogramas consecutivos."
@@ -356,7 +533,7 @@ class StartrailsTab(QWidget):
         gaps_layout.addWidget(self.slider_gap_radius)
 
         lbl_gap_hint = QLabel("Nota: 1–2 px cierra huecos sin engrosar trazas; valores mayores ensanchan las estrellas.")
-        lbl_gap_hint.setStyleSheet("color: #90a4ae; font-size: 10px; font-style: italic;")
+        lbl_gap_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px; font-style: italic;")
         lbl_gap_hint.setWordWrap(True)
         gaps_layout.addWidget(lbl_gap_hint)
 
@@ -375,7 +552,7 @@ class StartrailsTab(QWidget):
 
         # Realce y preservación de color estelar (Star Color Boost)
         self.chk_star_color = QCheckBox("Realzar y preservar color estelar (Star Color Boost)")
-        self.chk_star_color.setStyleSheet("font-weight: bold; color: #ce93d8;")
+        self.chk_star_color.setStyleSheet(f"font-weight: bold; color: {TEXT_PRIMARY};")
         self.chk_star_color.setToolTip(
             "Preserva los colores espectrales naturales de las estrellas (azules, dorados, anaranjados y rojos)\n"
             "evitando que las trazas queden blancas y recuperando el color en los núcleos sobreexpuestos."
@@ -419,26 +596,8 @@ class StartrailsTab(QWidget):
 
         # Botón para reajuste rápido sin recalcular todo
         self.btn_apply_color_live = QPushButton("Aplicar a la Imagen Actual (Retoque Rápido)")
-        self.btn_apply_color_live.setIcon(get_icon("sparkles", size=13, color="#e1bee7"))
-        self.btn_apply_color_live.setStyleSheet("""
-            QPushButton {
-                font-size: 11px;
-                font-weight: bold;
-                background-color: #4a148c;
-                color: #e1bee7;
-                border: 1px solid #7b1fa2;
-                border-radius: 4px;
-                padding: 5px;
-            }
-            QPushButton:hover {
-                background-color: #6a1b9a;
-            }
-            QPushButton:disabled {
-                background-color: #212121;
-                color: #616161;
-                border-color: #333333;
-            }
-        """)
+        self.btn_apply_color_live.setIcon(get_icon("sparkles", size=13, color="#2f81f7"))
+        self.btn_apply_color_live.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_apply_color_live.setToolTip(
             "Aplica los ajustes de saturación y recuperación de núcleos a la circumpolar ya generada\n"
             "en menos de un segundo, sin tener que volver a integrar todas las tomas."
@@ -459,7 +618,7 @@ class StartrailsTab(QWidget):
         ground_layout.setSpacing(8)
 
         self.chk_clean_ground = QCheckBox("Activar Suelo Limpio (Eliminación de Ruido)")
-        self.chk_clean_ground.setStyleSheet("font-weight: bold; color: #a5d6a7;")
+        self.chk_clean_ground.setStyleSheet(f"font-weight: bold; color: {TEXT_PRIMARY};")
         self.chk_clean_ground.toggled.connect(self._on_clean_ground_toggled)
         ground_layout.addWidget(self.chk_clean_ground)
 
@@ -478,39 +637,23 @@ class StartrailsTab(QWidget):
 
         # Máscara de horizonte
         self.btn_ai_mask = QPushButton("Auto-Detectar Suelo (IA)")
-        self.btn_ai_mask.setIcon(get_icon("sparkles", size=15, color="#ffffff"))
+        self.btn_ai_mask.setIcon(get_icon("sparkles", size=15, color="#2f81f7"))
         self.btn_ai_mask.setCursor(Qt.PointingHandCursor)
-        self.btn_ai_mask.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6a1b9a, stop:1 #8e24aa);
-                color: #ffffff;
-                font-weight: bold;
-                border-radius: 4px;
-                padding: 6px 12px;
-                border: 1px solid #ba68c8;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #7b1fa2, stop:1 #9c27b0);
-                border-color: #ce93d8;
-            }
-            QPushButton:pressed {
-                background-color: #4a148c;
-            }
-        """)
+        self.btn_ai_mask.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_ai_mask.setToolTip("Segmenta automáticamente el horizonte con IA ligera U²-Net y Guided Filter sobre la toma de referencia")
         self.btn_ai_mask.clicked.connect(self._on_ai_mask_clicked)
         gnd_sub_layout.addWidget(self.btn_ai_mask)
 
         row_mask_btns = QHBoxLayout()
         self.btn_load_mask = QPushButton("Cargar...")
-        self.btn_load_mask.setIcon(get_icon("folder", size=13, color="#80cbc4"))
+        self.btn_load_mask.setIcon(get_icon("folder", size=13, color="#a1a1aa"))
+        self.btn_load_mask.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_load_mask.setToolTip("Carga un archivo PNG, TIFF o FITS con la máscara de cielo/suelo")
         self.btn_load_mask.clicked.connect(self._on_load_mask_clicked)
 
         self.btn_import_stacker_mask = QPushButton("Del Apilador")
-        self.btn_import_stacker_mask.setIcon(get_icon("brush", size=13, color="#ffcc80"))
-        self.btn_import_stacker_mask.setStyleSheet("color: #ffcc80;")
+        self.btn_import_stacker_mask.setIcon(get_icon("brush", size=13, color="#a1a1aa"))
+        self.btn_import_stacker_mask.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_import_stacker_mask.setToolTip("Importa con un solo clic la máscara de horizonte calculada en la Pestaña 1")
         self.btn_import_stacker_mask.clicked.connect(self._on_import_stacker_mask_clicked)
 
@@ -519,7 +662,7 @@ class StartrailsTab(QWidget):
         gnd_sub_layout.addLayout(row_mask_btns)
 
         self.lbl_mask_status = QLabel("Sin máscara de horizonte asignada")
-        self.lbl_mask_status.setStyleSheet("color: #ffb74d; font-size: 11px;")
+        self.lbl_mask_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
         gnd_sub_layout.addWidget(self.lbl_mask_status)
 
         # Suavizado de bordes (Feathering)
@@ -553,7 +696,7 @@ class StartrailsTab(QWidget):
         tl_layout.setSpacing(8)
 
         self.chk_enable_timelapse = QCheckBox("Generar Vídeo Time-Lapse (.mp4)")
-        self.chk_enable_timelapse.setStyleSheet("font-weight: bold; color: #80d8ff;")
+        self.chk_enable_timelapse.setStyleSheet(f"font-weight: bold; color: {TEXT_PRIMARY};")
         self.chk_enable_timelapse.setToolTip(
             "Crea un vídeo .mp4 mostrando el nacimiento y giro progresivo de las trazas de estrellas,\n"
             "fotograma a fotograma a lo largo de toda la sesión."
@@ -591,7 +734,7 @@ class StartrailsTab(QWidget):
 
         # Exportar fotogramas individuales
         self.chk_tl_save_frames = QCheckBox("Exportar fotogramas secuenciales (.jpg)")
-        self.chk_tl_save_frames.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        self.chk_tl_save_frames.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
         self.chk_tl_save_frames.setToolTip(
             "Guarda cada paso de la acumulación como una imagen JPG numerada en una subcarpeta,\n"
             "útil para edición manual en Premiere, DaVinci Resolve o After Effects."
@@ -601,11 +744,11 @@ class StartrailsTab(QWidget):
         # Destino del vídeo
         row_dest = QHBoxLayout()
         self.lbl_tl_path = QLabel("Destino: Automático (junto a las tomas)")
-        self.lbl_tl_path.setStyleSheet("color: #90a4ae; font-size: 10px;")
+        self.lbl_tl_path.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
         self.lbl_tl_path.setWordWrap(True)
         self.btn_tl_dest = QPushButton("Cambiar Destino...")
-        self.btn_tl_dest.setIcon(get_icon("folder", size=12, color="#80d8ff"))
-        self.btn_tl_dest.setStyleSheet("font-size: 11px; padding: 3px 6px;")
+        self.btn_tl_dest.setIcon(get_icon("folder", size=12, color="#a1a1aa"))
+        self.btn_tl_dest.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_tl_dest.clicked.connect(self._on_select_timelapse_dest_clicked)
         row_dest.addWidget(self.lbl_tl_path, 1)
         row_dest.addWidget(self.btn_tl_dest)
@@ -613,24 +756,8 @@ class StartrailsTab(QWidget):
 
         # Botón de reproducción de timelapse generado
         self.btn_play_timelapse = QPushButton("Reproducir Vídeo Time-Lapse")
-        self.btn_play_timelapse.setIcon(get_icon("play", size=14, color="#ffffff"))
-        self.btn_play_timelapse.setStyleSheet("""
-            QPushButton {
-                font-weight: bold;
-                font-size: 12px;
-                background-color: #00838f;
-                color: white;
-                border-radius: 4px;
-                padding: 6px;
-            }
-            QPushButton:hover {
-                background-color: #0097a7;
-            }
-            QPushButton:disabled {
-                background-color: #37474f;
-                color: #78909c;
-            }
-        """)
+        self.btn_play_timelapse.setIcon(get_icon("play", size=14, color="#e4e4e7"))
+        self.btn_play_timelapse.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_play_timelapse.setEnabled(False)
         self.btn_play_timelapse.clicked.connect(self._on_play_timelapse_clicked)
         tl_sub_layout.addWidget(self.btn_play_timelapse)
@@ -648,13 +775,13 @@ class StartrailsTab(QWidget):
 
         btn_tiff_row = QHBoxLayout()
         self.btn_save_tiff_16 = QPushButton("Guardar TIFF 16-bit...")
-        self.btn_save_tiff_16.setIcon(get_icon("save", size=13, color="#80cbc4"))
-        self.btn_save_tiff_16.setStyleSheet("font-weight: bold; color: #80cbc4;")
+        self.btn_save_tiff_16.setIcon(get_icon("save", size=13, color="#a1a1aa"))
+        self.btn_save_tiff_16.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_save_tiff_16.clicked.connect(lambda: self._on_save_tiff_clicked(bit_depth=16))
 
         self.btn_save_tiff_32 = QPushButton("Guardar TIFF 32-bit...")
-        self.btn_save_tiff_32.setIcon(get_icon("save", size=13, color="#90caf9"))
-        self.btn_save_tiff_32.setStyleSheet("font-weight: bold; color: #90caf9;")
+        self.btn_save_tiff_32.setIcon(get_icon("save", size=13, color="#a1a1aa"))
+        self.btn_save_tiff_32.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_save_tiff_32.clicked.connect(lambda: self._on_save_tiff_clicked(bit_depth=32))
 
         btn_tiff_row.addWidget(self.btn_save_tiff_16)
@@ -662,8 +789,8 @@ class StartrailsTab(QWidget):
         export_layout.addLayout(btn_tiff_row)
 
         self.btn_send_to_dev = QPushButton("Enviar al Revelador / Editor")
-        self.btn_send_to_dev.setIcon(get_icon("sliders", size=13, color="#ffffff"))
-        self.btn_send_to_dev.setStyleSheet(STYLE_TRANSFER_BTN)
+        self.btn_send_to_dev.setIcon(get_icon("sliders", size=13, color="#2f81f7"))
+        self.btn_send_to_dev.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_send_to_dev.clicked.connect(self._on_send_to_developer_clicked)
         export_layout.addWidget(self.btn_send_to_dev)
 
@@ -908,6 +1035,7 @@ class StartrailsTab(QWidget):
     def _on_clear_series_clicked(self) -> None:
         """Limpia la lista de archivos."""
         self.files_list.clear()
+        self.excluded_files.clear()
         self.table_files.setRowCount(0)
         self.lbl_files_summary.setText("0 tomas cargadas")
         self.current_preview_img = None
@@ -924,22 +1052,125 @@ class StartrailsTab(QWidget):
         self.lbl_tl_path.setStyleSheet("color: #90a4ae; font-size: 10px;")
         self.log("Lista de tomas vaciada y máscara reiniciada.")
 
+    def _update_files_summary(self) -> None:
+        total = len(self.files_list)
+        active = sum(1 for f in self.files_list if f not in self.excluded_files)
+        if total > 0 and active < total:
+            self.lbl_files_summary.setText(f"{active} / {total} tomas activas")
+        else:
+            self.lbl_files_summary.setText(f"{total} tomas cargadas")
+
+    def _get_shot_metadata(self, path: str, meta_batch_item: Optional[dict] = None) -> Dict[str, Any]:
+        """Obtiene y cachea metadatos EXIF (Exp, ISO, Apertura) de la toma."""
+        if path not in self._metadata_cache:
+            self._metadata_cache[path] = extract_shot_exif(path, meta_batch_item)
+        return self._metadata_cache[path]
+
     def _refresh_table(self) -> None:
-        """Actualiza la tabla con los archivos cargados."""
+        """Actualiza la tabla con los archivos cargados y sus metadatos fotográficos."""
+        self.table_files.blockSignals(True)
         self.table_files.setRowCount(len(self.files_list))
         for row, path in enumerate(self.files_list):
+            meta = self._get_shot_metadata(path)
+            is_included = (path not in self.excluded_files)
+            chk_item = QTableWidgetItem()
+            chk_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            chk_item.setCheckState(Qt.Checked if is_included else Qt.Unchecked)
+
             is_ref = (row == self.ref_idx)
             ref_item = QTableWidgetItem("● REF" if is_ref else "")
             ref_item.setTextAlignment(Qt.AlignCenter)
             if is_ref:
-                ref_item.setForeground(QColor("#00e5ff"))
+                ref_item.setForeground(QColor("#2f81f7"))
 
             name_item = QTableWidgetItem(os.path.basename(path))
-            dir_item = QTableWidgetItem(os.path.dirname(path))
+            name_item.setToolTip(path)
 
-            self.table_files.setItem(row, 0, ref_item)
-            self.table_files.setItem(row, 1, name_item)
-            self.table_files.setItem(row, 2, dir_item)
+            exp_item = QTableWidgetItem(meta.get("exp_str", "—"))
+            exp_item.setTextAlignment(Qt.AlignCenter)
+
+            iso_item = QTableWidgetItem(meta.get("iso_str", "—"))
+            iso_item.setTextAlignment(Qt.AlignCenter)
+
+            ap_item = QTableWidgetItem(meta.get("aperture_str", "—"))
+            ap_item.setTextAlignment(Qt.AlignCenter)
+
+            self.table_files.setItem(row, 0, chk_item)
+            self.table_files.setItem(row, 1, ref_item)
+            self.table_files.setItem(row, 2, name_item)
+            self.table_files.setItem(row, 3, exp_item)
+            self.table_files.setItem(row, 4, iso_item)
+            self.table_files.setItem(row, 5, ap_item)
+        self.table_files.blockSignals(False)
+        self._update_files_summary()
+
+    def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
+        if item.column() == 0:
+            row = item.row()
+            if 0 <= row < len(self.files_list):
+                path = self.files_list[row]
+                if item.checkState() == Qt.Checked:
+                    self.excluded_files.discard(path)
+                else:
+                    self.excluded_files.add(path)
+                self._update_files_summary()
+
+    def open_blink_viewer(self) -> None:
+        """Abre el visor interactivo Blink para revisar la serie de startrails y cribar tomas."""
+        if not self.files_list:
+            QMessageBox.information(
+                self,
+                "Visor Blink",
+                "No hay tomas cargadas para inspeccionar.\n\n"
+                "Carga primero una serie de tomas de startrails antes de abrir el visor Blink."
+            )
+            return
+
+        from gui.dialog_blink import BlinkDialog
+
+        curr_idx = 0
+        selected_rows = self.table_files.selectionModel().selectedRows()
+        if selected_rows:
+            curr_idx = selected_rows[0].row()
+        elif 0 <= self.ref_idx < len(self.files_list):
+            curr_idx = self.ref_idx
+
+        dlg = BlinkDialog(
+            file_list=self.files_list,
+            excluded_files=self.excluded_files,
+            current_index=curr_idx,
+            metadata_cache=self._metadata_cache,
+            parent=self
+        )
+        dlg.exclusion_changed.connect(self._on_blink_exclusion_changed)
+        dlg.selection_applied.connect(self._on_blink_selection_applied)
+        dlg.exec()
+
+    def _on_blink_exclusion_changed(self, filepath: str, is_included: bool) -> None:
+        if is_included:
+            self.excluded_files.discard(filepath)
+        else:
+            self.excluded_files.add(filepath)
+
+        for row, path in enumerate(self.files_list):
+            if path == filepath:
+                item = self.table_files.item(row, 0)
+                if item:
+                    self.table_files.blockSignals(True)
+                    item.setCheckState(Qt.Checked if is_included else Qt.Unchecked)
+                    self.table_files.blockSignals(False)
+                break
+        self._update_files_summary()
+
+    def _on_blink_selection_applied(self, excluded_set: set) -> None:
+        self.excluded_files = set(excluded_set)
+        self.table_files.blockSignals(True)
+        for row, path in enumerate(self.files_list):
+            item = self.table_files.item(row, 0)
+            if item:
+                item.setCheckState(Qt.Checked if path not in self.excluded_files else Qt.Unchecked)
+        self.table_files.blockSignals(False)
+        self._update_files_summary()
 
     def _on_set_ref_clicked(self) -> None:
         """Establece la fila actualmente seleccionada como referencia."""
@@ -970,6 +1201,43 @@ class StartrailsTab(QWidget):
             except Exception:
                 pass
 
+    def _on_files_tab_changed(self, idx: int) -> None:
+        """Adapta la visibilidad de los controles específicos según la pestaña activa."""
+        is_lights = (idx == 0)
+        self.btn_set_ref.setVisible(is_lights)
+        self.btn_blink.setVisible(is_lights)
+
+    def _on_add_current_tab_files(self) -> None:
+        """Añade tomas según la pestaña actualmente seleccionada."""
+        idx = self.tabs_files.currentIndex()
+        if idx == 0:
+            self._on_load_series_clicked()
+        elif idx == 1:
+            self._on_load_darks_clicked()
+        elif idx == 2:
+            self._on_load_flats_clicked()
+
+    def _on_clear_current_tab_files(self) -> None:
+        """Limpia los archivos de la pestaña actualmente seleccionada."""
+        idx = self.tabs_files.currentIndex()
+        if idx == 0:
+            self._on_clear_series_clicked()
+        elif idx == 1:
+            self._on_clear_darks_clicked()
+        elif idx == 2:
+            self._on_clear_flats_clicked()
+
+    def add_darks_files(self, files: List[str]) -> None:
+        """Añade tomas dark deduplicando."""
+        if not files:
+            return
+        new_files = [f for f in files if f not in self.dark_files]
+        if not new_files:
+            return
+        self.dark_files.extend(new_files)
+        self._refresh_calibration_list("Darks")
+        self.log(f"Añadidas {len(new_files)} tomas dark (Total: {len(self.dark_files)}).")
+
     def _on_load_darks_clicked(self) -> None:
         """Carga tomas oscuras para la sustracción de píxeles calientes."""
         files, _ = QFileDialog.getOpenFileNames(
@@ -978,17 +1246,145 @@ class StartrailsTab(QWidget):
             "Imágenes (*.nef *.cr2 *.cr3 *.arw *.dng *.raw *.tif *.tiff *.fits);;Todos (*.*)"
         )
         if files:
-            self.dark_files = files
-            self.lbl_darks_count.setText(f"{len(files)} darks")
-            self.lbl_darks_count.setStyleSheet("color: #a5d6a7; font-weight: bold; font-size: 11px;")
-            self.log(f"Añadidos {len(files)} tomas dark para sustracción térmica.")
+            self.add_darks_files(files)
 
     def _on_clear_darks_clicked(self) -> None:
         """Descarta las tomas oscuras."""
         self.dark_files.clear()
-        self.lbl_darks_count.setText("0 darks")
-        self.lbl_darks_count.setStyleSheet("color: #90a4ae; font-size: 11px;")
+        self._refresh_calibration_list("Darks")
         self.log("Darks descartados.")
+
+    def add_flats_files(self, files: List[str]) -> None:
+        """Añade tomas flat deduplicando."""
+        if not files:
+            return
+        new_files = [f for f in files if f not in self.flat_files]
+        if not new_files:
+            return
+        self.flat_files.extend(new_files)
+        self._refresh_calibration_list("Flats")
+        self.log(f"Añadidas {len(new_files)} tomas flat (Total: {len(self.flat_files)}).")
+
+    def _on_load_flats_clicked(self) -> None:
+        """Carga tomas flat para la corrección de viñeteo y polvo."""
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Seleccionar Tomas Flat",
+            os.getcwd(),
+            "Imágenes (*.nef *.cr2 *.cr3 *.arw *.dng *.raw *.tif *.tiff *.fits);;Todos (*.*)"
+        )
+        if files:
+            self.add_flats_files(files)
+
+    def _on_clear_flats_clicked(self) -> None:
+        """Descarta las tomas flat."""
+        self.flat_files.clear()
+        self._refresh_calibration_list("Flats")
+        self.log("Flats descartados.")
+
+    def _refresh_darks_table(self) -> None:
+        """Actualiza la tabla de tomas Dark con metadatos de exposición e ISO."""
+        self.table_darks.blockSignals(True)
+        self.table_darks.setRowCount(len(self.dark_files))
+        for row, path in enumerate(self.dark_files):
+            meta = self._get_shot_metadata(path)
+            name_item = QTableWidgetItem(os.path.basename(path))
+            name_item.setToolTip(path)
+
+            exp_item = QTableWidgetItem(meta.get("exp_str", "—"))
+            exp_item.setTextAlignment(Qt.AlignCenter)
+
+            iso_item = QTableWidgetItem(meta.get("iso_str", "—"))
+            iso_item.setTextAlignment(Qt.AlignCenter)
+
+            btn_del = QPushButton("×")
+            btn_del.setFixedSize(18, 18)
+            btn_del.setToolTip("Eliminar esta toma dark")
+            btn_del.setStyleSheet(
+                "QPushButton { color: #a1a1aa; background: transparent; border: 1px solid #2e2e35; border-radius: 3px; font-weight: bold; font-size: 13px; line-height: 14px; padding: 0px; } "
+                "QPushButton:hover { background: #b91c1c; color: #ffffff; border-color: #ef4444; }"
+            )
+            p_cap = path
+            btn_del.clicked.connect(lambda checked=False, p=p_cap: self._on_delete_calibration_file("Darks", p))
+
+            self.table_darks.setItem(row, 0, name_item)
+            self.table_darks.setItem(row, 1, exp_item)
+            self.table_darks.setItem(row, 2, iso_item)
+            self.table_darks.setCellWidget(row, 3, btn_del)
+        self.table_darks.blockSignals(False)
+
+        count = len(self.dark_files)
+        self.lbl_darks_count.setText(f"{count} darks cargados")
+        self.lbl_darks_count.setStyleSheet("color: #a5d6a7; font-weight: bold; font-size: 11px;" if count > 0 else f"color: {TEXT_SECONDARY}; font-size: 11px;")
+
+    def _refresh_flats_table(self) -> None:
+        """Actualiza la tabla de tomas Flat con metadatos de exposición, ISO y apertura."""
+        self.table_flats.blockSignals(True)
+        self.table_flats.setRowCount(len(self.flat_files))
+        for row, path in enumerate(self.flat_files):
+            meta = self._get_shot_metadata(path)
+            name_item = QTableWidgetItem(os.path.basename(path))
+            name_item.setToolTip(path)
+
+            exp_item = QTableWidgetItem(meta.get("exp_str", "—"))
+            exp_item.setTextAlignment(Qt.AlignCenter)
+
+            iso_item = QTableWidgetItem(meta.get("iso_str", "—"))
+            iso_item.setTextAlignment(Qt.AlignCenter)
+
+            ap_item = QTableWidgetItem(meta.get("aperture_str", "—"))
+            ap_item.setTextAlignment(Qt.AlignCenter)
+
+            btn_del = QPushButton("×")
+            btn_del.setFixedSize(18, 18)
+            btn_del.setToolTip("Eliminar esta toma flat")
+            btn_del.setStyleSheet(
+                "QPushButton { color: #a1a1aa; background: transparent; border: 1px solid #2e2e35; border-radius: 3px; font-weight: bold; font-size: 13px; line-height: 14px; padding: 0px; } "
+                "QPushButton:hover { background: #b91c1c; color: #ffffff; border-color: #ef4444; }"
+            )
+            p_cap = path
+            btn_del.clicked.connect(lambda checked=False, p=p_cap: self._on_delete_calibration_file("Flats", p))
+
+            self.table_flats.setItem(row, 0, name_item)
+            self.table_flats.setItem(row, 1, exp_item)
+            self.table_flats.setItem(row, 2, iso_item)
+            self.table_flats.setItem(row, 3, ap_item)
+            self.table_flats.setCellWidget(row, 4, btn_del)
+        self.table_flats.blockSignals(False)
+
+        count = len(self.flat_files)
+        self.lbl_flats_count.setText(f"{count} flats cargados")
+        self.lbl_flats_count.setStyleSheet("color: #a5d6a7; font-weight: bold; font-size: 11px;" if count > 0 else f"color: {TEXT_SECONDARY}; font-size: 11px;")
+
+    def _refresh_calibration_list(self, tab_name: str) -> None:
+        """Actualiza la tabla de calibración según la pestaña activa."""
+        if tab_name == "Darks":
+            self._refresh_darks_table()
+        else:
+            self._refresh_flats_table()
+
+    def _on_delete_calibration_file(self, tab_name: str, filepath: str) -> None:
+        """Elimina una toma individual de calibración."""
+        if tab_name == "Darks":
+            if filepath in self.dark_files:
+                self.dark_files.remove(filepath)
+                self._refresh_darks_table()
+                self.log(f"Eliminado dark: {os.path.basename(filepath)}")
+        elif tab_name == "Flats":
+            if filepath in self.flat_files:
+                self.flat_files.remove(filepath)
+                self._refresh_flats_table()
+                self.log(f"Eliminado flat: {os.path.basename(filepath)}")
+
+    def _on_tabs_height_adjusted(self, delta_y: int) -> None:
+        """Ajuste continuo de la altura de las tablas mediante el tirador de arrastre."""
+        cur_h = self.tabs_files.height()
+        new_h = max(130, min(650, cur_h + delta_y))
+        self.tabs_files.setFixedHeight(new_h)
+
+    def _on_reset_tabs_auto_fit(self) -> None:
+        """Restaura el comportamiento de tamaño por defecto al hacer doble clic en el tirador."""
+        self.tabs_files.setMinimumHeight(170)
+        self.tabs_files.setMaximumHeight(16777215)
 
     def _on_ai_mask_clicked(self) -> None:
         """Detección automática de cielo/suelo mediante IA Ligera U²-Net para Startrails."""
@@ -1143,10 +1539,10 @@ class StartrailsTab(QWidget):
         if self.current_mask is not None:
             h, w = self.current_mask.shape[:2]
             self.lbl_mask_status.setText(f"Máscara activa ({w}x{h} px)")
-            self.lbl_mask_status.setStyleSheet("color: #81c784; font-weight: bold; font-size: 11px;")
+            self.lbl_mask_status.setStyleSheet("color: #2f81f7; font-weight: bold; font-size: 11px;")
         else:
             self.lbl_mask_status.setText("Sin máscara de horizonte asignada")
-            self.lbl_mask_status.setStyleSheet("color: #ffb74d; font-size: 11px;")
+            self.lbl_mask_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
 
     def _on_show_mask_toggled(self, checked: bool) -> None:
         """Muestra u oculta la máscara superpuesta en el visor."""
@@ -1204,8 +1600,9 @@ class StartrailsTab(QWidget):
             self._cancel_processing()
             return
 
-        if not self.files_list:
-            QMessageBox.warning(self, "Atención", "Debes cargar al menos dos tomas para generar trazas.")
+        active_files = [f for f in self.files_list if f not in self.excluded_files]
+        if len(active_files) < 2:
+            QMessageBox.warning(self, "Atención", "Debes tener al menos dos tomas activas (no excluidas) para generar trazas.")
             return
 
         mode = "comet" if self.rb_comet.isChecked() else "lighten"
@@ -1248,15 +1645,19 @@ class StartrailsTab(QWidget):
                 "core_recovery": self.slider_core_rec.value() / 100.0
             }
 
+        active_ref_path = self.files_list[self.ref_idx] if (0 <= self.ref_idx < len(self.files_list)) else active_files[0]
+        active_ref_idx = active_files.index(active_ref_path) if active_ref_path in active_files else 0
+
         params = {
-            "files": self.files_list,
+            "files": active_files,
             "mode": mode,
             "comet_params": comet_params,
             "dark_files": self.dark_files if self.dark_files else None,
+            "flat_files": self.flat_files if self.flat_files else None,
             "use_clean_ground": use_clean_ground,
             "mask": self.current_mask if use_clean_ground else None,
             "ground_mode": self.combo_gnd_mode.currentData(),
-            "ref_idx": self.ref_idx,
+            "ref_idx": active_ref_idx,
             "feather_radius": self.slider_feather.value(),
             "suppress_streaks": self.chk_suppress_streaks.isChecked(),
             "streak_sensitivity": float(self.combo_streak_sens.currentData() or 0.5),
@@ -1275,7 +1676,7 @@ class StartrailsTab(QWidget):
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self._startrail_start_time = time.perf_counter()
-        self.log(f"Iniciando cálculo de trazas en modo: {mode.upper()} ({len(self.files_list)} tomas)...")
+        self.log(f"Iniciando cálculo de trazas en modo: {mode.upper()} ({len(active_files)} tomas activas de {len(self.files_list)})...")
 
         self.worker = StartrailWorker(params)
         self.worker.progress.connect(self._on_worker_progress)
@@ -1437,7 +1838,7 @@ class StartrailsTab(QWidget):
                 desc = "TIFF 32-bit float (HDR)"
             else:
                 out_img = np.ascontiguousarray(np.clip(img * 65535.0 + 0.5, 0.0, 65535.0), dtype=np.uint16)
-                desc = "TIFF 16-bit entero (Photoshop / Lightroom)"
+                desc = "TIFF 16-bit entero"
 
             save_tiff_with_icc(path, out_img, compression='zlib', photometric=photometric)
             self.log(f"Imagen guardada exitosamente ({desc} con perfil ICC): {path}")

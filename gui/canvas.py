@@ -511,14 +511,14 @@ class MaskCanvas(QWidget):
             shadow_mask = (disp[..., 0] == 0) & (disp[..., 1] == 0) & (disp[..., 2] == 0)
             if np.any(shadow_mask):
                 has_overlay = True
-                rgba[shadow_mask] = [0, 112, 255, 220]  # Azul vibrante (Lightroom style)
+                rgba[shadow_mask] = [0, 112, 255, 220]  # Azul vibrante 
 
         if self.show_clipping_highlights:
             # Luces quemadas: saturación en al menos un canal a 255 (pérdida de rango dinámico)
             highlight_mask = (disp[..., 0] >= 255) | (disp[..., 1] >= 255) | (disp[..., 2] >= 255)
             if np.any(highlight_mask):
                 has_overlay = True
-                rgba[highlight_mask] = [255, 23, 68, 220]  # Rojo vibrante (Lightroom style)
+                rgba[highlight_mask] = [255, 23, 68, 220]  # Rojo vibrante 
 
         if has_overlay:
             rgba_contiguous = np.ascontiguousarray(rgba)
@@ -1986,7 +1986,7 @@ class MaskCanvas(QWidget):
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(18, 18, 18))
+        painter.fillRect(self.rect(), QColor("#0a0a0b"))
         if not self.base_pixmap or self.base_pixmap.isNull():
             painter.setPen(QColor(130, 130, 130))
             painter.drawText(self.rect(), Qt.AlignCenter, "Carga una toma o imagen para previsualizar aquí.")
@@ -2086,11 +2086,11 @@ class MaskCanvas(QWidget):
             painter.setPen(Qt.NoPen)
             painter.drawEllipse(handle_rect.adjusted(1, 2, 1, 2))
 
-            painter.setBrush(QBrush(QColor("#1a1b24")))
-            painter.setPen(QPen(QColor("#80d8ff"), 2))
+            painter.setBrush(QBrush(QColor("#1a1a1e")))
+            painter.setPen(QPen(QColor("#2f81f7"), 2))
             painter.drawEllipse(handle_rect)
 
-            painter.setBrush(QBrush(QColor("#80d8ff")))
+            painter.setBrush(QBrush(QColor("#2f81f7")))
             painter.setPen(Qt.NoPen)
 
             if is_horiz:
@@ -3429,7 +3429,7 @@ class MaskCanvas(QWidget):
         painter.setPen(QPen(QColor(255, 255, 255, 240), 1.5))
         painter.drawRect(s)
 
-        # 4. Tiradores y esquineros tipo Lightroom / Camera Raw
+        # 4. Tiradores y esquineros 
         c_len = min(18.0, min(s.width(), s.height()) * 0.25)
         c_thick = 3.0
         pen_handle = QPen(QColor(255, 255, 255, 255), c_thick, Qt.SolidLine, Qt.SquareCap)

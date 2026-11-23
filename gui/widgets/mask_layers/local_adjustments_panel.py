@@ -132,8 +132,9 @@ class LocalAdjustmentsPanel(QGroupBox):
         self.row_adj_texture_clarity.setToolTip("Claridad de textura bilateral modulada por campana de medios tonos 4L(1-L) (Seti Astro).")
         adj_layout.addWidget(self.row_adj_texture_clarity)
 
-        # Saturación
+        # Saturación con doble capa)
         self.row_adj_sat = PrecisionSliderRow("Saturación:", 0, 250, 100, scale=100.0, decimals=2, unit="x", label_width=115)
+        self.row_adj_sat.set_saturation_style()
         self.slider_adj_sat = self.row_adj_sat.slider
         self.lbl_adj_sat = self.row_adj_sat.lbl_value
         self.slider_adj_sat.valueChanged.connect(self._on_adj_sat_changed)
@@ -142,6 +143,7 @@ class LocalAdjustmentsPanel(QGroupBox):
 
         # Temperatura WB
         self.row_adj_temp = PrecisionSliderRow("Temp WB:", -10000, 10000, 0, scale=10000.0, decimals=4, force_sign=True, label_width=115)
+        self.row_adj_temp.set_track_gradient("qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #4B739B, stop:0.5 #2C2C32, stop:1 #9B794B)")
         self.slider_adj_temp = self.row_adj_temp.slider
         self.spin_adj_temp = self.row_adj_temp.spin
         self.lbl_adj_temp = self.row_adj_temp.lbl_value
@@ -151,6 +153,7 @@ class LocalAdjustmentsPanel(QGroupBox):
 
         # Tinte WB
         self.row_adj_tint = PrecisionSliderRow("Tinte WB:", -10000, 10000, 0, scale=10000.0, decimals=4, force_sign=True, label_width=115)
+        self.row_adj_tint.set_track_gradient("qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #4B9B65, stop:0.5 #2C2C32, stop:1 #9B4B8E)")
         self.slider_adj_tint = self.row_adj_tint.slider
         self.spin_adj_tint = self.row_adj_tint.spin
         self.lbl_adj_tint = self.row_adj_tint.lbl_value

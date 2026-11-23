@@ -53,7 +53,7 @@ class CanvasToolsMixin:
         tb_layout.setContentsMargins(8, 3, 8, 3)
         tb_layout.setSpacing(6)
 
-        # 0. Botón Ocultar/Mostrar Panel Izquierdo (Lightroom F7 / [)
+        # 0. Botón Ocultar/Mostrar Panel Izquierdo ( F7 / [)
         self.btn_toggle_left_panel = QPushButton()
         self.btn_toggle_left_panel.setIcon(get_icon("panel_left", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=14))
         self.btn_toggle_left_panel.setCheckable(True)
@@ -242,7 +242,7 @@ class CanvasToolsMixin:
         sep_right.setStyleSheet("color: #3b4252; margin: 4px 2px;")
         tb_layout.addWidget(sep_right)
 
-        # Botón Ocultar/Mostrar Panel Derecho (Lightroom F8 / ])
+        # Botón Ocultar/Mostrar Panel Derecho ( F8 / ])
         self.btn_toggle_right_panel = QPushButton()
         self.btn_toggle_right_panel.setIcon(get_icon("panel_right", color="#94a3b8", hover_color="#ffffff", active_color="#38bdf8", size=14))
         self.btn_toggle_right_panel.setCheckable(True)
@@ -265,7 +265,7 @@ class CanvasToolsMixin:
         return footer
 
     def set_canvas_progress(self, percent: int, text: str = "") -> None:
-        """Actualiza la barra de progreso compacta en el pie del lienzo estilo Photoshop."""
+        """Actualiza la barra de progreso compacta en el pie del lienzo."""
         if hasattr(self, 'canvas_footer') and self.canvas_footer is not None:
             self.canvas_footer.set_progress(percent, text)
 
@@ -1228,7 +1228,7 @@ class CanvasToolsMixin:
         if hasattr(self, 'sec_gnd_tone'):
             if self.current_mask is not None:
                 source_label = f"● Suelo ({self._mask_source_name})" if self._mask_source_name else "● Suelo Activo"
-                self.sec_gnd_tone.set_status_badge(source_label, "#a5d6a7")
+                self.sec_gnd_tone.set_status_badge(source_label, "#D97706")
             else:
                 self.sec_gnd_tone.set_status_badge("")
 
@@ -1247,14 +1247,14 @@ class CanvasToolsMixin:
         if is_mask_present:
             desc = f"Máscara de suelo activa ({self._mask_source_name})" if self._mask_source_name else "Máscara de suelo activa"
             self.lbl_gnd_mask_status.setText(desc)
-            self.lbl_gnd_mask_status.setStyleSheet("color: #a5d6a7; font-size: 11px; font-weight: bold;")
+            self.lbl_gnd_mask_status.setStyleSheet("color: #D97706; font-size: 11px; font-weight: bold;")
             if hasattr(self, 'btn_edit_ground_mask'):
                 self.btn_edit_ground_mask.setText("Editar Máscara...")
             if hasattr(self, 'btn_delete_mask'):
                 self.btn_delete_mask.setEnabled(True)
         else:
             self.lbl_gnd_mask_status.setText("Sin máscara de suelo activa")
-            self.lbl_gnd_mask_status.setStyleSheet("color: #ffb74d; font-size: 11px;")
+            self.lbl_gnd_mask_status.setStyleSheet("color: #a1a1aa; font-size: 11px;")
             if hasattr(self, 'btn_edit_ground_mask'):
                 self.btn_edit_ground_mask.setText("Crear Máscara Suelo...")
             if hasattr(self, 'btn_delete_mask'):
@@ -1938,7 +1938,7 @@ class CanvasToolsMixin:
         self.log_message(f"[CANVAS] Indicadores de recorte: {estado}")
 
     def toggle_left_panel(self, visible: Optional[bool] = None) -> None:
-        """Muestra u oculta el panel lateral izquierdo de ajustes (estilo Lightroom)."""
+        """Muestra u oculta el panel lateral izquierdo de ajustes."""
         if not hasattr(self, 'left_container'):
             return
         if visible is None:
@@ -1964,7 +1964,7 @@ class CanvasToolsMixin:
                 self.main_splitter.setSizes(sizes)
 
     def toggle_right_panel(self, visible: Optional[bool] = None) -> None:
-        """Muestra u oculta el panel lateral derecho de capas e histograma (estilo Lightroom)."""
+        """Muestra u oculta el panel lateral derecho de capas e histograma."""
         if not hasattr(self, 'right_container'):
             return
         if visible is None:
@@ -1990,7 +1990,7 @@ class CanvasToolsMixin:
                 self.main_splitter.setSizes(sizes)
 
     def toggle_both_panels(self) -> None:
-        """Alterna simultáneamente ambos paneles laterales (Modo Inmersivo / Cine Lightroom)."""
+        """Alterna simultáneamente ambos paneles laterales (Modo Inmersivo / Cine)."""
         left_vis = self.left_container.isVisible() if hasattr(self, 'left_container') else False
         right_vis = self.right_container.isVisible() if hasattr(self, 'right_container') else False
         target_vis = not (left_vis or right_vis)

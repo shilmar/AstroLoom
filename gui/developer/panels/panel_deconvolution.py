@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt, Signal as pyqtSignal
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
 from gui.icons import get_icon
+from gui.theme import STYLE_SPECIAL_ACTION_BTN, TEXT_SECONDARY
 
 
 class DeconvolutionPanel(QWidget):
@@ -57,19 +58,16 @@ class DeconvolutionPanel(QWidget):
 
         # 1. Botón de Estimación Automática de PSF y Estado
         self.btn_auto_psf = QPushButton("Auto-Estimar PSF de Estrellas")
-        self.btn_auto_psf.setIcon(get_icon("crosshair", color="#90caf9", size=14))
+        self.btn_auto_psf.setIcon(get_icon("crosshair", color="#2f81f7", size=14))
         self.btn_auto_psf.setToolTip("Analiza estrellas aisladas no saturadas de la imagen para determinar el diámetro FWHM y relación de aspecto de la PSF.")
-        self.btn_auto_psf.setStyleSheet(
-            "QPushButton { font-weight: bold; padding: 6px; background: #1c2836; border: 1px solid #1e88e5; border-radius: 4px; color: #90caf9; }"
-            "QPushButton:hover { background: #22374e; border-color: #42a5f5; }"
-        )
+        self.btn_auto_psf.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_auto_psf.setCursor(Qt.PointingHandCursor)
         self.btn_auto_psf.clicked.connect(self.auto_psf_requested.emit)
         deconv_layout.addWidget(self.btn_auto_psf)
 
         self.lbl_psf_status = QLabel("PSF: Moffat 2D (FWHM: 3.0 px | Aspecto: 1.00)")
         self.lbl_psf_status.setWordWrap(True)
-        self.lbl_psf_status.setStyleSheet("color: #90caf9; font-size: 11px; padding-left: 2px;")
+        self.lbl_psf_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; padding-left: 2px;")
         deconv_layout.addWidget(self.lbl_psf_status)
 
         # 2. Control Principal: Iteraciones R-L
@@ -78,13 +76,14 @@ class DeconvolutionPanel(QWidget):
         self.lbl_deconv_iter = self.row_deconv_iter.lbl_value
 
         self.btn_deconv_expand = QPushButton("")
-        self.btn_deconv_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#e3f2fd", size=13))
+        self.btn_deconv_expand.setIcon(get_icon("settings", color="#a1a1aa", active_color="#2f81f7", size=13))
         self.btn_deconv_expand.setCheckable(True)
         self.btn_deconv_expand.setChecked(False)
         self.btn_deconv_expand.setToolTip("Despliega controles avanzados de FWHM, antianillos (deringing), amortiguación de ruido, elipticidad y ámbito.")
         self.btn_deconv_expand.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 6px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #1976d2; color: #e3f2fd; border: 1px solid #42a5f5; }"
+            "QPushButton { font-size: 11px; padding: 2px 6px; font-weight: bold; border-radius: 4px; background: #2c2c32; color: #a1a1aa; border: 1px solid #2e2e35; }"
+            "QPushButton:hover { background: #3f3f46; color: #ffffff; }"
+            "QPushButton:checked { background: rgba(47, 129, 247, 0.15); color: #2f81f7; border: 1px solid #2f81f7; }"
         )
         self.btn_deconv_expand.toggled.connect(self._on_toggle_deconv_expand)
         self.row_deconv_iter.layout().addWidget(self.btn_deconv_expand)
@@ -172,7 +171,7 @@ class DeconvolutionPanel(QWidget):
         self.chk_deconv_luma_only = QCheckBox("Solo Luminancia (Preservar color)")
         self.chk_deconv_luma_only.setChecked(True)
         self.chk_deconv_luma_only.toggled.connect(self._on_luma_only_toggled)
-        self.chk_deconv_luma_only.setStyleSheet("color: #b0bec5; font-size: 11px;")
+        self.chk_deconv_luma_only.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
         w_dadv_layout.addWidget(self.chk_deconv_luma_only)
 
         deconv_layout.addWidget(self.w_deconv_advanced)

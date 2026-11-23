@@ -5,7 +5,7 @@ gui/widgets/collapsible_section.py - Sección Plegable (Acordeón) Pro para Astr
 Proporciona un contenedor colapsable reutilizable con cabecera interactiva,
 iconografía vectorial SVG integrada (chevron, icono temático de sección y reset),
 título limpio de alta legibilidad, badge de estado flotante tipo píldora
-y superficies de tarjeta elevadas acordes a AstroLoom Studio Pro.
+y superficies de tarjeta elevadas acordes a AstroLoom Studio Pro (estilo DaVinci Resolve / Blender).
 """
 
 import re
@@ -17,6 +17,12 @@ from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QCursor, QFont
 
 from gui.icons import get_svg_pixmap, get_icon, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_MUTED
+
+# Micro-acentos semánticos por dominio fotográfico
+COLOR_DOMAIN_SKY     = "#3B82F6"  # Cielo / Estrellas
+COLOR_DOMAIN_GROUND  = "#D97706"  # Suelo / Paisaje
+COLOR_DOMAIN_AI      = "#8B5CF6"  # Funciones IA (StarNet, Astro-Reveal)
+COLOR_DOMAIN_NEUTRAL = "#A1A1AA"  # Neutro para herramientas fotográficas base
 
 # Mapeo inteligente de palabras clave del título a iconos vectoriales SVG
 SECTION_ICON_KEYWORDS = {
@@ -68,19 +74,43 @@ class CollapsibleSection(QWidget):
         on_reset: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
         icon_name: Optional[str] = None,
-        icon: Optional[str] = None
+        icon: Optional[str] = None,
+        domain: Optional[str] = None
     ) -> None:
         super().__init__(parent)
         self._is_expanded: bool = is_expanded
         self._on_reset_callback: Optional[Callable[[], None]] = on_reset
         self._explicit_icon: Optional[str] = icon or icon_name
+        self._explicit_domain: Optional[str] = domain
 
         clean_title, detected_icon = self._clean_title_and_detect_icon(title, self._explicit_icon)
         self._title_text: str = clean_title
         self._icon_name: Optional[str] = detected_icon
+        self._domain_color: str = self._detect_domain_color(title, self._explicit_domain)
 
         self._setup_ui()
         self.set_expanded(self._is_expanded)
+
+    @classmethod
+    def _detect_domain_color(cls, raw_title: str, explicit_domain: Optional[str] = None) -> str:
+        """Determina el micro-acento semántico (Azul Cielo, Ámbar Suelo o Violeta IA)."""
+        if explicit_domain:
+            low_d = explicit_domain.lower()
+            if low_d in ("sky", "stars", "cielo", "estrellas"):
+                return COLOR_DOMAIN_SKY
+            elif low_d in ("ground", "suelo", "paisaje"):
+                return COLOR_DOMAIN_GROUND
+            elif low_d in ("ai", "ia"):
+                return COLOR_DOMAIN_AI
+
+        low = raw_title.lower()
+        if any(w in low for w in ("starnet", "astro-reveal", "reveal", "nafnet")):
+            return COLOR_DOMAIN_AI
+        elif any(w in low for w in ("suelo", "paisaje", "ground", "horizonte")):
+            return COLOR_DOMAIN_GROUND
+        elif any(w in low for w in ("cielo", "sky", "estrella", "star", "gradiente", "gradient", "estirado", "stretch", "curva", "curve", "nebular", "dualband", "astro")):
+            return COLOR_DOMAIN_SKY
+        return COLOR_DOMAIN_NEUTRAL
 
     @classmethod
     def _clean_title_and_detect_icon(
@@ -128,21 +158,21 @@ class CollapsibleSection(QWidget):
         self._update_arrow_pixmap()
         header_layout.addWidget(self.lbl_arrow)
 
-        # Icono temático de sección vectorial SVG
+        # Icono temático de sección vectorial SVG con micro-acento semántico
         self.lbl_icon = QLabel(self.header)
         self.lbl_icon.setFixedSize(16, 16)
         self.lbl_icon.setAlignment(Qt.AlignCenter)
         header_layout.addWidget(self.lbl_icon)
 
         if self._icon_name:
-            self.lbl_icon.setPixmap(get_svg_pixmap(self._icon_name, color="#38bdf8", size=15))
+            self.lbl_icon.setPixmap(get_svg_pixmap(self._icon_name, color=self._domain_color, size=15))
             self.lbl_icon.setVisible(True)
         else:
             self.lbl_icon.setVisible(False)
 
         # Título de la sección
         self.lbl_title = QLabel(self._title_text)
-        self.lbl_title.setStyleSheet("font-weight: 600; color: #eceff4; font-size: 12px;")
+        self.lbl_title.setStyleSheet("font-weight: 600; color: #e4e4e7; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;")
         self.lbl_title.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         header_layout.addWidget(self.lbl_title)
 
@@ -153,8 +183,8 @@ class CollapsibleSection(QWidget):
         self.lbl_badge.setMaximumWidth(135)
         self.lbl_badge.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
         self.lbl_badge.setStyleSheet(
-            "background-color: #121622; border: 1px solid #2b3648; border-radius: 4px; "
-            "padding: 2px 6px; font-size: 10px; font-weight: bold; color: #80d8ff; margin-right: 4px;"
+            f"background-color: #202026; border: 1px solid #2e2e35; border-radius: 4px; "
+            f"padding: 2px 6px; font-size: 10px; font-weight: bold; color: {self._domain_color}; margin-right: 4px;"
         )
         self.lbl_badge.setVisible(False)
         header_layout.addWidget(self.lbl_badge)
@@ -164,7 +194,7 @@ class CollapsibleSection(QWidget):
         self.btn_reset.setFixedSize(22, 22)
         self.btn_reset.setCursor(Qt.PointingHandCursor)
         self.btn_reset.setToolTip("Restablecer controles de esta sección")
-        self.btn_reset.setIcon(get_icon("refresh", color="#64748b", hover_color="#38bdf8", active_color="#00e5ff", size=13))
+        self.btn_reset.setIcon(get_icon("refresh", color="#71717a", hover_color="#e4e4e7", active_color="#2f81f7", size=13))
         self.btn_reset.setStyleSheet("""
             QPushButton {
                 background: transparent;
@@ -173,10 +203,10 @@ class CollapsibleSection(QWidget):
                 padding: 0px;
             }
             QPushButton:hover {
-                background: #22293d;
+                background: #2c2c32;
             }
             QPushButton:pressed {
-                background: #333d59;
+                background: #383840;
             }
         """)
         self.btn_reset.clicked.connect(self._on_reset_clicked)
@@ -194,8 +224,8 @@ class CollapsibleSection(QWidget):
         self.btn_switch.setText("●")
         self.btn_switch.setStyleSheet("""
             QPushButton#SectionSwitch {
-                background-color: #0284c7;
-                border: 1px solid #38bdf8;
+                background-color: #2f81f7;
+                border: 1px solid #2f81f7;
                 border-radius: 8px;
                 color: #ffffff;
                 font-size: 10px;
@@ -204,10 +234,10 @@ class CollapsibleSection(QWidget):
                 padding-bottom: 1px;
             }
             QPushButton#SectionSwitch:!checked {
-                background-color: #1a1e2c;
-                border: 1px solid #2e354a;
+                background-color: #2c2c32;
+                border: 1px solid #2e2e35;
                 border-radius: 8px;
-                color: #64748b;
+                color: #71717a;
                 text-align: left;
                 padding-left: 3px;
                 padding-bottom: 1px;
@@ -234,36 +264,38 @@ class CollapsibleSection(QWidget):
     def _update_arrow_pixmap(self) -> None:
         """Actualiza el chevron SVG según el estado desplegado/colapsado."""
         if self._is_expanded:
-            self.lbl_arrow.setPixmap(get_svg_pixmap("chevron_down", color="#38bdf8", size=11))
+            self.lbl_arrow.setPixmap(get_svg_pixmap("chevron_down", color="#a1a1aa", size=11))
         else:
-            self.lbl_arrow.setPixmap(get_svg_pixmap("chevron_right", color="#64748b", size=11))
+            self.lbl_arrow.setPixmap(get_svg_pixmap("chevron_right", color="#71717a", size=11))
 
     def _update_styles(self) -> None:
-        """Aplica estilos acordes a AstroLoom Studio Pro."""
-        bg_col = "#1c2030" if self._is_expanded else "#151824"
-        border_col = "#2a3146" if self._is_expanded else "#222738"
+        """Aplica estilos con profundidad y relieve visual estilo DaVinci Resolve / Blender."""
+        header_bg = "#18181b"
+        card_body_bg = "#222226"
+        border_col = "#2e2e35"
         border_radius = "6px 6px 0px 0px" if self._is_expanded else "6px"
 
         self.header.setStyleSheet(f"""
             QFrame#CollapsibleHeader {{
-                background-color: {bg_col};
+                background-color: {header_bg};
                 border: 1px solid {border_col};
                 border-radius: {border_radius};
             }}
             QFrame#CollapsibleHeader:hover {{
-                background-color: #222738;
-                border-color: #3b4563;
+                background-color: #202025;
+                border-color: #3f3f46;
             }}
         """)
 
-        self.content_area.setStyleSheet("""
-            QWidget#CollapsibleContentArea {
-                background-color: #12141e;
-                border-left: 1px solid #2a3146;
-                border-right: 1px solid #2a3146;
-                border-bottom: 1px solid #2a3146;
+        self.content_area.setStyleSheet(f"""
+            QWidget#CollapsibleContentArea {{
+                background-color: {card_body_bg};
+                border-left: 1px solid {border_col};
+                border-right: 1px solid {border_col};
+                border-bottom: 1px solid {border_col};
+                border-top: none;
                 border-radius: 0px 0px 6px 6px;
-            }
+            }}
         """)
 
     def _on_header_clicked(self, event) -> None:
@@ -321,22 +353,24 @@ class CollapsibleSection(QWidget):
         clean_title, detected_icon = self._clean_title_and_detect_icon(title, self._explicit_icon)
         self._title_text = clean_title
         self.lbl_title.setText(clean_title)
+        self._domain_color = self._detect_domain_color(title, self._explicit_domain)
 
         if detected_icon:
             self._icon_name = detected_icon
-            self.lbl_icon.setPixmap(get_svg_pixmap(detected_icon, color="#38bdf8", size=15))
+            self.lbl_icon.setPixmap(get_svg_pixmap(detected_icon, color=self._domain_color, size=15))
             self.lbl_icon.setVisible(True)
 
-    def set_status_badge(self, text: str, color: str = "#80d8ff") -> None:
-        """Muestra u oculta una insignia de estado en la cabecera (ej: '● ON', '● Separadas')."""
+    def set_status_badge(self, text: str, color: Optional[str] = None) -> None:
+        """Muestra u oculta una insignia de estado en la cabecera con micro-acento semántico."""
         if text:
+            badge_color = color if color is not None else self._domain_color
             fm = self.lbl_badge.fontMetrics()
             elided = fm.elidedText(text, Qt.ElideRight, 125)
             self.lbl_badge.setText(elided)
             self.lbl_badge.setToolTip(text)
             self.lbl_badge.setStyleSheet(
-                f"background-color: #121622; border: 1px solid #2b3648; border-radius: 4px; "
-                f"padding: 2px 6px; font-size: 10px; font-weight: bold; color: {color}; margin-right: 4px;"
+                f"background-color: #202026; border: 1px solid #2e2e35; border-radius: 4px; "
+                f"padding: 2px 6px; font-size: 10px; font-weight: bold; color: {badge_color}; margin-right: 4px;"
             )
             self.lbl_badge.setVisible(True)
         else:

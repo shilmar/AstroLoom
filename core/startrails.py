@@ -127,6 +127,123 @@ def build_master_dark(
     return master_dark
 
 
+def build_master_flat(
+    flat_files: List[str],
+    master_dark: Optional[np.ndarray] = None,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
+    abort_flag: Optional[Callable[[], bool]] = None
+) -> Optional[np.ndarray]:
+    """Calcula el Master Flat promediado y normalizado a media 1.0 por canal a partir de tomas de campo plano."""
+    if not flat_files:
+        return None
+
+    n = len(flat_files)
+    flat_acc = None
+    for i, path in enumerate(flat_files):
+        if abort_flag and abort_flag():
+            raise InterruptedError("Procesamiento cancelado por el usuario.")
+        if progress_callback:
+            progress_callback(int(5 + (i / n) * 15), f"Cargando flat ({i+1}/{n}): {os.path.basename(path)}")
+        f_img = load_image_as_float32(path)
+        if flat_acc is None:
+            flat_acc = f_img.astype(np.float64)
+        else:
+            flat_acc += f_img
+
+    master_flat = (flat_acc / float(n)).astype(np.float32)
+    if master_dark is not None and master_dark.shape == master_flat.shape:
+        master_flat = np.maximum(0.0, master_flat - master_dark)
+
+    # Normalizar cada canal a media 1.0 para mantener el balance cromático
+    if master_flat.ndim == 3:
+        for ch in range(master_flat.shape[2]):
+            m_val = float(np.mean(master_flat[:, :, ch]))
+            if m_val > 1e-5:
+                master_flat[:, :, ch] /= m_val
+            else:
+                master_flat[:, :, ch].fill(1.0)
+    else:
+        m_val = float(np.mean(master_flat))
+        if m_val > 1e-5:
+            master_flat /= m_val
+        else:
+            master_flat.fill(1.0)
+
+    return master_flat
+
+
+def extract_shot_exif(filepath: str, meta_batch_item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Extrae tiempo de exposición, ISO y apertura (FNumber) de un archivo fotográfico o RAW.
+    Retorna un diccionario con valores numéricos y cadenas formateadas listas para la UI.
+    """
+    exp: Optional[float] = None
+    iso: Optional[int] = None
+    aperture: Optional[float] = None
+
+    if meta_batch_item:
+        exp = meta_batch_item.get("exposure_time")
+        iso = meta_batch_item.get("iso")
+
+    ext = os.path.splitext(filepath)[1].lower()
+    if (exp is None or iso is None or aperture is None) and ext in [".nef", ".cr2", ".cr3", ".arw", ".dng", ".raw", ".orf", ".rw2"]:
+        try:
+            import rawpy
+            with rawpy.imread(filepath) as raw:
+                other = getattr(raw, "other", None)
+                if other:
+                    if exp is None:
+                        s = getattr(other, "shutter_speed", None) or getattr(other, "shutter", None)
+                        if s is not None and float(s) > 0:
+                            exp = float(s)
+                    if iso is None:
+                        i = getattr(other, "iso_speed", None) or getattr(other, "iso", None)
+                        if i is not None and float(i) > 0:
+                            iso = int(round(float(i)))
+                    if aperture is None:
+                        a = getattr(other, "aperture", None)
+                        if a is not None and float(a) > 0:
+                            aperture = float(a)
+        except Exception:
+            pass
+
+    if exp is None or iso is None or aperture is None:
+        try:
+            from PIL import Image
+            with Image.open(filepath) as img:
+                exif_raw = img._getexif() if hasattr(img, "_getexif") else None
+                if exif_raw:
+                    if exp is None and 33434 in exif_raw:
+                        exp = float(exif_raw[33434])
+                    if iso is None and 34855 in exif_raw:
+                        v = exif_raw[34855]
+                        iso = int(v[0] if isinstance(v, (list, tuple)) else v)
+                    if aperture is None and 33437 in exif_raw:
+                        aperture = float(exif_raw[33437])
+        except Exception:
+            pass
+
+    if exp is not None and exp > 0:
+        if exp >= 1.0:
+            exp_str = f"{exp:.1f}s" if exp % 1 != 0 else f"{int(exp)}s"
+        else:
+            exp_str = f"1/{int(round(1.0 / exp))}s"
+    else:
+        exp_str = "—"
+
+    iso_str = f"{int(iso)}" if (iso is not None and iso > 0) else "—"
+    aperture_str = f"f/{aperture:.1f}" if (aperture is not None and aperture > 0) else "—"
+
+    return {
+        "exp": exp,
+        "exp_str": exp_str,
+        "iso": iso,
+        "iso_str": iso_str,
+        "aperture": aperture,
+        "aperture_str": aperture_str
+    }
+
+
 def clean_frame_streaks(
     current_img: np.ndarray,
     prev_img: Optional[np.ndarray],
@@ -547,6 +664,7 @@ def generate_startrail(
     mode: str = "lighten",
     comet_params: Optional[Dict[str, Any]] = None,
     dark_files: Optional[List[str]] = None,
+    flat_files: Optional[List[str]] = None,
     use_clean_ground: bool = False,
     mask: Optional[np.ndarray] = None,
     ground_mode: str = "average",
@@ -572,6 +690,7 @@ def generate_startrail(
     :param mode: "lighten" (máximo clásico) o "comet" (estela decreciente).
     :param comet_params: Diccionario con { "tail_pct": 30, "decay": "linear", "direction": "backward", "min_floor": 0.0 }
     :param dark_files: Lista opcional de tomas dark para sustracción térmica.
+    :param flat_files: Lista opcional de tomas flat para corrección de viñeteo y motas de polvo.
     :param use_clean_ground: Si es True, separa cielo y suelo usando la máscara para dejar el suelo limpio sin ruido.
     :param mask: Máscara binaria o en escala de grises (255 / 1.0 = cielo, 0 = suelo).
     :param ground_mode: "average" (media temporal con reducción drástica de ruido) o "ref" (toma de referencia).
@@ -611,16 +730,26 @@ def generate_startrail(
     if progress_callback:
         progress_callback(2, f"Iniciando procesado de {n_files} fotogramas...")
 
-    # 1. Master Dark si se han especificado tomas oscuras
+    # 1. Master Dark y Master Flat si se han especificado tomas de calibración
     master_dark = None
     t_dark = 0.0
     if dark_files and len(dark_files) > 0:
         if progress_callback:
-            progress_callback(5, "Calculando Master Dark...")
+            progress_callback(4, "Calculando Master Dark...")
         t0_dark = time.perf_counter()
         master_dark = build_master_dark(dark_files, progress_callback, abort_flag)
         t_dark = time.perf_counter() - t0_dark
         logger.info(f"[STARTRAILS] Master Dark completado en {t_dark:.2f}s ({len(dark_files)} tomas)")
+
+    master_flat = None
+    t_flat = 0.0
+    if flat_files and len(flat_files) > 0:
+        if progress_callback:
+            progress_callback(7, "Calculando Master Flat...")
+        t0_flat = time.perf_counter()
+        master_flat = build_master_flat(flat_files, master_dark=master_dark, progress_callback=progress_callback, abort_flag=abort_flag)
+        t_flat = time.perf_counter() - t0_flat
+        logger.info(f"[STARTRAILS] Master Flat completado en {t_flat:.2f}s ({len(flat_files)} tomas)")
 
     # 2. Ponderación para efecto cometa
     comet_weights = None
@@ -702,6 +831,9 @@ def generate_startrail(
             ref_ground = load_image_as_float32(files[ref_idx])
             if master_dark is not None and master_dark.shape == ref_ground.shape:
                 ref_ground = np.maximum(0.0, ref_ground - master_dark)
+            if master_flat is not None and master_flat.shape == ref_ground.shape:
+                safe_flat = np.where(master_flat > 1e-4, master_flat, 1.0)
+                ref_ground = np.clip(ref_ground / safe_flat, 0.0, 1.0)
         except Exception as e:
             print(f"[Startrails] Error al precargar referencia para suelo de timelapse: {e}")
             ref_ground = None
@@ -799,6 +931,9 @@ def generate_startrail(
         img = load_image_as_float32(files[idx], demosaic_algorithm=demosaic_algo)
         if master_dark is not None and master_dark.shape == img.shape:
             img = np.maximum(0.0, img - master_dark)
+        if master_flat is not None and master_flat.shape == img.shape:
+            safe_flat = np.where(master_flat > 1e-4, master_flat, 1.0)
+            img = np.clip(img / safe_flat, 0.0, 1.0)
         return img
 
     def _enqueue(idx: int):
@@ -1144,6 +1279,9 @@ def generate_startrail(
                 ground_clean = load_image_as_float32(files[ref_idx])
                 if master_dark is not None and master_dark.shape == ground_clean.shape:
                     ground_clean = np.maximum(0.0, ground_clean - master_dark)
+                if master_flat is not None and master_flat.shape == ground_clean.shape:
+                    safe_flat = np.where(master_flat > 1e-4, master_flat, 1.0)
+                    ground_clean = np.clip(ground_clean / safe_flat, 0.0, 1.0)
 
         # Fusión alfa ponderada
         final_img = (sky_acc * mask_3c) + (ground_clean * (1.0 - mask_3c))
@@ -1210,6 +1348,7 @@ def generate_startrail(
         "t_io": t_io,
         "t_meta": t_meta,
         "t_dark": t_dark,
+        "t_flat": t_flat,
         "t_streak_detection": t_streak_detection,
         "total_streaks": total_streaks,
         "t_gap_fill": t_gap_fill,

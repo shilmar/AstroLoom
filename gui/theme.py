@@ -18,182 +18,216 @@ CHEVRON_DOWN_DISABLED_PATH = os.path.join(_ASSETS_DIR, "chevron_down_disabled.sv
 CHEVRON_UP_PATH = os.path.join(_ASSETS_DIR, "chevron_up.svg").replace("\\", "/")
 CHEVRON_UP_HOVER_PATH = os.path.join(_ASSETS_DIR, "chevron_up_hover.svg").replace("\\", "/")
 CHEVRON_UP_DISABLED_PATH = os.path.join(_ASSETS_DIR, "chevron_up_disabled.svg").replace("\\", "/")
+CHECK_WHITE_PATH = os.path.join(_ASSETS_DIR, "check_white.svg").replace("\\", "/")
+CHECK_DISABLED_PATH = os.path.join(_ASSETS_DIR, "check_disabled.svg").replace("\\", "/")
 
 # =============================================================================
-# 1. PALETA DE COLORES MAESTRA (Cosmic Dark Pro)
+# 1. PALETA DE COLORES MAESTRA - REGLA 60-30-10 (Neutral Studio & Cobalt Blue)
 # =============================================================================
-BG_WINDOW       = "#0b0d14"  # Fondo base de ventanas y visores
-BG_PANEL        = "#12141e"  # Paneles laterales y áreas de herramientas
-BG_CARD         = "#171a26"  # Tarjetas, QGroupBox y contenedores elevados
-BG_CARD_ALT     = "#1c2030"  # Elementos anidados o resaltados dentro de tarjetas
-BG_INPUT        = "#0d0f17"  # Cajas de texto, spinboxes, tablas y listas
-BG_CONSOLE      = "#08090f"  # Terminal y cajas de logs monospaciadas
+# 60% - Fondos Base y Visor (Gris Neutro / Carbón Profundo libre de matices cromáticos)
+BG_CANVAS       = "#0a0a0b"  # Lienzo y visor principal de la imagen
+BG_WINDOW       = "#121214"  # Fondo base de la ventana principal y contenedores raíz
+BG_CONSOLE      = "#0e0e10"  # Consola y registros monospaciados
 
-BORDER_BASE     = "#232738"  # Bordes sutiles y divisores estructurales
-BORDER_HOVER    = "#3a415a"  # Borde al pasar el ratón (hover)
-BORDER_FOCUS    = "#00bcd4"  # Borde al tener foco activo (Cyan suave)
-BORDER_ACTIVE   = "#00e5ff"  # Resalte vibrante activo
+# 30% - Paneles, Barras y Estructura
+BG_PANEL        = "#1a1a1e"  # Barras laterales, superior y dock panels
+BG_CARD         = "#222226"  # Secciones modulares, bloques temáticos ("1. Sesión") y QGroupBox
+BG_CARD_HEADER  = "#18181b"  # Cabeceras de secciones y acordeones (relieve DaVinci Resolve)
+BG_CARD_ALT     = "#26262c"  # Sub-bloques y contenedores secundarios anidados
+BG_INPUT        = "#2c2c32"  # Cajas de texto, spinboxes, tablas, listas y controles comunes
 
-TEXT_PRIMARY    = "#eceff4"  # Texto principal de alta legibilidad
-TEXT_SECONDARY  = "#90a4ae"  # Texto descriptivo, leyendas y encabezados de tabla
-TEXT_MUTED      = "#546e7a"  # Textos deshabilitados o placeholders
-TEXT_CYAN       = "#80d8ff"  # Títulos de grupos y datos celestiales destacados
+# Bordes Neutros Ultrafinos
+BORDER_BASE     = "#2e2e35"  # Borde estructural neutral sutil (sin tonos de color)
+BORDER_HOVER    = "#3f3f46"  # Borde interactivo al pasar el ratón
+BORDER_FOCUS    = "#2f81f7"  # Borde al tener foco activo (Azul Cobalto)
+BORDER_ACTIVE   = "#2f81f7"  # Indicador de estado activo
 
-ACCENT_CYAN     = "#00e5ff"  # Identidad visual de AstroLoom y pestañas activas
-ACCENT_BLUE     = "#1565c0"  # Acciones secundarias principales
-ACCENT_GREEN    = "#2e7d32"  # Botón primario de ejecución (Run / Apilar / Coser)
-ACCENT_GREEN_HOVER = "#388e3c"
-ACCENT_GREEN_PRESSED = "#1b5e20"
-ACCENT_RED      = "#c62828"  # Botón de cancelación / Peligro / Eliminar
-ACCENT_RED_HOVER = "#d32f2f"
-ACCENT_RED_PRESSED = "#b71c1c"
-ACCENT_GOLD     = "#ffd54f"  # Parámetros numéricos clave y métricas estelares
-ACCENT_TEAL     = "#00838f"  # Botón de transferencia entre pestañas ("Enviar al Revelador")
-ACCENT_PURPLE   = "#7b1fa2"  # Modos astronómicos especiales y máscaras
+# Jerarquía Tipográfica de Alto Confort Visual Nocturno
+TEXT_PRIMARY    = "#e4e4e7"  # Texto principal de alta legibilidad
+TEXT_SECONDARY  = "#a1a1aa"  # Texto descriptivo, etiquetas secundarias y menor contraste
+TEXT_MUTED      = "#71717a"  # Textos deshabilitados y marcadores de posición
+TEXT_CYAN       = "#e4e4e7"  # Reemplazo limpio y neutro de antiguos textos cian
+
+# 10% - Acento Único de Enfoque (Azul Cobalto Profesional)
+ACCENT_COBALT        = "#2f81f7"  # ÚNICO color de enfoque activo
+ACCENT_COBALT_HOVER  = "#388bfd"  # Hover acento
+ACCENT_COBALT_PRESSED= "#1f6feb"  # Pressed acento
+ACCENT_GHOST_BG      = "rgba(47, 129, 247, 0.12)"  # Fondo translúcido para acciones especiales/IA
+ACCENT_GHOST_HOVER   = "rgba(47, 129, 247, 0.22)"
+ACCENT_GHOST_PRESSED = "rgba(47, 129, 247, 0.32)"
+
+# Estados de Cancelación / Alerta
+ACCENT_RED          = "#da3633"  # Cancelación / Alerta en ejecución
+ACCENT_RED_HOVER    = "#f85149"
+ACCENT_RED_PRESSED  = "#b62324"
+
+# Alias de compatibilidad retroactiva orientados a la nueva paleta neutra
+ACCENT_CYAN         = "#2f81f7"
+ACCENT_BLUE         = "#2f81f7"
+ACCENT_GREEN        = "#2f81f7"  # Los botones de ejecución principales ahora unifican a Azul Cobalto
+ACCENT_GREEN_HOVER  = "#388bfd"
+ACCENT_GREEN_PRESSED= "#1f6feb"
+ACCENT_GOLD         = "#e4e4e7"
+ACCENT_TEAL         = "#2f81f7"
+ACCENT_PURPLE       = "#2f81f7"
 
 # =============================================================================
-# 2. ESTILOS REUTILIZABLES PARA BOTONES DE ACCIÓN
+# 2. JERARQUÍA DE BOTONES Y ESTILOS REUTILIZABLES
 # =============================================================================
 
-# Botón de ejecución en reposo (Verde cósmico - Listo para iniciar tarea pesada)
+# Acción Principal (Lanzar proceso / Iniciar Apilado / Generar Trazas / Exportar)
+# Botón táctil con degradado sutil #3B82F6 a #2563EB, borde superior iluminado #60A5FA y texto blanco.
 STYLE_RUN_IDLE = f"""
     QPushButton {{
         font-weight: bold;
         font-size: 13px;
-        background-color: {ACCENT_GREEN};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3B82F6, stop:1 #2563EB);
         color: #ffffff;
-        border: 1px solid #43a047;
+        border: 1px solid #2563EB;
+        border-top: 1px solid #60A5FA;
         border-radius: 6px;
         padding: 8px 16px;
     }}
     QPushButton:hover {{
-        background-color: {ACCENT_GREEN_HOVER};
-        border-color: #4caf50;
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #60A5FA, stop:1 #3B82F6);
+        border: 1px solid #3B82F6;
+        border-top: 1px solid #93C5FD;
     }}
     QPushButton:pressed {{
-        background-color: {ACCENT_GREEN_PRESSED};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1D4ED8, stop:1 #1E40AF);
+        border: 1px solid #1E3A8A;
+        border-top: 1px solid #3B82F6;
     }}
     QPushButton:disabled {{
-        background-color: #1a241c;
-        color: #526e57;
-        border-color: #243527;
+        background-color: {BG_PANEL};
+        color: {TEXT_MUTED};
+        border: 1px solid {BORDER_BASE};
     }}
 """
 
-# Botón de ejecución activo (Rojo carmesí - Procesando / Cancelar)
+# Acción Principal Activa (Procesando / Solicitud de Cancelar)
 STYLE_RUN_ACTIVE = f"""
     QPushButton {{
         font-weight: bold;
         font-size: 13px;
         background-color: {ACCENT_RED};
         color: #ffffff;
-        border: 1px solid #e53935;
+        border: 1px solid {ACCENT_RED};
         border-radius: 6px;
         padding: 8px 16px;
     }}
     QPushButton:hover {{
         background-color: {ACCENT_RED_HOVER};
-        border-color: #ef5350;
+        border-color: {ACCENT_RED_HOVER};
     }}
     QPushButton:pressed {{
         background-color: {ACCENT_RED_PRESSED};
+        border-color: {ACCENT_RED_PRESSED};
     }}
 """
 
-# Botón en transición de parada (Gris neutro - Solicitando detención)
 STYLE_RUN_CANCELLING = f"""
     QPushButton {{
         font-weight: bold;
         font-size: 13px;
-        background-color: #37474f;
-        color: #b0bec5;
-        border: 1px solid #455a64;
+        background-color: {BG_INPUT};
+        color: {TEXT_SECONDARY};
+        border: 1px solid {BORDER_BASE};
         border-radius: 6px;
         padding: 8px 16px;
     }}
 """
 
-# Alias para coherencia con módulos anteriores
 STYLE_CANCEL_ACTIVE = STYLE_RUN_ACTIVE
 
-# Botón de transferencia entre módulos ("Enviar a Revelador / Editor")
-STYLE_TRANSFER_BTN = f"""
+# Acción Especial o de IA (ej: "Auto-Detectar Suelo", "1-Click Start", "Separar con StarNet")
+# Botón estilo "Ghost/Outline" con borde fino azul #2F81F7 y fondo translúcido rgba(47, 129, 247, 0.12)
+STYLE_SPECIAL_ACTION_BTN = f"""
     QPushButton {{
-        font-weight: bold;
-        font-size: 12px;
-        background-color: {ACCENT_TEAL};
-        color: #ffffff;
-        border: 1px solid #00acc1;
-        border-radius: 6px;
-        padding: 7px 14px;
+        font-weight: 600;
+        font-size: 11px;
+        background-color: {ACCENT_GHOST_BG};
+        color: {ACCENT_COBALT};
+        border: 1px solid {ACCENT_COBALT};
+        border-radius: 4px;
+        padding: 6px 12px;
     }}
     QPushButton:hover {{
-        background-color: #0097a7;
-        border-color: #26c6da;
+        background-color: {ACCENT_GHOST_HOVER};
+        border-color: {ACCENT_COBALT_HOVER};
+        color: #ffffff;
     }}
     QPushButton:pressed {{
-        background-color: #006064;
+        background-color: {ACCENT_GHOST_PRESSED};
+        border-color: {ACCENT_COBALT_PRESSED};
+        color: #ffffff;
     }}
     QPushButton:disabled {{
-        background-color: #152528;
-        color: #43656b;
-        border-color: #1f373b;
+        background-color: transparent;
+        color: {TEXT_MUTED};
+        border-color: {BORDER_BASE};
     }}
 """
 
-# Botón secundario estilizado (Cargar tomas, marcar referencia, etc.)
+# Alias para acciones de IA y transferencia entre módulos
+STYLE_AI_BTN = STYLE_SPECIAL_ACTION_BTN
+STYLE_TRANSFER_BTN = STYLE_SPECIAL_ACTION_BTN
+
+# Botones Secundarios / Ajustes (Cargar, Guardar, Limpiar, Añadir tomas)
+# Botón sólido gris oscuro #2C2C32 con texto gris claro, sin bordes de color.
 STYLE_SECONDARY_BTN = f"""
     QPushButton {{
         font-weight: 500;
         font-size: 11px;
-        background-color: #1e2230;
+        background-color: {BG_INPUT};
         color: {TEXT_PRIMARY};
-        border: 1px solid #33384c;
+        border: 1px solid {BORDER_BASE};
         border-radius: 4px;
         padding: 5px 12px;
     }}
     QPushButton:hover {{
-        background-color: #282e42;
-        border-color: #4f5573;
+        background-color: #383840;
+        border-color: {BORDER_HOVER};
+        color: #ffffff;
     }}
     QPushButton:pressed {{
-        background-color: #171924;
+        background-color: {BG_CARD};
     }}
     QPushButton:disabled {{
-        background-color: #141620;
+        background-color: {BG_PANEL};
         color: {TEXT_MUTED};
-        border-color: #232738;
+        border-color: #242429;
     }}
 """
 
-# Botón de peligro / eliminación (Limpiar listas, resetear)
+# Botón de peligro / eliminación secundario
 STYLE_DANGER_BTN = f"""
     QPushButton {{
         font-weight: 500;
         font-size: 11px;
-        background-color: #27191e;
-        color: #ff8a80;
-        border: 1px solid #4d232a;
+        background-color: {BG_INPUT};
+        color: #f87171;
+        border: 1px solid {BORDER_BASE};
         border-radius: 4px;
         padding: 5px 10px;
     }}
     QPushButton:hover {{
-        background-color: #3b2028;
-        border-color: #ff5252;
+        background-color: #383840;
+        border-color: {ACCENT_RED};
         color: #ffffff;
     }}
     QPushButton:pressed {{
-        background-color: #1f1216;
+        background-color: {BG_CARD};
     }}
 """
 
-# Badge / Píldora de estado (Monitores de hardware, versión, modo activo)
+# Badge / Píldora de estado (Monitores de RAM, versión de motor, telemetría)
 STYLE_STATUS_PILL = f"""
-    background-color: #141724;
+    background-color: {BG_CARD};
     border: 1px solid {BORDER_BASE};
     border-radius: 4px;
     padding: 2px 8px;
-    color: {TEXT_CYAN};
+    color: {TEXT_SECONDARY};
     font-weight: bold;
     font-size: 10px;
 """
@@ -206,10 +240,12 @@ STYLE_STATUS_PILL = f"""
 def get_application_stylesheet() -> str:
     """
     Devuelve la hoja de estilos QSS completa para AstroLoom.
-    Garantiza uniformidad tipográfica, espacial y cromática en todas las pestañas.
+    Garantiza uniformidad tipográfica, espacial y cromática en todas las pestañas
+    bajo la regla 60-30-10 (60% Fondos Neutros #121214/#0A0A0B, 30% Paneles/Tarjetas
+    #1A1A1E/#222227 con bordes #2E2E35, y 10% Acento Azul Cobalto #2F81F7).
     """
     return f"""
-        /* --- VENTANA PRINCIPAL Y CONTENEDORES BASE --- */
+        /* --- VENTANA PRINCIPAL Y CONTENEDORES BASE (60%) --- */
         QMainWindow, QWidget#centralWidget {{
             background-color: {BG_WINDOW};
             color: {TEXT_PRIMARY};
@@ -221,7 +257,7 @@ def get_application_stylesheet() -> str:
             color: {TEXT_PRIMARY};
         }}
 
-        /* --- BARRA DE PESTAÑAS PRINCIPAL DE NAVEGACIÓN --- */
+        /* --- BARRA DE PESTAÑAS PRINCIPAL DE NAVEGACIÓN (30% + 10% Acento) --- */
         QTabWidget::pane {{
             border: 1px solid {BORDER_BASE};
             background-color: {BG_PANEL};
@@ -229,123 +265,126 @@ def get_application_stylesheet() -> str:
             top: -1px;
         }}
         QTabBar::tab {{
-            background-color: #10121a;
+            background-color: {BG_PANEL};
             color: {TEXT_SECONDARY};
-            padding: 7px 12px;
-            border: 1px solid #1e2230;
+            padding: 7px 14px;
+            border: 1px solid {BORDER_BASE};
             border-bottom: 2px solid transparent;
             font-weight: bold;
             font-size: 11px;
             margin-right: 2px;
-            border-top-left-radius: 5px;
-            border-top-right-radius: 5px;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
         }}
         QTabBar::tab:selected {{
             background-color: {BG_CARD};
-            color: {ACCENT_CYAN};
+            color: #ffffff;
             border-color: {BORDER_BASE};
-            border-bottom: 2px solid {ACCENT_CYAN};
+            border-bottom: 2px solid {ACCENT_COBALT};
         }}
         QTabBar::tab:hover:!selected {{
-            background-color: #151822;
+            background-color: {BG_CARD};
             color: {TEXT_PRIMARY};
             border-bottom: 2px solid {BORDER_HOVER};
         }}
 
-        /* --- TARJETAS MODULARES (QGroupBox) --- */
+        /* --- TARJETAS MODULARES Y SECCIONES (QGroupBox - 30%) --- */
         QGroupBox {{
             font-weight: bold;
             border: 1px solid {BORDER_BASE};
-            border-radius: 8px;
+            border-radius: 6px;
             margin-top: 14px;
-            padding: 16px 10px 10px 10px;
+            padding: 14px 10px 10px 10px;
             background-color: {BG_CARD};
             color: {TEXT_PRIMARY};
         }}
         QGroupBox::title {{
             subcontrol-origin: margin;
             subcontrol-position: top left;
-            left: 14px;
+            left: 12px;
             top: 4px;
             padding: 2px 8px;
-            background-color: {BG_CARD_ALT};
-            border: 1px solid #282f44;
+            background-color: {BG_PANEL};
+            border: 1px solid {BORDER_BASE};
             border-radius: 4px;
-            color: {TEXT_CYAN};
+            color: {TEXT_PRIMARY};
             font-weight: bold;
-            font-size: 11px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }}
 
-        /* --- BOTONES ESTÁNDAR --- */
+        /* --- BOTONES COMUNES Y SECUNDARIOS --- */
         QPushButton {{
-            background-color: #1f2332;
-            border: 1px solid #33384c;
+            background-color: {BG_INPUT};
+            border: 1px solid {BORDER_BASE};
             border-radius: 4px;
             padding: 5px 12px;
             color: {TEXT_PRIMARY};
             font-weight: 500;
         }}
         QPushButton:hover {{
-            background-color: #292f44;
-            border-color: #4f5573;
+            background-color: #383840;
+            border-color: {BORDER_HOVER};
+            color: #ffffff;
         }}
         QPushButton:pressed {{
-            background-color: #161824;
+            background-color: {BG_CARD};
         }}
         QPushButton:disabled {{
-            background-color: #141620;
+            background-color: {BG_PANEL};
             color: {TEXT_MUTED};
-            border-color: #232738;
+            border-color: #242429;
         }}
 
         /* --- ENTRADA DE DATOS NUMÉRICOS Y TEXTO --- */
         QLineEdit, QSpinBox, QDoubleSpinBox {{
             background-color: {BG_INPUT};
-            border: 1px solid #2a2e42;
+            border: 1px solid {BORDER_BASE};
             border-radius: 4px;
             padding: 4px 6px;
             color: {TEXT_PRIMARY};
             font-size: 11px;
-            selection-background-color: {ACCENT_BLUE};
+            selection-background-color: {ACCENT_COBALT};
             selection-color: #ffffff;
         }}
         QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
             border: 1px solid {BORDER_FOCUS};
         }}
         QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{
-            background-color: #12141c;
+            background-color: {BG_PANEL};
             color: {TEXT_MUTED};
-            border-color: #1e2230;
+            border-color: #242429;
         }}
         QSpinBox::up-button, QDoubleSpinBox::up-button {{
             subcontrol-origin: border;
             subcontrol-position: top right;
             width: 16px;
-            border-left: 1px solid #2a2e42;
-            border-bottom: 1px solid #1e2230;
+            border-left: 1px solid {BORDER_BASE};
+            border-bottom: 1px solid {BORDER_BASE};
             border-top-right-radius: 4px;
-            background-color: #181b28;
+            background-color: {BG_CARD};
         }}
         QSpinBox::down-button, QDoubleSpinBox::down-button {{
             subcontrol-origin: border;
             subcontrol-position: bottom right;
             width: 16px;
-            border-left: 1px solid #2a2e42;
+            border-left: 1px solid {BORDER_BASE};
             border-bottom-right-radius: 4px;
-            background-color: #181b28;
+            background-color: {BG_CARD};
         }}
         QSpinBox::up-button:hover, QSpinBox::down-button:hover,
         QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {{
-            background-color: #252b3d;
+            background-color: #32323a;
         }}
         QSpinBox::up-button:pressed, QSpinBox::down-button:pressed,
         QDoubleSpinBox::up-button:pressed, QDoubleSpinBox::down-button:pressed {{
-            background-color: #121520;
+            background-color: {BG_PANEL};
         }}
         QSpinBox::up-button:disabled, QSpinBox::down-button:disabled,
         QDoubleSpinBox::up-button:disabled, QDoubleSpinBox::down-button:disabled {{
-            background-color: #12141c;
-            border-color: #1e2230;
+            background-color: {BG_PANEL};
+            border-color: #242429;
         }}
         QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
             image: url({CHEVRON_UP_PATH});
@@ -367,22 +406,22 @@ def get_application_stylesheet() -> str:
         /* --- DESPLEGABLES (QComboBox) --- */
         QComboBox {{
             background-color: {BG_INPUT};
-            border: 1px solid #2a2e42;
+            border: 1px solid {BORDER_BASE};
             border-radius: 4px;
             padding: 4px 24px 4px 8px;
             color: {TEXT_PRIMARY};
             font-size: 11px;
         }}
         QComboBox:hover {{
-            border-color: #38bdf8;
+            border-color: {BORDER_HOVER};
         }}
         QComboBox:focus {{
             border: 1px solid {BORDER_FOCUS};
         }}
         QComboBox:disabled {{
-            background-color: #12141c;
+            background-color: {BG_PANEL};
             color: {TEXT_MUTED};
-            border-color: #1e2230;
+            border-color: #242429;
         }}
         QComboBox::drop-down {{
             subcontrol-origin: padding;
@@ -392,7 +431,7 @@ def get_application_stylesheet() -> str:
             background: transparent;
         }}
         QComboBox::drop-down:hover {{
-            background-color: rgba(56, 189, 248, 0.12);
+            background-color: {ACCENT_GHOST_BG};
             border-top-right-radius: 4px;
             border-bottom-right-radius: 4px;
         }}
@@ -412,104 +451,161 @@ def get_application_stylesheet() -> str:
         }}
         QComboBox QAbstractItemView {{
             background-color: {BG_CARD};
-            border: 1px solid #33384c;
+            border: 1px solid {BORDER_BASE};
             color: {TEXT_PRIMARY};
-            selection-background-color: {ACCENT_BLUE};
+            selection-background-color: {ACCENT_COBALT};
             selection-color: #ffffff;
             outline: none;
             padding: 2px;
         }}
 
-        /* --- DESLIZADORES (QSlider) - Pro Studio Minimalista --- */
+        /* --- DESLIZADORES (QSlider) - Tirador Píldora Blanco Hueso #F4F4F5 --- */
         QSlider::groove:horizontal {{
             border: none;
-            height: 3px;
-            background: #242836;
-            border-radius: 1.5px;
+            height: 4px;
+            background: {BG_INPUT};
+            border-radius: 2px;
         }}
         QSlider::sub-page:horizontal {{
-            background: #4a657e;
-            border-radius: 1.5px;
+            background: #3B82F6;
+            border-radius: 2px;
         }}
         QSlider::sub-page:horizontal:disabled {{
-            background: #1a1e29;
+            background: {BG_CARD};
         }}
         QSlider::handle:horizontal {{
-            background: #cbd5e1;
-            width: 6px;
+            background: #F4F4F5;
+            width: 8px;
             height: 16px;
             margin: -6px 0;
-            border-radius: 3px;
-            border: none;
+            border-radius: 4px;
+            border: 1px solid #18181B;
         }}
         QSlider::handle:horizontal:hover {{
-            background: #ffffff;
-            border: 1px solid #38bdf8;
+            background: #FFFFFF;
+            border: 1px solid #09090B;
         }}
         QSlider::handle:horizontal:pressed {{
-            background: #00e5ff;
-            border: 1px solid #ffffff;
+            background: #E4E4E7;
+            border: 1px solid #09090B;
         }}
         QSlider::handle:horizontal:disabled {{
-            background: #334155;
-            border: none;
+            background: #52525B;
+            border: 1px solid #27272A;
         }}
         QSlider::groove:vertical {{
             border: none;
-            width: 3px;
-            background: #242836;
-            border-radius: 1.5px;
+            width: 4px;
+            background: {BG_INPUT};
+            border-radius: 2px;
         }}
         QSlider::sub-page:vertical {{
-            background: #4a657e;
-            border-radius: 1.5px;
+            background: #3B82F6;
+            border-radius: 2px;
         }}
         QSlider::sub-page:vertical:disabled {{
-            background: #1a1e29;
+            background: {BG_CARD};
         }}
         QSlider::handle:vertical {{
-            background: #cbd5e1;
-            height: 6px;
+            background: #F4F4F5;
+            height: 8px;
             width: 16px;
             margin: 0 -6px;
-            border-radius: 3px;
-            border: none;
+            border-radius: 4px;
+            border: 1px solid #18181B;
         }}
         QSlider::handle:vertical:hover {{
-            background: #ffffff;
-            border: 1px solid #38bdf8;
+            background: #FFFFFF;
+            border: 1px solid #09090B;
         }}
         QSlider::handle:vertical:pressed {{
-            background: #00e5ff;
-            border: 1px solid #ffffff;
+            background: #E4E4E7;
+            border: 1px solid #09090B;
         }}
         QSlider::handle:vertical:disabled {{
-            background: #334155;
-            border: none;
+            background: #52525B;
+            border: 1px solid #27272A;
         }}
 
-        /* --- CASILLAS Y SELECTORES --- */
-        QCheckBox, QRadioButton {{
-            color: {TEXT_PRIMARY};
+        /* --- CASILLAS DE VERIFICACIÓN (QCheckBox) --- */
+        QCheckBox {{
+            color: {TEXT_SECONDARY};
             font-size: 11px;
-            spacing: 6px;
+            spacing: 7px;
         }}
-        QCheckBox::indicator, QRadioButton::indicator {{
+        QCheckBox:checked {{
+            color: {TEXT_PRIMARY};
+        }}
+        QCheckBox:disabled {{
+            color: {TEXT_MUTED};
+        }}
+        QCheckBox::indicator {{
             width: 14px;
             height: 14px;
-            background-color: {BG_INPUT};
-            border: 1px solid #33384c;
+            background-color: #1E1E24;
+            border: 1.5px solid #55555F;
             border-radius: 3px;
         }}
+        QCheckBox::indicator:hover {{
+            border-color: #888896;
+            background-color: #26262D;
+        }}
+        QCheckBox::indicator:checked {{
+            image: url({CHECK_WHITE_PATH});
+            background-color: {ACCENT_COBALT};
+            border: 1.5px solid {ACCENT_COBALT};
+        }}
+        QCheckBox::indicator:checked:hover {{
+            background-color: {ACCENT_COBALT_HOVER};
+            border-color: {ACCENT_COBALT_HOVER};
+        }}
+        QCheckBox::indicator:disabled {{
+            background-color: #18181B;
+            border: 1.5px solid #383842;
+        }}
+        QCheckBox::indicator:checked:disabled {{
+            image: url({CHECK_DISABLED_PATH});
+            background-color: #222938;
+            border: 1.5px solid #2D3748;
+        }}
+
+        /* --- SELECTORES DE OPCIÓN ÚNICA (QRadioButton) --- */
+        QRadioButton {{
+            color: {TEXT_SECONDARY};
+            font-size: 11px;
+            spacing: 7px;
+        }}
+        QRadioButton:checked {{
+            color: {TEXT_PRIMARY};
+        }}
+        QRadioButton:disabled {{
+            color: {TEXT_MUTED};
+        }}
         QRadioButton::indicator {{
+            width: 14px;
+            height: 14px;
+            background-color: #1E1E24;
+            border: 1.5px solid #55555F;
             border-radius: 7px;
         }}
-        QCheckBox::indicator:hover, QRadioButton::indicator:hover {{
-            border-color: {ACCENT_CYAN};
+        QRadioButton::indicator:hover {{
+            border-color: #888896;
+            background-color: #26262D;
         }}
-        QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
-            background-color: #0288d1;
-            border: 1px solid {ACCENT_CYAN};
+        QRadioButton::indicator:checked {{
+            background-color: {ACCENT_COBALT};
+            border: 3.5px solid #1E1E24;
+        }}
+        QRadioButton::indicator:checked:hover {{
+            background-color: {ACCENT_COBALT_HOVER};
+        }}
+        QRadioButton::indicator:disabled {{
+            background-color: #18181B;
+            border: 1.5px solid #383842;
+        }}
+        QRadioButton::indicator:checked:disabled {{
+            background-color: {TEXT_MUTED};
+            border: 3.5px solid #18181B;
         }}
 
         /* --- TABLAS Y LISTAS DE ARCHIVOS (QTableWidget, QListWidget) --- */
@@ -518,28 +614,30 @@ def get_application_stylesheet() -> str:
             border: 1px solid {BORDER_BASE};
             border-radius: 4px;
             color: {TEXT_PRIMARY};
-            gridline-color: #1b1e2c;
+            gridline-color: {BG_CARD};
             font-size: 11px;
             outline: none;
         }}
         QTableWidget::item, QTableView::item, QListWidget::item {{
             padding: 3px 6px;
-            border-bottom: 1px solid #141724;
+            border-bottom: 1px solid {BG_CARD};
         }}
         QTableWidget::item:selected, QTableView::item:selected, QListWidget::item:selected {{
-            background-color: #173852;
-            color: {ACCENT_CYAN};
+            background-color: rgba(47, 129, 247, 0.25);
+            color: #ffffff;
+            border-left: 2px solid {ACCENT_COBALT};
         }}
-        QTableWidget::item:hover, QTableView::item:hover, QListWidget::item:hover {{
-            background-color: #161a28;
+        QTableWidget::item:hover:!selected, QTableView::item:hover:!selected, QListWidget::item:hover:!selected {{
+            background-color: #383840;
         }}
         QHeaderView::section {{
-            background-color: #141724;
+            background-color: {BG_PANEL};
             color: {TEXT_SECONDARY};
             padding: 5px 6px;
             border: 1px solid {BORDER_BASE};
             font-weight: bold;
             font-size: 10px;
+            text-transform: uppercase;
         }}
 
         /* --- BARRAS DE PROGRESO (QProgressBar) --- */
@@ -554,7 +652,7 @@ def get_application_stylesheet() -> str:
             height: 18px;
         }}
         QProgressBar::chunk {{
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0288d1, stop:1 {ACCENT_CYAN});
+            background-color: {ACCENT_COBALT};
             border-radius: 3px;
         }}
 
@@ -566,7 +664,7 @@ def get_application_stylesheet() -> str:
             border-radius: 4px;
         }}
         QScrollBar::handle:vertical {{
-            background: #2b3044;
+            background: {BG_INPUT};
             min-height: 20px;
             border-radius: 4px;
         }}
@@ -583,7 +681,7 @@ def get_application_stylesheet() -> str:
             border-radius: 4px;
         }}
         QScrollBar::handle:horizontal {{
-            background: #2b3044;
+            background: {BG_INPUT};
             min-width: 20px;
             border-radius: 4px;
         }}
@@ -597,12 +695,12 @@ def get_application_stylesheet() -> str:
         /* --- CONSOLAS DE TEXTO Y LOGS (QTextEdit) --- */
         QTextEdit, QPlainTextEdit {{
             background-color: {BG_CONSOLE};
-            color: #d4d4d8;
+            color: {TEXT_PRIMARY};
             border: 1px solid {BORDER_BASE};
             border-radius: 4px;
             font-family: "Consolas", "Cascadia Code", "Courier New", monospace;
             font-size: 11px;
-            selection-background-color: #1b384d;
+            selection-background-color: rgba(47, 129, 247, 0.35);
         }}
 
         /* --- ÁREAS DE DESPLAZAMIENTO (QScrollArea) --- */
@@ -613,23 +711,21 @@ def get_application_stylesheet() -> str:
 
         /* --- DIVISORES AJUSTABLES (QSplitter) --- */
         QSplitter::handle {{
-            background-color: #161a28;
+            background-color: {BG_PANEL};
         }}
         QSplitter::handle:horizontal {{
-            background-color: #141824;
-            border-left: 1px solid #1f2638;
-            border-right: 1px solid #1f2638;
+            background-color: {BG_PANEL};
+            border-left: 1px solid {BORDER_BASE};
+            border-right: 1px solid {BORDER_BASE};
         }}
         QSplitter::handle:horizontal:hover {{
-            background-color: #38bdf8;
-            border-left: 1px solid #7dd3fc;
-            border-right: 1px solid #7dd3fc;
+            background-color: {ACCENT_COBALT};
         }}
 
         /* --- INFORMACIÓN FLOTANTE (QToolTip) --- */
         QToolTip {{
-            background-color: #1a1d2b;
-            border: 1px solid #3d435d;
+            background-color: {BG_PANEL};
+            border: 1px solid {BORDER_BASE};
             color: {TEXT_PRIMARY};
             padding: 5px 8px;
             border-radius: 4px;
@@ -638,7 +734,7 @@ def get_application_stylesheet() -> str:
 
         /* --- BARRA DE ESTADO (QStatusBar) --- */
         QStatusBar {{
-            background-color: #08090e;
+            background-color: {BG_WINDOW};
             border-top: 1px solid {BORDER_BASE};
             color: {TEXT_SECONDARY};
             font-size: 11px;
@@ -647,60 +743,60 @@ def get_application_stylesheet() -> str:
 
         /* --- BARRA SUPERIOR DEL LIENZO (CANVAS TOOLBAR) --- */
         QWidget#canvas_toolbar {{
-            background-color: #121520;
-            border-bottom: 1px solid #1e2230;
+            background-color: {BG_PANEL};
+            border-bottom: 1px solid {BORDER_BASE};
             min-height: 36px;
             max-height: 38px;
         }}
         QWidget#canvas_toolbar QPushButton {{
-            background-color: #161924;
-            border: 1px solid #232738;
+            background-color: {BG_CARD};
+            border: 1px solid {BORDER_BASE};
             border-radius: 4px;
             padding: 3px 9px;
-            color: #94a3b8;
+            color: {TEXT_SECONDARY};
             font-size: 11px;
             font-weight: 500;
         }}
         QWidget#canvas_toolbar QPushButton:hover {{
-            background-color: #1c2234;
-            border-color: #38bdf8;
+            background-color: {BG_INPUT};
+            border-color: {BORDER_HOVER};
             color: #ffffff;
         }}
         QWidget#canvas_toolbar QPushButton:pressed {{
-            background-color: #0f172a;
+            background-color: {BG_PANEL};
         }}
         QWidget#canvas_toolbar QPushButton:checked {{
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0369a1, stop:1 #0284c7);
-            border: 1px solid #38bdf8;
+            background-color: {ACCENT_COBALT};
+            border: 1px solid {ACCENT_COBALT};
             color: #ffffff;
             font-weight: 600;
         }}
         QWidget#canvas_toolbar QPushButton:checked:hover {{
-            background: #0284c7;
-            border-color: #7dd3fc;
+            background-color: {ACCENT_COBALT_HOVER};
+            border-color: {ACCENT_COBALT_HOVER};
         }}
         QWidget#canvas_toolbar QPushButton:disabled {{
-            background-color: #12141c;
-            color: #475569;
-            border-color: #1a1e2a;
+            background-color: {BG_PANEL};
+            color: {TEXT_MUTED};
+            border-color: {BORDER_BASE};
         }}
         QWidget#canvas_toolbar QFrame {{
-            color: #232738;
+            color: {BORDER_BASE};
         }}
 
         /* --- BARRA INFERIOR DE ESTADO DEL LIENZO (CANVAS FOOTER BAR) --- */
         QWidget#canvas_footer_bar {{
-            background-color: #0d1017;
-            border-top: 1px solid #1e2230;
+            background-color: {BG_WINDOW};
+            border-top: 1px solid {BORDER_BASE};
             min-height: 24px;
             max-height: 26px;
         }}
         QWidget#canvas_footer_bar QLabel {{
-            color: #94a3b8;
+            color: {TEXT_SECONDARY};
             font-size: 11px;
         }}
         QWidget#canvas_footer_bar QFrame {{
-            color: #232738;
+            color: {BORDER_BASE};
         }}
     """
 

@@ -89,3 +89,11 @@ astroloom_rs/target/
 # Utilidades locales / scripts no trackeados
 build_wiki.py
 
+# Reglas y configuración local de agentes IA y hooks obsoletos
+AGENTS.md
+.antigravityignore
+.geminiignore
+.ignore
+hooks/
+
+

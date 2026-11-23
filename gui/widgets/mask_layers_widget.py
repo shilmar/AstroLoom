@@ -336,28 +336,28 @@ class MaskLayersWidget(QWidget):
         row_create_1.setSpacing(4)
 
         self.btn_add_brush = QPushButton(" Pincel")
-        self.btn_add_brush.setIcon(get_icon("brush", color="#e0e6f0", size=13))
+        self.btn_add_brush.setIcon(get_icon("brush", size=13))
         self.btn_add_brush.setCursor(Qt.PointingHandCursor)
         self.btn_add_brush.setToolTip("Crea una capa con máscara pintada a mano con dureza y opacidad de trazo")
         self.btn_add_brush.clicked.connect(lambda: self.add_new_layer(MASK_TYPE_BRUSH))
         row_create_1.addWidget(self.btn_add_brush)
 
         self.btn_add_linear = QPushButton(" Lineal")
-        self.btn_add_linear.setIcon(get_icon("sliders", color="#80d8ff", size=13))
+        self.btn_add_linear.setIcon(get_icon("sliders", size=13))
         self.btn_add_linear.setCursor(Qt.PointingHandCursor)
         self.btn_add_linear.setToolTip("Filtro degradado lineal vectorial analítico (ideal para cúpulas de polución lumínica)")
         self.btn_add_linear.clicked.connect(lambda: self.add_new_layer(MASK_TYPE_GRADIENT_LINEAR))
         row_create_1.addWidget(self.btn_add_linear)
 
         self.btn_add_radial = QPushButton(" Radial")
-        self.btn_add_radial.setIcon(get_icon("target", color="#80d8ff", size=13))
+        self.btn_add_radial.setIcon(get_icon("target", size=13))
         self.btn_add_radial.setCursor(Qt.PointingHandCursor)
         self.btn_add_radial.setToolTip("Filtro graduado radial elíptico analítico (ideal para el núcleo de la Vía Láctea)")
         self.btn_add_radial.clicked.connect(lambda: self.add_new_layer(MASK_TYPE_GRADIENT_RADIAL))
         row_create_1.addWidget(self.btn_add_radial)
 
         self.btn_add_raster = QPushButton(" Ráster")
-        self.btn_add_raster.setIcon(get_icon("layers", color="#ffb74d", size=13))
+        self.btn_add_raster.setIcon(get_icon("layers", size=13))
         self.btn_add_raster.setCursor(Qt.PointingHandCursor)
         self.btn_add_raster.setToolTip("Carga una imagen externa (H-Alfa, Suelo hora azul, cometa) como capa ráster con modo de fusión")
         self.btn_add_raster.clicked.connect(self._on_add_raster_clicked)
@@ -369,28 +369,28 @@ class MaskLayersWidget(QWidget):
         row_create_2.setSpacing(4)
 
         self.btn_add_luma = QPushButton(" Luminancia")
-        self.btn_add_luma.setIcon(get_icon("sparkles", color="#e0e6f0", size=13))
+        self.btn_add_luma.setIcon(get_icon("sparkles", size=13))
         self.btn_add_luma.setCursor(Qt.PointingHandCursor)
         self.btn_add_luma.setToolTip("Crea una máscara basada en el rango de brillo (Sombras, Medios, Luces)")
         self.btn_add_luma.clicked.connect(lambda: self.add_new_layer(MASK_TYPE_LUMA))
         row_create_2.addWidget(self.btn_add_luma)
 
         self.btn_add_color = QPushButton(" Color")
-        self.btn_add_color.setIcon(get_icon("palette", color="#e0e6f0", size=13))
+        self.btn_add_color.setIcon(get_icon("palette", size=13))
         self.btn_add_color.setCursor(Qt.PointingHandCursor)
         self.btn_add_color.setToolTip("Crea una máscara basada en tono cromático (H-Alfa, OIII, Sodio, etc.)")
         self.btn_add_color.clicked.connect(lambda: self.add_new_layer(MASK_TYPE_COLOR))
         row_create_2.addWidget(self.btn_add_color)
 
         self.btn_add_gnd = QPushButton(" Suelo")
-        self.btn_add_gnd.setIcon(get_icon("mountain", color="#e0e6f0", size=13))
+        self.btn_add_gnd.setIcon(get_icon("mountain", size=13))
         self.btn_add_gnd.setCursor(Qt.PointingHandCursor)
         self.btn_add_gnd.setToolTip("Crea una capa vinculada a la segmentación del terreno")
         self.btn_add_gnd.clicked.connect(lambda: self.add_new_layer(MASK_TYPE_GROUND))
         row_create_2.addWidget(self.btn_add_gnd)
 
         self.btn_add_sky = QPushButton(" Cielo")
-        self.btn_add_sky.setIcon(get_icon("cloud", color="#80d8ff", size=13))
+        self.btn_add_sky.setIcon(get_icon("cloud", size=13))
         self.btn_add_sky.setCursor(Qt.PointingHandCursor)
         self.btn_add_sky.setToolTip("Crea una capa vinculada a la segmentación del cielo / bóveda celeste")
         self.btn_add_sky.clicked.connect(lambda: self.add_new_layer(MASK_TYPE_SKY))
@@ -428,11 +428,11 @@ class MaskLayersWidget(QWidget):
             btn.setCursor(Qt.PointingHandCursor)
             btn.setStyleSheet("""
                 QPushButton {
-                    background-color: #12151e; color: #94a3b8; border: 1px solid #202638;
+                    background-color: #2c2c32; color: #a1a1aa; border: 1px solid #2e2e35;
                     border-radius: 3px; font-size: 10px; font-weight: 600; padding: 0px;
                 }
-                QPushButton:hover { background-color: #1a2234; color: #f1f5f9; }
-                QPushButton:checked { background-color: #0284c7; color: #ffffff; border-color: #38bdf8; font-weight: bold; }
+                QPushButton:hover { background-color: #383840; color: #ffffff; }
+                QPushButton:checked { background-color: #2f81f7; color: #ffffff; border-color: #2f81f7; font-weight: bold; }
             """)
             self.btn_group_size.addButton(btn)
             row_header.addWidget(btn)
@@ -449,13 +449,13 @@ class MaskLayersWidget(QWidget):
         self.list_layers.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.list_layers.setStyleSheet("""
             QListWidget {
-                background-color: #0f121a; border: 1px solid #1e2538; border-radius: 5px; padding: 2px;
+                background-color: #18181b; border: 1px solid #2e2e35; border-radius: 5px; padding: 3px;
             }
             QListWidget::item {
-                background-color: #131722; border: 1px solid #1c2333; border-radius: 4px; margin-bottom: 2px; padding: 0px;
+                background: transparent; border: none; margin-bottom: 3px; padding: 0px;
             }
-            QListWidget::item:selected { background-color: #162033; border: 1px solid #0284c7; }
-            QListWidget::item:hover:!selected { background-color: #161a26; border-color: #28324a; }
+            QListWidget::item:selected { background: transparent; border: none; }
+            QListWidget::item:hover:!selected { background: transparent; }
         """)
         self.list_layers.currentRowChanged.connect(self._on_layer_selection_changed)
         self.list_layers.itemClicked.connect(lambda item: self._on_layer_selection_changed(self.list_layers.row(item)))
@@ -466,27 +466,26 @@ class MaskLayersWidget(QWidget):
         row_actions.setSpacing(6)
 
         self.btn_move_up = QPushButton(" Subir")
-        self.btn_move_up.setIcon(get_icon("chevron_up", color="#b0bec5", size=13))
+        self.btn_move_up.setIcon(get_icon("chevron_up", size=13))
         self.btn_move_up.setToolTip("Mueve la capa seleccionada hacia arriba en la pila")
         self.btn_move_up.clicked.connect(self._move_selected_up)
         row_actions.addWidget(self.btn_move_up)
 
         self.btn_move_down = QPushButton(" Bajar")
-        self.btn_move_down.setIcon(get_icon("chevron_down", color="#b0bec5", size=13))
+        self.btn_move_down.setIcon(get_icon("chevron_down", size=13))
         self.btn_move_down.setToolTip("Mueve la capa seleccionada hacia abajo en la pila")
         self.btn_move_down.clicked.connect(self._move_selected_down)
         row_actions.addWidget(self.btn_move_down)
 
         self.btn_duplicate = QPushButton(" Duplicar")
-        self.btn_duplicate.setIcon(get_icon("copy", color="#b0bec5", size=13))
+        self.btn_duplicate.setIcon(get_icon("copy", size=13))
         self.btn_duplicate.setToolTip("Duplica la capa seleccionada con todos sus parámetros")
         self.btn_duplicate.clicked.connect(self._duplicate_selected)
         row_actions.addWidget(self.btn_duplicate)
 
         self.btn_delete = QPushButton(" Eliminar")
-        self.btn_delete.setIcon(get_icon("trash", color="#ef9a9a", size=13))
+        self.btn_delete.setIcon(get_icon("trash", size=13))
         self.btn_delete.setToolTip("Elimina la capa seleccionada")
-        self.btn_delete.setStyleSheet("color: #ef9a9a;")
         self.btn_delete.clicked.connect(self._delete_selected)
         row_actions.addWidget(self.btn_delete)
 
@@ -1051,6 +1050,61 @@ class MaskLayersWidget(QWidget):
         tw, th = self._get_thumbnail_dimensions()
         return get_raster_mask_thumbnail_pixmap(layer, self._thumb_size_mode, tw, th)
 
+    def _get_layer_domain_colors(self, layer: MaskLayer) -> tuple[str, str]:
+        """
+        Retorna (color_activo, color_atenuado) según la identidad y dominio de la capa:
+        - Estrellas: Celeste vibrante (#38BDF8)
+        - Starless: Violeta cósmico (#8B5CF6)
+        - Suelo / Paisaje: Ámbar (#D97706)
+        - Fondo Base: Azul cobalto (#3B82F6)
+        - Ráster: Ámbar solar (#F59E0B)
+        - Ajustes locales / máscaras cielo: Celeste (#38BDF8) u otros (#818CF8)
+        """
+        if layer.mask_type == MASK_TYPE_IMAGE_STARS:
+            return "#38BDF8", "rgba(56, 189, 248, 0.40)"
+        elif layer.mask_type == MASK_TYPE_IMAGE_STARLESS:
+            return "#8B5CF6", "rgba(139, 92, 246, 0.40)"
+        elif layer.mask_type in (MASK_TYPE_IMAGE_GROUND, MASK_TYPE_GROUND):
+            return "#D97706", "rgba(217, 119, 6, 0.40)"
+        elif layer.mask_type == MASK_TYPE_IMAGE_BASE:
+            return "#3B82F6", "rgba(59, 130, 246, 0.35)"
+        elif layer.mask_type == MASK_TYPE_IMAGE_RASTER:
+            return "#F59E0B", "rgba(245, 158, 11, 0.40)"
+        elif layer.mask_type == MASK_TYPE_SKY:
+            return "#38BDF8", "rgba(56, 189, 248, 0.35)"
+        else:
+            return "#818CF8", "rgba(129, 140, 248, 0.30)"
+
+    def _style_layer_row(self, row_widget: QWidget, layer: MaskLayer, is_selected: bool) -> None:
+        """Aplica estilo táctil con fondo #262932 y borde izquierdo semántico de 3px según dominio característico."""
+        if not row_widget or not layer:
+            return
+        active_col, dim_col = self._get_layer_domain_colors(layer)
+
+        if is_selected:
+            row_widget.setStyleSheet(f"""
+                QWidget#LayerRowWidget {{
+                    background-color: #262932;
+                    border: 1px solid #2e2e35;
+                    border-left: 3px solid {active_col};
+                    border-radius: 4px;
+                }}
+            """)
+        else:
+            row_widget.setStyleSheet(f"""
+                QWidget#LayerRowWidget {{
+                    background-color: #1a1a20;
+                    border: 1px solid #282830;
+                    border-left: 3px solid {dim_col};
+                    border-radius: 4px;
+                }}
+                QWidget#LayerRowWidget:hover {{
+                    background-color: #222228;
+                    border-color: #383842;
+                    border-left: 3px solid {active_col};
+                }}
+            """)
+
     def _rebuild_list_items(self, select_layer_id: Optional[str] = None) -> None:
         self._updating_ui = True
         self.list_layers.clear()
@@ -1064,22 +1118,19 @@ class MaskLayersWidget(QWidget):
 
         select_row = -1
         for i, layer in enumerate(self.layers):
+            active_col, dim_col = self._get_layer_domain_colors(layer)
             if layer.mask_type == MASK_TYPE_IMAGE_BASE:
                 icon_name = "file"
                 type_tag = "Fondo Base"
-                fg_col = "#ffd54f" if layer.enabled else "#607d8b"
             elif layer.mask_type == MASK_TYPE_IMAGE_STARS:
                 icon_name = "star"
-                type_tag = "StarNet AI"
-                fg_col = "#80d8ff" if layer.enabled else "#607d8b"
+                type_tag = "Estrellas"
             elif layer.mask_type == MASK_TYPE_IMAGE_STARLESS:
                 icon_name = "sparkles"
-                type_tag = "StarNet AI"
-                fg_col = "#ce93d8" if layer.enabled else "#607d8b"
+                type_tag = "Starless"
             elif layer.mask_type == MASK_TYPE_IMAGE_GROUND:
                 icon_name = "mountain"
                 type_tag = "Paisaje Suelo"
-                fg_col = "#a5d6a7" if layer.enabled else "#607d8b"
             elif layer.mask_type == MASK_TYPE_IMAGE_RASTER:
                 icon_name = "sun"
                 b_labels = {
@@ -1089,7 +1140,6 @@ class MaskLayersWidget(QWidget):
                 b_mode = getattr(layer, 'blend_mode', 'normal').lower()
                 b_str = b_labels.get(b_mode, b_mode.capitalize())
                 type_tag = f"Ráster ({b_str})"
-                fg_col = "#ffb74d" if layer.enabled else "#607d8b"
             else:
                 type_tag = {
                     MASK_TYPE_BRUSH: "Pincel", MASK_TYPE_LUMA: "Luminancia", MASK_TYPE_COLOR: "Color HSV",
@@ -1099,17 +1149,21 @@ class MaskLayersWidget(QWidget):
 
                 icon_name = {
                     MASK_TYPE_BRUSH: "brush", MASK_TYPE_LUMA: "sparkles", MASK_TYPE_COLOR: "palette",
-                    MASK_TYPE_GROUND: "mountain", MASK_TYPE_SKY: "sparkles",
+                    MASK_TYPE_GROUND: "mountain", MASK_TYPE_SKY: "cloud",
                     MASK_TYPE_GRADIENT_LINEAR: "sliders", MASK_TYPE_GRADIENT_RADIAL: "target",
                 }.get(layer.mask_type, "layers")
-                fg_col = "#e0e6f0" if layer.enabled else "#607d8b"
+
+            ico_col = active_col if layer.enabled else "#607d8b"
+            fg_col = "#e4e4e7" if layer.enabled else "#71717a"
 
             item = QListWidgetItem()
             item.setSizeHint(QSize(0, row_h))
             self.list_layers.addItem(item)
 
             row_widget = QWidget()
-            row_widget.setStyleSheet("background: transparent;")
+            row_widget.setObjectName("LayerRowWidget")
+            is_layer_selected = (select_layer_id and layer.id == select_layer_id) or (not select_layer_id and i == 0)
+            self._style_layer_row(row_widget, layer, is_layer_selected)
             row_layout = QHBoxLayout(row_widget)
             row_layout.setContentsMargins(6, 2, 4, 2)
             row_layout.setSpacing(6)
@@ -1136,7 +1190,7 @@ class MaskLayersWidget(QWidget):
                 lbl_thumb_img = QLabel()
                 lbl_thumb_img.setFixedSize(tw + 2, th + 2)
                 is_img_active = is_layer_selected and (target == "image")
-                border_img = "#38bdf8" if is_img_active else ("#28324a" if layer.enabled else "#161b26")
+                border_img = active_col if is_img_active else (dim_col if layer.enabled else "#161b26")
                 lbl_thumb_img.setStyleSheet(f"""
                     QLabel {{
                         background-color: #07090e; border: {2 if is_img_active else 1}px solid {border_img}; border-radius: 3px;
@@ -1204,7 +1258,7 @@ class MaskLayersWidget(QWidget):
                 pix = self._get_layer_thumbnail_pixmap(layer)
                 lbl_thumb = QLabel()
                 lbl_thumb.setFixedSize(tw + 2, th + 2)
-                border_col = "#28324a" if layer.enabled else "#161b26"
+                border_col = active_col if is_layer_selected else (dim_col if layer.enabled else "#161b26")
                 lbl_thumb.setStyleSheet(f"""
                     QLabel {{
                         background-color: #07090e; border: 1px solid {border_col}; border-radius: 3px;
@@ -1220,14 +1274,17 @@ class MaskLayersWidget(QWidget):
 
             lbl_icon = QLabel()
             lbl_icon.setStyleSheet("background: transparent;")
-            pix_ico = get_svg_pixmap(icon_name, color=fg_col, size=ico_sz)
+            pix_ico = get_svg_pixmap(icon_name, color=ico_col, size=ico_sz)
             if not pix_ico.isNull():
                 lbl_icon.setPixmap(pix_ico)
             lbl_icon.setFixedSize(ico_sz + 2, ico_sz + 2)
             row_layout.addWidget(lbl_icon)
 
             bold_css = "font-weight: bold; " if layer.is_system_layer else ""
-            lbl_title = QLabel(f"{layer.name}  [{type_tag}]")
+            tag_col = active_col if layer.enabled else "#71717a"
+            lbl_title = QLabel()
+            lbl_title.setText(f"{layer.name}  <span style='color: {tag_col}; font-weight: normal; font-size: {max(9, title_pt - 1)}pt;'>[{type_tag}]</span>")
+            lbl_title.setTextFormat(Qt.RichText)
             f = lbl_title.font()
             f.setPointSize(title_pt)
             if layer.is_system_layer:
@@ -1338,6 +1395,19 @@ class MaskLayersWidget(QWidget):
         # Aplicar estilo cromático e identidad
         self._apply_layer_theme(layer)
 
+        # Actualizar resaltado táctil con borde semántico izquierdo en la pila de capas
+        curr_row = self.list_layers.currentRow()
+        for idx in range(self.list_layers.count()):
+            item = self.list_layers.item(idx)
+            if not item:
+                continue
+            w = self.list_layers.itemWidget(item)
+            if not w:
+                continue
+            l = self.layers[idx] if idx < len(self.layers) else None
+            if l:
+                self._style_layer_row(w, l, is_selected=(idx == curr_row))
+
         if not layer:
             self.brush_tool_toggled.emit(False, None)
             self.layer_move_tool_toggled.emit(False)
@@ -1404,66 +1474,64 @@ class MaskLayersWidget(QWidget):
                 self.preview_mask_requested.emit(None)
 
     def _apply_layer_theme(self, layer: Optional[MaskLayer]) -> None:
+        neutral_border = "#2e2e35"
+        neutral_bg = "#222226"
         if layer is None:
-            self.grp_local_adj.apply_theme("#2b3044", "#00e5ff", "#171a26", "Ajustes Locales de Revelado")
-            self.grp_mask_def.apply_theme("#2b3044", "#00e5ff", "#171a26", "Definición de Máscara")
+            self.grp_local_adj.apply_theme(neutral_border, "#3B82F6", neutral_bg, "Ajustes Locales de Revelado")
+            self.grp_mask_def.apply_theme(neutral_border, "#3B82F6", neutral_bg, "Definición de Máscara")
             return
 
         mtype = layer.mask_type
         if mtype in (MASK_TYPE_IMAGE_GROUND, MASK_TYPE_GROUND):
-            border_c, title_c, bg_c = "#43a047", "#81c784", "#141f17"
+            title_c = "#D97706"  # Ámbar Suelo/Paisaje
             adj_title = "Ajustes de Capa de Suelo (Post-Estirado)"
             mask_def_title = "Definición de Máscara de Suelo"
         elif mtype == MASK_TYPE_IMAGE_STARLESS:
-            border_c, title_c, bg_c = "#8e24aa", "#ce93d8", "#1c1424"
+            title_c = "#8B5CF6"  # Violeta suave IA (StarNet)
             adj_title = "Ajustes de Capa de Fondo Nebular"
             mask_def_title = "Definición de Máscara"
         elif mtype == MASK_TYPE_IMAGE_STARS:
-            border_c, title_c, bg_c = "#fbc02d", "#ffd54f", "#221f14"
+            title_c = "#3B82F6"  # Azul Cielo/Estrellas
             adj_title = "Ajustes de Capa de Estrellas"
             mask_def_title = "Definición de Máscara"
         elif mtype == MASK_TYPE_BRUSH:
-            border_c, title_c, bg_c = "#e53935", "#ef5350", "#221415"
+            title_c = "#8B5CF6"  # Violeta suave
             adj_title = "Ajustes Locales de Pincel"
             mask_def_title = "Trazo y Parámetros de Pincel"
         elif mtype == MASK_TYPE_LUMA:
-            border_c, title_c, bg_c = "#fdd835", "#fff59d", "#202018"
+            title_c = "#e2e8f0"  # Neutral silver
             adj_title = "Ajustes Locales de Luminancia"
             mask_def_title = "Rango de Luminancia"
         elif mtype == MASK_TYPE_COLOR:
-            border_c, title_c, bg_c = "#00acc1", "#80d8ff", "#141f24"
+            title_c = "#3B82F6"  # Azul
             adj_title = "Ajustes Locales de Color HSV"
             mask_def_title = "Tono y Tolerancia de Color"
         elif mtype == MASK_TYPE_SKY:
-            border_c, title_c, bg_c = "#1976d2", "#90caf9", "#141924"
+            title_c = "#3B82F6"  # Azul Cielo
             adj_title = "Ajustes de Capa de Cielo"
             mask_def_title = "Definición de Máscara de Cielo"
         elif mtype == MASK_TYPE_IMAGE_BASE:
-            border_c, title_c, bg_c = "#ffa000", "#ffe082", "#1f1c14"
+            title_c = "#3B82F6"  # Azul Cielo Base
             adj_title = "Ajustes de Imagen Base"
             mask_def_title = "Definición de Máscara"
         elif mtype == MASK_TYPE_IMAGE_RASTER:
-            border_c, title_c, bg_c = "#ff9800", "#ffb74d", "#241914"
+            title_c = "#D97706"  # Ámbar
             adj_title = "Ajustes de Capa Ráster / Filtro Coronal"
             mask_def_title = "Máscara Espacial de Capa (Pincel)"
-        elif mtype == MASK_TYPE_GRADIENT_LINEAR:
-            border_c, title_c, bg_c = "#00bcd4", "#80deea", "#141f22"
-            adj_title = "Ajustes Locales de Gradiente Lineal"
-            mask_def_title = "Propiedades de Gradiente Lineal"
-        elif mtype == MASK_TYPE_GRADIENT_RADIAL:
-            border_c, title_c, bg_c = "#00acc1", "#80deea", "#141f22"
-            adj_title = "Ajustes Locales de Gradiente Radial"
-            mask_def_title = "Propiedades de Gradiente Radial"
+        elif mtype in (MASK_TYPE_GRADIENT_LINEAR, MASK_TYPE_GRADIENT_RADIAL):
+            title_c = "#94a3b8"  # Slate neutro sutil
+            adj_title = "Ajustes Locales de Gradiente"
+            mask_def_title = "Propiedades de Gradiente"
         else:
-            border_c, title_c, bg_c = "#2b3044", "#00e5ff", "#171a26"
+            title_c = "#3B82F6"
             adj_title = "Ajustes Locales de Revelado"
             mask_def_title = "Definición de Máscara"
 
-        self.grp_local_adj.apply_theme(border_c, title_c, bg_c, adj_title)
-        self.grp_mask_def.apply_theme(border_c, title_c, bg_c, mask_def_title)
-        self.grp_gnd_special.apply_theme("#43a047", "#81c784", "#141f17", "Ajustes Tonales Especiales de Suelo (Pre-Estirado Lineal)")
-        self.grp_stars_special.apply_theme("#fbc02d", "#ffd54f", "#221f14", "Ajustes Especiales de Estrellas")
-        self.grp_starless_special.apply_theme("#8e24aa", "#ce93d8", "#1c1424", "Ajustes Especiales de Fondo Nebular")
+        self.grp_local_adj.apply_theme(neutral_border, title_c, neutral_bg, adj_title)
+        self.grp_mask_def.apply_theme(neutral_border, title_c, neutral_bg, mask_def_title)
+        self.grp_gnd_special.apply_theme(neutral_border, "#D97706", neutral_bg, "Ajustes Tonales Especiales de Suelo (Pre-Estirado Lineal)")
+        self.grp_stars_special.apply_theme(neutral_border, "#3B82F6", neutral_bg, "Ajustes Especiales de Estrellas")
+        self.grp_starless_special.apply_theme(neutral_border, "#8B5CF6", neutral_bg, "Ajustes Especiales de Fondo Nebular")
 
     def select_layer_by_id(self, layer_id: str) -> bool:
         for layer in self.layers:

@@ -3054,7 +3054,7 @@ def export_coronal_layers_psd(
             clipped = cv2.resize(clipped, (w, h), interpolation=cv2.INTER_LINEAR)
         return np.ascontiguousarray(clipped, dtype=np.float32)
 
-    # Construcción de la pila de capas PSD (de abajo a arriba en Photoshop)
+    # Construcción de la pila de capas PSD (de abajo a arriba)
     layer_records = []
 
     # Fondo HDR Base

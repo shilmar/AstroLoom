@@ -10,7 +10,10 @@ from PySide6.QtCore import Qt, Signal as pyqtSignal
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
 from gui.icons import get_icon
-from gui.theme import STYLE_RUN_IDLE, STYLE_TRANSFER_BTN
+from gui.theme import (
+    STYLE_RUN_IDLE, STYLE_TRANSFER_BTN, STYLE_SPECIAL_ACTION_BTN,
+    BORDER_BASE, TEXT_PRIMARY, TEXT_SECONDARY
+)
 
 
 class DustPanel(QWidget):
@@ -79,7 +82,7 @@ class DustPanel(QWidget):
         # 2. Selector de Modo de Curación
         row_mode = QHBoxLayout()
         lbl_m = QLabel("Modo:")
-        lbl_m.setStyleSheet("color: #c0caf5; font-size: 11px;")
+        lbl_m.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
         lbl_m.setFixedWidth(60)
         row_mode.addWidget(lbl_m)
 
@@ -100,8 +103,8 @@ class DustPanel(QWidget):
 
         # 3. Botón de Búsqueda Automática
         self.btn_auto_detect = QPushButton("Buscar Manchas de Polvo")
-        self.btn_auto_detect.setIcon(get_icon("search", size=13))
-        self.btn_auto_detect.setStyleSheet(STYLE_TRANSFER_BTN)
+        self.btn_auto_detect.setIcon(get_icon("search", color="#2f81f7", size=13))
+        self.btn_auto_detect.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_auto_detect.setCursor(Qt.PointingHandCursor)
         self.btn_auto_detect.setToolTip("Escanea áreas homogéneas y añade parches de curación automáticos.")
         self.btn_auto_detect.clicked.connect(self._on_auto_detect_clicked)
@@ -111,13 +114,13 @@ class DustPanel(QWidget):
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
         sep.setFrameShadow(QFrame.Sunken)
-        sep.setStyleSheet("color: #2e3440; margin: 2px 0;")
+        sep.setStyleSheet(f"color: {BORDER_BASE}; margin: 2px 0;")
         c_layout.addWidget(sep)
 
         # 4. Diagnóstico "Visualizar Manchas (A)"
         row_vis = QHBoxLayout()
         self.chk_visualize = QCheckBox("Visualizar Manchas (Paso Alto)")
-        self.chk_visualize.setStyleSheet("color: #80d8ff; font-weight: bold; font-size: 11px;")
+        self.chk_visualize.setStyleSheet(f"color: {TEXT_PRIMARY}; font-weight: bold; font-size: 11px;")
         self.chk_visualize.setToolTip("Modo de inspección en blanco y negro de alto contraste para detectar motas invisibles a simple vista.")
         self.chk_visualize.toggled.connect(self._on_visualize_toggled)
         row_vis.addWidget(self.chk_visualize)
@@ -138,7 +141,7 @@ class DustPanel(QWidget):
 
         # 5. Estado y controles de manchas
         self.lbl_status = QLabel("0 manchas en la imagen")
-        self.lbl_status.setStyleSheet("color: #94a3b8; font-size: 11px; font-style: italic;")
+        self.lbl_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; font-style: italic;")
         c_layout.addWidget(self.lbl_status)
 
         row_actions = QHBoxLayout()

@@ -429,7 +429,7 @@ def visualize_dust_spots(
 ) -> np.ndarray:
     """Generate a high-pass diagnostic view where sensor dust spots and specks stand out as white dots on black.
 
-    Matches Lightcraft's and Lightroom's 'Visualize Spots (A)' inspection mode.
+    'Visualize Spots (A)' inspection mode.
     """
     if img is None or img.size == 0:
         return img

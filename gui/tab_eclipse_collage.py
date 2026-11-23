@@ -64,7 +64,8 @@ from core.eclipse_collage import (
     HAS_PYTOSHOP
 )
 from core.config_manager import get_config_val
-from gui.theme import STYLE_RUN_IDLE, STYLE_TRANSFER_BTN
+from core.log_hub import log_hub
+from gui.theme import STYLE_RUN_IDLE, STYLE_TRANSFER_BTN, STYLE_SECONDARY_BTN, STYLE_SPECIAL_ACTION_BTN
 from core.icc_manager import save_tiff_with_icc
 from gui.widgets.drop_widgets import DropTableWidget
 from gui.icons import get_icon, get_svg_pixmap, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_ACCENT
@@ -87,7 +88,7 @@ class CollageInteractiveCanvas(QWidget):
         super().__init__(parent)
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setStyleSheet("background: #0f1015; border: 1px solid #262833; border-radius: 4px;")
+        self.setStyleSheet("background: #0a0a0b; border: 1px solid #2e2e35; border-radius: 4px;")
 
         self._pixmap: Optional[QPixmap] = None
         self._zoom: float = 1.0
@@ -301,9 +302,22 @@ class EclipseCollageTab(QWidget):
         self.worker: Optional[EclipseAnalysisWorker] = None
 
         self._setup_ui()
+        self.log_message("Módulo de Collage de Eclipses inicializado.")
 
         if initial_filepaths:
             self.load_filepaths(initial_filepaths)
+
+    def log_message(self, message: str) -> None:
+        """Registra un mensaje de actividad en LogHub y en la interfaz."""
+        log_hub.log("Eclipses", f"[Collage] {message}")
+        if hasattr(self, 'lbl_info'):
+            self.lbl_info.setText(message)
+
+    def _get_configured_workers(self) -> int:
+        """Obtiene el número de hilos concurrentes configurado globalmente en AstroLoom."""
+        cpu_total = os.cpu_count() or 16
+        configured = int(get_config_val("cpu_workers", max(2, cpu_total - 2)))
+        return max(1, min(configured, cpu_total))
 
     def set_mode(self, mode: str):
         """Actualiza la modalidad solar o lunar."""
@@ -326,27 +340,27 @@ class EclipseCollageTab(QWidget):
         splitter.setChildrenCollapsible(False)
 
         # -----------------------------------------------------------------
-        # Panel Izquierdo: Scrollable (420 - 520 px de ancho unificado)
+        # Panel Izquierdo: Redimensionable con Splitter Vertical (420 - 750 px de ancho)
         # -----------------------------------------------------------------
         left_panel = QWidget()
         left_panel.setMinimumWidth(420)
-        left_panel.setMaximumWidth(520)
+        left_panel.setMaximumWidth(750)
         left_panel_layout = QVBoxLayout(left_panel)
         left_panel_layout.setContentsMargins(0, 0, 0, 0)
-        left_panel_layout.setSpacing(6)
+        left_panel_layout.setSpacing(0)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFrameShape(QScrollArea.NoFrame)
-        scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        left_v_splitter = QSplitter(Qt.Vertical)
+        left_v_splitter.setChildrenCollapsible(False)
+        self.left_v_splitter = left_v_splitter
 
-        panel_content = QWidget()
-        left_layout = QVBoxLayout(panel_content)
-        left_layout.setContentsMargins(4, 4, 10, 4)
-        left_layout.setSpacing(10)
-
-        # --- SECCIÓN 1: Ingesta y Cribado de Calidad ---
+        # --- SECCIÓN 1: Ingesta y Cribado de Calidad (Zona Superior Redimensionable) ---
         self.sec_files = CollapsibleSection("1. Ingesta y Cribado de Calidad", is_expanded=True, icon_name="camera")
+        self.sec_files.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        if self.sec_files.layout():
+            self.sec_files.layout().setStretch(0, 0)
+            self.sec_files.layout().setStretch(1, 1)
+        self.sec_files.content_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
         box_files = self.sec_files.content_layout
         box_files.setSpacing(6)
 
@@ -354,8 +368,8 @@ class EclipseCollageTab(QWidget):
         row_mode_sel = QHBoxLayout()
         row_mode_sel.addWidget(QLabel("Modalidad:"))
         self.combo_mode = QComboBox()
-        self.combo_mode.addItem(get_icon("sun", color="#ff4081"), "Eclipse Solar", "solar")
-        self.combo_mode.addItem(get_icon("moon", color="#00e5ff"), "Eclipse Lunar", "lunar")
+        self.combo_mode.addItem(get_icon("sun"), "Eclipse Solar", "solar")
+        self.combo_mode.addItem(get_icon("moon"), "Eclipse Lunar", "lunar")
         self.combo_mode.setCurrentIndex(0 if self.eclipse_mode == "solar" else 1)
         self.combo_mode.currentIndexChanged.connect(self._on_mode_combo_changed)
         row_mode_sel.addWidget(self.combo_mode, stretch=1)
@@ -364,14 +378,14 @@ class EclipseCollageTab(QWidget):
         # Botones de sesión .ecollage
         btn_row_sess = QHBoxLayout()
         self.btn_load_session = QPushButton("Abrir Sesión...")
-        self.btn_load_session.setIcon(get_icon("folder", color="#d1c4e9"))
-        self.btn_load_session.setStyleSheet("font-weight: bold; background: #2a1b4e; color: #d1c4e9; border: 1px solid #7e57c2;")
+        self.btn_load_session.setIcon(get_icon("folder"))
+        self.btn_load_session.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_load_session.setToolTip("Carga una sesión guardada (.ecollage) restaurando todo el análisis y selección instantáneamente")
         self.btn_load_session.clicked.connect(self._on_load_session_clicked)
 
         self.btn_save_session = QPushButton("Guardar Sesión...")
-        self.btn_save_session.setIcon(get_icon("save", color="#d1c4e9"))
-        self.btn_save_session.setStyleSheet("font-weight: bold; background: #2a1b4e; color: #d1c4e9; border: 1px solid #7e57c2;")
+        self.btn_save_session.setIcon(get_icon("save"))
+        self.btn_save_session.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_save_session.setToolTip("Guarda la sesión actual con todos los cálculos de análisis, calidad y selección en un archivo .ecollage")
         self.btn_save_session.clicked.connect(self._on_save_session_clicked)
 
@@ -382,18 +396,24 @@ class EclipseCollageTab(QWidget):
         # Cargar fotos / limpiar
         btn_row_f = QHBoxLayout()
         self.btn_load_files = QPushButton("Cargar Fotos...")
-        self.btn_load_files.setIcon(get_icon("folder", color="#80d8ff"))
-        self.btn_load_files.setStyleSheet("font-weight: bold; color: #80d8ff;")
+        self.btn_load_files.setIcon(get_icon("folder"))
+        self.btn_load_files.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_load_files.clicked.connect(self._on_load_files_clicked)
         self.btn_clear_files = QPushButton("Limpiar")
-        self.btn_clear_files.setIcon(get_icon("trash", color="#ff8a80"))
-        self.btn_clear_files.setStyleSheet("font-weight: bold; color: #ff8a80;")
+        self.btn_clear_files.setIcon(get_icon("trash"))
+        self.btn_clear_files.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_clear_files.clicked.connect(self._on_clear_clicked)
+        self.btn_blink = QPushButton("Visor Blink")
+        self.btn_blink.setIcon(get_icon("eye"))
+        self.btn_blink.setStyleSheet(STYLE_SECONDARY_BTN)
+        self.btn_blink.setToolTip("Abre el visor interactivo Blink para revisar tomas del eclipse y cribar con teclado (X/P)")
+        self.btn_blink.clicked.connect(self.open_blink_viewer)
         btn_row_f.addWidget(self.btn_load_files)
         btn_row_f.addWidget(self.btn_clear_files)
+        btn_row_f.addWidget(self.btn_blink)
         box_files.addLayout(btn_row_f)
 
-        # Tabla interactiva con Drag & Drop
+        # Tabla interactiva con Drag & Drop - Sección redimensionable y expandible
         self.table_files = DropTableWidget()
         self.table_files.setColumnCount(6)
         self.table_files.setHorizontalHeaderLabels(["Usar", "Archivo", "Hora", "% Ocult.", "Fase Detectada", "Nitidez / Estado"])
@@ -404,49 +424,47 @@ class EclipseCollageTab(QWidget):
         self.table_files.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.table_files.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.table_files.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table_files.setMinimumHeight(170)
+        self.table_files.setMinimumHeight(190)
+        self.table_files.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.table_files.itemChanged.connect(self._on_table_item_changed)
         self.table_files.files_dropped.connect(self._on_files_dropped)
-        box_files.addWidget(self.table_files)
+        box_files.addWidget(self.table_files, 1)
 
-        # Opciones de Rendimiento y Multihilo
-        row_perf = QHBoxLayout()
-        row_perf.setSpacing(6)
-        
+        # Opciones de Rendimiento (hilos de CPU globales vía Ajustes)
         self.combo_analysis_speed = QComboBox()
-        self.combo_analysis_speed.addItem(get_icon("zap", color="#ffd54f"), "Modo Rápido (Half-size RAW 4x)", True)
-        self.combo_analysis_speed.addItem(get_icon("target", color="#80d8ff"), "Modo Precisión 1:1 (Full RAW)", False)
+        self.combo_analysis_speed.addItem(get_icon("zap"), "Modo Rápido (Half-size RAW 4x)", True)
+        self.combo_analysis_speed.addItem(get_icon("target"), "Modo Precisión 1:1 (Full RAW)", False)
         self.combo_analysis_speed.setToolTip(
             "Modo Rápido: Procesa RAWs con binning 2x2 acelerando 4x a 8x el análisis sin perder precisión geométrica.\n"
-            "Modo Precisión: Procesa RAWs a resolución 1:1 nativa completa."
+            "Modo Precisión: Procesa RAWs a resolución 1:1 nativa completa.\n"
+            "Nota: Los hilos concurrentes de CPU se gestionan desde la configuración global de la aplicación."
         )
-        row_perf.addWidget(self.combo_analysis_speed, stretch=1)
-
-        lbl_threads = QLabel("Hilos:")
-        lbl_threads.setStyleSheet("color: #b0bec5;")
-        row_perf.addWidget(lbl_threads)
-
-        self.spin_analysis_workers = QSpinBox()
-        cpu_total = os.cpu_count() or 16
-        self.spin_analysis_workers.setRange(1, cpu_total)
-        configured_workers = int(get_config_val("cpu_workers", 4))
-        def_workers = max(configured_workers, max(2, cpu_total - 2))
-        self.spin_analysis_workers.setValue(min(def_workers, cpu_total))
-        self.spin_analysis_workers.setFixedWidth(68)
-        self.spin_analysis_workers.setToolTip(
-            f"Número de hilos de CPU concurrentes para el análisis en lote (Detectados: {cpu_total} núcleos lógicos)"
-        )
-        row_perf.addWidget(self.spin_analysis_workers)
-        box_files.addLayout(row_perf)
+        box_files.addWidget(self.combo_analysis_speed)
 
         self.btn_analyze = QPushButton("Analizar Calidad y Ocultación en Lote")
-        self.btn_analyze.setIcon(get_icon("search", color="#80d8ff"))
+        self.btn_analyze.setIcon(get_icon("search"))
         self.btn_analyze.setFixedHeight(34)
-        self.btn_analyze.setStyleSheet("font-weight: bold; background: #263238; color: #80d8ff; border: 1px solid #80d8ff;")
+        self.btn_analyze.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_analyze.clicked.connect(self._on_analyze_clicked)
         box_files.addWidget(self.btn_analyze)
 
-        left_layout.addWidget(self.sec_files)
+        # Contenedor superior para el splitter vertical
+        ingest_container = QWidget()
+        ingest_container_layout = QVBoxLayout(ingest_container)
+        ingest_container_layout.setContentsMargins(4, 4, 10, 4)
+        ingest_container_layout.setSpacing(6)
+        ingest_container_layout.addWidget(self.sec_files, 1)
+
+        # --- SECCIONES 2, 3 y 4 en ScrollArea Inferior ---
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)
+        scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        panel_content = QWidget()
+        left_layout = QVBoxLayout(panel_content)
+        left_layout.setContentsMargins(4, 4, 10, 4)
+        left_layout.setSpacing(10)
 
         # --- SECCIÓN 2: Recomendador Inteligente ---
         self.sec_rec = CollapsibleSection("2. Recomendador Inteligente de Fases", is_expanded=True, icon_name="sparkles")
@@ -461,8 +479,8 @@ class EclipseCollageTab(QWidget):
         row_rec_ctrl.addWidget(self.combo_target_count)
 
         self.btn_auto_select = QPushButton("Auto-Seleccionar Mejores Tomas")
-        self.btn_auto_select.setIcon(get_icon("zap", color="#ffd54f"))
-        self.btn_auto_select.setStyleSheet("font-weight: bold; color: #ffd54f;")
+        self.btn_auto_select.setIcon(get_icon("zap"))
+        self.btn_auto_select.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_auto_select.setToolTip("Selecciona simétricamente las fotos más nítidas descartando trepidaciones")
         self.btn_auto_select.clicked.connect(self._auto_select_recommended)
         row_rec_ctrl.addWidget(self.btn_auto_select)
@@ -517,7 +535,7 @@ class EclipseCollageTab(QWidget):
 
         self.btn_bg_custom = QPushButton()
         self.btn_bg_custom.setFixedSize(26, 24)
-        self.btn_bg_custom.setStyleSheet(f"background-color: {self.canvas_bg_hex}; border: 1px solid #78909c; border-radius: 3px;")
+        self.btn_bg_custom.setStyleSheet(f"background-color: {self.canvas_bg_hex}; border: 1px solid #2e2e35; border-radius: 3px;")
         self.btn_bg_custom.setToolTip("Elegir color de fondo personalizado")
         self.btn_bg_custom.clicked.connect(self._choose_custom_bg_color)
         row_bg.addWidget(self.btn_bg_custom)
@@ -528,7 +546,7 @@ class EclipseCollageTab(QWidget):
         box_layout.addWidget(self.chk_captions)
 
         self.btn_apply_layout = QPushButton("Actualizar Composición / Collage")
-        self.btn_apply_layout.setIcon(get_icon("refresh", color="#80d8ff"))
+        self.btn_apply_layout.setIcon(get_icon("refresh", color="#ffffff"))
         self.btn_apply_layout.setFixedHeight(36)
         self.btn_apply_layout.setStyleSheet(STYLE_RUN_IDLE)
         self.btn_apply_layout.setToolTip("Aplica los cambios de modalidad, espaciado, escala y margen generando la vista previa")
@@ -542,26 +560,26 @@ class EclipseCollageTab(QWidget):
         box_exp = self.sec_exp.content_layout
         box_exp.setSpacing(6)
 
-        btn_row_exp = QHBoxLayout()
-        self.btn_export_psd = QPushButton("Exportar PSD (Photoshop 16-bit)")
-        self.btn_export_psd.setIcon(get_icon("layers", color="#ffffff"))
-        self.btn_export_psd.setFixedHeight(36)
-        self.btn_export_psd.setStyleSheet("font-weight: bold; background: #0d47a1; color: #ffffff;")
-        self.btn_export_psd.setToolTip("Exporta un archivo de Photoshop nativo con cada fase en su propia capa nombrada")
-        self.btn_export_psd.clicked.connect(self._export_psd_clicked)
-        btn_row_exp.addWidget(self.btn_export_psd)
+        self.btn_save_image = QPushButton("Guardar Collage...")
+        self.btn_save_image.setIcon(get_icon("save"))
+        self.btn_save_image.setFixedHeight(36)
+        self.btn_save_image.setStyleSheet(STYLE_SECONDARY_BTN)
+        self.btn_save_image.setToolTip(
+            "Exporta el collage según la extensión seleccionada en el diálogo:\n"
+            "• TIFF 16-bit (*.tif, *.tiff)\n"
+            "• Photoshop Multicapa (*.psd)\n"
+            "• JPEG Alta Calidad (*.jpg, *.jpeg)"
+        )
+        self.btn_save_image.clicked.connect(self._on_save_collage_clicked)
+        box_exp.addWidget(self.btn_save_image)
 
-        self.btn_export_flat = QPushButton("Guardar Imagen (TIFF / JPG)")
-        self.btn_export_flat.setIcon(get_icon("image", color="#80cbc4"))
-        self.btn_export_flat.setFixedHeight(36)
-        self.btn_export_flat.setStyleSheet("font-weight: bold; color: #80cbc4;")
-        self.btn_export_flat.clicked.connect(self._export_flat_clicked)
-        btn_row_exp.addWidget(self.btn_export_flat)
-        box_exp.addLayout(btn_row_exp)
+        # Aliases para compatibilidad hacia atrás
+        self.btn_export_flat = self.btn_save_image
+        self.btn_export_psd = self.btn_save_image
 
         # Enlace directo al Revelador
         self.btn_export_developer = QPushButton("Enviar Collage al Revelador / Editor")
-        self.btn_export_developer.setIcon(get_icon("arrow_right", color="#ffffff"))
+        self.btn_export_developer.setIcon(get_icon("arrow_right"))
         self.btn_export_developer.setFixedHeight(36)
         self.btn_export_developer.setStyleSheet(STYLE_TRANSFER_BTN)
         self.btn_export_developer.setToolTip("Exporta el collage como imagen plana y la abre inmediatamente en el Revelador para ajuste tonal y color")
@@ -572,7 +590,15 @@ class EclipseCollageTab(QWidget):
         left_layout.addStretch()
 
         scroll_area.setWidget(panel_content)
-        left_panel_layout.addWidget(scroll_area)
+
+        # Ensamblar divisor vertical
+        left_v_splitter.addWidget(ingest_container)
+        left_v_splitter.addWidget(scroll_area)
+        left_v_splitter.setStretchFactor(0, 3)
+        left_v_splitter.setStretchFactor(1, 4)
+        left_v_splitter.setSizes([400, 460])
+
+        left_panel_layout.addWidget(left_v_splitter)
         self.splitter = splitter
         self.left_panel = left_panel
         splitter.addWidget(left_panel)
@@ -601,7 +627,7 @@ class EclipseCollageTab(QWidget):
 
         # Botón Actualizar composición
         self.btn_refresh = QPushButton("Actualizar")
-        self.btn_refresh.setIcon(get_icon("refresh", color="#80d8ff"))
+        self.btn_refresh.setIcon(get_icon("refresh"))
         self.btn_refresh.setToolTip("Re-renderizar la composición previa del collage")
         self.btn_refresh.clicked.connect(self._update_preview)
         self.toolbar.insert_custom_widget_before_stretch(self.btn_refresh)
@@ -617,7 +643,7 @@ class EclipseCollageTab(QWidget):
         self.toolbar.insert_custom_widget_before_stretch(self.btn_zoom_out)
 
         self.lbl_zoom_val = QLabel("100%")
-        self.lbl_zoom_val.setStyleSheet("color: #80d8ff; font-weight: bold; min-width: 44px;")
+        self.lbl_zoom_val.setStyleSheet("color: #2f81f7; font-weight: bold; min-width: 44px;")
         self.lbl_zoom_val.setAlignment(Qt.AlignCenter)
         self.toolbar.insert_custom_widget_before_stretch(self.lbl_zoom_val)
 
@@ -631,13 +657,13 @@ class EclipseCollageTab(QWidget):
         # Badge de Modo a la derecha (estilo idéntico a Eclipse HDR)
         self.lbl_mode_badge = QLabel("● Modo: Solar (Collage)")
         self.lbl_mode_badge.setStyleSheet(
-            "background-color: #141724; border: 1px solid #ff4081; border-radius: 4px; padding: 2px 8px; color: #ff4081; font-weight: bold; font-size: 11px;"
+            "background-color: #222227; border: 1px solid #2e2e35; border-radius: 4px; padding: 2px 8px; color: #2f81f7; font-weight: bold; font-size: 11px;"
         )
         self.toolbar.add_widget(self.lbl_mode_badge)
 
         # Etiqueta informativa de fases
         self.lbl_info = QLabel("0 fases seleccionadas")
-        self.lbl_info.setStyleSheet("color: #90a4ae; font-size: 11px;")
+        self.lbl_info.setStyleSheet("color: #a1a1aa; font-size: 11px;")
         self.toolbar.add_widget(self.lbl_info)
 
         right_layout.addWidget(self.toolbar)
@@ -674,13 +700,14 @@ class EclipseCollageTab(QWidget):
             if self.eclipse_mode == "solar":
                 self.lbl_mode_badge.setText("● Modo: Solar (Collage)")
                 self.lbl_mode_badge.setStyleSheet(
-                    "background-color: #141724; border: 1px solid #ff4081; border-radius: 4px; padding: 2px 8px; color: #ff4081; font-weight: bold; font-size: 11px;"
+                    "background-color: #222227; border: 1px solid #2e2e35; border-radius: 4px; padding: 2px 8px; color: #2f81f7; font-weight: bold; font-size: 11px;"
                 )
             else:
                 self.lbl_mode_badge.setText("● Modo: Lunar (Collage)")
                 self.lbl_mode_badge.setStyleSheet(
-                    "background-color: #141724; border: 1px solid #00e5ff; border-radius: 4px; padding: 2px 8px; color: #00e5ff; font-weight: bold; font-size: 11px;"
+                    "background-color: #222227; border: 1px solid #2e2e35; border-radius: 4px; padding: 2px 8px; color: #2f81f7; font-weight: bold; font-size: 11px;"
                 )
+        self.log_message(f"Modalidad cambiada a: Eclipse {'Solar' if self.eclipse_mode == 'solar' else 'Lunar'}")
 
     def toggle_left_panel(self, visible: Optional[bool] = None) -> None:
         """Muestra u oculta el panel lateral izquierdo de controles de collage de eclipses (Atajo: F7 o [)."""
@@ -740,17 +767,19 @@ class EclipseCollageTab(QWidget):
             "draw_captions": self.chk_captions.isChecked(),
             "target_count_idx": self.combo_target_count.currentIndex(),
             "fast_mode_idx": self.combo_analysis_speed.currentIndex(),
-            "analysis_workers": self.spin_analysis_workers.value()
+            "analysis_workers": self._get_configured_workers()
         }
 
         ok = save_eclipse_collage_session(filepath, self.frames_meta, settings, mode=self.eclipse_mode)
         if ok:
+            self.log_message(f"✓ Sesión de collage guardada: {os.path.basename(filepath)}")
             QMessageBox.information(
                 self,
                 "Sesión Guardada",
                 f"Sesión guardada exitosamente con {len(self.frames_meta)} fotogramas analizados:\n{filepath}"
             )
         else:
+            self.log_message(f"[ERROR] No se pudo guardar la sesión en: {filepath}")
             QMessageBox.critical(self, "Error", "No se pudo guardar el archivo de sesión.")
 
     def _on_load_session_clicked(self):
@@ -815,19 +844,23 @@ class EclipseCollageTab(QWidget):
             if "fast_mode_idx" in settings:
                 self.combo_analysis_speed.setCurrentIndex(int(settings["fast_mode_idx"]))
             if "analysis_workers" in settings:
-                self.spin_analysis_workers.setValue(int(settings["analysis_workers"]))
+                pass  # Los hilos de CPU ahora se leen de la configuración global de la aplicación
 
             self._populate_table()
             self._update_preview()
 
             num_rec = len([f for f in frames if f.is_recommended])
-            QMessageBox.information(
-                self,
-                "Sesión Cargada",
-                f"Sesión restaurada correctamente:\n{len(frames)} fotogramas cargados ({num_rec} seleccionados).\n"
-                f"No es necesario reanalizar los archivos."
-            )
+            msg = f"Sesión restaurada: {len(frames)} fotogramas cargados ({num_rec} seleccionados)."
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(100)
+            self.progress_bar.setFormat(f"Sesión cargada ({len(frames)} fotos, {num_rec} sel.)")
+            self.lbl_info.setText(msg)
+            if hasattr(self, 'canvas_footer'):
+                self.canvas_footer.set_progress(100, f"Sesión cargada: {len(frames)} fotos")
+            self.log_message(f"✓ {msg}")
         except Exception as e:
+            self.log_message(f"[ERROR] Al cargar sesión: {e}")
             QMessageBox.critical(self, "Error al cargar sesión", f"No se pudo cargar la sesión:\n{e}")
 
     # -----------------------------------------------------------------
@@ -886,10 +919,15 @@ class EclipseCollageTab(QWidget):
 
         self.frames_meta.extend(new_metas)
         self._populate_table()
+        msg = f"Carga finalizada: {len(new_metas)} tomas añadidas (Total: {len(self.frames_meta)})."
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat(f"Cargadas {len(self.frames_meta)} fotos (pulsa 'Analizar')")
+        self.lbl_info.setText(f"{msg} Pulsa 'Analizar'.")
         if hasattr(self, 'canvas_footer'):
-            self.canvas_footer.hide_progress()
-        self.progress_bar.setVisible(False)
-        self.lbl_info.setText(f"Carga finalizada: {len(self.frames_meta)} tomas añadidas (pulsa 'Analizar').")
+            self.canvas_footer.set_progress(100, f"Cargadas {len(self.frames_meta)} fotos")
+        self.log_message(f"✓ {msg}")
 
     def _on_clear_clicked(self):
         self._tile_cache.clear()
@@ -897,6 +935,10 @@ class EclipseCollageTab(QWidget):
         self.table_files.setRowCount(0)
         self.canvas_preview.set_image(None)
         self.lbl_info.setText("Vista Previa del Collage (0 fases seleccionadas)")
+        self.progress_bar.setVisible(False)
+        if hasattr(self, 'canvas_footer'):
+            self.canvas_footer.hide_progress()
+        self.log_message("Lista de fotos y vista previa vaciadas.")
 
     def _populate_table(self):
         self.table_files.blockSignals(True)
@@ -925,43 +967,36 @@ class EclipseCollageTab(QWidget):
             phase_text = f.phase_label or "Pendiente"
             phase_item = QTableWidgetItem(phase_text)
             phase_item.setTextAlignment(Qt.AlignCenter)
-            if "Diamante" in phase_text:
-                phase_item.setForeground(QColor("#80d8ff"))
+            if "TOTALIDAD" in phase_text:
+                phase_item.setForeground(QColor("#2f81f7"))
                 font = phase_item.font()
                 font.setBold(True)
                 phase_item.setFont(font)
-            elif "Baily" in phase_text:
-                phase_item.setForeground(QColor("#ffd54f"))
+            elif "Diamante" in phase_text or "Baily" in phase_text:
+                phase_item.setForeground(QColor("#e4e4e7"))
                 font = phase_item.font()
                 font.setBold(True)
                 phase_item.setFont(font)
-            elif "TOTALIDAD" in phase_text:
-                phase_item.setForeground(QColor("#b388ff"))
-                font = phase_item.font()
-                font.setBold(True)
-                phase_item.setFont(font)
-            elif "Entrada" in phase_text:
-                phase_item.setForeground(QColor("#90caf9"))
-            elif "Salida" in phase_text:
-                phase_item.setForeground(QColor("#a5d6a7"))
+            elif "Entrada" in phase_text or "Salida" in phase_text:
+                phase_item.setForeground(QColor("#a1a1aa"))
             else:
-                phase_item.setForeground(QColor("#90a4ae"))
+                phase_item.setForeground(QColor("#71717a"))
             self.table_files.setItem(row, 4, phase_item)
 
             # Columna 5: Nitidez / Estado
             if f.sharpness_score > 0:
                 if f.is_trepidated:
                     status_text = f"● {f.sharpness_score:.0f} (Movida)"
-                    color = QColor("#ff5252")
+                    color = QColor("#ef4444")
                 elif f.sharpness_score >= 80:
                     status_text = f"● {f.sharpness_score:.0f} (Nítida)"
-                    color = QColor("#00e676")
+                    color = QColor("#2f81f7")
                 else:
                     status_text = f"● {f.sharpness_score:.0f}"
-                    color = QColor("#ffd54f")
+                    color = QColor("#a1a1aa")
             else:
                 status_text = "Pendiente"
-                color = QColor("#90a4ae")
+                color = QColor("#71717a")
 
             status_item = QTableWidgetItem(status_text)
             status_item.setForeground(color)
@@ -976,6 +1011,57 @@ class EclipseCollageTab(QWidget):
             if 0 <= row < len(self.frames_meta):
                 self.frames_meta[row].is_recommended = (item.checkState() == Qt.Checked)
                 self._update_preview()
+
+    def open_blink_viewer(self):
+        """Abre el visor interactivo Blink para revisar tomas del eclipse."""
+        if not self.frames_meta:
+            QMessageBox.information(
+                self,
+                "Visor Blink",
+                "No hay fotogramas cargados para inspeccionar.\n\n"
+                "Carga primero tomas del eclipse antes de abrir el visor Blink."
+            )
+            return
+
+        from gui.dialog_blink import BlinkDialog
+
+        file_list = [f.filepath for f in self.frames_meta]
+        excluded = {f.filepath for f in self.frames_meta if not f.is_recommended}
+
+        selected_rows = [idx.row() for idx in self.table_files.selectedIndexes()]
+        curr_idx = selected_rows[0] if selected_rows else 0
+
+        dlg = BlinkDialog(
+            file_list=file_list,
+            excluded_files=excluded,
+            current_index=curr_idx,
+            parent=self
+        )
+        dlg.exclusion_changed.connect(self._on_blink_exclusion_changed)
+        dlg.selection_applied.connect(self._on_blink_selection_applied)
+        dlg.exec()
+
+    def _on_blink_exclusion_changed(self, filepath: str, is_included: bool):
+        for row, f in enumerate(self.frames_meta):
+            if f.filepath == filepath:
+                f.is_recommended = is_included
+                item = self.table_files.item(row, 0)
+                if item:
+                    self.table_files.blockSignals(True)
+                    item.setCheckState(Qt.Checked if is_included else Qt.Unchecked)
+                    self.table_files.blockSignals(False)
+                break
+        self._update_preview()
+
+    def _on_blink_selection_applied(self, excluded_set: set):
+        self.table_files.blockSignals(True)
+        for row, f in enumerate(self.frames_meta):
+            f.is_recommended = (f.filepath not in excluded_set)
+            item = self.table_files.item(row, 0)
+            if item:
+                item.setCheckState(Qt.Checked if f.is_recommended else Qt.Unchecked)
+        self.table_files.blockSignals(False)
+        self._update_preview()
 
     # -----------------------------------------------------------------
     # Análisis y Clasificación Automática
@@ -999,12 +1085,13 @@ class EclipseCollageTab(QWidget):
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.btn_analyze.setText("Cancelar Análisis")
-        self.btn_analyze.setIcon(get_icon("stop", color="#ffcdd2"))
-        self.btn_analyze.setStyleSheet("font-weight: bold; background: #b71c1c; color: #ffcdd2; border: 1px solid #e57373;")
+        self.btn_analyze.setIcon(get_icon("stop"))
+        self.btn_analyze.setStyleSheet("font-weight: bold; background: #352020; color: #f87171; border: 1px solid #7f1d1d; border-radius: 4px; padding: 6px;")
         self.btn_analyze.setEnabled(True)
 
         fast_mode = bool(self.combo_analysis_speed.currentData())
-        workers = self.spin_analysis_workers.value()
+        workers = self._get_configured_workers()
+        self.log_message(f"Iniciando análisis de calidad y ocultación ({len(fps)} tomas, {workers} hilos de CPU, modo {'rápido' if fast_mode else 'precisión'})...")
 
         self.worker = EclipseAnalysisWorker(
             fps, 
@@ -1030,23 +1117,25 @@ class EclipseCollageTab(QWidget):
         if hasattr(self, 'canvas_footer'):
             self.canvas_footer.hide_progress()
         self.btn_analyze.setText("Analizar Calidad y Ocultación en Lote")
-        self.btn_analyze.setIcon(get_icon("search", color="#80d8ff"))
-        self.btn_analyze.setStyleSheet("font-weight: bold; background: #263238; color: #80d8ff; border: 1px solid #80d8ff;")
+        self.btn_analyze.setIcon(get_icon("search"))
+        self.btn_analyze.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_analyze.setEnabled(True)
         if results:
             self._tile_cache.clear()
             self.frames_meta = results
             self._populate_table()
             self._auto_select_recommended()
+            self.log_message(f"✓ Análisis de lote completado: {len(results)} tomas procesadas con éxito.")
 
     def _on_worker_error(self, err: str):
         self.progress_bar.setVisible(False)
         if hasattr(self, 'canvas_footer'):
             self.canvas_footer.hide_progress()
         self.btn_analyze.setText("Analizar Calidad y Ocultación en Lote")
-        self.btn_analyze.setIcon(get_icon("search", color="#80d8ff"))
-        self.btn_analyze.setStyleSheet("font-weight: bold; background: #263238; color: #80d8ff; border: 1px solid #80d8ff;")
+        self.btn_analyze.setIcon(get_icon("search"))
+        self.btn_analyze.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_analyze.setEnabled(True)
+        self.log_message(f"[ERROR] En análisis de lote: {err}")
         QMessageBox.critical(self, "Error de Análisis", f"Ocurrió un error analizando el lote:\n{err}")
 
     def _auto_select_recommended(self):
@@ -1059,6 +1148,7 @@ class EclipseCollageTab(QWidget):
         recommend_key_frames(self.frames_meta, num_targets=num)
         self._populate_table()
         self._update_preview()
+        self.log_message(f"Recomendador automático: seleccionadas {num} fases clave del eclipse.")
 
     # -----------------------------------------------------------------
     # Callbacks de Controles y Zoom
@@ -1097,7 +1187,7 @@ class EclipseCollageTab(QWidget):
         self.canvas_bg_hex = hex_str
         c = QColor(hex_str)
         self.canvas_bg_color = (c.redF(), c.greenF(), c.blueF())
-        self.btn_bg_custom.setStyleSheet(f"background-color: {hex_str}; border: 1px solid #78909c; border-radius: 3px;")
+        self.btn_bg_custom.setStyleSheet(f"background-color: {hex_str}; border: 1px solid #2e2e35; border-radius: 3px;")
 
 
     def _on_zoom_changed(self, zoom: float):
@@ -1137,7 +1227,7 @@ class EclipseCollageTab(QWidget):
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            workers = self.spin_analysis_workers.value() if hasattr(self, 'spin_analysis_workers') else None
+            workers = self._get_configured_workers()
             cw, ch, placements = compute_collage_layout(
                 selected,
                 layout_type=layout_mode,
@@ -1165,74 +1255,66 @@ class EclipseCollageTab(QWidget):
             QApplication.restoreOverrideCursor()
 
     # -----------------------------------------------------------------
-    # Exportaciones
+    # Exportaciones y Guardado Unificado
     # -----------------------------------------------------------------
-    def _export_psd_clicked(self):
+    def _on_save_collage_clicked(self):
+        """Guarda el collage en el formato seleccionado por extensión o filtro (TIFF, PSD, JPG)."""
         selected = self._get_selected_frames()
         if not selected:
             QMessageBox.warning(self, "Aviso", "No hay fases seleccionadas para exportar.")
             return
 
-        if not HAS_PYTOSHOP:
-            QMessageBox.warning(self, "Aviso", "El módulo 'pytoshop' no está disponible en este entorno.")
-            return
-
         export_dir = get_config_val("export_dir", "exportaciones")
         os.makedirs(export_dir, exist_ok=True)
-        filepath, _ = QFileDialog.getSaveFileName(
+        default_path = os.path.join(export_dir, "eclipse_collage_final.tif")
+
+        filtros = (
+            "TIFF 16-bit (*.tif *.tiff);;"
+            "Photoshop Multicapa (*.psd);;"
+            "JPEG Alta Calidad (*.jpg *.jpeg)"
+        )
+        filepath, selected_filter = QFileDialog.getSaveFileName(
             self,
-            "Guardar Collage de Eclipse como PSD por Capas",
-            os.path.join(export_dir, "eclipse_collage_capas.psd"),
-            "Photoshop PSD (*.psd)"
+            "Guardar Collage de Eclipse",
+            default_path,
+            filtros,
+            selectedFilter="TIFF 16-bit (*.tif *.tiff)"
         )
         if not filepath:
             return
 
-        layout_mode = self._get_current_layout_mode()
-        gap = self.slider_gap.value()
-        tot_scale = self.slider_tot_scale.value() / 100.0
-        crop_factor = self.slider_pad.value() / 100.0
-        draw_caps = self.chk_captions.isChecked()
-        workers = self.spin_analysis_workers.value() if hasattr(self, 'spin_analysis_workers') else None
+        filepath = os.path.abspath(os.path.normpath(str(filepath).strip()))
+        ext = os.path.splitext(filepath)[1].lower()
+        if not ext:
+            if "Photoshop" in selected_filter or "*.psd" in selected_filter:
+                ext = ".psd"
+            elif "JPEG" in selected_filter or "*.jpg" in selected_filter:
+                ext = ".jpg"
+            else:
+                ext = ".tif"
+            filepath += ext
 
-        cw, ch, placements = compute_collage_layout(
-            selected,
-            layout_type=layout_mode,
-            canvas_width=3840,
-            target_disk_radius=150,
-            gap_spacing=gap,
-            totality_scale=tot_scale,
-            crop_margin_factor=crop_factor,
-            fast_preview=False,
-            max_workers=workers
-        )
-
-        ok = export_layered_psd(filepath, cw, ch, placements, bg_color=self.canvas_bg_color, depth=16, include_captions=draw_caps)
-        if ok:
-            QMessageBox.information(
-                self, 
-                "Exportación Exitosa", 
-                f"Collage exportado en PSD por capas de 16-bit:\n{filepath}\n\n"
-                f"Lienzo: {cw} × {ch} px ({len(placements)} fases + capa marcas horarias)."
-            )
+        if ext == ".psd" or ("Photoshop" in selected_filter and ext not in [".tif", ".tiff", ".jpg", ".jpeg"]):
+            self._do_export_psd(filepath, selected)
         else:
-            QMessageBox.critical(self, "Error", "No se pudo generar el archivo PSD.")
+            self._do_export_flat(filepath, selected, ext)
+
+    def _export_psd_clicked(self):
+        """Alias de compatibilidad para exportación a PSD."""
+        self._on_save_collage_clicked()
 
     def _export_flat_clicked(self):
-        selected = self._get_selected_frames()
-        if not selected:
-            QMessageBox.warning(self, "Aviso", "No hay fases seleccionadas para exportar.")
-            return
+        """Alias de compatibilidad para exportación plana (TIFF/JPG)."""
+        self._on_save_collage_clicked()
 
-        export_dir = get_config_val("export_dir", "exportaciones")
-        os.makedirs(export_dir, exist_ok=True)
-        filepath, _ = QFileDialog.getSaveFileName(
-            self,
-            "Guardar Imagen del Collage",
-            os.path.join(export_dir, "eclipse_collage_final.tif"),
-            "TIFF 16-bit (*.tif *.tiff);;JPEG Alta Calidad (*.jpg *.jpeg)"
-        )
-        if not filepath:
+    def _do_export_psd(self, filepath: str, selected: List[EclipseFrameMetadata]):
+        if not HAS_PYTOSHOP:
+            QMessageBox.warning(
+                self,
+                "Aviso",
+                "El módulo 'pytoshop' no está disponible en este entorno.\n"
+                "Para exportar archivos PSD multicapa, asegúrate de tener instalada la dependencia pytoshop."
+            )
             return
 
         layout_mode = self._get_current_layout_mode()
@@ -1240,35 +1322,94 @@ class EclipseCollageTab(QWidget):
         tot_scale = self.slider_tot_scale.value() / 100.0
         crop_factor = self.slider_pad.value() / 100.0
         draw_caps = self.chk_captions.isChecked()
-        workers = self.spin_analysis_workers.value() if hasattr(self, 'spin_analysis_workers') else None
+        workers = self._get_configured_workers()
 
-        cw, ch, placements = compute_collage_layout(
-            selected,
-            layout_type=layout_mode,
-            canvas_width=3840,
-            target_disk_radius=150,
-            gap_spacing=gap,
-            totality_scale=tot_scale,
-            crop_margin_factor=crop_factor,
-            fast_preview=False,
-            max_workers=workers
-        )
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setFormat("Generando archivo PSD por capas...")
+        self.log_message(f"Iniciando exportación de PSD multicapa a: {os.path.basename(filepath)}...")
+        QApplication.processEvents()
 
-        flat = render_flat_collage(cw, ch, placements, bg_color=self.canvas_bg_color, draw_captions=draw_caps)
+        try:
+            cw, ch, placements = compute_collage_layout(
+                selected,
+                layout_type=layout_mode,
+                canvas_width=3840,
+                target_disk_radius=150,
+                gap_spacing=gap,
+                totality_scale=tot_scale,
+                crop_margin_factor=crop_factor,
+                fast_preview=False,
+                max_workers=workers
+            )
 
-        ext = os.path.splitext(filepath)[1].lower()
-        if ext in (".tif", ".tiff"):
-            save_tiff_with_icc(filepath, flat, bit_depth=16, profile_name="sRGB")
-        else:
-            u8 = (np.clip(flat, 0.0, 1.0) * 255.0).astype(np.uint8)
-            bgr = cv2.cvtColor(u8, cv2.COLOR_RGB2BGR)
-            cv2.imwrite(filepath, bgr, [cv2.IMWRITE_JPEG_QUALITY, 98])
+            ok = export_layered_psd(filepath, cw, ch, placements, bg_color=self.canvas_bg_color, depth=16, include_captions=draw_caps)
+            if ok:
+                msg = f"Collage exportado en PSD por capas de 16-bit:\n{filepath}\n\nLienzo: {cw} × {ch} px ({len(placements)} fases + capa marcas horarias)."
+                self.log_message(f"✓ PSD exportado: {os.path.basename(filepath)} ({len(placements)} capas)")
+                self.progress_bar.setRange(0, 100)
+                self.progress_bar.setValue(100)
+                self.progress_bar.setFormat(f"✓ PSD exportado ({len(placements)} capas)")
+                QMessageBox.information(self, "PSD Generado", msg)
+            else:
+                self.log_message(f"[ERROR] No se pudo generar el archivo PSD en: {filepath}")
+                QMessageBox.critical(self, "Error", "No se pudo generar el archivo PSD.")
+        except Exception as e:
+            self.log_message(f"[ERROR] Al exportar PSD: {e}")
+            QMessageBox.critical(self, "Error", f"No se pudo generar el archivo PSD:\n{e}")
+        finally:
+            self.progress_bar.setVisible(False)
 
-        QMessageBox.information(
-            self,
-            "Guardado Exitoso",
-            f"Imagen de collage guardada correctamente:\n{filepath}\n\nDimensiones: {cw} × {ch} px"
-        )
+    def _do_export_flat(self, filepath: str, selected: List[EclipseFrameMetadata], ext: str):
+        layout_mode = self._get_current_layout_mode()
+        gap = self.slider_gap.value()
+        tot_scale = self.slider_tot_scale.value() / 100.0
+        crop_factor = self.slider_pad.value() / 100.0
+        draw_caps = self.chk_captions.isChecked()
+        workers = self._get_configured_workers()
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setFormat(f"Renderizando imagen de collage ({ext.upper()})...")
+        self.log_message(f"Renderizando imagen de collage ({ext.upper()})...")
+        QApplication.processEvents()
+
+        try:
+            cw, ch, placements = compute_collage_layout(
+                selected,
+                layout_type=layout_mode,
+                canvas_width=3840,
+                target_disk_radius=150,
+                gap_spacing=gap,
+                totality_scale=tot_scale,
+                crop_margin_factor=crop_factor,
+                fast_preview=False,
+                max_workers=workers
+            )
+
+            flat = render_flat_collage(cw, ch, placements, bg_color=self.canvas_bg_color, draw_captions=draw_caps)
+
+            if ext in (".tif", ".tiff"):
+                save_tiff_with_icc(filepath, flat, bit_depth=16, profile_name="sRGB")
+            else:
+                u8 = (np.clip(flat, 0.0, 1.0) * 255.0).astype(np.uint8)
+                bgr = cv2.cvtColor(u8, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(filepath, bgr, [cv2.IMWRITE_JPEG_QUALITY, 98])
+
+            self.log_message(f"✓ Imagen de collage guardada: {os.path.basename(filepath)} ({cw}x{ch} px)")
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(100)
+            self.progress_bar.setFormat(f"✓ Guardado: {os.path.basename(filepath)}")
+            QMessageBox.information(
+                self,
+                "Collage Guardado",
+                f"Imagen de collage guardada correctamente:\n{filepath}\n\nDimensiones: {cw} × {ch} px"
+            )
+        except Exception as e:
+            self.log_message(f"[ERROR] Al guardar imagen: {e}")
+            QMessageBox.critical(self, "Error de Exportación", f"No se pudo guardar la imagen:\n{e}")
+        finally:
+            self.progress_bar.setVisible(False)
 
     def _export_to_developer_clicked(self):
         """Exporta el collage como imagen plana y la abre inmediatamente en el Revelador."""
@@ -1282,9 +1423,10 @@ class EclipseCollageTab(QWidget):
         tot_scale = self.slider_tot_scale.value() / 100.0
         crop_factor = self.slider_pad.value() / 100.0
         draw_caps = self.chk_captions.isChecked()
-        workers = self.spin_analysis_workers.value() if hasattr(self, 'spin_analysis_workers') else None
+        workers = self._get_configured_workers()
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.log_message("Transfiriendo imagen del collage al módulo Revelador...")
         try:
             cw, ch, placements = compute_collage_layout(
                 selected,
@@ -1305,8 +1447,10 @@ class EclipseCollageTab(QWidget):
             temp_path = os.path.join(temp_dir, "eclipse_collage_temp_developer.tif")
             save_tiff_with_icc(temp_path, flat, bit_depth=16, profile_name="sRGB")
 
+            self.log_message("✓ Collage transferido al Revelador con éxito.")
             self.export_to_developer.emit(temp_path)
         except Exception as e:
+            self.log_message(f"[ERROR] Error al transferir al Revelador: {e}")
             QMessageBox.critical(self, "Error al transferir al Revelador", f"No se pudo generar la imagen:\n{e}")
         finally:
             QApplication.restoreOverrideCursor()

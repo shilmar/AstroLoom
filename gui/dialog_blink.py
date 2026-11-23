@@ -19,12 +19,13 @@ import numpy as np
 
 from PySide6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QSlider, QCheckBox, QComboBox, QFrame, QSizePolicy, QApplication
+    QSlider, QCheckBox, QComboBox, QFrame, QSizePolicy, QApplication,
+    QSplitter, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QSize
 from PySide6.QtGui import QImage, QPixmap, QKeyEvent, QColor, QPainter
 
-from gui.theme import apply_theme, BG_CARD, BORDER_BASE, TEXT_MUTED
+from gui.theme import apply_theme, BG_CARD, BORDER_BASE, TEXT_MUTED, BG_CANVAS, BG_PANEL
 from gui.icons import get_icon
 
 
@@ -187,17 +188,19 @@ class BlinkDialog(QDialog):
         excluded_files: Optional[Set[str]] = None,
         culling_results: Optional[Dict[str, Any]] = None,
         current_index: int = 0,
+        metadata_cache: Optional[Dict[str, Dict[str, Any]]] = None,
         parent: Optional[QWidget] = None
     ):
         super().__init__(parent, Qt.Window)
         self.setWindowTitle("AstroLoom - Visor Rápido de Subframes (Blink & Culling)")
-        self.resize(1100, 750)
+        self.resize(1150, 750)
         apply_theme(self)
 
         self.file_list: List[str] = list(file_list)
         self.excluded_files: Set[str] = set(excluded_files) if excluded_files else set()
         self.culling_results: Dict[str, Any] = culling_results if culling_results else {}
         self.current_idx: int = max(0, min(current_index, len(self.file_list) - 1)) if self.file_list else 0
+        self._metadata_cache: Dict[str, Dict[str, Any]] = metadata_cache if metadata_cache is not None else {}
 
         # Caché de memoria en búfer circular
         self._cache: Dict[str, np.ndarray] = {}
@@ -241,6 +244,12 @@ class BlinkDialog(QDialog):
 
         h_layout.addStretch()
 
+        self.btn_toggle_side = QPushButton("Ocultar Lista")
+        self.btn_toggle_side.setIcon(get_icon("sidebar", size=13))
+        self.btn_toggle_side.setToolTip("Muestra u oculta la lista lateral de tomas de la serie")
+        self.btn_toggle_side.clicked.connect(self._toggle_side_panel)
+        h_layout.addWidget(self.btn_toggle_side)
+
         self.chk_auto_stretch = QCheckBox("Auto-Estirado (LUT)")
         self.chk_auto_stretch.setChecked(True)
         self.chk_auto_stretch.setToolTip("Aplica un estirado temporal para ver tomas lineales oscuras con brillo óptimo")
@@ -250,10 +259,79 @@ class BlinkDialog(QDialog):
         root_layout.addWidget(header)
 
         # =====================================================================
-        # LIENZO CENTRAL
+        # ZONA CENTRAL: SPLITTER CON TABLA DE TOMAS A LA IZQUIERDA Y CANVAS A LA DERECHA
         # =====================================================================
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
+
+        # Panel lateral con tabla de tomas
+        self.side_panel = QFrame()
+        self.side_panel.setMinimumWidth(280)
+        self.side_panel.setMaximumWidth(480)
+        self.side_panel.setStyleSheet(f"background-color: {BG_CARD}; border: 1px solid {BORDER_BASE}; border-radius: 6px;")
+        side_layout = QVBoxLayout(self.side_panel)
+        side_layout.setContentsMargins(6, 6, 6, 6)
+        side_layout.setSpacing(4)
+
+        side_hdr = QHBoxLayout()
+        lbl_list_title = QLabel("Tomas de la Serie")
+        lbl_list_title.setStyleSheet("font-weight: bold; font-size: 11px; color: #cbd5e1;")
+        side_hdr.addWidget(lbl_list_title)
+        side_hdr.addStretch()
+
+        self.lbl_blink_summary = QLabel(f"{len(self.file_list)} tomas")
+        self.lbl_blink_summary.setStyleSheet("color: #94a3b8; font-size: 10px;")
+        side_hdr.addWidget(self.lbl_blink_summary)
+        side_layout.addLayout(side_hdr)
+
+        self.table_blink = QTableWidget(len(self.file_list), 5)
+        self.table_blink.setHorizontalHeaderLabels(["#", "Uso", "Archivo", "Exp.", "ISO"])
+        self.table_blink.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table_blink.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table_blink.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table_blink.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table_blink.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.table_blink.verticalHeader().setVisible(False)
+        self.table_blink.verticalHeader().setDefaultSectionSize(22)
+        self.table_blink.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table_blink.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table_blink.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {BG_CANVAS};
+                border: 1px solid {BORDER_BASE};
+                border-radius: 4px;
+                gridline-color: #1a1a1e;
+                font-size: 11px;
+            }}
+            QTableWidget::item {{
+                padding: 1px 4px;
+                color: #e2e8f0;
+            }}
+            QTableWidget::item:selected {{
+                background-color: #1e293b;
+                color: #ffffff;
+            }}
+            QHeaderView::section {{
+                background-color: {BG_PANEL};
+                color: #94a3b8;
+                padding: 2px 4px;
+                font-size: 10px;
+                font-weight: 600;
+                border: 1px solid {BORDER_BASE};
+            }}
+        """)
+        self.table_blink.itemSelectionChanged.connect(self._on_table_selection_changed)
+        side_layout.addWidget(self.table_blink)
+
         self.canvas = BlinkCanvas(self)
-        root_layout.addWidget(self.canvas, stretch=1)
+        self.splitter.addWidget(self.side_panel)
+        self.splitter.addWidget(self.canvas)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([340, 810])
+
+        root_layout.addWidget(self.splitter, stretch=1)
+        self._populate_table()
 
         # =====================================================================
         # BARRA INFERIOR: Controles de Reproducción y Cribado
@@ -431,6 +509,17 @@ class BlinkDialog(QDialog):
             self.lbl_status_badge.setText("✗ DESCARTADA")
             self.lbl_status_badge.setStyleSheet("color: #f87171; background-color: #2a1520; border: 1px solid #ef4444; border-radius: 4px; padding: 2px 8px; font-weight: bold;")
 
+        # Actualizar indicador en la tabla lateral
+        if hasattr(self, 'table_blink') and self.table_blink.rowCount() > self.current_idx:
+            status_item = self.table_blink.item(self.current_idx, 1)
+            if status_item:
+                status_item.setText("● INCL" if is_included else "✕ DESC")
+                status_item.setForeground(QColor("#4ade80") if is_included else QColor("#f87171"))
+        if hasattr(self, 'lbl_blink_summary'):
+            total = len(self.file_list)
+            inc = total - len(self.excluded_files)
+            self.lbl_blink_summary.setText(f"{inc}/{total} activas")
+
         # Métricas ópticas si están disponibles
         if path in self.culling_results:
             r = self.culling_results[path]
@@ -454,6 +543,15 @@ class BlinkDialog(QDialog):
         self.lbl_title.setText(f"Fotograma {self.current_idx + 1} de {total} : {filename} ({included_count}/{total} activas)")
         self._update_badges()
 
+        # Sincronizar selección y scroll en la tabla lateral
+        if hasattr(self, 'table_blink') and self.table_blink.rowCount() > self.current_idx:
+            self.table_blink.blockSignals(True)
+            self.table_blink.selectRow(self.current_idx)
+            item = self.table_blink.item(self.current_idx, 0)
+            if item:
+                self.table_blink.scrollToItem(item)
+            self.table_blink.blockSignals(False)
+
         # Obtener imagen de caché o cargar
         if path in self._cache:
             self.canvas.set_image(self._cache[path])
@@ -463,6 +561,57 @@ class BlinkDialog(QDialog):
             if img_u8 is not None:
                 self._cache[path] = img_u8
             self.canvas.set_image(img_u8)
+
+    def _toggle_side_panel(self):
+        """Muestra u oculta el panel lateral de tomas para dar más espacio al lienzo."""
+        self._side_panel_visible = not getattr(self, '_side_panel_visible', True)
+        self.side_panel.setVisible(self._side_panel_visible)
+        self.btn_toggle_side.setText("Ocultar Lista" if self._side_panel_visible else "Mostrar Lista")
+
+    def _populate_table(self):
+        """Rellena la tabla lateral con la lista de tomas y sus metadatos fotográficos."""
+        from core.startrails import extract_shot_exif
+        self.table_blink.blockSignals(True)
+        for row, path in enumerate(self.file_list):
+            if path not in self._metadata_cache:
+                self._metadata_cache[path] = extract_shot_exif(path)
+            meta = self._metadata_cache[path]
+            is_inc = (path not in self.excluded_files)
+
+            idx_item = QTableWidgetItem(f"{row + 1}")
+            idx_item.setTextAlignment(Qt.AlignCenter)
+            idx_item.setForeground(QColor("#94a3b8"))
+
+            status_item = QTableWidgetItem("● INCL" if is_inc else "✕ DESC")
+            status_item.setTextAlignment(Qt.AlignCenter)
+            status_item.setForeground(QColor("#4ade80") if is_inc else QColor("#f87171"))
+
+            name_item = QTableWidgetItem(os.path.basename(path))
+            name_item.setToolTip(path)
+
+            exp_item = QTableWidgetItem(meta.get("exp_str", "—"))
+            exp_item.setTextAlignment(Qt.AlignCenter)
+
+            iso_item = QTableWidgetItem(meta.get("iso_str", "—"))
+            iso_item.setTextAlignment(Qt.AlignCenter)
+
+            self.table_blink.setItem(row, 0, idx_item)
+            self.table_blink.setItem(row, 1, status_item)
+            self.table_blink.setItem(row, 2, name_item)
+            self.table_blink.setItem(row, 3, exp_item)
+            self.table_blink.setItem(row, 4, iso_item)
+
+        if 0 <= self.current_idx < len(self.file_list):
+            self.table_blink.selectRow(self.current_idx)
+        self.table_blink.blockSignals(False)
+
+    def _on_table_selection_changed(self):
+        """Cambia el fotograma activo al hacer clic o navegar con teclado en la tabla lateral."""
+        selected = self.table_blink.selectedIndexes()
+        if selected:
+            row = selected[0].row()
+            if 0 <= row < len(self.file_list) and row != self.current_idx:
+                self.set_current_index(row)
 
     def _preload_neighbors(self):
         """Precarga fotogramas adyacentes en segundo plano para transición instantánea."""
@@ -505,10 +654,20 @@ class BlinkDialog(QDialog):
             self.next_frame()
         elif key == Qt.Key_Space:
             self.toggle_play()
-        elif key in (Qt.Key_X, Qt.Key_Down, Qt.Key_Delete):
+        elif key in (Qt.Key_X, Qt.Key_Delete):
             self.discard_current_frame()
-        elif key in (Qt.Key_P, Qt.Key_Up, Qt.Key_Insert):
+        elif key in (Qt.Key_P, Qt.Key_Insert):
             self.keep_current_frame()
+        elif key == Qt.Key_Up:
+            if hasattr(self, 'table_blink') and self.table_blink.hasFocus():
+                super().keyPressEvent(event)
+            else:
+                self.prev_frame()
+        elif key == Qt.Key_Down:
+            if hasattr(self, 'table_blink') and self.table_blink.hasFocus():
+                super().keyPressEvent(event)
+            else:
+                self.next_frame()
         elif key == Qt.Key_Escape:
             self.accept()
         else:
@@ -518,7 +677,7 @@ class BlinkDialog(QDialog):
         if self._timer.isActive():
             self._timer.stop()
         try:
-            self._executor.shutdown(wait=False, cancel_futures=True)
+            self._executor.shutdown(wait=True, cancel_futures=True)
         except Exception:
             pass
         self.selection_applied.emit(self.excluded_files)
@@ -528,7 +687,7 @@ class BlinkDialog(QDialog):
         if self._timer.isActive():
             self._timer.stop()
         try:
-            self._executor.shutdown(wait=False, cancel_futures=True)
+            self._executor.shutdown(wait=True, cancel_futures=True)
         except Exception:
             pass
         super().reject()
@@ -537,7 +696,7 @@ class BlinkDialog(QDialog):
         if self._timer.isActive():
             self._timer.stop()
         try:
-            self._executor.shutdown(wait=False, cancel_futures=True)
+            self._executor.shutdown(wait=True, cancel_futures=True)
         except Exception:
             pass
         self.selection_applied.emit(self.excluded_files)

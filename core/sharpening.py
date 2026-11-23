@@ -1,6 +1,6 @@
 # core/sharpening.py
 """
-core/sharpening.py - Máscara de Enfoque con Detección de Bordes (Estilo Lightroom).
+core/sharpening.py - Máscara de Enfoque con Detección de Bordes.
 Proporciona realce selectivo de altas frecuencias espaciales (USM) con protección de ruido
 en zonas homogéneas y cielo nocturno mediante gradientes de Sobel y smoothstep thresholding.
 """

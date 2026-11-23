@@ -44,7 +44,8 @@ class GroundSkyPanel(QWidget):
             "1. Paisaje y Máscara de Suelo (Horizonte IA)",
             is_expanded=True,
             on_reset=self.reset_requested.emit,
-            icon_name="mountain"
+            icon_name="mountain",
+            domain="ground"
         )
         w_gnd_tone = QWidget()
         gnd_tone_layout = QVBoxLayout(w_gnd_tone)
@@ -54,31 +55,32 @@ class GroundSkyPanel(QWidget):
         # 1. Estado de la Máscara de Suelo
         row_mask_status = QHBoxLayout()
         self.lbl_gnd_mask_status = QLabel("Sin máscara de suelo activa")
-        self.lbl_gnd_mask_status.setStyleSheet("color: #ffb74d; font-size: 11px;")
+        self.lbl_gnd_mask_status.setStyleSheet("color: #a1a1aa; font-size: 11px;")
         row_mask_status.addWidget(self.lbl_gnd_mask_status, stretch=1)
         gnd_tone_layout.addLayout(row_mask_status)
 
-        # 2. Botón principal: Detección Automática con IA
+        # 2. Botón principal: Detección Automática con IA (Ghost / Outline Azul Cobalto)
         self.btn_ai_mask = QPushButton("✨ Detectar Suelo con IA")
-        self.btn_ai_mask.setIcon(get_icon("sparkles", color="#ffffff", size=14))
+        self.btn_ai_mask.setIcon(get_icon("sparkles", color="#2f81f7", size=14))
         self.btn_ai_mask.setCursor(Qt.PointingHandCursor)
         self.btn_ai_mask.setFixedHeight(32)
         self.btn_ai_mask.setStyleSheet("""
             QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6a1b9a, stop:1 #8e24aa);
-                color: #ffffff;
+                background-color: rgba(47, 129, 247, 0.12);
+                color: #2f81f7;
                 font-weight: bold;
-                border: 1px solid #ba68c8;
+                border: 1px solid #2f81f7;
                 border-radius: 4px;
                 padding: 4px 12px;
                 font-size: 11px;
             }
             QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #7b1fa2, stop:1 #9c27b0);
-                border-color: #ce93d8;
+                background-color: rgba(47, 129, 247, 0.22);
+                border-color: #388bfd;
+                color: #ffffff;
             }
             QPushButton:pressed {
-                background-color: #4a148c;
+                background-color: rgba(47, 129, 247, 0.32);
             }
         """)
         self.btn_ai_mask.setToolTip("Detecta automáticamente el horizonte y suelo mediante IA ligera U²-Net con 1 solo clic")
@@ -90,21 +92,22 @@ class GroundSkyPanel(QWidget):
         row_actions.setSpacing(4)
 
         self.btn_edit_ground_mask = QPushButton("Pintar en Lienzo (M)")
-        self.btn_edit_ground_mask.setIcon(get_icon("brush", color="#80d8ff", size=13))
+        self.btn_edit_ground_mask.setIcon(get_icon("brush", size=13))
         self.btn_edit_ground_mask.setCursor(Qt.PointingHandCursor)
         self.btn_edit_ground_mask.setStyleSheet("""
             QPushButton {
-                background-color: #1a2736;
-                color: #80d8ff;
-                border: 1px solid #2a3b50;
+                background-color: #2c2c32;
+                color: #e4e4e7;
+                border: 1px solid #2e2e35;
                 border-radius: 4px;
                 padding: 4px 8px;
                 font-size: 11px;
-                font-weight: bold;
+                font-weight: 500;
             }
             QPushButton:hover {
-                background-color: #24354a;
-                border-color: #38bdf8;
+                background-color: #383840;
+                border-color: #3f3f46;
+                color: #ffffff;
             }
         """)
         self.btn_edit_ground_mask.setToolTip("Abre la herramienta de trazado interactivo de máscara en el visor (Atajo: M)")
@@ -112,26 +115,27 @@ class GroundSkyPanel(QWidget):
         row_actions.addWidget(self.btn_edit_ground_mask, stretch=2)
 
         self.btn_overlay_mask = QPushButton("Ver")
-        self.btn_overlay_mask.setIcon(get_icon("layers", color="#cfd8dc", size=13))
+        self.btn_overlay_mask.setIcon(get_icon("layers", size=13))
         self.btn_overlay_mask.setCheckable(True)
         self.btn_overlay_mask.setCursor(Qt.PointingHandCursor)
         self.btn_overlay_mask.setStyleSheet("""
             QPushButton {
-                background-color: #222733;
-                color: #cfd8dc;
-                border: 1px solid #333d4d;
+                background-color: #2c2c32;
+                color: #e4e4e7;
+                border: 1px solid #2e2e35;
                 border-radius: 4px;
                 padding: 4px 8px;
                 font-size: 11px;
             }
             QPushButton:checked {
-                background-color: #1b5e20;
-                color: #a5d6a7;
-                border-color: #4caf50;
+                background-color: #2f81f7;
+                color: #ffffff;
+                border-color: #2f81f7;
                 font-weight: bold;
             }
             QPushButton:hover {
-                background-color: #2d3545;
+                background-color: #383840;
+                color: #ffffff;
             }
         """)
         self.btn_overlay_mask.setToolTip("Alterna la visualización superpuesta (overlay verde/rojo) de la máscara en el lienzo")
@@ -139,25 +143,26 @@ class GroundSkyPanel(QWidget):
         row_actions.addWidget(self.btn_overlay_mask, stretch=1)
 
         self.btn_delete_mask = QPushButton("Borrar")
-        self.btn_delete_mask.setIcon(get_icon("trash", color="#ef9a9a", size=13))
+        self.btn_delete_mask.setIcon(get_icon("trash", size=13))
         self.btn_delete_mask.setCursor(Qt.PointingHandCursor)
         self.btn_delete_mask.setStyleSheet("""
             QPushButton {
-                background-color: #2a1b1b;
-                color: #ef9a9a;
-                border: 1px solid #5a2c2c;
+                background-color: #2c2c32;
+                color: #e4e4e7;
+                border: 1px solid #2e2e35;
                 border-radius: 4px;
                 padding: 4px 8px;
                 font-size: 11px;
             }
             QPushButton:hover {
-                background-color: #3d2323;
-                border-color: #ef5350;
+                background-color: #383840;
+                border-color: #da3633;
+                color: #f87171;
             }
             QPushButton:disabled {
-                background-color: #1a1c23;
-                color: #4c566a;
-                border: 1px solid #2a2e39;
+                background-color: #1a1a1e;
+                color: #71717a;
+                border: 1px solid #242429;
             }
         """)
         self.btn_delete_mask.setToolTip("Elimina la máscara actual y devuelve el cielo a cobertura completa")
@@ -172,15 +177,15 @@ class GroundSkyPanel(QWidget):
             "Si tu toma no contiene paisaje (solo cielo / cielo profundo), puedes ignorar este paso."
         )
         self.lbl_gnd_tip.setWordWrap(True)
-        self.lbl_gnd_tip.setStyleSheet("color: #78909c; font-size: 10px; line-height: 1.3;")
+        self.lbl_gnd_tip.setStyleSheet("color: #71717a; font-size: 10px; line-height: 1.3;")
         gnd_tone_layout.addWidget(self.lbl_gnd_tip)
 
         # 5. Tarjeta informativa de la Capa de Suelo en el gestor
         self.card_gnd_info = QFrame()
         self.card_gnd_info.setStyleSheet("""
             QFrame {
-                background-color: #152219;
-                border: 1px solid #2e7d32;
+                background-color: #222227;
+                border: 1px solid #2e2e35;
                 border-radius: 6px;
                 padding: 4px;
             }
@@ -194,7 +199,7 @@ class GroundSkyPanel(QWidget):
             "en la Capa de Suelo dentro del Gestor de Capas."
         )
         self.lbl_gnd_info.setWordWrap(True)
-        self.lbl_gnd_info.setStyleSheet("color: #c8e6c9; font-size: 10px; line-height: 1.3;")
+        self.lbl_gnd_info.setStyleSheet("color: #a1a1aa; font-size: 10px; line-height: 1.3;")
         layout_card_gnd.addWidget(self.lbl_gnd_info)
 
         gnd_tone_layout.addWidget(self.card_gnd_info)
@@ -258,13 +263,13 @@ class GroundSkyPanel(QWidget):
         if has_mask:
             desc = f"Máscara activa ({source_name})" if source_name else "Máscara de suelo activa"
             self.lbl_gnd_mask_status.setText(f"● {desc}")
-            self.lbl_gnd_mask_status.setStyleSheet("color: #a5d6a7; font-size: 11px; font-weight: bold;")
+            self.lbl_gnd_mask_status.setStyleSheet("color: #D97706; font-size: 11px; font-weight: bold;")
             self.btn_edit_ground_mask.setText("Refinar Pincel (M)")
             self.btn_delete_mask.setEnabled(True)
             self.btn_overlay_mask.setEnabled(True)
         else:
             self.lbl_gnd_mask_status.setText("Sin máscara de suelo (Todo cielo)")
-            self.lbl_gnd_mask_status.setStyleSheet("color: #ffb74d; font-size: 11px;")
+            self.lbl_gnd_mask_status.setStyleSheet("color: #71717a; font-size: 11px;")
             self.btn_edit_ground_mask.setText("Pintar en Lienzo (M)")
             self.btn_delete_mask.setEnabled(False)
             self.btn_overlay_mask.setEnabled(False)

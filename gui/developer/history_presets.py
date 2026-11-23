@@ -276,7 +276,7 @@ class HistoryPresetsMixin:
         """Habilita o deshabilita individualmente todos los controles que dependen de StarNet."""
         if hasattr(self, "sec_starnet"):
             if enabled:
-                self.sec_starnet.set_status_badge("● Separadas", "#00e5ff")
+                self.sec_starnet.set_status_badge("● Separadas", "#8B5CF6")
             else:
                 self.sec_starnet.set_status_badge("")
 

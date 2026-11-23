@@ -3,7 +3,6 @@
 gui/widgets/viewer_toolbar.py - Barra de herramientas superior unificada y modular
 para los visores interactivos de AstroLoom (Startrails, Meteoros, Panorámicas, Eclipses).
 
-Inspirada en la ergonomía y estética de Adobe Lightroom y el Revelador RAW de AstroLoom.
 Permite colapsar el panel lateral izquierdo, regular modos de visualización (Natural/MTF/Realce),
 activar indicadores de recorte, zoom 1:1, vista ajustada y lupa de inspección flotante.
 """
@@ -324,7 +323,7 @@ class ViewerToolbar(QWidget):
 class CanvasFooterBar(QWidget):
     """
     Barra inferior de estado, modo de herramienta, barra de progreso compacta
-    (estilo Photoshop) y metadatos del lienzo reutilizable para los visores de AstroLoom.
+    y metadatos del lienzo reutilizable para los visores de AstroLoom.
     """
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -354,7 +353,7 @@ class CanvasFooterBar(QWidget):
         # Espaciador elástico
         layout.addStretch(1)
 
-        # 3. Barra de Progreso Compacta Estilo Photoshop (oculta por defecto)
+        # 3. Barra de Progreso Compacta (oculta por defecto)
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(16)
         self.progress_bar.setFixedWidth(290)

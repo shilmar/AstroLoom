@@ -863,7 +863,7 @@ def apply_developer_pipeline(
         )
 
         if sharp_preview:
-            # Previsualización monocroma de alto contraste estilo Lightroom (Alt-drag)
+            # Previsualización monocroma de alto contraste (Alt-drag)
             stretched = np.repeat(edge_mask[..., np.newaxis], 3, axis=2)
         else:
             stretched = apply_unsharp_mask(

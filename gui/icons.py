@@ -13,15 +13,15 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtCore import QByteArray, Qt
 from PySide6.QtWidgets import QApplication
 
-# Color tokens por defecto para iconos
-ICON_COLOR_MUTED    = "#64748b"  # Deshabilitado
-ICON_COLOR_DEFAULT  = "#94a3b8"  # En reposo
-ICON_COLOR_HOVER    = "#f1f5f9"  # Hover
-ICON_COLOR_ACTIVE   = "#38bdf8"  # Activo / Destacado
-ICON_COLOR_ACCENT   = "#00e5ff"  # Cian celestial
-ICON_COLOR_SUCCESS  = "#4ade80"  # Éxito / Máscara visible
-ICON_COLOR_DANGER   = "#f87171"  # Descarte / Error
-ICON_COLOR_WARNING  = "#fbbf24"  # Advertencia
+# Color tokens por defecto para iconos (Neutral Studio Pro - 60-30-10)
+ICON_COLOR_MUTED    = "#71717a"  # Deshabilitado
+ICON_COLOR_DEFAULT  = "#a1a1aa"  # En reposo (Gris neutro de menor contraste)
+ICON_COLOR_HOVER    = "#e4e4e7"  # Hover (Gris claro de alta legibilidad)
+ICON_COLOR_ACTIVE   = "#2f81f7"  # Activo / Destacado (Azul Cobalto de enfoque)
+ICON_COLOR_ACCENT   = "#2f81f7"  # Azul Cobalto de acento
+ICON_COLOR_SUCCESS  = "#a1a1aa"  # Estado normal neutro
+ICON_COLOR_DANGER   = "#da3633"  # Descarte / Error
+ICON_COLOR_WARNING  = "#d97706"  # Advertencia
 
 # =============================================================================
 # DEFINICIONES SVG VECTORIALES (ViewBox 0 0 24 24, stroke=currentColor)

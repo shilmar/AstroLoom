@@ -31,6 +31,7 @@ from core.mask_layers import (
     LIMIT_MASK_GROUND,
 )
 from gui.icons import get_icon
+from gui.theme import STYLE_SECONDARY_BTN, STYLE_SPECIAL_ACTION_BTN
 from gui.widgets.precision_slider import PrecisionSliderRow
 from gui.widgets.mask_layers.common import make_resettable_label, make_box_qss
 
@@ -132,28 +133,34 @@ class MaskDefinitionWidget(QGroupBox):
         row_refine.addWidget(self.slider_refine_strength, stretch=1)
 
         self.lbl_refine_val = QLabel("100%")
-        self.lbl_refine_val.setStyleSheet("color: #80d8ff; font-weight: bold; min-width: 35px;")
+        self.lbl_refine_val.setStyleSheet("color: #2f81f7; font-weight: bold; min-width: 35px;")
         row_refine.addWidget(self.lbl_refine_val)
         self.layout_mask_def.addLayout(row_refine)
 
         # 7. Botón de previsualización en lienzo
         self.btn_preview_mask = QPushButton(" Previsualizar Máscara en Lienzo")
-        self.btn_preview_mask.setIcon(get_icon("eye", color="#80d8ff", size=13))
+        self.btn_preview_mask.setIcon(get_icon("eye", color="#2f81f7", size=13))
         self.btn_preview_mask.setCheckable(True)
         self.btn_preview_mask.setCursor(Qt.PointingHandCursor)
         self.btn_preview_mask.setStyleSheet("""
             QPushButton {
-                background-color: #1a2736;
-                color: #80d8ff;
-                border: 1px solid #0288d1;
+                background-color: rgba(47, 129, 247, 0.12);
+                color: #2f81f7;
+                border: 1px solid #2f81f7;
                 border-radius: 4px;
-                padding: 4px;
+                padding: 5px;
                 font-size: 11px;
                 font-weight: bold;
             }
-            QPushButton:checked {
-                background-color: #0288d1;
+            QPushButton:hover {
+                background-color: rgba(47, 129, 247, 0.22);
+                border-color: #388bfd;
                 color: #ffffff;
+            }
+            QPushButton:checked {
+                background-color: #2f81f7;
+                color: #ffffff;
+                border: 1px solid #2f81f7;
             }
         """)
         self.btn_preview_mask.toggled.connect(self._on_preview_mask_toggled)
@@ -177,15 +184,17 @@ class MaskDefinitionWidget(QGroupBox):
         row_rma_1.setSpacing(6)
 
         self.btn_raster_add_mask = QPushButton(" + Revelar Todo")
-        self.btn_raster_add_mask.setIcon(get_icon("plus", color="#80d8ff", size=12))
+        self.btn_raster_add_mask.setIcon(get_icon("plus", size=12))
         self.btn_raster_add_mask.setCursor(Qt.PointingHandCursor)
+        self.btn_raster_add_mask.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_raster_add_mask.setToolTip("Crea una máscara de capa blanca (100% visible) para ocultar zonas con el pincel en Borrar")
         self.btn_raster_add_mask.clicked.connect(self._add_raster_layer_mask_white)
         row_rma_1.addWidget(self.btn_raster_add_mask)
 
         self.btn_raster_add_black = QPushButton(" + Ocultar Todo")
-        self.btn_raster_add_black.setIcon(get_icon("plus", color="#a5d6a7", size=12))
+        self.btn_raster_add_black.setIcon(get_icon("plus", size=12))
         self.btn_raster_add_black.setCursor(Qt.PointingHandCursor)
+        self.btn_raster_add_black.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_raster_add_black.setToolTip("Crea una máscara de capa negra (capa oculta) para descubrir con el pincel en Pintar")
         self.btn_raster_add_black.clicked.connect(self._add_raster_layer_mask_black)
         row_rma_1.addWidget(self.btn_raster_add_black)
@@ -197,25 +206,27 @@ class MaskDefinitionWidget(QGroupBox):
         row_rma_2.setSpacing(6)
 
         self.btn_raster_add_ground = QPushButton(" + Máscara Suelo")
-        self.btn_raster_add_ground.setIcon(get_icon("mountain", color="#a5d6a7", size=12))
+        self.btn_raster_add_ground.setIcon(get_icon("mountain", size=12))
         self.btn_raster_add_ground.setCursor(Qt.PointingHandCursor)
+        self.btn_raster_add_ground.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_raster_add_ground.setToolTip("Crea una máscara de suelo (1.0 en suelo, 0.0 en cielo) para tomas en trípode.")
         self.btn_raster_add_ground.clicked.connect(lambda: self._add_raster_layer_mask_ground())
         row_rma_2.addWidget(self.btn_raster_add_ground)
 
         self.btn_raster_add_sky = QPushButton(" + Máscara Cielo")
-        self.btn_raster_add_sky.setIcon(get_icon("sparkles", color="#80d8ff", size=12))
+        self.btn_raster_add_sky.setIcon(get_icon("cloud", size=12))
         self.btn_raster_add_sky.setCursor(Qt.PointingHandCursor)
+        self.btn_raster_add_sky.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_raster_add_sky.setToolTip("Crea una máscara de cielo (1.0 en cielo, 0.0 en suelo) preservando el suelo.")
         self.btn_raster_add_sky.clicked.connect(lambda: self._add_raster_layer_mask_sky())
         row_rma_2.addWidget(self.btn_raster_add_sky)
         layout_rma.addWidget(self.row_rma_horizon)
 
         self.btn_raster_del_mask = QPushButton(" Quitar Máscara")
-        self.btn_raster_del_mask.setIcon(get_icon("trash", color="#ef9a9a", size=12))
+        self.btn_raster_del_mask.setIcon(get_icon("trash", size=12))
         self.btn_raster_del_mask.setCursor(Qt.PointingHandCursor)
         self.btn_raster_del_mask.setToolTip("Elimina la máscara de capa (hace la capa 100% visible)")
-        self.btn_raster_del_mask.setStyleSheet("color: #ef9a9a;")
+        self.btn_raster_del_mask.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_raster_del_mask.clicked.connect(self._remove_raster_layer_mask)
         layout_rma.addWidget(self.btn_raster_del_mask)
 
@@ -225,7 +236,7 @@ class MaskDefinitionWidget(QGroupBox):
         row_b_radius = QHBoxLayout()
         row_b_radius.addWidget(make_resettable_label(QLabel("Radio (Tamaño):"), lambda: self.slider_b_radius.setValue(35), "35 px"))
         self.lbl_b_radius = QLabel("35 px")
-        self.lbl_b_radius.setStyleSheet("color: #80d8ff; font-weight: bold;")
+        self.lbl_b_radius.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_b_radius.addWidget(self.lbl_b_radius)
         self.slider_b_radius = QSlider(Qt.Horizontal)
         self.slider_b_radius.setRange(5, 250)
@@ -238,7 +249,7 @@ class MaskDefinitionWidget(QGroupBox):
         row_b_hard = QHBoxLayout()
         row_b_hard.addWidget(make_resettable_label(QLabel("Dureza:"), lambda: self.slider_b_hardness.setValue(50), "50%"))
         self.lbl_b_hardness = QLabel("50%")
-        self.lbl_b_hardness.setStyleSheet("color: #ffd54f; font-weight: bold;")
+        self.lbl_b_hardness.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_b_hard.addWidget(self.lbl_b_hardness)
         self.slider_b_hardness = QSlider(Qt.Horizontal)
         self.slider_b_hardness.setRange(0, 100)
@@ -251,7 +262,7 @@ class MaskDefinitionWidget(QGroupBox):
         row_b_flow = QHBoxLayout()
         row_b_flow.addWidget(make_resettable_label(QLabel("Flujo / Opacidad:"), lambda: self.slider_b_flow.setValue(80), "80%"))
         self.lbl_b_flow = QLabel("80%")
-        self.lbl_b_flow.setStyleSheet("color: #a5d6a7; font-weight: bold;")
+        self.lbl_b_flow.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_b_flow.addWidget(self.lbl_b_flow)
         self.slider_b_flow = QSlider(Qt.Horizontal)
         self.slider_b_flow.setRange(5, 100)
@@ -260,34 +271,59 @@ class MaskDefinitionWidget(QGroupBox):
         row_b_flow.addWidget(self.slider_b_flow, stretch=1)
         brush_layout.addLayout(row_b_flow)
 
+        brush_toggle_qss = """
+            QPushButton {
+                font-size: 11px;
+                padding: 4px 8px;
+                font-weight: bold;
+                border-radius: 4px;
+                background-color: #2c2c32;
+                color: #e4e4e7;
+                border: 1px solid #2e2e35;
+            }
+            QPushButton:hover {
+                background-color: #383840;
+                border-color: #3f3f46;
+                color: #ffffff;
+            }
+            QPushButton:checked {
+                background-color: rgba(47, 129, 247, 0.15);
+                color: #2f81f7;
+                border: 1px solid #2f81f7;
+            }
+        """
+
         # Fila Modos de pincel
         row_b_mode = QHBoxLayout()
         self.btn_b_paint = QPushButton(" Pintar (+)")
-        self.btn_b_paint.setIcon(get_icon("brush", color="#80d8ff", size=13))
+        self.btn_b_paint.setIcon(get_icon("brush", color="#2f81f7", size=13))
         self.btn_b_paint.setCheckable(True)
         self.btn_b_paint.setChecked(True)
         self.btn_b_paint.setCursor(Qt.PointingHandCursor)
+        self.btn_b_paint.setStyleSheet(brush_toggle_qss)
         self.btn_b_paint.clicked.connect(lambda: self._set_brush_mode("paint"))
         row_b_mode.addWidget(self.btn_b_paint)
 
         self.btn_b_erase = QPushButton(" Borrar (-)")
-        self.btn_b_erase.setIcon(get_icon("x", color="#ff8a80", size=13))
+        self.btn_b_erase.setIcon(get_icon("x", color="#a1a1aa", size=13))
         self.btn_b_erase.setCheckable(True)
         self.btn_b_erase.setCursor(Qt.PointingHandCursor)
+        self.btn_b_erase.setStyleSheet(brush_toggle_qss)
         self.btn_b_erase.clicked.connect(lambda: self._set_brush_mode("erase"))
         row_b_mode.addWidget(self.btn_b_erase)
 
         self.btn_b_invert = QPushButton(" Invertir")
-        self.btn_b_invert.setIcon(get_icon("rotate_cw", color="#ce93d8", size=13))
+        self.btn_b_invert.setIcon(get_icon("rotate_cw", color="#a1a1aa", size=13))
         self.btn_b_invert.setCursor(Qt.PointingHandCursor)
+        self.btn_b_invert.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_b_invert.setToolTip("Invierte la máscara actual [Ctrl+I]")
         self.btn_b_invert.clicked.connect(self.invert_selected_brush_mask)
         row_b_mode.addWidget(self.btn_b_invert)
 
         self.btn_b_clear = QPushButton(" Limpiar")
-        self.btn_b_clear.setIcon(get_icon("trash", color="#ef9a9a", size=13))
+        self.btn_b_clear.setIcon(get_icon("trash", color="#a1a1aa", size=13))
         self.btn_b_clear.setCursor(Qt.PointingHandCursor)
-        self.btn_b_clear.setStyleSheet("color: #ef9a9a;")
+        self.btn_b_clear.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_b_clear.clicked.connect(self._clear_brush_mask)
         row_b_mode.addWidget(self.btn_b_clear)
 
@@ -446,33 +482,20 @@ class MaskDefinitionWidget(QGroupBox):
 
         row_gnd_info = QHBoxLayout()
         self.lbl_gnd_desc = QLabel("Vinculada a la máscara de segmentación de suelo.")
-        self.lbl_gnd_desc.setStyleSheet("color: #a5d6a7; font-size: 11px; font-style: italic;")
+        self.lbl_gnd_desc.setStyleSheet("color: #a1a1aa; font-size: 11px; font-style: italic;")
         row_gnd_info.addWidget(self.lbl_gnd_desc, stretch=1)
 
         self.btn_ai_gnd_mask = QPushButton(" Detección IA")
-        self.btn_ai_gnd_mask.setIcon(get_icon("sparkles", color="#ffffff", size=13))
+        self.btn_ai_gnd_mask.setIcon(get_icon("sparkles", color="#2f81f7", size=13))
         self.btn_ai_gnd_mask.setCursor(Qt.PointingHandCursor)
-        self.btn_ai_gnd_mask.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6a1b9a, stop:1 #8e24aa);
-                color: #ffffff;
-                font-weight: bold;
-                border-radius: 4px;
-                padding: 4px 8px;
-                border: 1px solid #ba68c8;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #7b1fa2, stop:1 #9c27b0);
-                border-color: #ce93d8;
-            }
-        """)
+        self.btn_ai_gnd_mask.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_ai_gnd_mask.setToolTip("Detecta automáticamente el horizonte con IA ligera U²-Net")
         self.btn_ai_gnd_mask.clicked.connect(self.ai_ground_mask_requested.emit)
         row_gnd_info.addWidget(self.btn_ai_gnd_mask)
 
         self.btn_edit_gnd_mask = QPushButton(" Pintar Trazos...")
-        self.btn_edit_gnd_mask.setIcon(get_icon("brush", color="#a5d6a7", size=13))
+        self.btn_edit_gnd_mask.setIcon(get_icon("brush", size=13))
+        self.btn_edit_gnd_mask.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_edit_gnd_mask.setCursor(Qt.PointingHandCursor)
         self.btn_edit_gnd_mask.clicked.connect(self.edit_ground_mask_requested.emit)
         row_gnd_info.addWidget(self.btn_edit_gnd_mask)
@@ -639,8 +662,7 @@ class MaskDefinitionWidget(QGroupBox):
             self.slider_b_flow.setValue(flw)
             self.lbl_b_flow.setText(f"{flw}%")
             b_mode = getattr(layer, 'brush_mode', "paint")
-            self.btn_b_paint.setChecked(b_mode == "paint")
-            self.btn_b_erase.setChecked(b_mode == "erase")
+            self._update_brush_buttons_state(b_mode)
 
         if mtype == MASK_TYPE_LUMA:
             self.spin_luma_min.setValue(getattr(layer, 'luma_min', 0.0))
@@ -692,14 +714,20 @@ class MaskDefinitionWidget(QGroupBox):
                 layer.brush_radius, layer.brush_hardness, layer.brush_flow, layer.brush_mode
             )
 
+    def _update_brush_buttons_state(self, mode: str) -> None:
+        is_paint = (mode == "paint")
+        self.btn_b_paint.setChecked(is_paint)
+        self.btn_b_erase.setChecked(not is_paint)
+        self.btn_b_paint.setIcon(get_icon("brush", color="#2f81f7" if is_paint else "#a1a1aa", size=13))
+        self.btn_b_erase.setIcon(get_icon("x", color="#2f81f7" if not is_paint else "#a1a1aa", size=13))
+
     def _set_brush_mode(self, mode: str) -> None:
         if self._updating_ui: return
         layer = self.get_selected_layer()
         if layer and getattr(layer, 'supports_brush', False):
             layer.brush_mode = mode
             self._last_brush_mode = mode
-            self.btn_b_paint.setChecked(mode == "paint")
-            self.btn_b_erase.setChecked(mode == "erase")
+            self._update_brush_buttons_state(mode)
             self.brush_params_changed.emit(
                 layer.brush_radius, layer.brush_hardness, layer.brush_flow, layer.brush_mode
             )
@@ -749,8 +777,7 @@ class MaskDefinitionWidget(QGroupBox):
         layer.brush_mode = new_mode
         self._last_brush_mode = new_mode
         self._updating_ui = True
-        self.btn_b_paint.setChecked(new_mode == "paint")
-        self.btn_b_erase.setChecked(new_mode == "erase")
+        self._update_brush_buttons_state(new_mode)
         self._updating_ui = False
 
         self.mask_param_changed.emit()
@@ -780,8 +807,7 @@ class MaskDefinitionWidget(QGroupBox):
         layer.active_target = "mask"
         layer.brush_mode = "erase"
         self._last_brush_mode = "erase"
-        self.btn_b_erase.setChecked(True)
-        self.btn_b_paint.setChecked(False)
+        self._update_brush_buttons_state("erase")
         self.update_for_layer(layer)
         self.brush_tool_toggled.emit(True, layer)
         self.mask_param_changed.emit()
@@ -797,8 +823,7 @@ class MaskDefinitionWidget(QGroupBox):
         layer.active_target = "mask"
         layer.brush_mode = "paint"
         self._last_brush_mode = "paint"
-        self.btn_b_paint.setChecked(True)
-        self.btn_b_erase.setChecked(False)
+        self._update_brush_buttons_state("paint")
         self.update_for_layer(layer)
         self.brush_tool_toggled.emit(True, layer)
         self.mask_param_changed.emit()
@@ -912,8 +937,7 @@ class MaskDefinitionWidget(QGroupBox):
         layer.active_target = "mask"
         layer.brush_mode = "erase"
         self._last_brush_mode = "erase"
-        self.btn_b_erase.setChecked(True)
-        self.btn_b_paint.setChecked(False)
+        self._update_brush_buttons_state("erase")
 
         if detected_fresh and not has_existing_master:
             self.master_mask_updated.emit(chosen_sky_mask)
@@ -1176,6 +1200,7 @@ class MaskDefinitionWidget(QGroupBox):
                 self._emit_mask_preview()
 
     def _on_preview_mask_toggled(self, checked: bool) -> None:
+        self.btn_preview_mask.setIcon(get_icon("eye", color="#ffffff" if checked else "#2f81f7", size=13))
         self.preview_mask_toggled.emit(checked)
         if checked:
             self._emit_mask_preview()

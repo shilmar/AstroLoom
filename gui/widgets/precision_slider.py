@@ -1,7 +1,7 @@
 # gui/widgets/precision_slider.py
 """
 gui/widgets/precision_slider.py - Control deslizante de alta precisión con alineación estándar y edición numérica.
-Inspirado en los estándares de interfaces de edición creativa profesional (Adobe Lightroom Classic, DaVinci Resolve).
+Inspirado en los estándares de interfaces de edición creativa profesional.
 """
 import re
 from typing import Optional, Callable
@@ -45,21 +45,21 @@ class PrecisionSpinBox(QDoubleSpinBox):
         if self._is_modified:
             self.setStyleSheet(f"""
                 QDoubleSpinBox {{
-                    background-color: #121826;
-                    border: 1px solid #0288d1;
+                    background-color: #2c2c32;
+                    border: 1px solid #2f81f7;
                     border-radius: 4px;
-                    color: #38bdf8;
+                    color: #2f81f7;
                     font-size: 11px;
                     font-weight: 600;
                     padding: 1px 4px;
                 }}
                 QDoubleSpinBox:hover {{
-                    border-color: #00e5ff;
-                    background-color: #172338;
+                    border-color: #388bfd;
+                    background-color: #383840;
                 }}
                 QDoubleSpinBox:focus {{
-                    border-color: #00e5ff;
-                    background-color: #19263e;
+                    border-color: #2f81f7;
+                    background-color: #2c2c32;
                     color: #ffffff;
                 }}
                 {btn_css}
@@ -67,22 +67,22 @@ class PrecisionSpinBox(QDoubleSpinBox):
         else:
             self.setStyleSheet(f"""
                 QDoubleSpinBox {{
-                    background-color: #121520;
-                    border: 1px solid #1e2433;
+                    background-color: #2c2c32;
+                    border: 1px solid #2e2e35;
                     border-radius: 4px;
-                    color: #94a3b8;
+                    color: #a1a1aa;
                     font-size: 11px;
                     font-weight: 500;
                     padding: 1px 4px;
                 }}
                 QDoubleSpinBox:hover {{
-                    border-color: #38bdf8;
-                    background-color: #181d2c;
-                    color: #e2e8f0;
+                    border-color: #3f3f46;
+                    background-color: #383840;
+                    color: #e4e4e7;
                 }}
                 QDoubleSpinBox:focus {{
-                    border-color: #00e5ff;
-                    background-color: #19263e;
+                    border-color: #2f81f7;
+                    background-color: #2c2c32;
                     color: #ffffff;
                 }}
                 {btn_css}
@@ -248,13 +248,68 @@ class PrecisionSliderRow(QWidget):
     def _update_styles(self) -> None:
         modified = (self.slider.value() != self.raw_default)
         if modified:
-            self.lbl_dot.setStyleSheet("color: #38bdf8; font-size: 8px;")
-            self.lbl_title.setStyleSheet("color: #f1f5f9; font-weight: 600; font-size: 11px;")
+            self.lbl_dot.setStyleSheet("color: #3b82f6; font-size: 8px;")
+            self.lbl_title.setStyleSheet("color: #e4e4e7; font-weight: 600; font-size: 11px;")
             self.spin.set_modified(True)
         else:
             self.lbl_dot.setStyleSheet("color: transparent; font-size: 8px;")
-            self.lbl_title.setStyleSheet("color: #94a3b8; font-weight: normal; font-size: 11px;")
+            self.lbl_title.setStyleSheet("color: #a1a1aa; font-weight: normal; font-size: 11px;")
             self.spin.set_modified(False)
+
+    def set_track_gradient(self, gradient_css: str, add_page_css: Optional[str] = None) -> None:
+        """
+        Aplica un degradado fotográfico a la pista del deslizador (groove) manteniendo
+        el tirador en pastilla blanco hueso #F4F4F5 estilizado (e.g. Balance de Blancos, SCNR, Halos).
+        """
+        add_page_rule = f"background: {add_page_css}; border-radius: 2.5px;" if add_page_css else "background: transparent;"
+        self.slider.setStyleSheet(f"""
+            QSlider::groove:horizontal {{
+                border: 1px solid #2e2e35;
+                height: 5px;
+                background: {gradient_css};
+                border-radius: 2.5px;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: transparent;
+            }}
+            QSlider::add-page:horizontal {{
+                {add_page_rule}
+            }}
+            QSlider::handle:horizontal {{
+                background: #F4F4F5;
+                width: 8px;
+                height: 16px;
+                margin: -6px 0;
+                border-radius: 4px;
+                border: 1px solid #18181B;
+            }}
+            QSlider::handle:horizontal:hover {{
+                background: #FFFFFF;
+                border: 1px solid #09090B;
+            }}
+            QSlider::handle:horizontal:pressed {{
+                background: #E4E4E7;
+                border: 1px solid #09090B;
+            }}
+            QSlider::handle:horizontal:disabled {{
+                background: #52525B;
+                border: 1px solid #27272A;
+            }}
+        """)
+
+    def set_saturation_style(self) -> None:
+        """
+        Aplica el estilo Lightroom para deslizadores de saturación a:
+        Pista que va desde tonos grises (sin saturación, izquierda) hasta los colores
+        vivos del espectro hacia la saturación (derecha), donde el tirador blanco hueso
+        genera la diferencia entre la capa activa luminosa y la capa velada neutra.
+        """
+        sat_gradient = (
+            "qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 #33333A, stop:0.20 #4A4A55, stop:0.38 #5E5E6E, "
+            "stop:0.52 #0EA5E9, stop:0.68 #8B5CF6, stop:0.82 #EC4899, stop:0.92 #EF4444, stop:1.0 #F59E0B)"
+        )
+        self.set_track_gradient(sat_gradient, add_page_css="rgba(18, 18, 20, 0.45)")
 
     def value(self) -> int:
         return self.slider.value()

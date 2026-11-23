@@ -103,8 +103,9 @@ from core.developer_presets import (
 )
 from gui.dialog_presets import SavePresetDialog, PresetManagerDialog
 from gui.theme import (
-    STYLE_RUN_IDLE, STYLE_TRANSFER_BTN, BG_PANEL, BORDER_BASE, TEXT_PRIMARY,
-    TEXT_SECONDARY, TEXT_MUTED, TEXT_CYAN, ACCENT_CYAN
+    STYLE_RUN_IDLE, STYLE_SPECIAL_ACTION_BTN, STYLE_SECONDARY_BTN,
+    BG_PANEL, BG_CARD, BG_INPUT, BORDER_BASE, BORDER_HOVER, ACCENT_COBALT,
+    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED
 )
 from gui.developer.panels.panel_color_wb import ColorWbPanel
 from gui.developer.panels.panel_deconvolution import DeconvolutionPanel
@@ -349,7 +350,7 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
         self.async_pipeline.preview_ready.connect(self._on_async_preview_ready)
         self.async_pipeline.pipeline_failed.connect(self._on_async_pipeline_failed)
 
-        # Memoria de tamaños para paneles ocultables (Lightroom style)
+        # Memoria de tamaños para paneles ocultables 
         self._last_left_panel_width = 380
         self._last_right_panel_width = 360
 
@@ -397,13 +398,13 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
 
         # 1. Gestión de Proyecto (.devloom) fijada arriba
         self.proj_container = QWidget()
-        self.proj_container.setStyleSheet("background: #181c28; border: 1px solid #2a3144; border-radius: 4px;")
+        self.proj_container.setStyleSheet(f"background: {BG_CARD}; border: 1px solid {BORDER_BASE}; border-radius: 4px;")
         proj_vbox = QVBoxLayout(self.proj_container)
         proj_vbox.setContentsMargins(6, 6, 6, 6)
         proj_vbox.setSpacing(5)
 
         self.lbl_project_title = QLabel("Proyecto: Sin guardar")
-        self.lbl_project_title.setStyleSheet("color: #80cbc4; font-size: 11px; font-weight: bold; border: none; background: transparent;")
+        self.lbl_project_title.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; font-weight: bold; border: none; background: transparent;")
         proj_vbox.addWidget(self.lbl_project_title)
 
         proj_btn_row = QHBoxLayout()
@@ -411,26 +412,26 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
         proj_btn_row.setSpacing(4)
 
         self.btn_open_proj = QPushButton("Abrir")
-        self.btn_open_proj.setIcon(get_icon("folder", size=13, color="#80d8ff"))
+        self.btn_open_proj.setIcon(get_icon("folder", size=13, color="#a1a1aa"))
         self.btn_open_proj.setToolTip("Abrir proyecto de revelado .devloom (Atajo: Ctrl+O)")
         self.btn_open_proj.setCursor(Qt.PointingHandCursor)
-        self.btn_open_proj.setStyleSheet("font-weight: bold; color: #80d8ff; background: #22293d; border: 1px solid #333d59; border-radius: 3px; padding: 4px 6px;")
+        self.btn_open_proj.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_open_proj.clicked.connect(self.open_project_dialog)
         proj_btn_row.addWidget(self.btn_open_proj)
 
         self.btn_save_proj = QPushButton("Guardar")
-        self.btn_save_proj.setIcon(get_icon("save", size=13, color="#a5d6a7"))
+        self.btn_save_proj.setIcon(get_icon("save", size=13, color="#a1a1aa"))
         self.btn_save_proj.setToolTip("Guardar sesión de revelado actual (Atajo: Ctrl+S)")
         self.btn_save_proj.setCursor(Qt.PointingHandCursor)
-        self.btn_save_proj.setStyleSheet("font-weight: bold; color: #a5d6a7; background: #22293d; border: 1px solid #333d59; border-radius: 3px; padding: 4px 6px;")
+        self.btn_save_proj.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_save_proj.clicked.connect(self.save_project)
         proj_btn_row.addWidget(self.btn_save_proj)
 
         self.btn_save_as_proj = QPushButton("Guardar Como...")
-        self.btn_save_as_proj.setIcon(get_icon("copy", size=13, color="#cfd8dc"))
+        self.btn_save_as_proj.setIcon(get_icon("copy", size=13, color="#a1a1aa"))
         self.btn_save_as_proj.setToolTip("Guardar sesión de revelado en un archivo nuevo (Atajo: Ctrl+Shift+S)")
         self.btn_save_as_proj.setCursor(Qt.PointingHandCursor)
-        self.btn_save_as_proj.setStyleSheet("color: #cfd8dc; background: #22293d; border: 1px solid #333d59; border-radius: 3px; padding: 4px 6px;")
+        self.btn_save_as_proj.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_save_as_proj.clicked.connect(self.save_project_as_dialog)
         proj_btn_row.addWidget(self.btn_save_as_proj)
 
@@ -439,35 +440,41 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
 
         # Carga externa (Siempre fijada arriba)
         self.btn_open_img = QPushButton("Abrir Imagen (TIFF / FITS / RAW)...")
-        self.btn_open_img.setIcon(get_icon("folder", color="#38bdf8", size=16))
-        self.btn_open_img.setStyleSheet("font-weight: bold; color: #80d8ff; padding: 7px; background: #1c2030; border: 1px solid #2f3549; border-radius: 4px;")
+        self.btn_open_img.setIcon(get_icon("folder", color="#e4e4e7", size=16))
+        self.btn_open_img.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_open_img.setCursor(Qt.PointingHandCursor)
         self.btn_open_img.clicked.connect(self.open_image_file)
         left_container_layout.addWidget(self.btn_open_img, 0)
 
         # Botón de Arranque Rápido: 1-Click Start Astro-Reveal
         self.btn_start_reveal = QPushButton("✨ 1-Click Start Astro-Reveal")
-        self.btn_start_reveal.setIcon(get_icon("sparkles", color="#ffd54f", size=16))
+        self.btn_start_reveal.setIcon(get_icon("sparkles", color="#8B5CF6", hover_color="#A78BFA", size=16))
         self.btn_start_reveal.setToolTip("Arranque en 1 clic para paisaje: detecta horizonte por IA, neutraliza el fondo celestial, auto-estira el cielo y evalúa el suelo con Smart Ground Lift.")
         self.btn_start_reveal.setCursor(Qt.PointingHandCursor)
+        self.btn_start_reveal.setFixedHeight(34)
         self.btn_start_reveal.setStyleSheet("""
             QPushButton {
-                font-weight: bold;
-                font-size: 12px;
-                color: #fff9c4;
-                padding: 8px;
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1a237e, stop:1 #283593);
-                border: 1px solid #5c6bc0;
-                border-radius: 4px;
+                font-weight: 600;
+                font-size: 11px;
+                background-color: #1E2433;
+                color: #E4E4E7;
+                border: 1px solid #3B82F6;
+                border-radius: 6px;
+                padding: 6px 14px;
             }
             QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #283593, stop:1 #3949ab);
-                border: 1px solid #9fa8da;
-                color: #ffffff;
+                background-color: #273147;
+                border-color: #60A5FA;
+                color: #FFFFFF;
             }
             QPushButton:pressed {
-                background: #1a237e;
-                border: 1px solid #3949ab;
+                background-color: #161B26;
+                border-color: #2563EB;
+            }
+            QPushButton:disabled {
+                background-color: #1A1A1E;
+                color: #71717A;
+                border-color: #2E2E35;
             }
         """)
         self.btn_start_reveal.clicked.connect(self.start_astro_reveal)
@@ -701,34 +708,31 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
         row_curve_mode = QHBoxLayout()
         row_curve_mode.setSpacing(4)
 
+        btn_curve_style = (
+            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #2c2c32; color: #a1a1aa; border: 1px solid #2e2e35; }"
+            "QPushButton:hover { background: #3f3f46; color: #ffffff; }"
+            "QPushButton:checked { background: rgba(47, 129, 247, 0.15); color: #2f81f7; border: 1px solid #2f81f7; }"
+        )
+
         self.btn_curve_rgb = QPushButton("Tonos (RGB)")
-        self.btn_curve_rgb.setIcon(get_icon("curve", color="#80d8ff", size=12))
+        self.btn_curve_rgb.setIcon(get_icon("curve", color="#a1a1aa", active_color="#2f81f7", size=12))
         self.btn_curve_rgb.setCheckable(True)
         self.btn_curve_rgb.setChecked(True)
-        self.btn_curve_rgb.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #3b4252; color: #80d8ff; border: 1px solid #80d8ff; }"
-        )
+        self.btn_curve_rgb.setStyleSheet(btn_curve_style)
         self.btn_curve_rgb.setToolTip("Curva tonal RGB continua con histograma logarítmico y avisos de recorte.")
         self.btn_curve_rgb.clicked.connect(lambda: self._set_curve_mode("rgb"))
 
         self.btn_curve_hue = QPushButton("Tono vs Sat")
-        self.btn_curve_hue.setIcon(get_icon("palette", color="#ffb74d", size=12))
+        self.btn_curve_hue.setIcon(get_icon("palette", color="#a1a1aa", active_color="#2f81f7", size=12))
         self.btn_curve_hue.setCheckable(True)
-        self.btn_curve_hue.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #3b4252; color: #ffb74d; border: 1px solid #ffb74d; }"
-        )
+        self.btn_curve_hue.setStyleSheet(btn_curve_style)
         self.btn_curve_hue.setToolTip("Curva selectiva de saturación en función del tono (Hue vs Sat).\nPermite saturar selectivamente H-alfa / nebulosas o neutralizar tonalidades no deseadas.")
         self.btn_curve_hue.clicked.connect(lambda: self._set_curve_mode("hue_sat"))
 
         self.btn_curve_luma = QPushButton("Luma vs Sat")
-        self.btn_curve_luma.setIcon(get_icon("chart", color="#00e676", size=12))
+        self.btn_curve_luma.setIcon(get_icon("chart", color="#a1a1aa", active_color="#2f81f7", size=12))
         self.btn_curve_luma.setCheckable(True)
-        self.btn_curve_luma.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #3b4252; color: #00e676; border: 1px solid #00e676; }"
-        )
+        self.btn_curve_luma.setStyleSheet(btn_curve_style)
         self.btn_curve_luma.setToolTip("Curva selectiva de saturación en función de la luminancia (Luma vs Sat).\nPermite desaturar sombras oscuras para eliminar ruido de crominancia del cielo.")
         self.btn_curve_luma.clicked.connect(lambda: self._set_curve_mode("luma_sat"))
 
@@ -752,12 +756,12 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
         row_crv_btn = QHBoxLayout()
         row_crv_btn.setSpacing(6)
         self.btn_reset_curve = QPushButton("Resetear Curva Activa")
-        self.btn_reset_curve.setStyleSheet("font-size: 11px; padding: 3px;")
+        self.btn_reset_curve.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_reset_curve.setToolTip("Restablece únicamente la curva actualmente visible a su valor neutro.")
         self.btn_reset_curve.clicked.connect(lambda: self.curve_widget.reset_curve())
 
         self.btn_reset_all_curves = QPushButton("Resetear Todas")
-        self.btn_reset_all_curves.setStyleSheet("font-size: 11px; padding: 3px; color: #ffab91;")
+        self.btn_reset_all_curves.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_reset_all_curves.setToolTip("Restablece simultáneamente las tres curvas (Tonos, Tono vs Sat, Luma vs Sat).")
         self.btn_reset_all_curves.clicked.connect(self.curve_widget.reset_all_curves)
 
@@ -1004,7 +1008,7 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
         def _update_masks_badge():
             count = len(self.mask_layers_widget.layers)
             if count > 0:
-                self.sec_masks.set_status_badge(f"● {count} {'capas' if count > 1 else 'capa'}", "#80d8ff")
+                self.sec_masks.set_status_badge(f"● {count} {'capas' if count > 1 else 'capa'}", "#3B82F6")
             else:
                 self.sec_masks.set_status_badge("")
         self.mask_layers_widget.layers_changed.connect(_update_masks_badge)
@@ -1023,7 +1027,33 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
         self.btn_export.setIcon(get_icon("save", color="#ffffff", size=16))
         self.btn_export.setFixedHeight(40)
         self.btn_export.setCursor(Qt.PointingHandCursor)
-        self.btn_export.setStyleSheet(STYLE_RUN_IDLE)
+        self.btn_export.setStyleSheet("""
+            QPushButton {
+                font-weight: bold;
+                font-size: 13px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3B82F6, stop:1 #2563EB);
+                color: #ffffff;
+                border: 1px solid #2563EB;
+                border-top: 1px solid #60A5FA;
+                border-radius: 6px;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #60A5FA, stop:1 #3B82F6);
+                border: 1px solid #3B82F6;
+                border-top: 1px solid #93C5FD;
+            }
+            QPushButton:pressed {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1D4ED8, stop:1 #1E40AF);
+                border: 1px solid #1E3A8A;
+                border-top: 1px solid #3B82F6;
+            }
+            QPushButton:disabled {
+                background-color: #1A1A1E;
+                color: #71717A;
+                border: 1px solid #2E2E35;
+            }
+        """)
         self.btn_export.setToolTip(
             "Exporta la imagen revelada a disco.\n"
             "Formatos soportados según filtro o extensión:\n"
@@ -1087,7 +1117,7 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
         right_header_layout.setSpacing(6)
 
         lbl_right_title = QLabel("HISTOGRAMA Y CAPAS")
-        lbl_right_title.setStyleSheet("font-weight: 700; font-size: 11px; color: #80d8ff; letter-spacing: 0.6px;")
+        lbl_right_title.setStyleSheet(f"font-weight: 700; font-size: 11px; color: {TEXT_SECONDARY}; letter-spacing: 0.6px;")
         right_header_layout.addWidget(lbl_right_title)
         right_header_layout.addStretch()
         right_container_layout.addWidget(right_header, 0)
@@ -1151,7 +1181,7 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
             h2.setToolTip("Arrastra para redimensionar o doble clic para alternar panel ancho")
             h2.installEventFilter(self)
 
-        # Atajo global 'Tab' para alternar ambos paneles laterales (Modo Inmersivo / Cine Lightroom)
+        # Atajo global 'Tab' para alternar ambos paneles laterales (Modo Inmersivo / Cine )
         self.shortcut_tab = QShortcut(QKeySequence(Qt.Key_Tab), self)
         self.shortcut_tab.setContext(Qt.WindowShortcut)
         self.shortcut_tab.activated.connect(self.toggle_both_panels)
@@ -1175,7 +1205,7 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
         self.shortcut_crop.setContext(Qt.WindowShortcut)
         self.shortcut_crop.activated.connect(self._on_toggle_crop_shortcut)
 
-        # Atajo global 'J' para alternar indicadores de recorte (Lightroom / Camera Raw style)
+        # Atajo global 'J' para alternar indicadores de recorte 
         self.shortcut_clipping = QShortcut(QKeySequence(Qt.Key_J), self)
         self.shortcut_clipping.setContext(Qt.WindowShortcut)
         self.shortcut_clipping.activated.connect(self._on_toggle_clipping_shortcut)
@@ -1306,8 +1336,8 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
                 border-bottom: 1px solid {BORDER_BASE};
             }}
             #canvas_toolbar QPushButton {{
-                background-color: #1e2230;
-                border: 1px solid #33384c;
+                background-color: {BG_INPUT};
+                border: 1px solid {BORDER_BASE};
                 border-radius: 4px;
                 padding: 4px 10px;
                 color: {TEXT_PRIMARY};
@@ -1315,21 +1345,21 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
                 font-weight: bold;
             }}
             #canvas_toolbar QPushButton:hover {{
-                background-color: #282e42;
-                border-color: {TEXT_CYAN};
+                background-color: {BORDER_HOVER};
+                border-color: {BORDER_HOVER};
             }}
             #canvas_toolbar QPushButton:checked {{
-                background-color: #0d47a1;
+                background-color: rgba(47, 129, 247, 0.2);
                 color: #ffffff;
-                border-color: {ACCENT_CYAN};
+                border-color: {ACCENT_COBALT};
             }}
             #canvas_toolbar QPushButton:disabled {{
-                background-color: #141620;
+                background-color: {BG_PANEL};
                 color: {TEXT_MUTED};
                 border-color: {BORDER_BASE};
             }}
             #crop_toolbar {{
-                background-color: #10121a;
+                background-color: {BG_PANEL};
                 border-bottom: 1px solid {BORDER_BASE};
             }}
             #crop_toolbar QLabel {{
@@ -1337,16 +1367,16 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
                 font-size: 11px;
             }}
             #crop_toolbar QComboBox {{
-                background-color: #1e2230;
-                border: 1px solid #33384c;
+                background-color: {BG_INPUT};
+                border: 1px solid {BORDER_BASE};
                 border-radius: 4px;
                 padding: 2px 8px;
                 color: {TEXT_PRIMARY};
                 font-size: 11px;
             }}
             #crop_toolbar QPushButton {{
-                background-color: #1e2230;
-                border: 1px solid #33384c;
+                background-color: {BG_INPUT};
+                border: 1px solid {BORDER_BASE};
                 border-radius: 4px;
                 padding: 3px 8px;
                 color: {TEXT_PRIMARY};
@@ -1354,11 +1384,11 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
                 font-weight: bold;
             }}
             #crop_toolbar QPushButton:hover {{
-                background-color: #282e42;
-                border-color: {TEXT_CYAN};
+                background-color: {BORDER_HOVER};
+                border-color: {BORDER_HOVER};
             }}
             #mask_toolbar {{
-                background-color: #10121a;
+                background-color: {BG_PANEL};
                 border-bottom: 1px solid {BORDER_BASE};
             }}
             #mask_toolbar QLabel {{
@@ -1366,16 +1396,16 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
                 font-size: 11px;
             }}
             #mask_toolbar QSpinBox {{
-                background-color: #1e2230;
-                border: 1px solid #33384c;
+                background-color: {BG_INPUT};
+                border: 1px solid {BORDER_BASE};
                 border-radius: 4px;
                 padding: 2px 4px;
                 color: {TEXT_PRIMARY};
                 font-size: 11px;
             }}
             #mask_toolbar QPushButton {{
-                background-color: #1e2230;
-                border: 1px solid #33384c;
+                background-color: {BG_INPUT};
+                border: 1px solid {BORDER_BASE};
                 border-radius: 4px;
                 padding: 3px 8px;
                 color: {TEXT_PRIMARY};
@@ -1383,8 +1413,8 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
                 font-weight: bold;
             }}
             #mask_toolbar QPushButton:hover {{
-                background-color: #282e42;
-                border-color: {TEXT_CYAN};
+                background-color: {BORDER_HOVER};
+                border-color: {BORDER_HOVER};
             }}
         """)
 

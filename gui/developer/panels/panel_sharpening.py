@@ -1,6 +1,6 @@
 # gui/developer/panels/panel_sharpening.py
 """
-gui/developer/panels/panel_sharpening.py - Panel de Máscara de Enfoque y Nitidez (Estilo Lightroom).
+gui/developer/panels/panel_sharpening.py - Panel de Máscara de Enfoque y Nitidez.
 Proporciona controles de altas frecuencias espaciales (USM), radio, umbralización de bordes
 y previsualización monocroma interactiva (mediante botón o arrastre con tecla Alt).
 """

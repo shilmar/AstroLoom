@@ -1143,7 +1143,7 @@ def compose_meteor_shower_image(
 
 
 # =============================================================================
-# 6. EXPORTACIÓN MULTICAPA PSD (PHOTOSHOP)
+# 6. EXPORTACIÓN MULTICAPA PSD 
 # =============================================================================
 
 def export_meteor_layered_psd(
@@ -1155,7 +1155,7 @@ def export_meteor_layered_psd(
     boost_flux: float = 1.0
 ) -> bool:
     """
-    Exporta la composición en un archivo PSD de Photoshop de 16 bits donde cada
+    Exporta la composición en un archivo PSD de 16 bits donde cada
     meteoro se aloja en su propia capa independiente con modo de fusión Trama (Screen).
     """
     if not HAS_PYTOSHOP:

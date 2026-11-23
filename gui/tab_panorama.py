@@ -46,7 +46,10 @@ from core.icc_manager import save_tiff_with_icc
 from core.log_hub import log_hub
 from gui.widgets.viewer_toolbar import ViewerToolbar, CanvasFooterBar
 from gui.widgets.drop_widgets import DropTableWidget, collect_image_files_from_mime, SUPPORTED_IMAGE_EXTENSIONS
-from gui.theme import STYLE_RUN_IDLE, STYLE_CANCEL_ACTIVE, STYLE_TRANSFER_BTN, STYLE_SECONDARY_BTN
+from gui.theme import (
+    STYLE_RUN_IDLE, STYLE_CANCEL_ACTIVE, STYLE_TRANSFER_BTN, STYLE_SECONDARY_BTN,
+    STYLE_SPECIAL_ACTION_BTN, BG_CANVAS, BG_CARD, BORDER_BASE, TEXT_PRIMARY, TEXT_SECONDARY
+)
 from gui.icons import get_icon, get_svg_pixmap, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_ACCENT
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
@@ -135,7 +138,7 @@ class PanoramaInteractiveCanvas(QWidget):
         self.setMouseTracking(True)
         self.setAcceptDrops(True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setStyleSheet("background: #0f1015; border: 1px solid #262833; border-radius: 4px;")
+        self.setStyleSheet(f"background: {BG_CANVAS}; border: 1px solid {BORDER_BASE}; border-radius: 4px;")
 
         self._pixmap_full: Optional[QPixmap] = None
         self._pixmap_cropped: Optional[QPixmap] = None
@@ -388,16 +391,17 @@ class PanoramaTab(QWidget):
 
         btn_bar = QHBoxLayout()
         self.btn_add_files = QPushButton("Añadir Tomas")
-        self.btn_add_files.setIcon(get_icon("plus", color="#80d8ff"))
-        self.btn_add_files.setStyleSheet("font-weight: bold; color: #80d8ff;")
+        self.btn_add_files.setIcon(get_icon("plus", color="#a1a1aa"))
+        self.btn_add_files.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_add_dir = QPushButton("Carpeta")
-        self.btn_add_dir.setIcon(get_icon("folder", color="#80d8ff"))
+        self.btn_add_dir.setIcon(get_icon("folder", color="#a1a1aa"))
+        self.btn_add_dir.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_remove = QPushButton("Quitar")
-        self.btn_remove.setIcon(get_icon("x", color="#ff8a80"))
-        self.btn_remove.setStyleSheet("color: #ff8a80;")
+        self.btn_remove.setIcon(get_icon("x", color="#a1a1aa"))
+        self.btn_remove.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_clear = QPushButton("Limpiar")
-        self.btn_clear.setIcon(get_icon("trash", color="#ff8a80"))
-        self.btn_clear.setStyleSheet("color: #ff8a80;")
+        self.btn_clear.setIcon(get_icon("trash", color="#a1a1aa"))
+        self.btn_clear.setStyleSheet(STYLE_SECONDARY_BTN)
         btn_bar.addWidget(self.btn_add_files)
         btn_bar.addWidget(self.btn_add_dir)
         btn_bar.addWidget(self.btn_remove)
@@ -422,18 +426,26 @@ class PanoramaTab(QWidget):
         # Botones de ordenación
         order_bar = QHBoxLayout()
         self.btn_up = QPushButton("Subir")
-        self.btn_up.setIcon(get_icon("chevron_up", color="#b0bec5"))
+        self.btn_up.setIcon(get_icon("chevron_up", color="#a1a1aa"))
+        self.btn_up.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_down = QPushButton("Bajar")
-        self.btn_down.setIcon(get_icon("chevron_down", color="#b0bec5"))
+        self.btn_down.setIcon(get_icon("chevron_down", color="#a1a1aa"))
+        self.btn_down.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_sort_time = QPushButton("Ordenar por Hora")
-        self.btn_sort_time.setIcon(get_icon("refresh", color="#80d8ff"))
+        self.btn_sort_time.setIcon(get_icon("refresh", color="#a1a1aa"))
+        self.btn_sort_time.setStyleSheet(STYLE_SECONDARY_BTN)
+        self.btn_blink = QPushButton("Visor Blink")
+        self.btn_blink.setIcon(get_icon("eye", color="#a1a1aa"))
+        self.btn_blink.setStyleSheet(STYLE_SECONDARY_BTN)
+        self.btn_blink.setToolTip("Abre el visor interactivo Blink para revisar paneles y cribar con teclado (X/P)")
         order_bar.addWidget(self.btn_up)
         order_bar.addWidget(self.btn_down)
         order_bar.addWidget(self.btn_sort_time)
+        order_bar.addWidget(self.btn_blink)
         ingest_layout.addLayout(order_bar)
 
         self.lbl_ingest_summary = QLabel("0 paneles cargados.")
-        self.lbl_ingest_summary.setStyleSheet("color: #90a4ae; font-size: 11px;")
+        self.lbl_ingest_summary.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
         ingest_layout.addWidget(self.lbl_ingest_summary)
 
         # Controles de Modo Ráfaga / Apilar por tesela
@@ -441,7 +453,7 @@ class PanoramaTab(QWidget):
         self.box_burst.setCheckable(True)
         self.box_burst.setChecked(False)
         self.box_burst.setStyleSheet(
-            "QGroupBox { font-weight: bold; color: #80d8ff; margin-top: 4px; padding-top: 14px; }"
+            f"QGroupBox {{ font-weight: bold; color: {TEXT_PRIMARY}; margin-top: 4px; padding-top: 14px; background-color: {BG_CARD}; border: 1px solid {BORDER_BASE}; border-radius: 6px; }}"
             "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
         )
 
@@ -595,7 +607,7 @@ class PanoramaTab(QWidget):
         self.chk_exposure_comp.setChecked(True)
         self.chk_vignette_auto = QCheckBox("Auto (Medir)")
         self.chk_vignette_auto.setChecked(True)
-        self.chk_vignette_auto.setStyleSheet("color: #80d8ff; font-size: 11px;")
+        self.chk_vignette_auto.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 11px;")
         self.chk_vignette_auto.setToolTip("Mide la caída real de luz del cielo a través de los paneles de la serie.")
         vig_header.addWidget(self.chk_exposure_comp)
         vig_header.addWidget(self.chk_vignette_auto)
@@ -691,17 +703,17 @@ class PanoramaTab(QWidget):
 
         self.btn_to_developer = QPushButton("Enviar Panorámica al Revelador / Editor")
         self.btn_to_developer.setIcon(get_icon("arrow_right", color="#ffffff"))
-        self.btn_to_developer.setStyleSheet(STYLE_TRANSFER_BTN)
+        self.btn_to_developer.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_to_developer.setEnabled(False)
         proc_layout.addWidget(self.btn_to_developer)
 
         sess_bar = QHBoxLayout()
         self.btn_save_sess = QPushButton("Guardar Sesión")
-        self.btn_save_sess.setIcon(get_icon("save", color="#d1c4e9"))
-        self.btn_save_sess.setStyleSheet("background: #2a1b4e; color: #d1c4e9; border: 1px solid #7e57c2;")
+        self.btn_save_sess.setIcon(get_icon("save", color="#a1a1aa"))
+        self.btn_save_sess.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_load_sess = QPushButton("Cargar Sesión")
-        self.btn_load_sess.setIcon(get_icon("folder", color="#d1c4e9"))
-        self.btn_load_sess.setStyleSheet("background: #2a1b4e; color: #d1c4e9; border: 1px solid #7e57c2;")
+        self.btn_load_sess.setIcon(get_icon("folder", color="#a1a1aa"))
+        self.btn_load_sess.setStyleSheet(STYLE_SECONDARY_BTN)
         sess_bar.addWidget(self.btn_save_sess)
         sess_bar.addWidget(self.btn_load_sess)
         proc_layout.addLayout(sess_bar)
@@ -763,7 +775,7 @@ class PanoramaTab(QWidget):
 
         # Estadísticas y resolución a la derecha
         self.lbl_stats = QLabel("Sin panorámica generada")
-        self.lbl_stats.setStyleSheet("color: #80d8ff; font-size: 11px; font-weight: bold;")
+        self.lbl_stats.setStyleSheet("color: #2f81f7; font-size: 11px; font-weight: bold;")
         self.toolbar.add_widget(self.lbl_stats)
 
         right_layout.addWidget(self.toolbar)
@@ -851,7 +863,9 @@ class PanoramaTab(QWidget):
         self.btn_up.clicked.connect(lambda: self._move_row(-1))
         self.btn_down.clicked.connect(lambda: self._move_row(1))
         self.btn_sort_time.clicked.connect(self._sort_panels_by_time)
+        self.btn_blink.clicked.connect(self.open_blink_viewer)
 
+        self.table_panels.itemChanged.connect(self._on_table_item_changed)
         self.table_panels.files_dropped.connect(self.load_filepaths)
         self.canvas.files_dropped.connect(self.load_filepaths)
 
@@ -1107,6 +1121,64 @@ class PanoramaTab(QWidget):
         self.panels_metadata.sort(key=lambda m: (m.timestamp, m.filename))
         self._refresh_table()
         self.log("Paneles ordenados cronológicamente según marcas temporales EXIF.")
+
+    def _on_table_item_changed(self, item: QTableWidgetItem):
+        if item.column() == 0:
+            row = item.row()
+            if 0 <= row < len(self.panels_metadata):
+                self.panels_metadata[row].is_included = (item.checkState() == Qt.Checked)
+                self._update_ingest_summary()
+
+    def open_blink_viewer(self):
+        """Abre el visor interactivo Blink para revisar tomas de la panorámica."""
+        if not self.panels_metadata:
+            QMessageBox.information(
+                self,
+                "Visor Blink",
+                "No hay paneles cargados para inspeccionar.\n\n"
+                "Añade primero tomas a la panorámica antes de abrir el visor Blink."
+            )
+            return
+
+        from gui.dialog_blink import BlinkDialog
+
+        file_list = [m.filepath for m in self.panels_metadata]
+        excluded = {m.filepath for m in self.panels_metadata if not m.is_included}
+
+        selected_rows = [idx.row() for idx in self.table_panels.selectedIndexes()]
+        curr_idx = selected_rows[0] if selected_rows else 0
+
+        dlg = BlinkDialog(
+            file_list=file_list,
+            excluded_files=excluded,
+            current_index=curr_idx,
+            parent=self
+        )
+        dlg.exclusion_changed.connect(self._on_blink_exclusion_changed)
+        dlg.selection_applied.connect(self._on_blink_selection_applied)
+        dlg.exec()
+
+    def _on_blink_exclusion_changed(self, filepath: str, is_included: bool):
+        for row, m in enumerate(self.panels_metadata):
+            if m.filepath == filepath:
+                m.is_included = is_included
+                item = self.table_panels.item(row, 0)
+                if item:
+                    self.table_panels.blockSignals(True)
+                    item.setCheckState(Qt.Checked if is_included else Qt.Unchecked)
+                    self.table_panels.blockSignals(False)
+                break
+        self._update_ingest_summary()
+
+    def _on_blink_selection_applied(self, excluded_set: set):
+        self.table_panels.blockSignals(True)
+        for row, m in enumerate(self.panels_metadata):
+            m.is_included = (m.filepath not in excluded_set)
+            item = self.table_panels.item(row, 0)
+            if item:
+                item.setCheckState(Qt.Checked if m.is_included else Qt.Unchecked)
+        self.table_panels.blockSignals(False)
+        self._update_ingest_summary()
 
     def _get_selected_panel_paths(self) -> List[str]:
         paths = []

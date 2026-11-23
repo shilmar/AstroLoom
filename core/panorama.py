@@ -609,8 +609,7 @@ def _level_and_center_rotations(rmats: List[np.ndarray]) -> List[np.ndarray]:
 def apply_arch_curvature_deformation(image: np.ndarray, curvature: float = 0.0) -> np.ndarray:
     """
     Aplica una deformación parabólica vertical suave (Curvature / Bow warp)
-    para nivelar el horizonte y arquear la Vía Láctea, idéntico a las herramientas de
-    curvatura de Autopano Giga y Photoshop.
+    para nivelar el horizonte y arquear la Vía Láctea.
     Valores negativos (<0) corrigen el efecto cuenco elevando el centro,
     lo que aplana los árboles y acentúa el arco estelar hacia el cenit.
     """

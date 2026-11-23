@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt, Signal as pyqtSignal
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
 from gui.icons import get_icon
+from gui.theme import STYLE_SECONDARY_BTN, STYLE_SPECIAL_ACTION_BTN
 
 
 class LightPollutionPanel(QWidget):
@@ -86,9 +87,31 @@ class LightPollutionPanel(QWidget):
         self.combo_bg_engine = self.combo_poly_degree  # Alias de compatibilidad
         layout_bg.addLayout(row_engine)
 
+        tool_toggle_qss = """
+            QPushButton {
+                font-size: 11px;
+                padding: 4px 8px;
+                font-weight: bold;
+                border-radius: 4px;
+                background-color: #2c2c32;
+                color: #e4e4e7;
+                border: 1px solid #2e2e35;
+            }
+            QPushButton:hover {
+                background-color: #383840;
+                border-color: #3f3f46;
+                color: #ffffff;
+            }
+            QPushButton:checked {
+                background-color: rgba(47, 129, 247, 0.15);
+                color: #2f81f7;
+                border: 1px solid #2f81f7;
+            }
+        """
+
         # Controles interactivos de Muestreo RBF (DBE)
         self.w_rbf_controls = QWidget()
-        self.w_rbf_controls.setStyleSheet("background-color: #1e2129; border-radius: 6px;")
+        self.w_rbf_controls.setStyleSheet("background-color: #222227; border: 1px solid #2e2e35; border-radius: 6px;")
         layout_rbf = QVBoxLayout(self.w_rbf_controls)
         layout_rbf.setContentsMargins(6, 6, 6, 6)
         layout_rbf.setSpacing(6)
@@ -98,25 +121,22 @@ class LightPollutionPanel(QWidget):
         row_rbf_btns.setSpacing(4)
 
         self.btn_sample_tool = QPushButton("Puntos")
-        self.btn_sample_tool.setIcon(get_icon("crosshair", color="#94a3b8", active_color="#80d8ff", size=12))
+        self.btn_sample_tool.setIcon(get_icon("crosshair", color="#a1a1aa", active_color="#2f81f7", size=12))
         self.btn_sample_tool.setCheckable(True)
-        self.btn_sample_tool.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #3b4252; color: #80d8ff; border: 1px solid #80d8ff; }"
-        )
+        self.btn_sample_tool.setStyleSheet(tool_toggle_qss)
         self.btn_sample_tool.setToolTip("Activa la edición interactiva en el lienzo:\n- Clic izquierdo: Añadir o arrastrar punto.\n- Clic derecho: Eliminar punto.")
         self.btn_sample_tool.toggled.connect(self.sample_tool_toggled.emit)
         row_rbf_btns.addWidget(self.btn_sample_tool)
 
         self.btn_auto_grid = QPushButton("Rejilla Auto")
-        self.btn_auto_grid.setIcon(get_icon("sparkles", color="#80d8ff", size=12))
-        self.btn_auto_grid.setStyleSheet("font-size: 11px; padding: 4px; font-weight: bold; color: #80d8ff;")
+        self.btn_auto_grid.setIcon(get_icon("sparkles", color="#a1a1aa", size=12))
+        self.btn_auto_grid.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_auto_grid.setToolTip("Genera automáticamente una malla de muestras en el cielo excluyendo suelo y estrellas.")
         self.btn_auto_grid.clicked.connect(self.auto_grid_requested.emit)
         row_rbf_btns.addWidget(self.btn_auto_grid)
 
         self.btn_clear_points = QPushButton("Borrar")
-        self.btn_clear_points.setStyleSheet("font-size: 11px; padding: 4px; color: #ffb74d;")
+        self.btn_clear_points.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_clear_points.setToolTip("Elimina todos los puntos de muestreo del lienzo.")
         self.btn_clear_points.clicked.connect(self.clear_points_requested.emit)
         row_rbf_btns.addWidget(self.btn_clear_points)
@@ -126,7 +146,7 @@ class LightPollutionPanel(QWidget):
         # Fila 2: Contador de puntos y modo (Sustracción / División)
         row_rbf_mode = QHBoxLayout()
         self.lbl_points_count = QLabel("Puntos: 0")
-        self.lbl_points_count.setStyleSheet("font-size: 11px; font-weight: bold; color: #80d8ff;")
+        self.lbl_points_count.setStyleSheet("font-size: 11px; font-weight: bold; color: #2f81f7;")
         row_rbf_mode.addWidget(self.lbl_points_count)
 
         self.combo_rbf_mode = QComboBox()
@@ -146,15 +166,15 @@ class LightPollutionPanel(QWidget):
         layout_bg.addWidget(self.w_rbf_controls)
 
         self.btn_extract_bg = QPushButton("Eliminar Gradientes")
-        self.btn_extract_bg.setIcon(get_icon("sparkles", color="#80d8ff", size=13))
-        self.btn_extract_bg.setStyleSheet("font-weight: bold; color: #80d8ff;")
+        self.btn_extract_bg.setIcon(get_icon("sparkles", color="#2f81f7", size=13))
+        self.btn_extract_bg.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_extract_bg.setToolTip("Ajusta una superficie analítica inmune a la silueta del suelo y neutraliza el gradiente.")
         self.btn_extract_bg.clicked.connect(self.extract_bg_requested.emit)
         layout_bg.addWidget(self.btn_extract_bg)
 
         self.btn_auto_abe = QPushButton("Auto Gradiente 1-Clic (ABE)")
-        self.btn_auto_abe.setIcon(get_icon("sparkles", color="#b388ff", size=13))
-        self.btn_auto_abe.setStyleSheet("font-weight: bold; color: #b388ff;")
+        self.btn_auto_abe.setIcon(get_icon("sparkles", color="#2f81f7", size=13))
+        self.btn_auto_abe.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_auto_abe.setToolTip("Calcula y neutraliza automáticamente el gradiente del cielo en un solo clic mediante muestreo no supervisado libre de estrellas y RBF (Seti Astro ABE).")
         self.btn_auto_abe.clicked.connect(self.auto_abe_requested.emit)
         layout_bg.addWidget(self.btn_auto_abe)
@@ -172,31 +192,25 @@ class LightPollutionPanel(QWidget):
         row_lp_tools = QHBoxLayout()
         row_lp_tools.setSpacing(4)
         self.btn_lp_expand = QPushButton("Cúpula 2D")
-        self.btn_lp_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#ffd54f", size=12))
+        self.btn_lp_expand.setIcon(get_icon("settings", color="#a1a1aa", active_color="#2f81f7", size=12))
         self.btn_lp_expand.setCheckable(True)
         self.btn_lp_expand.setChecked(False)
-        self.btn_lp_expand.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #3b4252; color: #ffd54f; border: 1px solid #ffd54f; }"
-        )
+        self.btn_lp_expand.setStyleSheet(tool_toggle_qss)
         self.btn_lp_expand.setToolTip("Despliega los controles analíticos avanzados de posición 2D, forma y tinte cromático de la cúpula.")
         self.btn_lp_expand.toggled.connect(self._on_toggle_lp_expand)
         row_lp_tools.addWidget(self.btn_lp_expand)
 
         self.btn_lp_auto = QPushButton("Auto-Detectar")
-        self.btn_lp_auto.setIcon(get_icon("sparkles", color="#80d8ff", size=12))
-        self.btn_lp_auto.setStyleSheet("font-size: 11px; padding: 4px; font-weight: bold; color: #80d8ff;")
+        self.btn_lp_auto.setIcon(get_icon("sparkles", color="#2f81f7", size=12))
+        self.btn_lp_auto.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_lp_auto.setToolTip("Analiza el resplandor difuso del cielo y sitúa automáticamente el centro de la cúpula urbana.")
         self.btn_lp_auto.clicked.connect(self.auto_detect_lp_requested.emit)
         row_lp_tools.addWidget(self.btn_lp_auto)
 
         self.btn_lp_center_pipette = QPushButton("Pinchar Centro")
-        self.btn_lp_center_pipette.setIcon(get_icon("crosshair", color="#94a3b8", active_color="#ffd54f", size=12))
+        self.btn_lp_center_pipette.setIcon(get_icon("crosshair", color="#a1a1aa", active_color="#2f81f7", size=12))
         self.btn_lp_center_pipette.setCheckable(True)
-        self.btn_lp_center_pipette.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #3b4252; color: #ffd54f; border: 1px solid #ffd54f; }"
-        )
+        self.btn_lp_center_pipette.setStyleSheet(tool_toggle_qss)
         self.btn_lp_center_pipette.setToolTip("Activa la pipeta interactiva en el lienzo para situar el foco de la cúpula de polución con un clic.")
         self.btn_lp_center_pipette.toggled.connect(self.center_pipette_toggled.emit)
         row_lp_tools.addWidget(self.btn_lp_center_pipette)
@@ -205,7 +219,7 @@ class LightPollutionPanel(QWidget):
         # Contenedor desplegable de parámetros 2D
         self.w_lp_params = QWidget()
         self.w_lp_params.setVisible(False)
-        self.w_lp_params.setStyleSheet("background-color: #1e2129; border-radius: 6px;")
+        self.w_lp_params.setStyleSheet("background-color: #222227; border: 1px solid #2e2e35; border-radius: 6px;")
         layout_lp_params = QVBoxLayout(self.w_lp_params)
         layout_lp_params.setContentsMargins(8, 6, 8, 8)
         layout_lp_params.setSpacing(6)
@@ -273,12 +287,9 @@ class LightPollutionPanel(QWidget):
         row_lp_tint.addWidget(self.btn_lp_swatch)
 
         self.btn_lp_color_pipette = QPushButton("Muestrear Color")
-        self.btn_lp_color_pipette.setIcon(get_icon("pipette", color="#94a3b8", active_color="#ffd54f", size=12))
+        self.btn_lp_color_pipette.setIcon(get_icon("pipette", color="#a1a1aa", active_color="#2f81f7", size=12))
         self.btn_lp_color_pipette.setCheckable(True)
-        self.btn_lp_color_pipette.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 4px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #3b4252; color: #ffd54f; border: 1px solid #ffd54f; }"
-        )
+        self.btn_lp_color_pipette.setStyleSheet(tool_toggle_qss)
         self.btn_lp_color_pipette.setToolTip("Muestrea el tinte cromático exacto pinchando sobre el resplandor de la cúpula en el lienzo.")
         self.btn_lp_color_pipette.toggled.connect(self.color_pipette_toggled.emit)
         row_lp_tint.addWidget(self.btn_lp_color_pipette)
@@ -310,7 +321,7 @@ class LightPollutionPanel(QWidget):
 
         # Botón de Restablecer Cúpula 2D
         btn_reset_lp = QPushButton("Restablecer Cúpula")
-        btn_reset_lp.setStyleSheet("font-size: 11px; padding: 4px; color: #ffb74d;")
+        btn_reset_lp.setStyleSheet(STYLE_SECONDARY_BTN)
         btn_reset_lp.clicked.connect(self.reset_gradients)
         layout_lp_params.addWidget(btn_reset_lp)
 
@@ -453,8 +464,8 @@ class LightPollutionPanel(QWidget):
         g_u8 = int(np.clip(rgb[1] * 255.0, 0, 255))
         b_u8 = int(np.clip(rgb[2] * 255.0, 0, 255))
         self.btn_lp_swatch.setStyleSheet(
-            f"QPushButton {{ background-color: rgb({r_u8}, {g_u8}, {b_u8}); border: 1px solid #90a4ae; border-radius: 4px; }}"
-            f"QPushButton:hover {{ border: 1.5px solid #80d8ff; }}"
+            f"QPushButton {{ background-color: rgb({r_u8}, {g_u8}, {b_u8}); border: 1px solid #2e2e35; border-radius: 4px; }}"
+            f"QPushButton:hover {{ border: 1.5px solid #2f81f7; }}"
         )
         self.btn_lp_swatch.setToolTip(f"Tinte activo: RGB({r_u8}, {g_u8}, {b_u8}). Clic para elegir color.")
 

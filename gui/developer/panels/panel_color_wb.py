@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt, Signal as pyqtSignal
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
 from gui.icons import get_icon
+from gui.theme import STYLE_SPECIAL_ACTION_BTN, STYLE_SECONDARY_BTN, TEXT_SECONDARY
 
 
 class ColorWbPanel(QWidget):
@@ -60,8 +61,9 @@ class ColorWbPanel(QWidget):
         wb_layout.setContentsMargins(6, 4, 6, 6)
         wb_layout.setSpacing(8)
 
-        # Sliders de alta precisión para Balance de Blancos
+        # Sliders de alta precisión para Balance de Blancos con pistas degradadas al 35% de saturación
         self.row_temp = PrecisionSliderRow("Temperatura:", -1000, 1000, 0, scale=1000.0, decimals=3, force_sign=True, label_width=115)
+        self.row_temp.set_track_gradient("qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #4B739B, stop:0.5 #2C2C32, stop:1 #9B794B)")
         self.slider_temp = self.row_temp.slider
         self.spin_temp = self.row_temp.spin
         self.lbl_temp = self.row_temp.lbl_value
@@ -72,6 +74,7 @@ class ColorWbPanel(QWidget):
         wb_layout.addWidget(self.row_temp)
 
         self.row_tint = PrecisionSliderRow("Tinte (V/M):", -1000, 1000, 0, scale=1000.0, decimals=3, force_sign=True, label_width=115)
+        self.row_tint.set_track_gradient("qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #4B9B65, stop:0.5 #2C2C32, stop:1 #9B4B8E)")
         self.slider_tint = self.row_tint.slider
         self.spin_tint = self.row_tint.spin
         self.lbl_tint = self.row_tint.lbl_value
@@ -83,16 +86,36 @@ class ColorWbPanel(QWidget):
 
         row_wb_btn = QHBoxLayout()
         self.btn_pipette = QPushButton("Pipeta WB (W)")
-        self.btn_pipette.setIcon(get_icon("pipette", color="#80d8ff", size=13))
+        self.btn_pipette.setIcon(get_icon("pipette", color="#e4e4e7", active_color="#2f81f7", size=13))
         self.btn_pipette.setCheckable(True)
         self.btn_pipette.setCursor(Qt.PointingHandCursor)
-        self.btn_pipette.setStyleSheet("font-weight: bold; color: #80d8ff;")
+        self.btn_pipette.setStyleSheet("""
+            QPushButton {
+                background-color: #2c2c32;
+                color: #e4e4e7;
+                border: 1px solid #2e2e35;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-weight: 500;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #3f3f46;
+                color: #ffffff;
+            }
+            QPushButton:checked {
+                background-color: rgba(47, 129, 247, 0.15);
+                color: #2f81f7;
+                border: 1px solid #2f81f7;
+            }
+        """)
         self.btn_pipette.setToolTip("Activa la pipeta para calibrar el balance de blancos haciendo clic sobre un fondo neutro en la imagen (Atajo: W)")
         self.btn_pipette.toggled.connect(self._on_pipette_toggled)
         row_wb_btn.addWidget(self.btn_pipette)
         self.btn_panel_pipette = self.btn_pipette
 
         btn_reset_wb = QPushButton("Restablecer")
+        btn_reset_wb.setStyleSheet(STYLE_SECONDARY_BTN)
         btn_reset_wb.clicked.connect(self.reset_wb)
         row_wb_btn.addWidget(btn_reset_wb)
         wb_layout.addLayout(row_wb_btn)
@@ -100,13 +123,14 @@ class ColorWbPanel(QWidget):
         # Fila Calibración Fotométrica del Color (PCC Real)
         row_pcc = QHBoxLayout()
         self.btn_pcc = QPushButton("Calibración PCC (Gaia)")
-        self.btn_pcc.setIcon(get_icon("star", color="#ffd54f", size=13))
+        self.btn_pcc.setIcon(get_icon("star", color="#2f81f7", size=13))
         self.btn_pcc.setCursor(Qt.PointingHandCursor)
         self.btn_pcc.setToolTip("Calibra el color físico exacto de las estrellas contra el estándar solar Gaia G2V (BP - RP = 0.82)")
-        self.btn_pcc.setStyleSheet("font-weight: bold; color: #ffd54f; margin-top: 2px;")
+        self.btn_pcc.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_pcc.clicked.connect(self._on_pcc_clicked)
 
         self.btn_reset_pcc = QPushButton("Restablecer")
+        self.btn_reset_pcc.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_reset_pcc.setToolTip("Restablecer ganancias fotométricas a 1.000")
         self.btn_reset_pcc.clicked.connect(self.reset_pcc)
 
@@ -115,7 +139,7 @@ class ColorWbPanel(QWidget):
         wb_layout.addLayout(row_pcc)
 
         self.lbl_pcc_status = QLabel("PCC: Inactivo (Ganancias 1.000)")
-        self.lbl_pcc_status.setStyleSheet("color: #888888; font-size: 11px;")
+        self.lbl_pcc_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
         wb_layout.addWidget(self.lbl_pcc_status)
 
         self.sec_wb.set_content_widget(w_wb)
@@ -133,8 +157,9 @@ class ColorWbPanel(QWidget):
         sat_layout.setContentsMargins(6, 4, 6, 6)
         sat_layout.setSpacing(8)
 
-        # Sliders de alta precisión para Saturación y Vibranza
+        # Sliders de alta precisión para Saturación y Vibranza (con doble capa)
         self.row_sat_sky = PrecisionSliderRow("Sat. Cielo:", 0, 250, 100, scale=100.0, decimals=2, unit="x", label_width=115)
+        self.row_sat_sky.set_saturation_style()
         self.slider_sat_sky = self.row_sat_sky.slider
         self.lbl_sat_sky = self.row_sat_sky.lbl_value
         self.slider_sat_sky.valueChanged.connect(self._on_sat_sky_changed)
@@ -143,6 +168,7 @@ class ColorWbPanel(QWidget):
         sat_layout.addWidget(self.row_sat_sky)
 
         self.row_sat_gnd = PrecisionSliderRow("Sat. Suelo:", 0, 250, 100, scale=100.0, decimals=2, unit="x", label_width=115)
+        self.row_sat_gnd.set_saturation_style()
         self.slider_sat_gnd = self.row_sat_gnd.slider
         self.lbl_sat_gnd = self.row_sat_gnd.lbl_value
         self.slider_sat_gnd.valueChanged.connect(self._on_sat_gnd_changed)
@@ -151,6 +177,7 @@ class ColorWbPanel(QWidget):
         sat_layout.addWidget(self.row_sat_gnd)
 
         self.row_vibrance = PrecisionSliderRow("Vibranza:", -100, 100, 0, scale=100.0, decimals=2, force_sign=True, label_width=115)
+        self.row_vibrance.set_saturation_style()
         self.slider_vibrance = self.row_vibrance.slider
         self.lbl_vibrance = self.row_vibrance.lbl_value
         self.slider_vibrance.valueChanged.connect(self._on_vibrance_changed)
@@ -182,10 +209,11 @@ class ColorWbPanel(QWidget):
             "Elimina el exceso de verde del sensor (SCNR) y desatura halos magenta en estrellas causados por aberración cromática en objetivos luminosos."
         )
         lbl_chroma_hint.setWordWrap(True)
-        lbl_chroma_hint.setStyleSheet("color: #78909c; font-size: 10px; line-height: 1.3;")
+        lbl_chroma_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px; line-height: 1.3;")
         chroma_layout.addWidget(lbl_chroma_hint)
 
         self.row_scnr_green = PrecisionSliderRow("Reducción Verde (SCNR):", 0, 100, 0, scale=1.0, decimals=0, unit="%", label_width=145)
+        self.row_scnr_green.set_track_gradient("qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #4B9B65, stop:1.0 #18181B)")
         self.slider_scnr_green = self.row_scnr_green.slider
         self.lbl_scnr_green = self.row_scnr_green.lbl_value
         self.slider_scnr_green.valueChanged.connect(self._on_scnr_green_changed)
@@ -194,6 +222,7 @@ class ColorWbPanel(QWidget):
         chroma_layout.addWidget(self.row_scnr_green)
 
         self.row_unpurple = PrecisionSliderRow("Atenuar Halos Magenta:", 0, 100, 0, scale=1.0, decimals=0, unit="%", label_width=145)
+        self.row_unpurple.set_track_gradient("qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #9B4B8E, stop:1.0 #18181B)")
         self.slider_unpurple = self.row_unpurple.slider
         self.lbl_unpurple = self.row_unpurple.lbl_value
         self.slider_unpurple.valueChanged.connect(self._on_unpurple_changed)
@@ -237,7 +266,7 @@ class ColorWbPanel(QWidget):
             "Para fotografía de paisaje y Vía Láctea RGB estándar, mantener en 'Desactivado (RGB)'."
         )
         lbl_db_hint.setWordWrap(True)
-        lbl_db_hint.setStyleSheet("color: #78909c; font-size: 10px; line-height: 1.3;")
+        lbl_db_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px; line-height: 1.3;")
         db_layout.addWidget(lbl_db_hint)
 
         self.row_oiii_boost = PrecisionSliderRow("Boost [OIII]:", 10, 300, 100, scale=100.0, decimals=2, unit="x", label_width=115)
@@ -330,10 +359,10 @@ class ColorWbPanel(QWidget):
         if hasattr(self, 'lbl_pcc_status'):
             if abs(self.pcc_kr - 1.0) > 1e-4 or abs(self.pcc_kb - 1.0) > 1e-4:
                 self.lbl_pcc_status.setText(f"✓ PCC Activo: R={self.pcc_kr:.3f}, B={self.pcc_kb:.3f}")
-                self.lbl_pcc_status.setStyleSheet("color: #ffd54f; font-size: 11px; font-weight: bold;")
+                self.lbl_pcc_status.setStyleSheet("color: #2f81f7; font-size: 11px; font-weight: bold;")
             else:
                 self.lbl_pcc_status.setText("PCC: Inactivo (Ganancias 1.000)")
-                self.lbl_pcc_status.setStyleSheet("color: #888888; font-size: 11px;")
+                self.lbl_pcc_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
         self.parameter_changed.emit()
 
     def reset_pcc(self) -> None:

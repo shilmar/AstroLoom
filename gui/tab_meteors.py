@@ -14,7 +14,7 @@ Implementa:
 
 import os
 import time
-from typing import Optional, List, Dict, Any, Callable, Tuple
+from typing import Optional, List, Dict, Any, Callable, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import tifffile
 import numpy as np
@@ -57,7 +57,9 @@ from gui.canvas import MaskCanvas
 from gui.worker import AIHorizonWorker
 from gui.widgets.drop_widgets import DropTableWidget
 from gui.theme import (
-    STYLE_RUN_IDLE, STYLE_RUN_ACTIVE, STYLE_RUN_CANCELLING, STYLE_TRANSFER_BTN
+    STYLE_RUN_IDLE, STYLE_RUN_ACTIVE, STYLE_RUN_CANCELLING, STYLE_TRANSFER_BTN,
+    STYLE_SPECIAL_ACTION_BTN, STYLE_SECONDARY_BTN, BG_CARD, BORDER_BASE,
+    TEXT_PRIMARY, TEXT_SECONDARY
 )
 from gui.icons import get_icon
 from gui.widgets.collapsible_section import CollapsibleSection
@@ -256,6 +258,7 @@ class MeteorTab(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.files_list: List[str] = []
+        self.excluded_files: Set[str] = set()
         self.ref_idx: int = 0
         self.candidates: List[MeteorCandidate] = []
         self.homographies_map: Dict[int, Optional[np.ndarray]] = {}
@@ -308,31 +311,43 @@ class MeteorTab(QWidget):
 
         btn_row_load = QHBoxLayout()
         self.btn_load_series = QPushButton("Cargar Serie...")
-        self.btn_load_series.setIcon(get_icon("folder", color="#80d8ff"))
+        self.btn_load_series.setIcon(get_icon("folder", color="#a1a1aa"))
+        self.btn_load_series.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_load_series.clicked.connect(self._on_load_series_clicked)
 
         self.btn_clear_series = QPushButton("Limpiar")
-        self.btn_clear_series.setIcon(get_icon("trash", color="#ff8a80"))
+        self.btn_clear_series.setIcon(get_icon("trash", color="#a1a1aa"))
+        self.btn_clear_series.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_clear_series.clicked.connect(self._on_clear_series_clicked)
 
         self.btn_set_ref = QPushButton("Marcar REF")
-        self.btn_set_ref.setIcon(get_icon("target", color="#00e5ff"))
+        self.btn_set_ref.setIcon(get_icon("target", color="#a1a1aa"))
+        self.btn_set_ref.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_set_ref.setToolTip("Establece la toma seleccionada como marco de referencia astronómica y composición")
         self.btn_set_ref.clicked.connect(self._on_set_ref_clicked)
+
+        self.btn_blink = QPushButton("Visor Blink")
+        self.btn_blink.setIcon(get_icon("eye", color="#a1a1aa"))
+        self.btn_blink.setStyleSheet(STYLE_SECONDARY_BTN)
+        self.btn_blink.setToolTip("Abre el visor interactivo Blink para revisar la serie de meteoros y descartar tomas con teclado (X/P)")
+        self.btn_blink.clicked.connect(self.open_blink_viewer)
 
         btn_row_load.addWidget(self.btn_load_series)
         btn_row_load.addWidget(self.btn_clear_series)
         btn_row_load.addWidget(self.btn_set_ref)
+        btn_row_load.addWidget(self.btn_blink)
         ingest_l.addLayout(btn_row_load)
 
-        self.table_files = DropTableWidget(0, 3)
-        self.table_files.setHorizontalHeaderLabels(["REF", "Archivo", "Timestamp / Fecha"])
+        self.table_files = DropTableWidget(0, 4)
+        self.table_files.setHorizontalHeaderLabels(["Usar", "REF", "Archivo", "Timestamp / Fecha"])
         self.table_files.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table_files.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table_files.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.table_files.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table_files.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table_files.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.table_files.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table_files.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table_files.setFixedHeight(140)
+        self.table_files.itemChanged.connect(self._on_table_files_item_changed)
         self.table_files.itemSelectionChanged.connect(self._on_table_selection_changed)
         self.table_files.files_dropped.connect(self.add_series_files)
         ingest_l.addWidget(self.table_files)
@@ -345,17 +360,20 @@ class MeteorTab(QWidget):
 
         row_mask_btns = QHBoxLayout()
         self.btn_detect_ai_mask = QPushButton("Detectar por IA")
-        self.btn_detect_ai_mask.setIcon(get_icon("sparkles", color="#80d8ff"))
+        self.btn_detect_ai_mask.setIcon(get_icon("sparkles", color="#2f81f7"))
+        self.btn_detect_ai_mask.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_detect_ai_mask.setToolTip("Segmentación semántica neuronal local (U²-Net) para delimitar el cielo y suelo automáticamente en 1 segundo.")
         self.btn_detect_ai_mask.clicked.connect(self._on_detect_ai_mask_clicked)
 
         self.btn_load_mask_file = QPushButton("Cargar Archivo...")
-        self.btn_load_mask_file.setIcon(get_icon("folder", color="#ffd54f"))
+        self.btn_load_mask_file.setIcon(get_icon("folder", color="#a1a1aa"))
+        self.btn_load_mask_file.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_load_mask_file.setToolTip("Carga una imagen de máscara desde archivo (PNG, TIFF, JPG).")
         self.btn_load_mask_file.clicked.connect(self._on_load_mask_file_clicked)
 
         self.btn_import_mask = QPushButton("Del Apilador")
-        self.btn_import_mask.setIcon(get_icon("layers", color="#b39ddb"))
+        self.btn_import_mask.setIcon(get_icon("layers", color="#a1a1aa"))
+        self.btn_import_mask.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_import_mask.setToolTip("Importa la máscara de horizonte calculada en el Apilador (Pestaña 1).")
         self.btn_import_mask.clicked.connect(self._on_import_mask_clicked)
 
@@ -371,7 +389,8 @@ class MeteorTab(QWidget):
         self.chk_show_mask.toggled.connect(self._on_toggle_show_mask)
 
         self.btn_clear_mask = QPushButton("Limpiar")
-        self.btn_clear_mask.setIcon(get_icon("trash", color="#ef5350"))
+        self.btn_clear_mask.setIcon(get_icon("trash", color="#a1a1aa"))
+        self.btn_clear_mask.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_clear_mask.setToolTip("Elimina la máscara actual y permite el escaneo en todo el encuadre.")
         self.btn_clear_mask.clicked.connect(self._on_clear_mask_clicked)
 
@@ -469,7 +488,7 @@ class MeteorTab(QWidget):
         rad_l.addWidget(self.chk_include_sporadics)
 
         self.lbl_radiant_info = QLabel("Radiante: No calculado (ejecuta el escaneo)")
-        self.lbl_radiant_info.setStyleSheet("color: #80d8ff; font-size: 11px; font-weight: bold;")
+        self.lbl_radiant_info.setStyleSheet("color: #2f81f7; font-size: 11px; font-weight: bold;")
         rad_l.addWidget(self.lbl_radiant_info)
 
         panel_layout.addWidget(sec_radiant)
@@ -480,7 +499,8 @@ class MeteorTab(QWidget):
 
         row_sky = QHBoxLayout()
         self.btn_load_sky_stack = QPushButton("Cargar Cielo Apilado...")
-        self.btn_load_sky_stack.setIcon(get_icon("layers", color="#b39ddb"))
+        self.btn_load_sky_stack.setIcon(get_icon("layers", color="#a1a1aa"))
+        self.btn_load_sky_stack.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_load_sky_stack.setToolTip("Opcional: Si tienes una imagen del cielo previamente apilada sin ruido (Pestaña 1), úsala como fondo maestro.")
         self.btn_load_sky_stack.clicked.connect(self._on_load_sky_stack_clicked)
         row_sky.addWidget(self.btn_load_sky_stack)
@@ -514,11 +534,13 @@ class MeteorTab(QWidget):
 
         btn_row_exp = QHBoxLayout()
         self.btn_save_tiff = QPushButton("Guardar TIFF 32-bit...")
-        self.btn_save_tiff.setIcon(get_icon("save", color="#90caf9"))
+        self.btn_save_tiff.setIcon(get_icon("save", color="#a1a1aa"))
+        self.btn_save_tiff.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_save_tiff.clicked.connect(self._on_save_tiff_clicked)
 
         self.btn_save_psd = QPushButton("Exportar PSD Capas...")
-        self.btn_save_psd.setIcon(get_icon("layers", color="#ce93d8"))
+        self.btn_save_psd.setIcon(get_icon("layers", color="#a1a1aa"))
+        self.btn_save_psd.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_save_psd.setToolTip("Exporta un archivo Photoshop con cada meteoro en su propia capa Screen para control individual de opacidad.")
         self.btn_save_psd.clicked.connect(self._on_save_psd_clicked)
 
@@ -527,8 +549,8 @@ class MeteorTab(QWidget):
         exp_l.addLayout(btn_row_exp)
 
         self.btn_send_dev = QPushButton("Enviar al Revelador / Editor")
-        self.btn_send_dev.setIcon(get_icon("sliders", color="#ffffff"))
-        self.btn_send_dev.setStyleSheet(STYLE_TRANSFER_BTN)
+        self.btn_send_dev.setIcon(get_icon("sliders", color="#2f81f7"))
+        self.btn_send_dev.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
         self.btn_send_dev.clicked.connect(self._on_send_to_developer_clicked)
         exp_l.addWidget(self.btn_send_dev)
 
@@ -597,7 +619,7 @@ class MeteorTab(QWidget):
         # 2. Tira Inferior: Galería de Culling e Inspección de Trazas
         culling_box = QGroupBox("Galería de Trazas Detectadas (Culling Interactivo)")
         culling_box.setStyleSheet(
-            "QGroupBox { font-weight: bold; color: #80d8ff; margin-top: 4px; padding-top: 14px; }"
+            f"QGroupBox {{ font-weight: bold; color: {TEXT_PRIMARY}; margin-top: 4px; padding-top: 14px; background-color: {BG_CARD}; border: 1px solid {BORDER_BASE}; border-radius: 6px; }}"
             "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
         )
         cull_l = QVBoxLayout(culling_box)
@@ -809,6 +831,7 @@ class MeteorTab(QWidget):
 
     def _on_clear_series_clicked(self) -> None:
         self.files_list.clear()
+        self.excluded_files.clear()
         self.candidates.clear()
         self.ref_idx = 0
         self._refresh_files_table()
@@ -837,11 +860,16 @@ class MeteorTab(QWidget):
         self.table_files.blockSignals(True)
         self.table_files.setRowCount(len(self.files_list))
         for row, fp in enumerate(self.files_list):
+            is_included = (fp not in self.excluded_files)
+            chk_item = QTableWidgetItem()
+            chk_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            chk_item.setCheckState(Qt.Checked if is_included else Qt.Unchecked)
+
             is_ref = (row == self.ref_idx)
             ref_item = QTableWidgetItem("★ REF" if is_ref else "")
             ref_item.setTextAlignment(Qt.AlignCenter)
             if is_ref:
-                ref_item.setForeground(QColor("#00e5ff"))
+                ref_item.setForeground(QColor("#2f81f7"))
 
             fname_item = QTableWidgetItem(os.path.basename(fp))
             time_str = "--:--:--"
@@ -853,10 +881,75 @@ class MeteorTab(QWidget):
                 time_str = "--:--:--"
             time_item = QTableWidgetItem(time_str)
 
-            self.table_files.setItem(row, 0, ref_item)
-            self.table_files.setItem(row, 1, fname_item)
-            self.table_files.setItem(row, 2, time_item)
+            self.table_files.setItem(row, 0, chk_item)
+            self.table_files.setItem(row, 1, ref_item)
+            self.table_files.setItem(row, 2, fname_item)
+            self.table_files.setItem(row, 3, time_item)
 
+        self.table_files.blockSignals(False)
+
+    def _on_table_files_item_changed(self, item: QTableWidgetItem) -> None:
+        if item.column() == 0:
+            row = item.row()
+            if 0 <= row < len(self.files_list):
+                fp = self.files_list[row]
+                if item.checkState() == Qt.Checked:
+                    self.excluded_files.discard(fp)
+                else:
+                    self.excluded_files.add(fp)
+
+    def open_blink_viewer(self) -> None:
+        """Abre el visor interactivo Blink para revisar la serie de meteoros y cribar tomas."""
+        if not self.files_list:
+            QMessageBox.information(
+                self,
+                "Visor Blink",
+                "No hay tomas cargadas para inspeccionar.\n\n"
+                "Carga primero una serie de tomas de meteoros antes de abrir el visor Blink."
+            )
+            return
+
+        from gui.dialog_blink import BlinkDialog
+
+        curr_idx = 0
+        rows = self.table_files.selectionModel().selectedRows()
+        if rows:
+            curr_idx = rows[0].row()
+        elif 0 <= self.ref_idx < len(self.files_list):
+            curr_idx = self.ref_idx
+
+        dlg = BlinkDialog(
+            file_list=self.files_list,
+            excluded_files=self.excluded_files,
+            current_index=curr_idx,
+            parent=self
+        )
+        dlg.exclusion_changed.connect(self._on_blink_exclusion_changed)
+        dlg.selection_applied.connect(self._on_blink_selection_applied)
+        dlg.exec()
+
+    def _on_blink_exclusion_changed(self, filepath: str, is_included: bool) -> None:
+        if is_included:
+            self.excluded_files.discard(filepath)
+        else:
+            self.excluded_files.add(filepath)
+
+        for row, fp in enumerate(self.files_list):
+            if fp == filepath:
+                item = self.table_files.item(row, 0)
+                if item:
+                    self.table_files.blockSignals(True)
+                    item.setCheckState(Qt.Checked if is_included else Qt.Unchecked)
+                    self.table_files.blockSignals(False)
+                break
+
+    def _on_blink_selection_applied(self, excluded_set: set) -> None:
+        self.excluded_files = set(excluded_set)
+        self.table_files.blockSignals(True)
+        for row, fp in enumerate(self.files_list):
+            item = self.table_files.item(row, 0)
+            if item:
+                item.setCheckState(Qt.Checked if fp not in self.excluded_files else Qt.Unchecked)
         self.table_files.blockSignals(False)
 
     def _on_table_selection_changed(self) -> None:
@@ -934,8 +1027,9 @@ class MeteorTab(QWidget):
             self.btn_scan.setText("Cancelando...")
             return
 
-        if len(self.files_list) < 2:
-            QMessageBox.warning(self, "Atención", "Carga al menos 2 tomas de la serie para detectar trazas de meteoros.")
+        active_files = [f for f in self.files_list if f not in self.excluded_files]
+        if len(active_files) < 2:
+            QMessageBox.warning(self, "Atención", "Carga al menos 2 tomas activas (no excluidas) de la serie para detectar trazas de meteoros.")
             return
 
         if hasattr(self, 'canvas_footer'):
@@ -946,9 +1040,12 @@ class MeteorTab(QWidget):
         self.btn_scan.setStyleSheet(STYLE_RUN_ACTIVE)
         self.btn_fuse.setEnabled(False)
 
+        active_ref_path = self.files_list[self.ref_idx] if (0 <= self.ref_idx < len(self.files_list)) else active_files[0]
+        active_ref_idx = active_files.index(active_ref_path) if active_ref_path in active_files else 0
+
         params = {
-            "files": self.files_list,
-            "ref_idx": self.ref_idx,
+            "files": active_files,
+            "ref_idx": active_ref_idx,
             "sensitivity_sigma": self.slider_sens.float_value(),
             "min_length_px": self.slider_min_len.float_value(),
             "filter_airplanes": self.chk_filter_planes.isChecked(),
@@ -1412,7 +1509,7 @@ class MeteorTab(QWidget):
     def _on_ai_mask_worker_finished(self, mask: np.ndarray, method_name: str) -> None:
         self.btn_detect_ai_mask.setEnabled(True)
         self.btn_detect_ai_mask.setText("Detectar por IA")
-        self.btn_detect_ai_mask.setIcon(get_icon("sparkles", color="#80d8ff"))
+        self.btn_detect_ai_mask.setIcon(get_icon("sparkles", color="#2f81f7"))
         self.unsetCursor()
         if hasattr(self, 'canvas_footer'):
             self.canvas_footer.hide_progress()
@@ -1427,7 +1524,7 @@ class MeteorTab(QWidget):
     def _on_ai_mask_worker_error(self, err_msg: str) -> None:
         self.btn_detect_ai_mask.setEnabled(True)
         self.btn_detect_ai_mask.setText("Detectar por IA")
-        self.btn_detect_ai_mask.setIcon(get_icon("sparkles", color="#80d8ff"))
+        self.btn_detect_ai_mask.setIcon(get_icon("sparkles", color="#2f81f7"))
         self.unsetCursor()
         if hasattr(self, 'canvas_footer'):
             self.canvas_footer.hide_progress()

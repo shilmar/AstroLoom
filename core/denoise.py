@@ -5,7 +5,7 @@ Implementa un motor de filtrado adaptativo de alto rendimiento en CPU:
 1. Reducción de Ruido Cromático en espacio YCrCb (limpieza de parches de color en sombras).
 2. Reducción de Ruido de Luminancia Bilateral con preservación estricta de microestructuras.
 3. Máscara de Luminosidad Invertida (prioridad a fondos oscuros y sombras donde el SNR es mínimo).
-4. Máscara de Protección de Bordes/Estructura (estilo Lightroom) para proteger estrellas y filamentos.
+4. Máscara de Protección de Bordes/Estructura  para proteger estrellas y filamentos.
 """
 
 from typing import Optional
@@ -72,7 +72,7 @@ def apply_astro_denoise(
     - img_rgb: Imagen en RGB float32 [0.0, 1.0].
     - strength: Fuerza de reducción de ruido de luminancia [0.0, 1.0] (grano de fondo).
     - color_strength: Fuerza de reducción de ruido cromático [0.0, 1.0] (motas de color en sombras).
-    - masking: Protección de bordes y enfoque en sombras [0.0, 1.0] (estilo Lightroom).
+    - masking: Protección de bordes y enfoque en sombras [0.0, 1.0] .
     - sky_mask: Máscara opcional de cielo para acotar el filtrado.
     - is_draft: Optimización para proxy borrador interactivo (60 FPS).
     - is_full_res: Escala radios para fotograma completo nativo.

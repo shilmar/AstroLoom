@@ -61,13 +61,13 @@ class EffectsPanel(QWidget):
         self.box_orton_tools = QGroupBox("Efecto Orton y Glow Galáctico")
         self.box_orton_tools.setStyleSheet("""
             QGroupBox {
-                border: 1px solid #7b1fa2;
+                border: 1px solid #2e2e35;
                 border-radius: 6px;
                 margin-top: 4px;
                 padding-top: 8px;
-                background-color: #1a1625;
+                background-color: #222227;
                 font-weight: bold;
-                color: #e1bee7;
+                color: #e4e4e7;
             }
         """)
         box_orton_layout = QVBoxLayout(self.box_orton_tools)
@@ -78,7 +78,7 @@ class EffectsPanel(QWidget):
         row_ort_int = QHBoxLayout()
         row_ort_int.addWidget(self._make_resettable_label(QLabel("Intensidad Glow:"), lambda: self.slider_orton.setValue(0), "0%"))
         self.lbl_orton = QLabel("0%")
-        self.lbl_orton.setStyleSheet("color: #ffb74d; font-weight: bold;")
+        self.lbl_orton.setStyleSheet("color: #2f81f7; font-weight: bold;")
         self.lbl_orton.setFixedWidth(34)
         row_ort_int.addWidget(self.lbl_orton)
         self.slider_orton = QSlider(Qt.Horizontal)
@@ -90,13 +90,14 @@ class EffectsPanel(QWidget):
         row_ort_int.addWidget(self.slider_orton, stretch=1)
 
         self.btn_orton_expand = QPushButton("")
-        self.btn_orton_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#e1bee7", size=13))
+        self.btn_orton_expand.setIcon(get_icon("settings", color="#a1a1aa", active_color="#2f81f7", size=13))
         self.btn_orton_expand.setCheckable(True)
         self.btn_orton_expand.setChecked(False)
         self.btn_orton_expand.setToolTip("Despliega los controles avanzados de radio, umbral de polvo, tinte cromático y modo de fusión.")
         self.btn_orton_expand.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 6px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #4a148c; color: #e1bee7; border: 1px solid #ba68c8; }"
+            "QPushButton { font-size: 11px; padding: 2px 6px; font-weight: bold; border-radius: 4px; background: #2c2c32; color: #a1a1aa; border: 1px solid #2e2e35; }"
+            "QPushButton:hover { background: #3f3f46; color: #ffffff; }"
+            "QPushButton:checked { background: rgba(47, 129, 247, 0.15); color: #2f81f7; border: 1px solid #2f81f7; }"
         )
         self.btn_orton_expand.toggled.connect(self._on_toggle_orton_expand)
         row_ort_int.addWidget(self.btn_orton_expand)
@@ -118,7 +119,7 @@ class EffectsPanel(QWidget):
         row_rad_lbl = QHBoxLayout()
         row_rad_lbl.addWidget(self._make_resettable_label(QLabel("Radio (Difusión):"), lambda: self.slider_orton_radius.setValue(40), "40 px"))
         self.lbl_orton_radius = QLabel("40 px")
-        self.lbl_orton_radius.setStyleSheet("color: #ce93d8; font-weight: bold;")
+        self.lbl_orton_radius.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_rad_lbl.addWidget(self.lbl_orton_radius)
         col_rad.addLayout(row_rad_lbl)
         self.slider_orton_radius = QSlider(Qt.Horizontal)
@@ -135,7 +136,7 @@ class EffectsPanel(QWidget):
         row_thr_lbl = QHBoxLayout()
         row_thr_lbl.addWidget(self._make_resettable_label(QLabel("Umbral Polvo:"), lambda: self.slider_orton_threshold.setValue(5), "0.05"))
         self.lbl_orton_threshold = QLabel("0.05")
-        self.lbl_orton_threshold.setStyleSheet("color: #ce93d8; font-weight: bold;")
+        self.lbl_orton_threshold.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_thr_lbl.addWidget(self.lbl_orton_threshold)
         col_thr.addLayout(row_thr_lbl)
         self.slider_orton_threshold = QSlider(Qt.Horizontal)
@@ -185,13 +186,13 @@ class EffectsPanel(QWidget):
         self.box_star_diff_tools = QGroupBox("Filtro Difusor y Realce de Constelaciones")
         self.box_star_diff_tools.setStyleSheet("""
             QGroupBox {
-                border: 1px solid #fbc02d;
+                border: 1px solid #2e2e35;
                 border-radius: 6px;
                 margin-top: 4px;
                 padding-top: 8px;
-                background-color: #221f14;
+                background-color: #222227;
                 font-weight: bold;
-                color: #fff9c4;
+                color: #e4e4e7;
             }
         """)
         box_sd_layout = QVBoxLayout(self.box_star_diff_tools)
@@ -202,7 +203,7 @@ class EffectsPanel(QWidget):
         row_sd_int = QHBoxLayout()
         row_sd_int.addWidget(self._make_resettable_label(QLabel("Intensidad Difusor:"), lambda: self.slider_star_diff.setValue(0), "0%"))
         self.lbl_star_diff = QLabel("0%")
-        self.lbl_star_diff.setStyleSheet("color: #ffd54f; font-weight: bold;")
+        self.lbl_star_diff.setStyleSheet("color: #2f81f7; font-weight: bold;")
         self.lbl_star_diff.setFixedWidth(34)
         row_sd_int.addWidget(self.lbl_star_diff)
         self.slider_star_diff = QSlider(Qt.Horizontal)
@@ -214,13 +215,14 @@ class EffectsPanel(QWidget):
         row_sd_int.addWidget(self.slider_star_diff, stretch=1)
 
         self.btn_star_diff_expand = QPushButton("")
-        self.btn_star_diff_expand.setIcon(get_icon("settings", color="#94a3b8", active_color="#fff9c4", size=13))
+        self.btn_star_diff_expand.setIcon(get_icon("settings", color="#a1a1aa", active_color="#2f81f7", size=13))
         self.btn_star_diff_expand.setCheckable(True)
         self.btn_star_diff_expand.setChecked(False)
         self.btn_star_diff_expand.setToolTip("Despliega controles avanzados de radio de halo, umbral de magnitud, saturación espectral y modo de fusión.")
         self.btn_star_diff_expand.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 6px; font-weight: bold; border-radius: 4px; background: #262933; color: #cfd8dc; }"
-            "QPushButton:checked { background: #f57f17; color: #fffde7; border: 1px solid #ffd54f; }"
+            "QPushButton { font-size: 11px; padding: 2px 6px; font-weight: bold; border-radius: 4px; background: #2c2c32; color: #a1a1aa; border: 1px solid #2e2e35; }"
+            "QPushButton:hover { background: #3f3f46; color: #ffffff; }"
+            "QPushButton:checked { background: rgba(47, 129, 247, 0.15); color: #2f81f7; border: 1px solid #2f81f7; }"
         )
         self.btn_star_diff_expand.toggled.connect(self._on_toggle_star_diff_expand)
         row_sd_int.addWidget(self.btn_star_diff_expand)
@@ -242,7 +244,7 @@ class EffectsPanel(QWidget):
         row_sd_rad_lbl = QHBoxLayout()
         row_sd_rad_lbl.addWidget(self._make_resettable_label(QLabel("Radio (Halo):"), lambda: self.slider_star_diff_radius.setValue(20), "20 px"))
         self.lbl_star_diff_radius = QLabel("20 px")
-        self.lbl_star_diff_radius.setStyleSheet("color: #ffe082; font-weight: bold;")
+        self.lbl_star_diff_radius.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_sd_rad_lbl.addWidget(self.lbl_star_diff_radius)
         col_sd_rad.addLayout(row_sd_rad_lbl)
         self.slider_star_diff_radius = QSlider(Qt.Horizontal)
@@ -259,7 +261,7 @@ class EffectsPanel(QWidget):
         row_sd_thr_lbl = QHBoxLayout()
         row_sd_thr_lbl.addWidget(self._make_resettable_label(QLabel("Umbral Magnitud:"), lambda: self.slider_star_diff_threshold.setValue(45), "0.45"))
         self.lbl_star_diff_threshold = QLabel("0.45")
-        self.lbl_star_diff_threshold.setStyleSheet("color: #ffe082; font-weight: bold;")
+        self.lbl_star_diff_threshold.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_sd_thr_lbl.addWidget(self.lbl_star_diff_threshold)
         col_sd_thr.addLayout(row_sd_thr_lbl)
         self.slider_star_diff_threshold = QSlider(Qt.Horizontal)
@@ -281,7 +283,7 @@ class EffectsPanel(QWidget):
         row_sd_col_lbl = QHBoxLayout()
         row_sd_col_lbl.addWidget(self._make_resettable_label(QLabel("Color Espectral:"), lambda: self.slider_star_diff_color.setValue(50), "50%"))
         self.lbl_star_diff_color = QLabel("50%")
-        self.lbl_star_diff_color.setStyleSheet("color: #ffe082; font-weight: bold;")
+        self.lbl_star_diff_color.setStyleSheet("color: #2f81f7; font-weight: bold;")
         row_sd_col_lbl.addWidget(self.lbl_star_diff_color)
         col_sd_col.addLayout(row_sd_col_lbl)
         self.slider_star_diff_color = QSlider(Qt.Horizontal)
