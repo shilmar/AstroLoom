@@ -16,6 +16,7 @@ Hoja de Ruta (Futuras funcionalidades anotadas):
 import os
 import gc
 import time
+import datetime
 import logging
 from typing import Optional, Callable, Dict, Any, List, Tuple
 from concurrent.futures import ThreadPoolExecutor
@@ -174,19 +175,28 @@ def build_master_flat(
 
 def extract_shot_exif(filepath: str, meta_batch_item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
-    Extrae tiempo de exposición, ISO y apertura (FNumber) de un archivo fotográfico o RAW.
+    Extrae tiempo de exposición, ISO, apertura (FNumber) y fecha/hora de un archivo fotográfico, RAW o FITS.
     Retorna un diccionario con valores numéricos y cadenas formateadas listas para la UI.
     """
     exp: Optional[float] = None
     iso: Optional[int] = None
     aperture: Optional[float] = None
+    timestamp: Optional[float] = None
+    dt_obj: Optional[datetime.datetime] = None
 
     if meta_batch_item:
         exp = meta_batch_item.get("exposure_time")
         iso = meta_batch_item.get("iso")
+        ts = meta_batch_item.get("timestamp")
+        if ts is not None and isinstance(ts, (int, float)) and ts > 0:
+            timestamp = float(ts)
+            try:
+                dt_obj = datetime.datetime.fromtimestamp(timestamp)
+            except Exception:
+                pass
 
     ext = os.path.splitext(filepath)[1].lower()
-    if (exp is None or iso is None or aperture is None) and ext in [".nef", ".cr2", ".cr3", ".arw", ".dng", ".raw", ".orf", ".rw2"]:
+    if ext in [".nef", ".cr2", ".cr3", ".arw", ".dng", ".raw", ".orf", ".rw2"]:
         try:
             import rawpy
             with rawpy.imread(filepath) as raw:
@@ -204,10 +214,42 @@ def extract_shot_exif(filepath: str, meta_batch_item: Optional[Dict[str, Any]] =
                         a = getattr(other, "aperture", None)
                         if a is not None and float(a) > 0:
                             aperture = float(a)
+                    if dt_obj is None:
+                        t = getattr(other, "timestamp", None)
+                        if t is not None and float(t) > 0:
+                            timestamp = float(t)
+                            try:
+                                dt_obj = datetime.datetime.fromtimestamp(timestamp)
+                            except Exception:
+                                pass
         except Exception:
             pass
 
-    if exp is None or iso is None or aperture is None:
+    if ext in [".fits", ".fit", ".fts"]:
+        try:
+            from astropy.io import fits
+            with fits.open(filepath) as hdul:
+                hdr = hdul[0].header
+                if exp is None:
+                    exp = float(hdr.get("EXPTIME", hdr.get("EXPOSURE", 0.0))) or None
+                if iso is None and "ISO" in hdr:
+                    try:
+                        iso = int(hdr["ISO"])
+                    except Exception:
+                        pass
+                if dt_obj is None:
+                    d_obs = hdr.get("DATE-OBS") or hdr.get("DATE")
+                    if d_obs:
+                        try:
+                            cleaned = str(d_obs).replace("T", " ").split(".")[0]
+                            dt_obj = datetime.datetime.fromisoformat(cleaned)
+                            timestamp = dt_obj.timestamp()
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    if exp is None or iso is None or aperture is None or dt_obj is None:
         try:
             from PIL import Image
             with Image.open(filepath) as img:
@@ -220,6 +262,30 @@ def extract_shot_exif(filepath: str, meta_batch_item: Optional[Dict[str, Any]] =
                         iso = int(v[0] if isinstance(v, (list, tuple)) else v)
                     if aperture is None and 33437 in exif_raw:
                         aperture = float(exif_raw[33437])
+                    if dt_obj is None:
+                        for tag_id in (36867, 36868, 306):
+                            if tag_id in exif_raw and exif_raw[tag_id]:
+                                try:
+                                    s_val = str(exif_raw[tag_id]).strip()
+                                    if len(s_val) >= 19 and s_val[4] == ":" and s_val[7] == ":":
+                                        parts = s_val.split(" ")
+                                        date_part = parts[0].replace(":", "-")
+                                        s_val = f"{date_part} {parts[1]}"
+                                    dt_obj = datetime.datetime.fromisoformat(s_val[:19])
+                                    timestamp = dt_obj.timestamp()
+                                    break
+                                except Exception:
+                                    pass
+        except Exception:
+            pass
+
+    # Fallback final a fecha de modificación del fichero
+    if dt_obj is None and os.path.exists(filepath):
+        try:
+            mtime = os.path.getmtime(filepath)
+            if mtime > 0:
+                timestamp = float(mtime)
+                dt_obj = datetime.datetime.fromtimestamp(timestamp)
         except Exception:
             pass
 
@@ -233,6 +299,8 @@ def extract_shot_exif(filepath: str, meta_batch_item: Optional[Dict[str, Any]] =
 
     iso_str = f"{int(iso)}" if (iso is not None and iso > 0) else "—"
     aperture_str = f"f/{aperture:.1f}" if (aperture is not None and aperture > 0) else "—"
+    time_str = dt_obj.strftime("%H:%M:%S") if dt_obj else "—"
+    datetime_str = dt_obj.strftime("%Y-%m-%d %H:%M:%S") if dt_obj else "—"
 
     return {
         "exp": exp,
@@ -240,7 +308,10 @@ def extract_shot_exif(filepath: str, meta_batch_item: Optional[Dict[str, Any]] =
         "iso": iso,
         "iso_str": iso_str,
         "aperture": aperture,
-        "aperture_str": aperture_str
+        "aperture_str": aperture_str,
+        "timestamp": timestamp,
+        "time_str": time_str,
+        "datetime_str": datetime_str
     }
 
 

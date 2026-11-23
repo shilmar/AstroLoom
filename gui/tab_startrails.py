@@ -37,6 +37,7 @@ from core.icc_manager import save_tiff_with_icc
 from gui.canvas import MaskCanvas
 from gui.widgets.viewer_toolbar import ViewerToolbar, CanvasFooterBar
 from gui.widgets.drop_widgets import DropTableWidget, DropListWidget
+from gui.widgets.series_table_widget import SeriesFilesTableWidget
 from gui.widgets.mask_layers.layer_thumbnails import LayerListResizeHandle
 from gui.theme import (
     STYLE_RUN_IDLE, STYLE_RUN_ACTIVE, STYLE_RUN_CANCELLING, STYLE_TRANSFER_BTN,
@@ -271,55 +272,23 @@ class StartrailsTab(QWidget):
             }}
         """)
 
-        table_compact_style = f"""
-            QTableWidget {{
-                background-color: {BG_CANVAS};
-                border: 1px solid {BORDER_BASE};
-                border-radius: 4px;
-                gridline-color: #1a1a1e;
-                font-size: 11px;
-            }}
-            QTableWidget::item {{
-                padding: 1px 4px;
-                color: {TEXT_PRIMARY};
-            }}
-            QTableWidget::item:selected {{
-                background-color: #1e293b;
-                color: #ffffff;
-            }}
-            QHeaderView::section {{
-                background-color: {BG_PANEL};
-                color: {TEXT_SECONDARY};
-                padding: 2px 4px;
-                font-size: 10px;
-                font-weight: 600;
-                border: 1px solid {BORDER_BASE};
-            }}
-        """
-
         # Pestaña 1: Lights (Serie temporal)
         tab_lights = QWidget()
         tab_lights_layout = QVBoxLayout(tab_lights)
         tab_lights_layout.setContentsMargins(4, 4, 4, 4)
         tab_lights_layout.setSpacing(4)
 
-        self.table_files = DropTableWidget(0, 6)
-        self.table_files.setHorizontalHeaderLabels(["Usar", "REF", "Archivo", "Exp.", "ISO", "f/"])
-        self.table_files.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table_files.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table_files.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.table_files.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table_files.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.table_files.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.table_files.verticalHeader().setVisible(False)
-        self.table_files.verticalHeader().setDefaultSectionSize(22)
-        self.table_files.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table_files.setMinimumHeight(140)
-        self.table_files.setStyleSheet(table_compact_style)
-        self.table_files.itemChanged.connect(self._on_table_item_changed)
-        self.table_files.itemSelectionChanged.connect(self._on_table_selection_changed)
-        self.table_files.files_dropped.connect(self.add_series_files)
-        tab_lights_layout.addWidget(self.table_files)
+        self.table_widget_lights = SeriesFilesTableWidget(mode="lights")
+        self.table_widget_lights.setMinimumHeight(140)
+        self.table_files = self.table_widget_lights.table
+        self.files_list = self.table_widget_lights.files_list
+        self.excluded_files = self.table_widget_lights.excluded_files
+        self._metadata_cache = self.table_widget_lights._metadata_cache
+        self.table_widget_lights.files_changed.connect(self._on_lights_files_changed)
+        self.table_widget_lights.selection_changed.connect(self._on_lights_selection_changed)
+        self.table_widget_lights.file_selected.connect(self._on_table_selection_changed)
+        self.table_widget_lights.reference_changed.connect(lambda idx: setattr(self, "ref_idx", idx))
+        tab_lights_layout.addWidget(self.table_widget_lights)
 
         self.lbl_files_summary = QLabel("0 tomas cargadas")
         self.lbl_files_summary.setStyleSheet("color: #2f81f7; font-weight: bold; font-size: 11px;")
@@ -333,20 +302,14 @@ class StartrailsTab(QWidget):
         tab_darks_layout.setContentsMargins(4, 4, 4, 4)
         tab_darks_layout.setSpacing(4)
 
-        self.table_darks = DropTableWidget(0, 4)
-        self.table_darks.setHorizontalHeaderLabels(["Archivo", "Exp.", "ISO", ""])
-        self.table_darks.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table_darks.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table_darks.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table_darks.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table_darks.verticalHeader().setVisible(False)
-        self.table_darks.verticalHeader().setDefaultSectionSize(22)
-        self.table_darks.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table_darks.setMinimumHeight(140)
-        self.table_darks.setStyleSheet(table_compact_style)
-        self.table_darks.files_dropped.connect(self.add_darks_files)
-        tab_darks_layout.addWidget(self.table_darks)
+        self.table_widget_darks = SeriesFilesTableWidget(mode="darks")
+        self.table_widget_darks.setMinimumHeight(140)
+        self.table_darks = self.table_widget_darks.table
         self.list_darks = self.table_darks  # alias retrocompatible
+        self.dark_files = self.table_widget_darks.files_list
+        self.table_widget_darks.files_changed.connect(self._on_darks_files_changed)
+        self.table_widget_darks.file_removed.connect(lambda p: self.log(f"Eliminado Dark: {os.path.basename(p)}"))
+        tab_darks_layout.addWidget(self.table_widget_darks)
 
         self.lbl_darks_count = QLabel("0 darks cargados")
         self.lbl_darks_count.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
@@ -360,21 +323,14 @@ class StartrailsTab(QWidget):
         tab_flats_layout.setContentsMargins(4, 4, 4, 4)
         tab_flats_layout.setSpacing(4)
 
-        self.table_flats = DropTableWidget(0, 5)
-        self.table_flats.setHorizontalHeaderLabels(["Archivo", "Exp.", "ISO", "f/", ""])
-        self.table_flats.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table_flats.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table_flats.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table_flats.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table_flats.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.table_flats.verticalHeader().setVisible(False)
-        self.table_flats.verticalHeader().setDefaultSectionSize(22)
-        self.table_flats.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table_flats.setMinimumHeight(140)
-        self.table_flats.setStyleSheet(table_compact_style)
-        self.table_flats.files_dropped.connect(self.add_flats_files)
-        tab_flats_layout.addWidget(self.table_flats)
+        self.table_widget_flats = SeriesFilesTableWidget(mode="flats")
+        self.table_widget_flats.setMinimumHeight(140)
+        self.table_flats = self.table_widget_flats.table
         self.list_flats = self.table_flats  # alias retrocompatible
+        self.flat_files = self.table_widget_flats.files_list
+        self.table_widget_flats.files_changed.connect(self._on_flats_files_changed)
+        self.table_widget_flats.file_removed.connect(lambda p: self.log(f"Eliminado Flat: {os.path.basename(p)}"))
+        tab_flats_layout.addWidget(self.table_widget_flats)
 
         self.lbl_flats_count = QLabel("0 flats cargados")
         self.lbl_flats_count.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
@@ -1005,12 +961,11 @@ class StartrailsTab(QWidget):
                 self.log(f"✓ [INGESTA] {len(new_files)} tomas analizadas en {elapsed:.3f}s{cam_info}")
 
         was_empty = (len(self.files_list) == 0)
-        self.files_list.extend(new_files)
-        self.files_list.sort()
-        if was_empty:
+        self.table_widget_lights.add_files(new_files, meta_batch=meta_batch)
+        if was_empty and self.files_list:
             self.ref_idx = 0
-        self._refresh_table()
-        self.lbl_files_summary.setText(f"{len(self.files_list)} tomas cargadas")
+            self.table_widget_lights.set_reference_index(0)
+        self._update_files_summary()
         self.log(f"Añadidas {len(new_files)} tomas para la serie de trazas (Total: {len(self.files_list)}).")
 
         # Cargar la primera toma en el visor para previsualización inmediata si estaba vacío
@@ -1034,9 +989,7 @@ class StartrailsTab(QWidget):
 
     def _on_clear_series_clicked(self) -> None:
         """Limpia la lista de archivos."""
-        self.files_list.clear()
-        self.excluded_files.clear()
-        self.table_files.setRowCount(0)
+        self.table_widget_lights.clear_files()
         self.lbl_files_summary.setText("0 tomas cargadas")
         self.current_preview_img = None
         self.final_startrail_img = None
@@ -1061,47 +1014,30 @@ class StartrailsTab(QWidget):
             self.lbl_files_summary.setText(f"{total} tomas cargadas")
 
     def _get_shot_metadata(self, path: str, meta_batch_item: Optional[dict] = None) -> Dict[str, Any]:
-        """Obtiene y cachea metadatos EXIF (Exp, ISO, Apertura) de la toma."""
+        """Obtiene y cachea metadatos EXIF (Hora, Exp, ISO, Apertura) de la toma."""
         if path not in self._metadata_cache:
             self._metadata_cache[path] = extract_shot_exif(path, meta_batch_item)
         return self._metadata_cache[path]
 
+    def _on_lights_files_changed(self, files: List[str]) -> None:
+        self._update_files_summary()
+
+    def _on_lights_selection_changed(self, excluded: Set[str]) -> None:
+        self._update_files_summary()
+
+    def _on_darks_files_changed(self, files: List[str]) -> None:
+        count = len(files)
+        self.lbl_darks_count.setText(f"{count} darks cargados")
+        self.lbl_darks_count.setStyleSheet("color: #a5d6a7; font-weight: bold; font-size: 11px;" if count > 0 else f"color: {TEXT_SECONDARY}; font-size: 11px;")
+
+    def _on_flats_files_changed(self, files: List[str]) -> None:
+        count = len(files)
+        self.lbl_flats_count.setText(f"{count} flats cargados")
+        self.lbl_flats_count.setStyleSheet("color: #a5d6a7; font-weight: bold; font-size: 11px;" if count > 0 else f"color: {TEXT_SECONDARY}; font-size: 11px;")
+
     def _refresh_table(self) -> None:
         """Actualiza la tabla con los archivos cargados y sus metadatos fotográficos."""
-        self.table_files.blockSignals(True)
-        self.table_files.setRowCount(len(self.files_list))
-        for row, path in enumerate(self.files_list):
-            meta = self._get_shot_metadata(path)
-            is_included = (path not in self.excluded_files)
-            chk_item = QTableWidgetItem()
-            chk_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            chk_item.setCheckState(Qt.Checked if is_included else Qt.Unchecked)
-
-            is_ref = (row == self.ref_idx)
-            ref_item = QTableWidgetItem("● REF" if is_ref else "")
-            ref_item.setTextAlignment(Qt.AlignCenter)
-            if is_ref:
-                ref_item.setForeground(QColor("#2f81f7"))
-
-            name_item = QTableWidgetItem(os.path.basename(path))
-            name_item.setToolTip(path)
-
-            exp_item = QTableWidgetItem(meta.get("exp_str", "—"))
-            exp_item.setTextAlignment(Qt.AlignCenter)
-
-            iso_item = QTableWidgetItem(meta.get("iso_str", "—"))
-            iso_item.setTextAlignment(Qt.AlignCenter)
-
-            ap_item = QTableWidgetItem(meta.get("aperture_str", "—"))
-            ap_item.setTextAlignment(Qt.AlignCenter)
-
-            self.table_files.setItem(row, 0, chk_item)
-            self.table_files.setItem(row, 1, ref_item)
-            self.table_files.setItem(row, 2, name_item)
-            self.table_files.setItem(row, 3, exp_item)
-            self.table_files.setItem(row, 4, iso_item)
-            self.table_files.setItem(row, 5, ap_item)
-        self.table_files.blockSignals(False)
+        self.table_widget_lights._refresh_all_rows()
         self._update_files_summary()
 
     def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
@@ -1151,25 +1087,12 @@ class StartrailsTab(QWidget):
             self.excluded_files.discard(filepath)
         else:
             self.excluded_files.add(filepath)
-
-        for row, path in enumerate(self.files_list):
-            if path == filepath:
-                item = self.table_files.item(row, 0)
-                if item:
-                    self.table_files.blockSignals(True)
-                    item.setCheckState(Qt.Checked if is_included else Qt.Unchecked)
-                    self.table_files.blockSignals(False)
-                break
+        self.table_widget_lights.set_excluded_files(self.excluded_files)
         self._update_files_summary()
 
     def _on_blink_selection_applied(self, excluded_set: set) -> None:
         self.excluded_files = set(excluded_set)
-        self.table_files.blockSignals(True)
-        for row, path in enumerate(self.files_list):
-            item = self.table_files.item(row, 0)
-            if item:
-                item.setCheckState(Qt.Checked if path not in self.excluded_files else Qt.Unchecked)
-        self.table_files.blockSignals(False)
+        self.table_widget_lights.set_excluded_files(self.excluded_files)
         self._update_files_summary()
 
     def _on_set_ref_clicked(self) -> None:
@@ -1178,7 +1101,7 @@ class StartrailsTab(QWidget):
         if not selected_rows:
             return
         self.ref_idx = selected_rows[0].row()
-        self._refresh_table()
+        self.table_widget_lights.set_reference_index(self.ref_idx)
         ref_path = self.files_list[self.ref_idx]
         self.log(f"Toma de referencia establecida: {os.path.basename(ref_path)}")
         try:
@@ -1248,10 +1171,30 @@ class StartrailsTab(QWidget):
         if files:
             self.add_darks_files(files)
 
+    def add_darks_files(self, files: List[str]) -> None:
+        """Añade tomas dark deduplicando."""
+        if not files:
+            return
+        new_files = [f for f in files if f not in self.dark_files]
+        if not new_files:
+            return
+        meta_batch = scan_raw_batch_metadata(new_files)
+        self.table_widget_darks.add_files(new_files, meta_batch=meta_batch)
+        self.log(f"Añadidos {len(new_files)} darks (Total: {len(self.dark_files)}).")
+
+    def _on_load_darks_clicked(self) -> None:
+        """Carga tomas oscuras para la sustracción de píxeles calientes."""
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Seleccionar Tomas Dark",
+            os.getcwd(),
+            "Imágenes (*.nef *.cr2 *.cr3 *.arw *.dng *.raw *.tif *.tiff *.fits);;Todos (*.*)"
+        )
+        if files:
+            self.add_darks_files(files)
+
     def _on_clear_darks_clicked(self) -> None:
         """Descarta las tomas oscuras."""
-        self.dark_files.clear()
-        self._refresh_calibration_list("Darks")
+        self.table_widget_darks.clear_files()
         self.log("Darks descartados.")
 
     def add_flats_files(self, files: List[str]) -> None:
@@ -1261,9 +1204,9 @@ class StartrailsTab(QWidget):
         new_files = [f for f in files if f not in self.flat_files]
         if not new_files:
             return
-        self.flat_files.extend(new_files)
-        self._refresh_calibration_list("Flats")
-        self.log(f"Añadidas {len(new_files)} tomas flat (Total: {len(self.flat_files)}).")
+        meta_batch = scan_raw_batch_metadata(new_files)
+        self.table_widget_flats.add_files(new_files, meta_batch=meta_batch)
+        self.log(f"Añadidos {len(new_files)} flats (Total: {len(self.flat_files)}).")
 
     def _on_load_flats_clicked(self) -> None:
         """Carga tomas flat para la corrección de viñeteo y polvo."""
@@ -1277,83 +1220,18 @@ class StartrailsTab(QWidget):
 
     def _on_clear_flats_clicked(self) -> None:
         """Descarta las tomas flat."""
-        self.flat_files.clear()
-        self._refresh_calibration_list("Flats")
+        self.table_widget_flats.clear_files()
         self.log("Flats descartados.")
 
     def _refresh_darks_table(self) -> None:
         """Actualiza la tabla de tomas Dark con metadatos de exposición e ISO."""
-        self.table_darks.blockSignals(True)
-        self.table_darks.setRowCount(len(self.dark_files))
-        for row, path in enumerate(self.dark_files):
-            meta = self._get_shot_metadata(path)
-            name_item = QTableWidgetItem(os.path.basename(path))
-            name_item.setToolTip(path)
-
-            exp_item = QTableWidgetItem(meta.get("exp_str", "—"))
-            exp_item.setTextAlignment(Qt.AlignCenter)
-
-            iso_item = QTableWidgetItem(meta.get("iso_str", "—"))
-            iso_item.setTextAlignment(Qt.AlignCenter)
-
-            btn_del = QPushButton("×")
-            btn_del.setFixedSize(18, 18)
-            btn_del.setToolTip("Eliminar esta toma dark")
-            btn_del.setStyleSheet(
-                "QPushButton { color: #a1a1aa; background: transparent; border: 1px solid #2e2e35; border-radius: 3px; font-weight: bold; font-size: 13px; line-height: 14px; padding: 0px; } "
-                "QPushButton:hover { background: #b91c1c; color: #ffffff; border-color: #ef4444; }"
-            )
-            p_cap = path
-            btn_del.clicked.connect(lambda checked=False, p=p_cap: self._on_delete_calibration_file("Darks", p))
-
-            self.table_darks.setItem(row, 0, name_item)
-            self.table_darks.setItem(row, 1, exp_item)
-            self.table_darks.setItem(row, 2, iso_item)
-            self.table_darks.setCellWidget(row, 3, btn_del)
-        self.table_darks.blockSignals(False)
-
-        count = len(self.dark_files)
-        self.lbl_darks_count.setText(f"{count} darks cargados")
-        self.lbl_darks_count.setStyleSheet("color: #a5d6a7; font-weight: bold; font-size: 11px;" if count > 0 else f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        self.table_widget_darks._refresh_all_rows()
+        self._on_darks_files_changed(self.dark_files)
 
     def _refresh_flats_table(self) -> None:
         """Actualiza la tabla de tomas Flat con metadatos de exposición, ISO y apertura."""
-        self.table_flats.blockSignals(True)
-        self.table_flats.setRowCount(len(self.flat_files))
-        for row, path in enumerate(self.flat_files):
-            meta = self._get_shot_metadata(path)
-            name_item = QTableWidgetItem(os.path.basename(path))
-            name_item.setToolTip(path)
-
-            exp_item = QTableWidgetItem(meta.get("exp_str", "—"))
-            exp_item.setTextAlignment(Qt.AlignCenter)
-
-            iso_item = QTableWidgetItem(meta.get("iso_str", "—"))
-            iso_item.setTextAlignment(Qt.AlignCenter)
-
-            ap_item = QTableWidgetItem(meta.get("aperture_str", "—"))
-            ap_item.setTextAlignment(Qt.AlignCenter)
-
-            btn_del = QPushButton("×")
-            btn_del.setFixedSize(18, 18)
-            btn_del.setToolTip("Eliminar esta toma flat")
-            btn_del.setStyleSheet(
-                "QPushButton { color: #a1a1aa; background: transparent; border: 1px solid #2e2e35; border-radius: 3px; font-weight: bold; font-size: 13px; line-height: 14px; padding: 0px; } "
-                "QPushButton:hover { background: #b91c1c; color: #ffffff; border-color: #ef4444; }"
-            )
-            p_cap = path
-            btn_del.clicked.connect(lambda checked=False, p=p_cap: self._on_delete_calibration_file("Flats", p))
-
-            self.table_flats.setItem(row, 0, name_item)
-            self.table_flats.setItem(row, 1, exp_item)
-            self.table_flats.setItem(row, 2, iso_item)
-            self.table_flats.setItem(row, 3, ap_item)
-            self.table_flats.setCellWidget(row, 4, btn_del)
-        self.table_flats.blockSignals(False)
-
-        count = len(self.flat_files)
-        self.lbl_flats_count.setText(f"{count} flats cargados")
-        self.lbl_flats_count.setStyleSheet("color: #a5d6a7; font-weight: bold; font-size: 11px;" if count > 0 else f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        self.table_widget_flats._refresh_all_rows()
+        self._on_flats_files_changed(self.flat_files)
 
     def _refresh_calibration_list(self, tab_name: str) -> None:
         """Actualiza la tabla de calibración según la pestaña activa."""
@@ -1365,15 +1243,11 @@ class StartrailsTab(QWidget):
     def _on_delete_calibration_file(self, tab_name: str, filepath: str) -> None:
         """Elimina una toma individual de calibración."""
         if tab_name == "Darks":
-            if filepath in self.dark_files:
-                self.dark_files.remove(filepath)
-                self._refresh_darks_table()
-                self.log(f"Eliminado dark: {os.path.basename(filepath)}")
+            self.table_widget_darks.remove_file(filepath)
+            self.log(f"Eliminado dark: {os.path.basename(filepath)}")
         elif tab_name == "Flats":
-            if filepath in self.flat_files:
-                self.flat_files.remove(filepath)
-                self._refresh_flats_table()
-                self.log(f"Eliminado flat: {os.path.basename(filepath)}")
+            self.table_widget_flats.remove_file(filepath)
+            self.log(f"Eliminado flat: {os.path.basename(filepath)}")
 
     def _on_tabs_height_adjusted(self, delta_y: int) -> None:
         """Ajuste continuo de la altura de las tablas mediante el tirador de arrastre."""
@@ -1869,3 +1743,12 @@ class StartrailsTab(QWidget):
         except Exception as e:
             self.log(f"ERROR al transferir al Revelador: {e}")
             QMessageBox.critical(self, "Error de Transferencia", f"No se pudo transferir al Revelador:\n{e}")
+
+    def closeEvent(self, event):
+        if hasattr(self, "table_widget_lights"):
+            self.table_widget_lights.cancel_scan()
+        if hasattr(self, "table_widget_darks"):
+            self.table_widget_darks.cancel_scan()
+        if hasattr(self, "table_widget_flats"):
+            self.table_widget_flats.cancel_scan()
+        super().closeEvent(event)

@@ -56,6 +56,7 @@ from core.icc_manager import save_tiff_with_icc
 from gui.canvas import MaskCanvas
 from gui.worker import AIHorizonWorker
 from gui.widgets.drop_widgets import DropTableWidget
+from gui.widgets.series_table_widget import SeriesFilesTableWidget
 from gui.theme import (
     STYLE_RUN_IDLE, STYLE_RUN_ACTIVE, STYLE_RUN_CANCELLING, STYLE_TRANSFER_BTN,
     STYLE_SPECIAL_ACTION_BTN, STYLE_SECONDARY_BTN, BG_CARD, BORDER_BASE,
@@ -338,19 +339,15 @@ class MeteorTab(QWidget):
         btn_row_load.addWidget(self.btn_blink)
         ingest_l.addLayout(btn_row_load)
 
-        self.table_files = DropTableWidget(0, 4)
-        self.table_files.setHorizontalHeaderLabels(["Usar", "REF", "Archivo", "Timestamp / Fecha"])
-        self.table_files.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table_files.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table_files.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.table_files.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table_files.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table_files.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.table_files.setFixedHeight(140)
-        self.table_files.itemChanged.connect(self._on_table_files_item_changed)
-        self.table_files.itemSelectionChanged.connect(self._on_table_selection_changed)
-        self.table_files.files_dropped.connect(self.add_series_files)
-        ingest_l.addWidget(self.table_files)
+        self.table_widget_files = SeriesFilesTableWidget(mode="meteors")
+        self.table_widget_files.setMinimumHeight(140)
+        self.table_files = self.table_widget_files.table
+        self.files_list = self.table_widget_files.files_list
+        self.excluded_files = self.table_widget_files.excluded_files
+        self.table_widget_files.file_selected.connect(lambda row, p: self._preview_frame(row))
+        self.table_widget_files.reference_changed.connect(lambda idx: setattr(self, "ref_idx", idx))
+        self.table_widget_files.files_dropped.connect(self.add_series_files)
+        ingest_l.addWidget(self.table_widget_files)
 
         panel_layout.addWidget(sec_ingest)
 
@@ -812,12 +809,12 @@ class MeteorTab(QWidget):
         if not clean_paths:
             return
 
-        all_set = set(self.files_list)
-        all_set.update(clean_paths)
-        self.files_list = sorted(list(all_set))
-        self.ref_idx = min(self.ref_idx, max(0, len(self.files_list) - 1))
+        was_empty = (len(self.files_list) == 0)
+        self.table_widget_files.add_files(clean_paths)
+        if was_empty and self.files_list:
+            self.ref_idx = 0
+            self.table_widget_files.set_reference_index(0)
 
-        self._refresh_files_table()
         self.log(f"Serie de meteoros: {len(self.files_list)} tomas registradas.")
 
         if self.files_list:
@@ -830,11 +827,9 @@ class MeteorTab(QWidget):
             self.add_series_files(paths)
 
     def _on_clear_series_clicked(self) -> None:
-        self.files_list.clear()
-        self.excluded_files.clear()
+        self.table_widget_files.clear_files()
         self.candidates.clear()
         self.ref_idx = 0
-        self._refresh_files_table()
         self._refresh_cull_table()
         self.composite_result = None
         self.base_reference_img = None
@@ -852,51 +847,15 @@ class MeteorTab(QWidget):
         rows = self.table_files.selectionModel().selectedRows()
         if rows:
             self.ref_idx = rows[0].row()
-            self._refresh_files_table()
+            self.table_widget_files.set_reference_index(self.ref_idx)
             self._preview_frame(self.ref_idx)
             self.log(f"Toma de referencia maestra establecida: {os.path.basename(self.files_list[self.ref_idx])}")
 
     def _refresh_files_table(self) -> None:
-        self.table_files.blockSignals(True)
-        self.table_files.setRowCount(len(self.files_list))
-        for row, fp in enumerate(self.files_list):
-            is_included = (fp not in self.excluded_files)
-            chk_item = QTableWidgetItem()
-            chk_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            chk_item.setCheckState(Qt.Checked if is_included else Qt.Unchecked)
-
-            is_ref = (row == self.ref_idx)
-            ref_item = QTableWidgetItem("★ REF" if is_ref else "")
-            ref_item.setTextAlignment(Qt.AlignCenter)
-            if is_ref:
-                ref_item.setForeground(QColor("#2f81f7"))
-
-            fname_item = QTableWidgetItem(os.path.basename(fp))
-            time_str = "--:--:--"
-            try:
-                ts = extract_frame_timestamp(fp)
-                if ts > 0:
-                    time_str = time.strftime("%H:%M:%S", time.localtime(ts))
-            except Exception:
-                time_str = "--:--:--"
-            time_item = QTableWidgetItem(time_str)
-
-            self.table_files.setItem(row, 0, chk_item)
-            self.table_files.setItem(row, 1, ref_item)
-            self.table_files.setItem(row, 2, fname_item)
-            self.table_files.setItem(row, 3, time_item)
-
-        self.table_files.blockSignals(False)
+        self.table_widget_files._refresh_all_rows()
 
     def _on_table_files_item_changed(self, item: QTableWidgetItem) -> None:
-        if item.column() == 0:
-            row = item.row()
-            if 0 <= row < len(self.files_list):
-                fp = self.files_list[row]
-                if item.checkState() == Qt.Checked:
-                    self.excluded_files.discard(fp)
-                else:
-                    self.excluded_files.add(fp)
+        pass
 
     def open_blink_viewer(self) -> None:
         """Abre el visor interactivo Blink para revisar la serie de meteoros y cribar tomas."""
@@ -922,6 +881,7 @@ class MeteorTab(QWidget):
             file_list=self.files_list,
             excluded_files=self.excluded_files,
             current_index=curr_idx,
+            metadata_cache=self.table_widget_files._metadata_cache,
             parent=self
         )
         dlg.exclusion_changed.connect(self._on_blink_exclusion_changed)
@@ -933,24 +893,11 @@ class MeteorTab(QWidget):
             self.excluded_files.discard(filepath)
         else:
             self.excluded_files.add(filepath)
-
-        for row, fp in enumerate(self.files_list):
-            if fp == filepath:
-                item = self.table_files.item(row, 0)
-                if item:
-                    self.table_files.blockSignals(True)
-                    item.setCheckState(Qt.Checked if is_included else Qt.Unchecked)
-                    self.table_files.blockSignals(False)
-                break
+        self.table_widget_files.set_excluded_files(self.excluded_files)
 
     def _on_blink_selection_applied(self, excluded_set: set) -> None:
         self.excluded_files = set(excluded_set)
-        self.table_files.blockSignals(True)
-        for row, fp in enumerate(self.files_list):
-            item = self.table_files.item(row, 0)
-            if item:
-                item.setCheckState(Qt.Checked if fp not in self.excluded_files else Qt.Unchecked)
-        self.table_files.blockSignals(False)
+        self.table_widget_files.set_excluded_files(self.excluded_files)
 
     def _on_table_selection_changed(self) -> None:
         rows = self.table_files.selectionModel().selectedRows()
@@ -1620,3 +1567,8 @@ class MeteorTab(QWidget):
             self.log(f"Compuesto de meteoros transferido al Revelador / Editor ({transfer_path}).")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo transferir la imagen: {e}")
+
+    def closeEvent(self, event):
+        if hasattr(self, "table_widget_files"):
+            self.table_widget_files.cancel_scan()
+        super().closeEvent(event)

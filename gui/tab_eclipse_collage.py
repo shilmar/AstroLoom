@@ -1012,6 +1012,41 @@ class EclipseCollageTab(QWidget):
                 self.frames_meta[row].is_recommended = (item.checkState() == Qt.Checked)
                 self._update_preview()
 
+    def _compute_eclipse_contacts(self) -> Dict[str, float]:
+        """Calcula o estima las marcas temporales de contacto (C1, C2, MAX, C3, C4) a partir de frames_meta."""
+        valid = [f for f in self.frames_meta if f.timestamp > 0]
+        if not valid:
+            return {}
+        valid.sort(key=lambda f: f.timestamp)
+        t_c1 = valid[0].timestamp
+        t_c4 = valid[-1].timestamp
+
+        tot_frames = [f for f in valid if ("TOTALIDAD" in (f.phase_label or "").upper()) or (f.obscuration_pct >= 98.0)]
+        c2_frames = [f for f in valid if (("DIAMANTE" in (f.phase_label or "").upper() or "BAILY" in (f.phase_label or "").upper()) and f.is_ingress) or ("(C2)" in (f.phase_label or "").upper())]
+        c3_frames = [f for f in valid if (("DIAMANTE" in (f.phase_label or "").upper() or "BAILY" in (f.phase_label or "").upper()) and not f.is_ingress) or ("(C3)" in (f.phase_label or "").upper())]
+
+        contacts: Dict[str, float] = {
+            "C1": t_c1,
+            "C4": t_c4,
+        }
+
+        if tot_frames or c2_frames or c3_frames:
+            t_c2 = c2_frames[0].timestamp if c2_frames else tot_frames[0].timestamp
+            t_c3 = c3_frames[-1].timestamp if c3_frames else tot_frames[-1].timestamp
+            t_max = tot_frames[len(tot_frames) // 2].timestamp if tot_frames else (t_c2 + t_c3) / 2.0
+            contacts["C2"] = t_c2
+            contacts["MAX"] = t_max
+            contacts["C3"] = t_c3
+        else:
+            best_frame = max(valid, key=lambda f: f.obscuration_pct if f.obscuration_pct > 0 else 0)
+            if best_frame.obscuration_pct > 0:
+                t_max = best_frame.timestamp
+            else:
+                t_max = (t_c1 + t_c4) / 2.0
+            contacts["MAX"] = t_max
+
+        return contacts
+
     def open_blink_viewer(self):
         """Abre el visor interactivo Blink para revisar tomas del eclipse."""
         if not self.frames_meta:
@@ -1028,6 +1063,34 @@ class EclipseCollageTab(QWidget):
         file_list = [f.filepath for f in self.frames_meta]
         excluded = {f.filepath for f in self.frames_meta if not f.is_recommended}
 
+        meta_cache: Dict[str, Dict[str, Any]] = {}
+        for f in self.frames_meta:
+            exp = f.exp_time
+            if exp is not None and exp > 0:
+                if exp >= 1.0:
+                    exp_str = f"{exp:.1f}s" if exp % 1 != 0 else f"{int(exp)}s"
+                else:
+                    exp_str = f"1/{int(round(1.0 / exp))}s"
+            else:
+                exp_str = "—"
+            iso_str = f"{int(f.iso)}" if (f.iso is not None and f.iso > 0) else "—"
+            meta_cache[f.filepath] = {
+                "exp": f.exp_time,
+                "exp_str": exp_str,
+                "iso": f.iso,
+                "iso_str": iso_str,
+                "aperture": None,
+                "aperture_str": "—",
+                "timestamp": f.timestamp,
+                "time_str": f.time_str,
+                "datetime_str": f.time_str,
+                "phase_label": f.phase_label,
+                "obscuration_pct": f.obscuration_pct,
+                "is_ingress": f.is_ingress,
+            }
+
+        contacts = self._compute_eclipse_contacts()
+
         selected_rows = [idx.row() for idx in self.table_files.selectedIndexes()]
         curr_idx = selected_rows[0] if selected_rows else 0
 
@@ -1035,6 +1098,9 @@ class EclipseCollageTab(QWidget):
             file_list=file_list,
             excluded_files=excluded,
             current_index=curr_idx,
+            metadata_cache=meta_cache,
+            mode="eclipse",
+            contacts=contacts,
             parent=self
         )
         dlg.exclusion_changed.connect(self._on_blink_exclusion_changed)

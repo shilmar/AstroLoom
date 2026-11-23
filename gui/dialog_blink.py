@@ -181,6 +181,7 @@ class BlinkDialog(QDialog):
 
     exclusion_changed = Signal(str, bool)     # (filepath, is_included)
     selection_applied = Signal(set)           # set de archivos excluidos
+    _meta_scanned = Signal(int, str, dict)    # (row, filepath, metadata_dict)
 
     def __init__(
         self,
@@ -189,10 +190,16 @@ class BlinkDialog(QDialog):
         culling_results: Optional[Dict[str, Any]] = None,
         current_index: int = 0,
         metadata_cache: Optional[Dict[str, Dict[str, Any]]] = None,
+        mode: str = "general",
+        contacts: Optional[Dict[str, float]] = None,
         parent: Optional[QWidget] = None
     ):
         super().__init__(parent, Qt.Window)
-        self.setWindowTitle("AstroLoom - Visor Rápido de Subframes (Blink & Culling)")
+        self.mode: str = (mode or "general").lower()
+        if self.mode == "eclipse":
+            self.setWindowTitle("AstroLoom - Visor Rápido (Blink & Selección Eclipse)")
+        else:
+            self.setWindowTitle("AstroLoom - Visor Rápido de Subframes (Blink & Culling)")
         self.resize(1150, 750)
         apply_theme(self)
 
@@ -201,6 +208,10 @@ class BlinkDialog(QDialog):
         self.culling_results: Dict[str, Any] = culling_results if culling_results else {}
         self.current_idx: int = max(0, min(current_index, len(self.file_list) - 1)) if self.file_list else 0
         self._metadata_cache: Dict[str, Dict[str, Any]] = metadata_cache if metadata_cache is not None else {}
+        self._eclipse_contacts: Dict[str, float] = dict(contacts) if contacts else {}
+        self._is_shutting_down: bool = False
+
+        self._meta_scanned.connect(self._on_meta_scanned)
 
         # Caché de memoria en búfer circular
         self._cache: Dict[str, np.ndarray] = {}
@@ -274,18 +285,22 @@ class BlinkDialog(QDialog):
         side_layout.setSpacing(4)
 
         side_hdr = QHBoxLayout()
-        lbl_list_title = QLabel("Tomas de la Serie")
+        lbl_list_title = QLabel("Tomas del Eclipse" if self.mode == "eclipse" else "Tomas de la Serie")
         lbl_list_title.setStyleSheet("font-weight: bold; font-size: 11px; color: #cbd5e1;")
         side_hdr.addWidget(lbl_list_title)
         side_hdr.addStretch()
 
-        self.lbl_blink_summary = QLabel(f"{len(self.file_list)} tomas")
+        total = len(self.file_list)
+        inc = total - len(self.excluded_files)
+        term = "en collage" if self.mode == "eclipse" else "activas"
+        self.lbl_blink_summary = QLabel(f"{inc}/{total} {term}")
         self.lbl_blink_summary.setStyleSheet("color: #94a3b8; font-size: 10px;")
         side_hdr.addWidget(self.lbl_blink_summary)
         side_layout.addLayout(side_hdr)
 
+        col1_name = "Collage" if self.mode == "eclipse" else "Uso"
         self.table_blink = QTableWidget(len(self.file_list), 5)
-        self.table_blink.setHorizontalHeaderLabels(["#", "Uso", "Archivo", "Exp.", "ISO"])
+        self.table_blink.setHorizontalHeaderLabels(["#", col1_name, "Archivo", "Exp.", "ISO"])
         self.table_blink.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table_blink.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.table_blink.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
@@ -342,14 +357,56 @@ class BlinkDialog(QDialog):
         f_layout.setContentsMargins(8, 6, 8, 6)
         f_layout.setSpacing(6)
 
-        # Fila 1: Deslizador de posición
+        # Fila 1: Línea de tiempo astronómica interactiva (Timeline con hitos y gaps)
+        from gui.widgets.session_timeline_widget import SessionTimelineWidget
+        self.timeline = SessionTimelineWidget(mode=self.mode, parent=self)
+        if self._eclipse_contacts:
+            self.timeline.set_eclipse_contacts(self._eclipse_contacts)
+        self.timeline.set_data(
+            files=self.file_list,
+            metadata_cache=self._metadata_cache,
+            excluded_files=self.excluded_files,
+            current_idx=self.current_idx
+        )
+        self.timeline.frame_selected.connect(self.set_current_index)
+        self.timeline.gap_selected.connect(self._on_timeline_gap_selected)
+        f_layout.addWidget(self.timeline)
+
+        # Barra de Leyenda de Fases (Modo Eclipse)
+        if self.mode == "eclipse":
+            legend_frame = QFrame()
+            legend_frame.setStyleSheet("background: transparent; border: none;")
+            legend_layout = QHBoxLayout(legend_frame)
+            legend_layout.setContentsMargins(4, 0, 4, 0)
+            legend_layout.setSpacing(10)
+
+            lbl_leg_title = QLabel("Fases:")
+            lbl_leg_title.setStyleSheet("font-size: 10px; font-weight: bold; color: #94a3b8;")
+            legend_layout.addWidget(lbl_leg_title)
+
+            legend_items = [
+                ("C1-C2 Entrada", "#0284c7"),
+                ("C2/C3 Contacto", "#fbbf24"),
+                ("Totalidad", "#9333ea"),
+                ("C3-C4 Salida", "#ea580c"),
+                ("En Collage", "#38bdf8"),
+                ("Disponible", "#64748b"),
+            ]
+            for label, col in legend_items:
+                dot = QLabel(f"<span style='color: {col}; font-size: 11px;'>■</span> <span style='color: #cbd5e1; font-size: 10px;'>{label}</span>")
+                legend_layout.addWidget(dot)
+
+            legend_layout.addStretch()
+            f_layout.addWidget(legend_frame)
+
+        # Fila 2: Deslizador de posición compacto
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setRange(0, max(0, len(self.file_list) - 1))
         self.slider.setValue(self.current_idx)
         self.slider.valueChanged.connect(self._on_slider_changed)
         f_layout.addWidget(self.slider)
 
-        # Fila 2: Botones de transporte y cribado
+        # Fila 3: Botones de transporte, hitos de gaps y cribado
         row_ctrl = QHBoxLayout()
         row_ctrl.setSpacing(8)
 
@@ -370,48 +427,109 @@ class BlinkDialog(QDialog):
         self.btn_next.clicked.connect(self.next_frame)
         row_ctrl.addWidget(self.btn_next)
 
-        # Velocidad FPS
+        # Velocidad FPS: 1 a 5 fps, 1 por defecto
         row_ctrl.addWidget(QLabel("Velocidad:"))
         self.combo_fps = QComboBox()
-        self.combo_fps.addItems(["1 fps", "2 fps", "5 fps", "10 fps", "15 fps"])
-        self.combo_fps.setCurrentIndex(2)  # 5 fps default
+        self.combo_fps.addItems(["1 fps", "2 fps", "3 fps", "4 fps", "5 fps"])
+        self.combo_fps.setCurrentIndex(0)  # 1 fps default
         self.combo_fps.currentIndexChanged.connect(self._on_fps_changed)
         row_ctrl.addWidget(self.combo_fps)
+
+        # Navegación entre discontinuidades (Gaps)
+        self.btn_prev_gap = QPushButton("◀ Gap")
+        self.btn_prev_gap.setIcon(get_icon("chevron-left", size=11))
+        self.btn_prev_gap.setToolTip("Saltar a la discontinuidad temporal anterior")
+        self.btn_prev_gap.clicked.connect(self._on_jump_prev_gap)
+        row_ctrl.addWidget(self.btn_prev_gap)
+
+        self.btn_next_gap = QPushButton("Gap ▶")
+        self.btn_next_gap.setIcon(get_icon("chevron-right", size=11))
+        self.btn_next_gap.setToolTip("Saltar a la siguiente discontinuidad temporal (falta de fotos)")
+        self.btn_next_gap.clicked.connect(self._on_jump_next_gap)
+        row_ctrl.addWidget(self.btn_next_gap)
+
+        gaps = self.timeline.get_gaps()
+        self.lbl_gaps_summary = QLabel(f"⚠️ {len(gaps)} gaps" if gaps else "")
+        self.lbl_gaps_summary.setStyleSheet("color: #f87171; font-size: 11px; font-weight: bold;")
+        self.lbl_gaps_summary.setVisible(len(gaps) > 0)
+        row_ctrl.addWidget(self.lbl_gaps_summary)
+
+        # Botón Vista Completa (se muestra cuando hay zoom activo en el timeline)
+        self.btn_full_view = QPushButton("Vista Completa")
+        self.btn_full_view.setToolTip("Restaura la escala temporal completa del timeline (o clic derecho en la barra)")
+        self.btn_full_view.setStyleSheet("color: #38bdf8; font-weight: bold;")
+        self.btn_full_view.clicked.connect(self.timeline.reset_zoom)
+        self.btn_full_view.setVisible(False)
+        self.timeline.zoom_changed.connect(self.btn_full_view.setVisible)
+        row_ctrl.addWidget(self.btn_full_view)
 
         row_ctrl.addStretch()
 
         # Acciones de Cribado
-        self.btn_keep = QPushButton("✓ Conservar (P)")
-        self.btn_keep.setStyleSheet("""
-            QPushButton {
-                background-color: #132b1e;
-                color: #4ade80;
-                font-weight: bold;
-                border: 1px solid #22c55e;
-                border-radius: 4px;
-                padding: 5px 12px;
-            }
-            QPushButton:hover { background-color: #22c55e; color: #ffffff; }
-        """)
-        self.btn_keep.setToolTip("Incluye la toma actual en el apilado y avanza al siguiente fotograma (Atajo: P)")
-        self.btn_keep.clicked.connect(self.keep_current_frame)
-        row_ctrl.addWidget(self.btn_keep)
+        if self.mode == "eclipse":
+            self.btn_keep = QPushButton("✓ Al Collage (P)")
+            self.btn_keep.setStyleSheet("""
+                QPushButton {
+                    background-color: #082f49;
+                    color: #38bdf8;
+                    font-weight: bold;
+                    border: 1px solid #0284c7;
+                    border-radius: 4px;
+                    padding: 5px 12px;
+                }
+                QPushButton:hover { background-color: #0284c7; color: #ffffff; }
+            """)
+            self.btn_keep.setToolTip("Incluye la toma actual en el collage (Atajo: P)")
+            self.btn_keep.clicked.connect(self.keep_current_frame)
+            row_ctrl.addWidget(self.btn_keep)
 
-        self.btn_discard = QPushButton("✗ Descartar (X)")
-        self.btn_discard.setStyleSheet("""
-            QPushButton {
-                background-color: #2a1520;
-                color: #f87171;
-                font-weight: bold;
-                border: 1px solid #ef4444;
-                border-radius: 4px;
-                padding: 5px 12px;
-            }
-            QPushButton:hover { background-color: #ef4444; color: #ffffff; }
-        """)
-        self.btn_discard.setToolTip("Excluye la toma actual del apilado y avanza al siguiente fotograma (Atajo: X)")
-        self.btn_discard.clicked.connect(self.discard_current_frame)
-        row_ctrl.addWidget(self.btn_discard)
+            self.btn_discard = QPushButton("✕ Quitar (X)")
+            self.btn_discard.setStyleSheet("""
+                QPushButton {
+                    background-color: #1e293b;
+                    color: #94a3b8;
+                    font-weight: bold;
+                    border: 1px solid #475569;
+                    border-radius: 4px;
+                    padding: 5px 12px;
+                }
+                QPushButton:hover { background-color: #334155; color: #f1f5f9; }
+            """)
+            self.btn_discard.setToolTip("Quita la toma actual del collage manteniéndola en la sesión (Atajo: X)")
+            self.btn_discard.clicked.connect(self.discard_current_frame)
+            row_ctrl.addWidget(self.btn_discard)
+        else:
+            self.btn_keep = QPushButton("✓ Conservar (P)")
+            self.btn_keep.setStyleSheet("""
+                QPushButton {
+                    background-color: #132b1e;
+                    color: #4ade80;
+                    font-weight: bold;
+                    border: 1px solid #22c55e;
+                    border-radius: 4px;
+                    padding: 5px 12px;
+                }
+                QPushButton:hover { background-color: #22c55e; color: #ffffff; }
+            """)
+            self.btn_keep.setToolTip("Incluye la toma actual en el apilado y avanza al siguiente fotograma (Atajo: P)")
+            self.btn_keep.clicked.connect(self.keep_current_frame)
+            row_ctrl.addWidget(self.btn_keep)
+
+            self.btn_discard = QPushButton("✗ Descartar (X)")
+            self.btn_discard.setStyleSheet("""
+                QPushButton {
+                    background-color: #2a1520;
+                    color: #f87171;
+                    font-weight: bold;
+                    border: 1px solid #ef4444;
+                    border-radius: 4px;
+                    padding: 5px 12px;
+                }
+                QPushButton:hover { background-color: #ef4444; color: #ffffff; }
+            """)
+            self.btn_discard.setToolTip("Excluye la toma actual del apilado y avanza al siguiente fotograma (Atajo: X)")
+            self.btn_discard.clicked.connect(self.discard_current_frame)
+            row_ctrl.addWidget(self.btn_discard)
 
         self.btn_close = QPushButton("Aplicar y Cerrar")
         self.btn_close.clicked.connect(self.accept)
@@ -421,8 +539,8 @@ class BlinkDialog(QDialog):
         root_layout.addWidget(footer)
 
     def _on_fps_changed(self):
-        fps_map = {0: 1, 1: 2, 2: 5, 3: 10, 4: 15}
-        fps = fps_map.get(self.combo_fps.currentIndex(), 5)
+        fps_map = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5}
+        fps = fps_map.get(self.combo_fps.currentIndex(), 1)
         interval_ms = int(1000.0 / fps)
         if self._timer.isActive():
             self._timer.setInterval(interval_ms)
@@ -434,12 +552,23 @@ class BlinkDialog(QDialog):
             self.btn_play.setIcon(get_icon("play", size=13))
             self.btn_play.setStyleSheet("font-weight: bold; color: #38bdf8;")
         else:
-            fps_map = {0: 1, 1: 2, 2: 5, 3: 10, 4: 15}
-            fps = fps_map.get(self.combo_fps.currentIndex(), 5)
+            fps_map = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5}
+            fps = fps_map.get(self.combo_fps.currentIndex(), 1)
             self._timer.start(int(1000.0 / fps))
             self.btn_play.setText("⏸ Pausar (Espacio)")
             self.btn_play.setIcon(get_icon("pause", size=13))
             self.btn_play.setStyleSheet("font-weight: bold; color: #fbbf24;")
+
+    def _on_jump_next_gap(self):
+        if hasattr(self, 'timeline'):
+            self.timeline.jump_to_next_gap()
+
+    def _on_jump_prev_gap(self):
+        if hasattr(self, 'timeline'):
+            self.timeline.jump_to_prev_gap()
+
+    def _on_timeline_gap_selected(self, from_idx: int, to_idx: int):
+        self.set_current_index(from_idx)
 
     def _on_play_step(self):
         if not self.file_list:
@@ -466,6 +595,8 @@ class BlinkDialog(QDialog):
         self.slider.blockSignals(True)
         self.slider.setValue(idx)
         self.slider.blockSignals(False)
+        if hasattr(self, 'timeline'):
+            self.timeline.set_current_index(idx)
         self._update_current_frame()
         self._preload_neighbors()
 
@@ -484,6 +615,8 @@ class BlinkDialog(QDialog):
         if path in self.excluded_files:
             self.excluded_files.remove(path)
             self.exclusion_changed.emit(path, True)
+            if hasattr(self, 'timeline'):
+                self.timeline.set_excluded_files(self.excluded_files)
         self._update_badges()
         self.next_frame()
 
@@ -494,6 +627,8 @@ class BlinkDialog(QDialog):
         if path not in self.excluded_files:
             self.excluded_files.add(path)
             self.exclusion_changed.emit(path, False)
+            if hasattr(self, 'timeline'):
+                self.timeline.set_excluded_files(self.excluded_files)
         self._update_badges()
         self.next_frame()
 
@@ -502,23 +637,38 @@ class BlinkDialog(QDialog):
             return
         path = self.file_list[self.current_idx]
         is_included = path not in self.excluded_files
-        if is_included:
-            self.lbl_status_badge.setText("✓ INCLUIDA")
-            self.lbl_status_badge.setStyleSheet("color: #4ade80; background-color: #132b1e; border: 1px solid #22c55e; border-radius: 4px; padding: 2px 8px; font-weight: bold;")
+        is_eclipse = (self.mode == "eclipse")
+
+        if is_eclipse:
+            if is_included:
+                self.lbl_status_badge.setText("● EN COLLAGE")
+                self.lbl_status_badge.setStyleSheet("color: #38bdf8; background-color: #082f49; border: 1px solid #0284c7; border-radius: 4px; padding: 2px 8px; font-weight: bold;")
+            else:
+                self.lbl_status_badge.setText("○ DISPONIBLE")
+                self.lbl_status_badge.setStyleSheet("color: #94a3b8; background-color: #1e293b; border: 1px solid #475569; border-radius: 4px; padding: 2px 8px; font-weight: bold;")
         else:
-            self.lbl_status_badge.setText("✗ DESCARTADA")
-            self.lbl_status_badge.setStyleSheet("color: #f87171; background-color: #2a1520; border: 1px solid #ef4444; border-radius: 4px; padding: 2px 8px; font-weight: bold;")
+            if is_included:
+                self.lbl_status_badge.setText("✓ INCLUIDA")
+                self.lbl_status_badge.setStyleSheet("color: #4ade80; background-color: #132b1e; border: 1px solid #22c55e; border-radius: 4px; padding: 2px 8px; font-weight: bold;")
+            else:
+                self.lbl_status_badge.setText("✗ DESCARTADA")
+                self.lbl_status_badge.setStyleSheet("color: #f87171; background-color: #2a1520; border: 1px solid #ef4444; border-radius: 4px; padding: 2px 8px; font-weight: bold;")
 
         # Actualizar indicador en la tabla lateral
         if hasattr(self, 'table_blink') and self.table_blink.rowCount() > self.current_idx:
             status_item = self.table_blink.item(self.current_idx, 1)
             if status_item:
-                status_item.setText("● INCL" if is_included else "✕ DESC")
-                status_item.setForeground(QColor("#4ade80") if is_included else QColor("#f87171"))
+                if is_eclipse:
+                    status_item.setText("● COL" if is_included else "○ DISP")
+                    status_item.setForeground(QColor("#38bdf8") if is_included else QColor("#94a3b8"))
+                else:
+                    status_item.setText("● INCL" if is_included else "✕ DESC")
+                    status_item.setForeground(QColor("#4ade80") if is_included else QColor("#f87171"))
         if hasattr(self, 'lbl_blink_summary'):
             total = len(self.file_list)
             inc = total - len(self.excluded_files)
-            self.lbl_blink_summary.setText(f"{inc}/{total} activas")
+            term = "en collage" if is_eclipse else "activas"
+            self.lbl_blink_summary.setText(f"{inc}/{total} {term}")
 
         # Métricas ópticas si están disponibles
         if path in self.culling_results:
@@ -540,7 +690,13 @@ class BlinkDialog(QDialog):
         total = len(self.file_list)
         included_count = total - len(self.excluded_files)
 
-        self.lbl_title.setText(f"Fotograma {self.current_idx + 1} de {total} : {filename} ({included_count}/{total} activas)")
+        meta = self._metadata_cache.get(path, {})
+        dt_label = meta.get("datetime_str") or meta.get("time_str")
+        dt_suffix = f" | {dt_label}" if dt_label and dt_label != "—" else ""
+        phase_lbl = meta.get("phase_label")
+        phase_suffix = f" | Fase: {phase_lbl}" if phase_lbl and phase_lbl != "Pendiente" else ""
+        term = "en collage" if self.mode == "eclipse" else "activas"
+        self.lbl_title.setText(f"Fotograma {self.current_idx + 1} de {total} : {filename}{dt_suffix}{phase_suffix} ({included_count}/{total} {term})")
         self._update_badges()
 
         # Sincronizar selección y scroll en la tabla lateral
@@ -569,30 +725,54 @@ class BlinkDialog(QDialog):
         self.btn_toggle_side.setText("Ocultar Lista" if self._side_panel_visible else "Mostrar Lista")
 
     def _populate_table(self):
-        """Rellena la tabla lateral con la lista de tomas y sus metadatos fotográficos."""
-        from core.startrails import extract_shot_exif
+        """Rellena la tabla lateral con la lista de tomas e inicia escaneo asíncrono si falta metadatos."""
         self.table_blink.blockSignals(True)
+        missing_paths = []
+        is_eclipse = (self.mode == "eclipse")
+
         for row, path in enumerate(self.file_list):
-            if path not in self._metadata_cache:
-                self._metadata_cache[path] = extract_shot_exif(path)
-            meta = self._metadata_cache[path]
+            meta = self._metadata_cache.get(path)
+            if meta is None:
+                missing_paths.append((row, path))
+                meta = {}
+
             is_inc = (path not in self.excluded_files)
 
             idx_item = QTableWidgetItem(f"{row + 1}")
             idx_item.setTextAlignment(Qt.AlignCenter)
             idx_item.setForeground(QColor("#94a3b8"))
 
-            status_item = QTableWidgetItem("● INCL" if is_inc else "✕ DESC")
+            if is_eclipse:
+                status_text = "● COL" if is_inc else "○ DISP"
+                status_color = QColor("#38bdf8") if is_inc else QColor("#94a3b8")
+            else:
+                status_text = "● INCL" if is_inc else "✕ DESC"
+                status_color = QColor("#4ade80") if is_inc else QColor("#f87171")
+
+            status_item = QTableWidgetItem(status_text)
             status_item.setTextAlignment(Qt.AlignCenter)
-            status_item.setForeground(QColor("#4ade80") if is_inc else QColor("#f87171"))
+            status_item.setForeground(status_color)
 
             name_item = QTableWidgetItem(os.path.basename(path))
-            name_item.setToolTip(path)
+            dt_tip = meta.get("datetime_str") or meta.get("time_str")
+            phase_tip = meta.get("phase_label")
+            tip_parts = [path]
+            if dt_tip and dt_tip != "—":
+                tip_parts.append(dt_tip)
+            if phase_tip and phase_tip != "Pendiente":
+                tip_parts.append(f"Fase: {phase_tip}")
+            name_item.setToolTip("\n".join(tip_parts))
+            ts = meta.get("timestamp")
+            if ts is not None:
+                try:
+                    name_item.setData(Qt.UserRole, float(ts))
+                except (ValueError, TypeError):
+                    pass
 
-            exp_item = QTableWidgetItem(meta.get("exp_str", "—"))
+            exp_item = QTableWidgetItem(meta.get("exp_str", "..." if path not in self._metadata_cache else "—"))
             exp_item.setTextAlignment(Qt.AlignCenter)
 
-            iso_item = QTableWidgetItem(meta.get("iso_str", "—"))
+            iso_item = QTableWidgetItem(meta.get("iso_str", "..." if path not in self._metadata_cache else "—"))
             iso_item.setTextAlignment(Qt.AlignCenter)
 
             self.table_blink.setItem(row, 0, idx_item)
@@ -604,6 +784,88 @@ class BlinkDialog(QDialog):
         if 0 <= self.current_idx < len(self.file_list):
             self.table_blink.selectRow(self.current_idx)
         self.table_blink.blockSignals(False)
+
+        if hasattr(self, 'timeline'):
+            self.timeline.set_data(
+                files=self.file_list,
+                metadata_cache=self._metadata_cache,
+                excluded_files=self.excluded_files,
+                current_idx=self.current_idx
+            )
+            gaps = self.timeline.get_gaps()
+            if hasattr(self, 'lbl_gaps_summary'):
+                gap_count = len(gaps)
+                self.lbl_gaps_summary.setText(f"⚠️ {gap_count} gaps" if gap_count > 0 else "")
+                self.lbl_gaps_summary.setVisible(gap_count > 0)
+
+        if missing_paths:
+            self._start_background_metadata_scan(missing_paths)
+
+    def _start_background_metadata_scan(self, missing_paths: List[tuple[int, str]]):
+        def _scan_worker():
+            from core.startrails import extract_shot_exif
+            for row, path in missing_paths:
+                if self._is_shutting_down:
+                    break
+                try:
+                    meta = extract_shot_exif(path)
+                except Exception:
+                    meta = {}
+                if self._is_shutting_down:
+                    break
+                try:
+                    self._meta_scanned.emit(row, path, meta)
+                except (RuntimeError, Exception):
+                    break
+
+        self._executor.submit(_scan_worker)
+
+    def _on_meta_scanned(self, row: int, path: str, meta: Dict[str, Any]):
+        if self._is_shutting_down or not hasattr(self, 'table_blink'):
+            return
+        self._metadata_cache[path] = meta
+        if row < self.table_blink.rowCount():
+            self.table_blink.blockSignals(True)
+            exp_item = self.table_blink.item(row, 3)
+            if exp_item:
+                exp_item.setText(meta.get("exp_str", "—"))
+            iso_item = self.table_blink.item(row, 4)
+            if iso_item:
+                iso_item.setText(meta.get("iso_str", "—"))
+            name_item = self.table_blink.item(row, 2)
+            if name_item:
+                dt_tip = meta.get("datetime_str") or meta.get("time_str")
+                phase_tip = meta.get("phase_label")
+                tip_parts = [path]
+                if dt_tip and dt_tip != "—":
+                    tip_parts.append(dt_tip)
+                if phase_tip and phase_tip != "Pendiente":
+                    tip_parts.append(f"Fase: {phase_tip}")
+                name_item.setToolTip("\n".join(tip_parts))
+                ts = meta.get("timestamp")
+                if ts is not None:
+                    try:
+                        name_item.setData(Qt.UserRole, float(ts))
+                    except (ValueError, TypeError):
+                        pass
+            self.table_blink.blockSignals(False)
+
+        if hasattr(self, 'timeline'):
+            self.timeline.update_item_metadata(path, meta)
+            gaps = self.timeline.get_gaps()
+            if hasattr(self, 'lbl_gaps_summary'):
+                gap_count = len(gaps)
+                self.lbl_gaps_summary.setText(f"⚠️ {gap_count} gaps" if gap_count > 0 else "")
+                self.lbl_gaps_summary.setVisible(gap_count > 0)
+
+        if row == self.current_idx:
+            dt_label = meta.get("datetime_str") or meta.get("time_str")
+            if dt_label and dt_label != "—":
+                filename = os.path.basename(path)
+                total = len(self.file_list)
+                included_count = total - len(self.excluded_files)
+                term = "en collage" if self.mode == "eclipse" else "activas"
+                self.lbl_title.setText(f"Fotograma {self.current_idx + 1} de {total} : {filename} | {dt_label} ({included_count}/{total} {term})")
 
     def _on_table_selection_changed(self):
         """Cambia el fotograma activo al hacer clic o navegar con teclado en la tabla lateral."""
@@ -674,6 +936,7 @@ class BlinkDialog(QDialog):
             super().keyPressEvent(event)
 
     def accept(self):
+        self._is_shutting_down = True
         if self._timer.isActive():
             self._timer.stop()
         try:
@@ -684,6 +947,7 @@ class BlinkDialog(QDialog):
         super().accept()
 
     def reject(self):
+        self._is_shutting_down = True
         if self._timer.isActive():
             self._timer.stop()
         try:
@@ -693,6 +957,7 @@ class BlinkDialog(QDialog):
         super().reject()
 
     def closeEvent(self, event):
+        self._is_shutting_down = True
         if self._timer.isActive():
             self._timer.stop()
         try:
