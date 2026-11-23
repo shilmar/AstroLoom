@@ -22,8 +22,8 @@ from PySide6.QtWidgets import (
     QSlider, QCheckBox, QComboBox, QFrame, QSizePolicy, QApplication,
     QSplitter, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QSize
-from PySide6.QtGui import QImage, QPixmap, QKeyEvent, QColor, QPainter
+from PySide6.QtCore import Qt, Signal, QTimer, QSize, QPointF, QRectF
+from PySide6.QtGui import QImage, QPixmap, QKeyEvent, QColor, QPainter, QWheelEvent, QMouseEvent, QFont
 
 from gui.theme import apply_theme, BG_CARD, BORDER_BASE, TEXT_MUTED, BG_CANVAS, BG_PANEL
 from gui.icons import get_icon
@@ -142,14 +142,21 @@ def _fast_load_and_stretch(filepath: str, auto_stretch: bool = True, max_dim: in
 
 
 class BlinkCanvas(QWidget):
-    """Lienzo optimizado para el visor Blink con escalado manteniendo proporción."""
+    """Lienzo interactivo optimizado para el visor Blink con escalado, zoom 1:1, pan y navegación."""
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setMinimumSize(400, 300)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setStyleSheet("background-color: #07090e; border: 1px solid #1a2233; border-radius: 6px;")
+        self.setMouseTracking(True)
+
         self._pixmap: Optional[QPixmap] = None
+        self._fit_mode: bool = True
+        self._zoom_scale: float = 1.0
+        self._pan_offset: QPointF = QPointF(0.0, 0.0)
+        self._is_panning: bool = False
+        self._last_mouse_pos: QPointF = QPointF(0.0, 0.0)
 
     def set_image(self, img_u8: Optional[np.ndarray]):
         if img_u8 is None:
@@ -161,14 +168,144 @@ class BlinkCanvas(QWidget):
             self._pixmap = QPixmap.fromImage(qimg)
         self.update()
 
+    def reset_view(self):
+        """Restaura la vista completa ajustada a la ventana (Fit)."""
+        self._fit_mode = True
+        self._zoom_scale = 1.0
+        self._pan_offset = QPointF(0.0, 0.0)
+        self.setCursor(Qt.ArrowCursor)
+        self.update()
+
+    def wheelEvent(self, event: QWheelEvent):
+        delta = event.angleDelta().y()
+        if delta == 0:
+            return
+
+        # Si Ctrl está presionado -> Zoom sobre la imagen
+        if event.modifiers() & Qt.ControlModifier:
+            if not self._pixmap or self._pixmap.isNull():
+                return
+            pw, ph = float(self._pixmap.width()), float(self._pixmap.height())
+            w, h = float(self.width()), float(self.height())
+            fit_scale = min(w / max(1.0, pw), h / max(1.0, ph))
+
+            if self._fit_mode:
+                self._fit_mode = False
+                self._zoom_scale = fit_scale
+                self._pan_offset = QPointF(0.0, 0.0)
+
+            factor = 1.25 if delta > 0 else 0.8
+            new_scale = max(fit_scale * 0.5, min(8.0, self._zoom_scale * factor))
+
+            if new_scale <= fit_scale * 1.02:
+                self._fit_mode = True
+                self._zoom_scale = 1.0
+                self._pan_offset = QPointF(0.0, 0.0)
+                self.setCursor(Qt.ArrowCursor)
+            else:
+                cursor_pos = event.position()
+                cx = (w / 2.0) + self._pan_offset.x()
+                cy = (h / 2.0) + self._pan_offset.y()
+                vx = cursor_pos.x() - cx
+                vy = cursor_pos.y() - cy
+                ratio = new_scale / max(1e-4, self._zoom_scale)
+                self._pan_offset = QPointF(
+                    self._pan_offset.x() - vx * (ratio - 1.0),
+                    self._pan_offset.y() - vy * (ratio - 1.0)
+                )
+                self._zoom_scale = new_scale
+                self.setCursor(Qt.OpenHandCursor)
+            self.update()
+        else:
+            # Rueda directa -> Pasar fotos (rueda arriba: anterior, rueda abajo: siguiente)
+            parent = self.parent()
+            while parent is not None and not hasattr(parent, 'next_frame'):
+                parent = parent.parent()
+            if parent is not None:
+                if delta > 0:
+                    parent.prev_frame()
+                else:
+                    parent.next_frame()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton:
+            if not self._pixmap or self._pixmap.isNull():
+                return
+            pw, ph = float(self._pixmap.width()), float(self._pixmap.height())
+            w, h = float(self.width()), float(self.height())
+
+            if self._fit_mode:
+                # Pasar a 1:1 (100% tamaño real) centrado en la posición de clic
+                self._fit_mode = False
+                self._zoom_scale = 1.0
+                fit_scale = min(w / max(1.0, pw), h / max(1.0, ph))
+                click_pos = event.position()
+                vx = click_pos.x() - (w / 2.0)
+                vy = click_pos.y() - (h / 2.0)
+                ratio = (1.0 / max(1e-4, fit_scale)) - 1.0
+                self._pan_offset = QPointF(-vx * max(0.0, ratio), -vy * max(0.0, ratio))
+                self.setCursor(Qt.OpenHandCursor)
+            else:
+                # Volver a Fit completo
+                self._fit_mode = True
+                self._zoom_scale = 1.0
+                self._pan_offset = QPointF(0.0, 0.0)
+                self.setCursor(Qt.ArrowCursor)
+            self.update()
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if not self._fit_mode and event.button() in (Qt.LeftButton, Qt.MiddleButton, Qt.RightButton):
+            self._is_panning = True
+            self._last_mouse_pos = event.position()
+            self.setCursor(Qt.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self._is_panning and not self._fit_mode:
+            curr_pos = event.position()
+            delta = curr_pos - self._last_mouse_pos
+            self._pan_offset += delta
+            self._last_mouse_pos = curr_pos
+            self.update()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        if self._is_panning:
+            self._is_panning = False
+            self.setCursor(Qt.ArrowCursor if self._fit_mode else Qt.OpenHandCursor)
+        super().mouseReleaseEvent(event)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor("#07090e"))
         if self._pixmap and not self._pixmap.isNull():
-            scaled = self._pixmap.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            x = (self.width() - scaled.width()) // 2
-            y = (self.height() - scaled.height()) // 2
-            painter.drawPixmap(x, y, scaled)
+            w, h = float(self.width()), float(self.height())
+            pw, ph = float(self._pixmap.width()), float(self._pixmap.height())
+
+            if self._fit_mode:
+                scaled = self._pixmap.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                x = (self.width() - scaled.width()) // 2
+                y = (self.height() - scaled.height()) // 2
+                painter.drawPixmap(x, y, scaled)
+            else:
+                painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+                draw_w = pw * self._zoom_scale
+                draw_h = ph * self._zoom_scale
+                cx = (w / 2.0) + self._pan_offset.x()
+                cy = (h / 2.0) + self._pan_offset.y()
+                target_rect = QRectF(cx - draw_w / 2.0, cy - draw_h / 2.0, draw_w, draw_h)
+                painter.drawPixmap(target_rect, self._pixmap, QRectF(0.0, 0.0, pw, ph))
+
+                # Indicador discreto de zoom en la esquina superior derecha
+                zoom_pct = int(round(self._zoom_scale * 100))
+                tag_str = f"Zoom {zoom_pct}% (1:1)" if abs(self._zoom_scale - 1.0) < 0.05 else f"Zoom {zoom_pct}%"
+                painter.setFont(QFont("Segoe UI", 9))
+                badge_rect = QRectF(w - 120.0, 10.0, 110.0, 22.0)
+                painter.fillRect(badge_rect, QColor(15, 23, 42, 200))
+                painter.setPen(QPen(QColor(BORDER_BASE), 1))
+                painter.drawRoundedRect(badge_rect, 4, 4)
+                painter.setPen(QColor("#38bdf8"))
+                painter.drawText(badge_rect, Qt.AlignCenter, tag_str)
         else:
             painter.setPen(QColor(TEXT_MUTED))
             painter.drawText(self.rect(), Qt.AlignCenter, "Cargando fotograma...")
@@ -181,6 +318,7 @@ class BlinkDialog(QDialog):
 
     exclusion_changed = Signal(str, bool)     # (filepath, is_included)
     selection_applied = Signal(set)           # set de archivos excluidos
+    order_changed = Signal(list)              # (reordered_file_list)
     _meta_scanned = Signal(int, str, dict)    # (row, filepath, metadata_dict)
 
     def __init__(
@@ -207,6 +345,8 @@ class BlinkDialog(QDialog):
         self.excluded_files: Set[str] = set(excluded_files) if excluded_files else set()
         self.culling_results: Dict[str, Any] = culling_results if culling_results else {}
         self.current_idx: int = max(0, min(current_index, len(self.file_list) - 1)) if self.file_list else 0
+        self._sort_col: Optional[int] = None
+        self._sort_asc: bool = True
         self._metadata_cache: Dict[str, Dict[str, Any]] = metadata_cache if metadata_cache is not None else {}
         self._eclipse_contacts: Dict[str, float] = dict(contacts) if contacts else {}
         self._is_shutting_down: bool = False
@@ -243,10 +383,19 @@ class BlinkDialog(QDialog):
         self.lbl_title.setStyleSheet("font-weight: bold; font-size: 13px; color: #f1f5f9;")
         h_layout.addWidget(self.lbl_title)
 
-        # Badge de inclusión
-        self.lbl_status_badge = QLabel("INCLUIDA")
-        self.lbl_status_badge.setStyleSheet("padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 11px;")
-        h_layout.addWidget(self.lbl_status_badge)
+        # Botón píldora interactivo para alternar estado de inclusión
+        self.btn_status_badge = QPushButton("INCLUIDA")
+        self.btn_status_badge.setCursor(Qt.PointingHandCursor)
+        self.btn_status_badge.setToolTip("Alternar inclusión de la toma (Atajo: P o X)")
+        self.btn_status_badge.clicked.connect(self._toggle_current_frame_status)
+        self.lbl_status_badge = self.btn_status_badge  # Alias para retrocompatibilidad
+        h_layout.addWidget(self.btn_status_badge)
+
+        # Parámetros clave de disparo (Velocidad · ISO)
+        self.lbl_exif_badge = QLabel("")
+        self.lbl_exif_badge.setStyleSheet("color: #38bdf8; font-weight: 600; font-size: 11px; background-color: #0c1929; border: 1px solid #1e3a5f; border-radius: 4px; padding: 2px 8px;")
+        self.lbl_exif_badge.setVisible(False)
+        h_layout.addWidget(self.lbl_exif_badge)
 
         # Badge de calidad óptica si ya fue analizada
         self.lbl_quality_badge = QLabel("")
@@ -301,11 +450,32 @@ class BlinkDialog(QDialog):
         col1_name = "Collage" if self.mode == "eclipse" else "Uso"
         self.table_blink = QTableWidget(len(self.file_list), 5)
         self.table_blink.setHorizontalHeaderLabels(["#", col1_name, "Archivo", "Exp.", "ISO"])
-        self.table_blink.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table_blink.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table_blink.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.table_blink.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table_blink.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        hdr_blink = self.table_blink.horizontalHeader()
+        hdr_blink.setMinimumSectionSize(28)
+        hdr_blink.setSectionResizeMode(0, QHeaderView.Interactive)
+        hdr_blink.setSectionResizeMode(1, QHeaderView.Interactive)
+        hdr_blink.setSectionResizeMode(2, QHeaderView.Stretch)
+        hdr_blink.setSectionResizeMode(3, QHeaderView.Interactive)
+        hdr_blink.setSectionResizeMode(4, QHeaderView.Interactive)
+        self.table_blink.setColumnWidth(0, 38)
+        self.table_blink.setColumnWidth(1, 68)
+        self.table_blink.setColumnWidth(3, 58)
+        self.table_blink.setColumnWidth(4, 54)
+        hdr_blink.setSectionsClickable(True)
+        hdr_blink.setSortIndicatorShown(True)
+        hdr_blink.sectionClicked.connect(self._on_header_section_clicked)
+
+        tooltips = {
+            0: "Ordenar por orden de lista",
+            1: "Ordenar por estado de uso",
+            2: "Ordenar alfabéticamente por nombre de archivo",
+            3: "Ordenar por tiempo de exposición",
+            4: "Ordenar por sensibilidad ISO",
+        }
+        for c, tip in tooltips.items():
+            h_item = self.table_blink.horizontalHeaderItem(c)
+            if h_item:
+                h_item.setToolTip(tip)
         self.table_blink.verticalHeader().setVisible(False)
         self.table_blink.verticalHeader().setDefaultSectionSize(22)
         self.table_blink.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -323,7 +493,7 @@ class BlinkDialog(QDialog):
                 color: #e2e8f0;
             }}
             QTableWidget::item:selected {{
-                background-color: #1e293b;
+                background-color: #132238;
                 color: #ffffff;
             }}
             QHeaderView::section {{
@@ -370,6 +540,8 @@ class BlinkDialog(QDialog):
         )
         self.timeline.frame_selected.connect(self.set_current_index)
         self.timeline.gap_selected.connect(self._on_timeline_gap_selected)
+        if self.mode == "eclipse":
+            self.timeline.auto_select_requested.connect(self._on_timeline_auto_select)
         f_layout.addWidget(self.timeline)
 
         # Barra de Leyenda de Fases (Modo Eclipse)
@@ -435,6 +607,29 @@ class BlinkDialog(QDialog):
         self.combo_fps.currentIndexChanged.connect(self._on_fps_changed)
         row_ctrl.addWidget(self.combo_fps)
 
+        # Filtro de reproducción y navegación por tomas incluidas
+        filter_label = "Blink solo collage" if self.mode == "eclipse" else "Blink solo activas"
+        self.chk_play_filtered = QCheckBox(filter_label)
+        self.chk_play_filtered.setStyleSheet("color: #94a3b8; font-size: 11px; margin-left: 6px;")
+        self.chk_play_filtered.setToolTip("Al reproducir o pasar fotos, salta únicamente entre tomas seleccionadas / en collage")
+        row_ctrl.addWidget(self.chk_play_filtered)
+
+        # Navegación rápida de Meteoros (Modo meteors)
+        if self.mode == "meteors":
+            self.btn_prev_meteor = QPushButton("◄ Meteoro")
+            self.btn_prev_meteor.setIcon(get_icon("chevron-left", size=11))
+            self.btn_prev_meteor.setToolTip("Saltar al fotograma anterior con meteoro conservado")
+            self.btn_prev_meteor.setStyleSheet("font-weight: bold; color: #10b981; border: 1px solid #059669; border-radius: 4px; padding: 4px 8px;")
+            self.btn_prev_meteor.clicked.connect(self._on_jump_prev_meteor)
+            row_ctrl.addWidget(self.btn_prev_meteor)
+
+            self.btn_next_meteor = QPushButton("Meteoro ▶")
+            self.btn_next_meteor.setIcon(get_icon("chevron-right", size=11))
+            self.btn_next_meteor.setToolTip("Saltar al siguiente fotograma con meteoro conservado")
+            self.btn_next_meteor.setStyleSheet("font-weight: bold; color: #10b981; border: 1px solid #059669; border-radius: 4px; padding: 4px 8px;")
+            self.btn_next_meteor.clicked.connect(self._on_jump_next_meteor)
+            row_ctrl.addWidget(self.btn_next_meteor)
+
         # Navegación entre discontinuidades (Gaps)
         self.btn_prev_gap = QPushButton("◀ Gap")
         self.btn_prev_gap.setIcon(get_icon("chevron-left", size=11))
@@ -453,6 +648,21 @@ class BlinkDialog(QDialog):
         self.lbl_gaps_summary.setStyleSheet("color: #f87171; font-size: 11px; font-weight: bold;")
         self.lbl_gaps_summary.setVisible(len(gaps) > 0)
         row_ctrl.addWidget(self.lbl_gaps_summary)
+
+        # Indicador de continuidad para Startrails
+        if self.mode == "startrails":
+            self.lbl_startrails_continuity = QLabel()
+            self.lbl_startrails_continuity.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: bold; margin-left: 4px;")
+            row_ctrl.addWidget(self.lbl_startrails_continuity)
+            self._update_startrails_continuity()
+
+        # Atajo Zoom Totalidad (Modo eclipse)
+        if self.mode == "eclipse":
+            self.btn_zoom_totality = QPushButton("🔍 Zoom Totalidad")
+            self.btn_zoom_totality.setToolTip("Encuadra la ventana temporal en la fase de totalidad (C2 a C3)")
+            self.btn_zoom_totality.setStyleSheet("font-weight: bold; color: #c084fc; border: 1px solid #9333ea; border-radius: 4px; padding: 4px 8px;")
+            self.btn_zoom_totality.clicked.connect(self.timeline.zoom_to_totality)
+            row_ctrl.addWidget(self.btn_zoom_totality)
 
         # Botón Vista Completa (se muestra cuando hay zoom activo en el timeline)
         self.btn_full_view = QPushButton("Vista Completa")
@@ -567,26 +777,174 @@ class BlinkDialog(QDialog):
         if hasattr(self, 'timeline'):
             self.timeline.jump_to_prev_gap()
 
+    def _on_jump_next_meteor(self):
+        if hasattr(self, 'timeline'):
+            self.timeline.jump_to_next_kept()
+
+    def _on_jump_prev_meteor(self):
+        if hasattr(self, 'timeline'):
+            self.timeline.jump_to_prev_kept()
+
+    def _update_startrails_continuity(self):
+        if not hasattr(self, 'lbl_startrails_continuity') or not hasattr(self, 'timeline'):
+            return
+        stats = self.timeline.get_continuity_stats()
+        dt_lost = stats["lost_seconds"]
+        lost_str = f"{dt_lost / 60.0:.1f}m" if dt_lost >= 60.0 else f"{dt_lost:.0f}s"
+        txt = f"Continuidad: {stats['continuity_pct']:.1f}% · {stats['capture_gaps_count']} huecos ({lost_str})"
+        self.lbl_startrails_continuity.setText(txt)
+
+    def _on_timeline_auto_select(self, interval_seconds: float):
+        """Auto-selecciona tomas cada N minutos en tramos libres de parcialidad (modo Eclipse)."""
+        if self.mode != "eclipse" or not self.file_list:
+            return
+        items = getattr(self.timeline, "_items", [])
+        if not items:
+            return
+
+        contacts = getattr(self.timeline, "_eclipse_contacts", {}) or {}
+        t_c2 = contacts.get("C2")
+        t_c3 = contacts.get("C3")
+
+        new_excluded = set()
+        last_t_selected = -float("inf")
+
+        for it in sorted(items, key=lambda x: x["t"]):
+            p = it["path"]
+            t = it["t"]
+            p_label = it.get("phase_label", "").upper()
+
+            # Preservar siempre las tomas de totalidad o contactos singulares (Baily / Diamante)
+            is_totality = False
+            if t_c2 and t_c3 and t_c2 <= t <= t_c3:
+                is_totality = True
+            elif "TOTALIDAD" in p_label or "DIAMANTE" in p_label or "BAILY" in p_label:
+                is_totality = True
+
+            if is_totality:
+                continue
+
+            # Parcialidad: espaciar cada interval_seconds
+            if (t - last_t_selected) >= interval_seconds:
+                last_t_selected = t
+            else:
+                new_excluded.add(p)
+
+        self.excluded_files = new_excluded
+        self.timeline.set_excluded_files(self.excluded_files)
+        self.selection_applied.emit(self.excluded_files)
+        self._update_badges()
+        self._populate_table()
+
     def _on_timeline_gap_selected(self, from_idx: int, to_idx: int):
         self.set_current_index(from_idx)
+
+    def _on_header_section_clicked(self, col: int) -> None:
+        if len(self.file_list) < 2:
+            return
+
+        if self._sort_col == col:
+            self._sort_asc = not self._sort_asc
+        else:
+            self._sort_col = col
+            self._sort_asc = True
+
+        selected_path = self.file_list[self.current_idx] if 0 <= self.current_idx < len(self.file_list) else None
+
+        if col == 0:  # "#"
+            def _key(p):
+                return os.path.basename(p).lower()
+        elif col == 1:  # "Uso" / "Collage"
+            def _key(p):
+                return (0 if p not in self.excluded_files else 1, os.path.basename(p).lower())
+        elif col == 2:  # "Archivo"
+            def _key(p):
+                return os.path.basename(p).lower()
+        elif col == 3:  # "Exp."
+            def _key(p):
+                meta = self._metadata_cache.get(p, {})
+                exp = meta.get("exp")
+                if exp is not None:
+                    try:
+                        return (0, float(exp))
+                    except (ValueError, TypeError):
+                        pass
+                return (1, 0.0)
+        elif col == 4:  # "ISO"
+            def _key(p):
+                meta = self._metadata_cache.get(p, {})
+                iso = meta.get("iso")
+                if iso is not None:
+                    try:
+                        return (0, int(iso))
+                    except (ValueError, TypeError):
+                        pass
+                return (1, 0)
+        else:
+            return
+
+        self.file_list.sort(key=_key, reverse=not self._sort_asc)
+
+        if selected_path and selected_path in self.file_list:
+            self.current_idx = self.file_list.index(selected_path)
+        else:
+            self.current_idx = 0
+
+        self.table_blink.horizontalHeader().setSortIndicator(
+            col, Qt.AscendingOrder if self._sort_asc else Qt.DescendingOrder
+        )
+
+        self._populate_table()
+        if hasattr(self, 'timeline'):
+            self.timeline.set_data(
+                files=self.file_list,
+                metadata_cache=self._metadata_cache,
+                excluded_files=self.excluded_files,
+                current_idx=self.current_idx
+            )
+        self.order_changed.emit(self.file_list)
 
     def _on_play_step(self):
         if not self.file_list:
             return
-        next_idx = (self.current_idx + 1) % len(self.file_list)
-        self.set_current_index(next_idx)
+        if getattr(self, 'chk_play_filtered', None) and self.chk_play_filtered.isChecked():
+            included = [i for i, p in enumerate(self.file_list) if p not in self.excluded_files]
+            if not included:
+                return
+            next_included = [i for i in included if i > self.current_idx]
+            next_idx = next_included[0] if next_included else included[0]
+            self.set_current_index(next_idx)
+        else:
+            next_idx = (self.current_idx + 1) % len(self.file_list)
+            self.set_current_index(next_idx)
 
     def prev_frame(self):
         if not self.file_list:
             return
-        new_idx = max(0, self.current_idx - 1)
-        self.set_current_index(new_idx)
+        if getattr(self, 'chk_play_filtered', None) and self.chk_play_filtered.isChecked():
+            included = [i for i, p in enumerate(self.file_list) if p not in self.excluded_files]
+            if not included:
+                return
+            prev_included = [i for i in included if i < self.current_idx]
+            new_idx = prev_included[-1] if prev_included else included[-1]
+            self.set_current_index(new_idx)
+        else:
+            new_idx = max(0, self.current_idx - 1)
+            self.set_current_index(new_idx)
 
     def next_frame(self):
         if not self.file_list:
             return
-        new_idx = min(len(self.file_list) - 1, self.current_idx + 1)
-        self.set_current_index(new_idx)
+        if getattr(self, 'chk_play_filtered', None) and self.chk_play_filtered.isChecked():
+            included = [i for i, p in enumerate(self.file_list) if p not in self.excluded_files]
+            if not included:
+                return
+            next_included = [i for i in included if i > self.current_idx]
+            new_idx = next_included[0] if next_included else included[0]
+            self.set_current_index(new_idx)
+        else:
+            new_idx = min(len(self.file_list) - 1, self.current_idx + 1)
+            self.set_current_index(new_idx)
 
     def set_current_index(self, idx: int):
         if idx == self.current_idx or idx < 0 or idx >= len(self.file_list):
@@ -607,6 +965,21 @@ class BlinkDialog(QDialog):
         self._cache.clear()
         self._update_current_frame()
         self._preload_neighbors()
+
+    def _toggle_current_frame_status(self):
+        """Alterna el estado de inclusión/exclusión de la toma activa sin avanzar de fotograma."""
+        if not self.file_list:
+            return
+        path = self.file_list[self.current_idx]
+        if path in self.excluded_files:
+            self.excluded_files.remove(path)
+            self.exclusion_changed.emit(path, True)
+        else:
+            self.excluded_files.add(path)
+            self.exclusion_changed.emit(path, False)
+        if hasattr(self, 'timeline'):
+            self.timeline.set_excluded_files(self.excluded_files)
+        self._update_badges()
 
     def keep_current_frame(self):
         if not self.file_list:
@@ -641,18 +1014,18 @@ class BlinkDialog(QDialog):
 
         if is_eclipse:
             if is_included:
-                self.lbl_status_badge.setText("● EN COLLAGE")
-                self.lbl_status_badge.setStyleSheet("color: #38bdf8; background-color: #082f49; border: 1px solid #0284c7; border-radius: 4px; padding: 2px 8px; font-weight: bold;")
+                self.btn_status_badge.setText("● EN COLLAGE [P]")
+                self.btn_status_badge.setStyleSheet("color: #38bdf8; background-color: #082f49; border: 1px solid #0284c7; border-radius: 11px; padding: 2px 10px; font-weight: bold; font-size: 11px;")
             else:
-                self.lbl_status_badge.setText("○ DISPONIBLE")
-                self.lbl_status_badge.setStyleSheet("color: #94a3b8; background-color: #1e293b; border: 1px solid #475569; border-radius: 4px; padding: 2px 8px; font-weight: bold;")
+                self.btn_status_badge.setText("○ DISPONIBLE [P]")
+                self.btn_status_badge.setStyleSheet("color: #94a3b8; background-color: #1e293b; border: 1px solid #475569; border-radius: 11px; padding: 2px 10px; font-weight: bold; font-size: 11px;")
         else:
             if is_included:
-                self.lbl_status_badge.setText("✓ INCLUIDA")
-                self.lbl_status_badge.setStyleSheet("color: #4ade80; background-color: #132b1e; border: 1px solid #22c55e; border-radius: 4px; padding: 2px 8px; font-weight: bold;")
+                self.btn_status_badge.setText("✓ INCLUIDA [P]")
+                self.btn_status_badge.setStyleSheet("color: #4ade80; background-color: #132b1e; border: 1px solid #22c55e; border-radius: 11px; padding: 2px 10px; font-weight: bold; font-size: 11px;")
             else:
-                self.lbl_status_badge.setText("✗ DESCARTADA")
-                self.lbl_status_badge.setStyleSheet("color: #f87171; background-color: #2a1520; border: 1px solid #ef4444; border-radius: 4px; padding: 2px 8px; font-weight: bold;")
+                self.btn_status_badge.setText("✗ DESCARTADA [X]")
+                self.btn_status_badge.setStyleSheet("color: #f87171; background-color: #2a1520; border: 1px solid #ef4444; border-radius: 11px; padding: 2px 10px; font-weight: bold; font-size: 11px;")
 
         # Actualizar indicador en la tabla lateral
         if hasattr(self, 'table_blink') and self.table_blink.rowCount() > self.current_idx:
@@ -669,6 +1042,9 @@ class BlinkDialog(QDialog):
             inc = total - len(self.excluded_files)
             term = "en collage" if is_eclipse else "activas"
             self.lbl_blink_summary.setText(f"{inc}/{total} {term}")
+
+        if self.mode == "startrails":
+            self._update_startrails_continuity()
 
         # Métricas ópticas si están disponibles
         if path in self.culling_results:
@@ -697,6 +1073,21 @@ class BlinkDialog(QDialog):
         phase_suffix = f" | Fase: {phase_lbl}" if phase_lbl and phase_lbl != "Pendiente" else ""
         term = "en collage" if self.mode == "eclipse" else "activas"
         self.lbl_title.setText(f"Fotograma {self.current_idx + 1} de {total} : {filename}{dt_suffix}{phase_suffix} ({included_count}/{total} {term})")
+
+        # Actualizar datos EXIF destacados (Velocidad · ISO)
+        exp_s = meta.get("exp_str")
+        iso_s = meta.get("iso_str")
+        exif_parts = []
+        if exp_s and exp_s != "—":
+            exif_parts.append(exp_s)
+        if iso_s and iso_s != "—":
+            exif_parts.append(f"ISO {iso_s}")
+        if exif_parts:
+            self.lbl_exif_badge.setText(" · ".join(exif_parts))
+            self.lbl_exif_badge.setVisible(True)
+        else:
+            self.lbl_exif_badge.setVisible(False)
+
         self._update_badges()
 
         # Sincronizar selección y scroll en la tabla lateral
@@ -866,6 +1257,16 @@ class BlinkDialog(QDialog):
                 included_count = total - len(self.excluded_files)
                 term = "en collage" if self.mode == "eclipse" else "activas"
                 self.lbl_title.setText(f"Fotograma {self.current_idx + 1} de {total} : {filename} | {dt_label} ({included_count}/{total} {term})")
+            exp_s = meta.get("exp_str")
+            iso_s = meta.get("iso_str")
+            exif_parts = []
+            if exp_s and exp_s != "—":
+                exif_parts.append(exp_s)
+            if iso_s and iso_s != "—":
+                exif_parts.append(f"ISO {iso_s}")
+            if exif_parts and hasattr(self, 'lbl_exif_badge'):
+                self.lbl_exif_badge.setText(" · ".join(exif_parts))
+                self.lbl_exif_badge.setVisible(True)
 
     def _on_table_selection_changed(self):
         """Cambia el fotograma activo al hacer clic o navegar con teclado en la tabla lateral."""

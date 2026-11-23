@@ -13,6 +13,8 @@ Proporciona:
    - "flats": [Archivo, Exp., ISO, f/, ✕]
 """
 import os
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Set, Dict, Any, Optional
 
 from PySide6.QtCore import Qt, Signal, QThread
@@ -47,89 +49,200 @@ class TimeTableWidgetItem(QTableWidgetItem):
         return super().__lt__(other)
 
 
+class ScoreTableWidgetItem(QTableWidgetItem):
+    """
+    QTableWidgetItem para columnas de calidad/score numérico con ordenación continua.
+    Compara mediante Qt.UserRole (float) para ordenar ascendentemente o descendentemente.
+    """
+    def __lt__(self, other):
+        if isinstance(other, QTableWidgetItem):
+            s1 = self.data(Qt.UserRole)
+            s2 = other.data(Qt.UserRole)
+            if s1 is not None and s2 is not None:
+                try:
+                    return float(s1) < float(s2)
+                except (ValueError, TypeError):
+                    pass
+        return super().__lt__(other)
+
+
 class MetadataScanWorker(QThread):
-    """Worker en segundo plano para escanear metadatos fotográficos sin bloquear la interfaz."""
+    """
+    Worker en segundo plano para escanear metadatos fotográficos sin bloquear la interfaz.
+    Solapa I/O y CPU mediante un pool dinámico de hilos (por defecto 2) para no saturar HDDs mecánicos.
+    """
     progress = Signal(int, int, str, dict)  # (current_1_based, total, path, meta_dict)
     finished = Signal()
 
-    def __init__(self, paths: List[str], meta_batch: Optional[Dict[str, Any]] = None, parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        paths: List[str],
+        meta_batch: Optional[Dict[str, Any]] = None,
+        max_workers: int = 2,
+        parent: Optional[QWidget] = None
+    ):
         super().__init__(parent)
         self.paths = list(paths)
         self.meta_batch = meta_batch or {}
+        # shortcut: 2 workers fijos por defecto (óptimo HDD/SSD básico), ampliar con detección HDD vs NVMe si se requiere mayor throughput
+        self.max_workers = max(1, int(max_workers))
         self._is_cancelled = False
+        self._executor: Optional[ThreadPoolExecutor] = None
 
     def cancel(self) -> None:
         self._is_cancelled = True
+        if self._executor is not None:
+            try:
+                self._executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+
+    def _process_item(self, path: str) -> tuple[str, Dict[str, Any]]:
+        if self._is_cancelled:
+            return path, {}
+        meta_item = self.meta_batch.get(path)
+        meta = extract_shot_exif(path, meta_item)
+        return path, meta
 
     def run(self) -> None:
         total = len(self.paths)
-        for i, path in enumerate(self.paths, 1):
-            if self._is_cancelled:
-                break
-            meta_item = self.meta_batch.get(path)
-            meta = extract_shot_exif(path, meta_item)
-            if self._is_cancelled:
-                break
-            self.progress.emit(i, total, path, meta)
+        if total == 0:
+            self.finished.emit()
+            return
+
+        if total == 1:
+            meta_item = self.meta_batch.get(self.paths[0])
+            meta = extract_shot_exif(self.paths[0], meta_item)
+            if not self._is_cancelled:
+                self.progress.emit(1, 1, self.paths[0], meta)
+            self.finished.emit()
+            return
+
+        workers = min(self.max_workers, total)
+        completed = 0
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            self._executor = executor
+            futures = {executor.submit(self._process_item, p): p for p in self.paths}
+            try:
+                for future in as_completed(futures):
+                    if self._is_cancelled:
+                        break
+                    try:
+                        path, meta = future.result()
+                    except (concurrent.futures.CancelledError, Exception):
+                        continue
+                    if self._is_cancelled:
+                        break
+                    completed += 1
+                    self.progress.emit(completed, total, path, meta)
+            finally:
+                self._executor = None
+
         self.finished.emit()
 
 
 class SeriesFilesTableWidget(QWidget):
     """
-    Widget de tabla reactiva y desacoplada para listas de fotografías (Lights, Darks, Flats, Meteoros).
+    Widget de tabla reactiva y desacoplada para listas de fotografías (Lights, Darks, Flats, Bias, Suelo, Meteoros).
     """
     files_changed = Signal(list)
     files_dropped = Signal(list)
     selection_changed = Signal(set)
     reference_changed = Signal(int)
     file_selected = Signal(int, str)
+    file_double_clicked = Signal(int, str)
     file_removed = Signal(str)
     scan_progress = Signal(int, int)
     scan_finished = Signal()
 
-    def __init__(self, mode: str = "lights", parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        mode: str = "lights",
+        max_workers: int = 2,
+        show_quality: bool = False,
+        allow_delete: Optional[bool] = None,
+        parent: Optional[QWidget] = None
+    ):
         super().__init__(parent)
         self.mode = mode.lower()
+        self.max_workers = max(1, int(max_workers))
+        self.show_quality = show_quality
+        self.allow_delete = allow_delete if allow_delete is not None else (self.mode not in ("lights", "meteors"))
         self.files_list: List[str] = []
         self.excluded_files: Set[str] = set()
         self.ref_idx: int = 0
+        self._sort_col: Optional[int] = None
+        self._sort_asc: bool = True
+        self._user_sorted: bool = False
         self._metadata_cache: Dict[str, Dict[str, Any]] = {}
+        self._quality_results: Dict[str, Any] = {}
         self._worker: Optional[MetadataScanWorker] = None
 
         self._setup_columns()
         self._setup_ui()
 
     def _setup_columns(self) -> None:
+        self.headers = []
+        self.col_use = -1
+        self.col_quality = -1
+        self.col_ref = -1
+        self.col_name = -1
+        self.col_time = -1
+        self.col_exp = -1
+        self.col_iso = -1
+        self.col_ap = -1
+        self.col_del = -1
+
         if self.mode in ("lights", "meteors"):
-            self.headers = ["Usar", "REF", "Archivo", "Hora", "Exp.", "ISO", "f/"]
-            self.col_use = 0
-            self.col_ref = 1
-            self.col_name = 2
-            self.col_time = 3
-            self.col_exp = 4
-            self.col_iso = 5
-            self.col_ap = 6
-            self.col_del = -1
-        elif self.mode == "darks":
-            self.headers = ["Archivo", "Exp.", "ISO", ""]
-            self.col_use = -1
-            self.col_ref = -1
+            self.headers.append("Usar")
+            self.col_use = len(self.headers) - 1
+
+            if self.show_quality:
+                self.headers.append("Calidad")
+                self.col_quality = len(self.headers) - 1
+
+            self.headers.append("REF")
+            self.col_ref = len(self.headers) - 1
+
+            self.headers.append("Archivo")
+            self.col_name = len(self.headers) - 1
+
+            self.headers.append("Hora")
+            self.col_time = len(self.headers) - 1
+
+            self.headers.append("Exp.")
+            self.col_exp = len(self.headers) - 1
+
+            self.headers.append("ISO")
+            self.col_iso = len(self.headers) - 1
+
+            self.headers.append("f/")
+            self.col_ap = len(self.headers) - 1
+
+            if self.allow_delete:
+                self.headers.append("")
+                self.col_del = len(self.headers) - 1
+
+        elif self.mode in ("darks", "bias"):
+            self.headers = ["Archivo", "Exp.", "ISO"]
             self.col_name = 0
-            self.col_time = -1
             self.col_exp = 1
             self.col_iso = 2
-            self.col_ap = -1
-            self.col_del = 3
-        elif self.mode == "flats":
-            self.headers = ["Archivo", "Exp.", "ISO", "f/", ""]
-            self.col_use = -1
-            self.col_ref = -1
+            if self.allow_delete:
+                self.headers.append("")
+                self.col_del = 3
+
+        elif self.mode in ("flats", "ground", "suelo"):
+            self.headers = ["Archivo", "Exp.", "ISO", "f/"]
             self.col_name = 0
-            self.col_time = -1
             self.col_exp = 1
             self.col_iso = 2
             self.col_ap = 3
-            self.col_del = 4
+            if self.allow_delete:
+                self.headers.append("")
+                self.col_del = 4
+
         else:
             self.headers = ["Usar", "REF", "Archivo", "Hora", "Exp.", "ISO", "f/"]
             self.col_use = 0
@@ -139,7 +252,6 @@ class SeriesFilesTableWidget(QWidget):
             self.col_exp = 4
             self.col_iso = 5
             self.col_ap = 6
-            self.col_del = -1
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -156,23 +268,52 @@ class SeriesFilesTableWidget(QWidget):
 
         header = self.table.horizontalHeader()
         header.setHighlightSections(False)
+        header.setMinimumSectionSize(28)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.sectionClicked.connect(self._on_header_section_clicked)
+
+        tooltips = {
+            self.col_use: "Ordenar por estado (incluida / descartada)",
+            self.col_quality: "Ordenar por puntuación de calidad óptica",
+            self.col_ref: "Toma de referencia para alineación",
+            self.col_name: "Ordenar alfabéticamente por nombre de archivo",
+            self.col_time: "Ordenar cronológicamente por fecha/hora",
+            self.col_exp: "Ordenar por tiempo de exposición",
+            self.col_iso: "Ordenar por sensibilidad ISO",
+            self.col_ap: "Ordenar por apertura de diafragma",
+        }
+        for c, tip in tooltips.items():
+            if c >= 0 and c < len(self.headers):
+                h_item = self.table.horizontalHeaderItem(c)
+                if h_item:
+                    h_item.setToolTip(tip)
 
         if self.col_use >= 0:
-            header.setSectionResizeMode(self.col_use, QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(self.col_use, QHeaderView.Interactive)
+            self.table.setColumnWidth(self.col_use, 44)
+        if self.col_quality >= 0:
+            header.setSectionResizeMode(self.col_quality, QHeaderView.Interactive)
+            self.table.setColumnWidth(self.col_quality, 76)
         if self.col_ref >= 0:
-            header.setSectionResizeMode(self.col_ref, QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(self.col_ref, QHeaderView.Interactive)
+            self.table.setColumnWidth(self.col_ref, 36)
         if self.col_name >= 0:
             header.setSectionResizeMode(self.col_name, QHeaderView.Stretch)
         if self.col_time >= 0:
             header.setSectionResizeMode(self.col_time, QHeaderView.ResizeToContents)
         if self.col_exp >= 0:
-            header.setSectionResizeMode(self.col_exp, QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(self.col_exp, QHeaderView.Interactive)
+            self.table.setColumnWidth(self.col_exp, 50)
         if self.col_iso >= 0:
-            header.setSectionResizeMode(self.col_iso, QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(self.col_iso, QHeaderView.Interactive)
+            self.table.setColumnWidth(self.col_iso, 52)
         if self.col_ap >= 0:
-            header.setSectionResizeMode(self.col_ap, QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(self.col_ap, QHeaderView.Interactive)
+            self.table.setColumnWidth(self.col_ap, 44)
         if self.col_del >= 0:
-            header.setSectionResizeMode(self.col_del, QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(self.col_del, QHeaderView.Interactive)
+            self.table.setColumnWidth(self.col_del, 28)
 
         table_compact_style = f"""
             QTableWidget {{
@@ -202,6 +343,8 @@ class SeriesFilesTableWidget(QWidget):
         self.table.setStyleSheet(table_compact_style)
         self.table.itemChanged.connect(self._on_table_item_changed)
         self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
+        self.table.cellClicked.connect(self._on_table_cell_clicked)
+        self.table.cellDoubleClicked.connect(self._on_table_cell_double_clicked)
         self.table.files_dropped.connect(self.add_files)
         self.table.files_dropped.connect(self.files_dropped.emit)
         layout.addWidget(self.table)
@@ -342,32 +485,120 @@ class SeriesFilesTableWidget(QWidget):
                 })
         return gaps
 
-    def sort_by_time(self, ascending: bool = True) -> None:
-        """
-        Reordena la lista de archivos por timestamp cronológico continuo (resuelve medianoche).
-        Las tomas sin timestamp quedan al final.
-        """
+    def _on_header_section_clicked(self, col: int) -> None:
+        if col in (self.col_del, self.col_ref) or col < 0:
+            return
+        if self._sort_col == col:
+            self._sort_asc = not self._sort_asc
+        else:
+            self._sort_col = col
+            # Calidad defaults to descending (highest quality first)
+            self._sort_asc = False if col == self.col_quality else True
+
+        self._user_sorted = True
+        self._apply_column_sort(col, self._sort_asc)
+
+    def _apply_column_sort(self, col: int, ascending: bool) -> None:
         if len(self.files_list) < 2:
             return
 
         ref_file = self.get_reference_file()
 
-        def _sort_key(path: str):
-            meta = self._metadata_cache.get(path, {})
-            ts = meta.get("timestamp")
-            if ts is not None:
-                return (0, float(ts))
-            return (1, path)
+        if col == self.col_time:
+            def _key(p):
+                meta = self._metadata_cache.get(p, {})
+                ts = meta.get("timestamp")
+                if ts is not None:
+                    try:
+                        return (0, float(ts))
+                    except (ValueError, TypeError):
+                        pass
+                return (1, os.path.basename(p).lower())
+        elif col == self.col_name:
+            def _key(p):
+                return os.path.basename(p).lower()
+        elif col == self.col_quality:
+            def _key(p):
+                res = self._quality_results.get(p)
+                score = getattr(res, "score", None) if res else None
+                if score is not None and score == score:
+                    return (0, float(score))
+                return (1, -1.0)
+        elif col == self.col_exp:
+            def _key(p):
+                meta = self._metadata_cache.get(p, {})
+                exp = meta.get("exp")
+                if exp is not None:
+                    try:
+                        return (0, float(exp))
+                    except (ValueError, TypeError):
+                        pass
+                return (1, 0.0)
+        elif col == self.col_iso:
+            def _key(p):
+                meta = self._metadata_cache.get(p, {})
+                iso = meta.get("iso")
+                if iso is not None:
+                    try:
+                        return (0, int(iso))
+                    except (ValueError, TypeError):
+                        pass
+                return (1, 0)
+        elif col == self.col_ap:
+            def _key(p):
+                meta = self._metadata_cache.get(p, {})
+                ap = meta.get("aperture")
+                if ap is not None:
+                    try:
+                        return (0, float(ap))
+                    except (ValueError, TypeError):
+                        pass
+                return (1, 0.0)
+        elif col == self.col_use:
+            def _key(p):
+                return (0 if p not in self.excluded_files else 1, os.path.basename(p).lower())
+        else:
+            return
 
-        self.files_list.sort(key=_sort_key, reverse=not ascending)
+        self._sort_col = col
+        self._sort_asc = ascending
+        self.files_list.sort(key=_key, reverse=not ascending)
 
         if ref_file and ref_file in self.files_list:
             self.ref_idx = self.files_list.index(ref_file)
         else:
             self.ref_idx = 0
 
+        self.table.horizontalHeader().setSortIndicator(
+            col, Qt.AscendingOrder if ascending else Qt.DescendingOrder
+        )
         self._refresh_all_rows()
         self.files_changed.emit(self.files_list)
+
+    def sort_by_time(self, ascending: bool = True) -> None:
+        """
+        Reordena la lista de archivos por timestamp cronológico continuo (resuelve medianoche).
+        Las tomas sin timestamp quedan al final.
+        """
+        if self.col_time >= 0:
+            self._apply_column_sort(self.col_time, ascending)
+        else:
+            if len(self.files_list) < 2:
+                return
+            ref_file = self.get_reference_file()
+            def _sort_key(path: str):
+                meta = self._metadata_cache.get(path, {})
+                ts = meta.get("timestamp")
+                if ts is not None:
+                    return (0, float(ts))
+                return (1, os.path.basename(path).lower())
+            self.files_list.sort(key=_sort_key, reverse=not ascending)
+            if ref_file and ref_file in self.files_list:
+                self.ref_idx = self.files_list.index(ref_file)
+            else:
+                self.ref_idx = 0
+            self._refresh_all_rows()
+            self.files_changed.emit(self.files_list)
 
     def set_files(self, files: List[str], meta_batch: Optional[Dict[str, Any]] = None) -> None:
         """Carga y reemplaza la lista completa de archivos."""
@@ -387,7 +618,9 @@ class SeriesFilesTableWidget(QWidget):
 
         self.files_list.extend(new_files)
         if self.mode in ("lights", "meteors"):
-            self.files_list.sort()
+            # Ordenar inicialmente por nombre base si no se ha ordenado manualmente
+            if not self._user_sorted:
+                self.files_list.sort(key=lambda p: os.path.basename(p).lower())
 
         self._refresh_all_rows()
         self.files_changed.emit(self.files_list)
@@ -402,7 +635,11 @@ class SeriesFilesTableWidget(QWidget):
         self.cancel_scan()
         self.files_list.clear()
         self.excluded_files.clear()
+        self._quality_results.clear()
         self.ref_idx = 0
+        self._sort_col = None
+        self._sort_asc = True
+        self._user_sorted = False
         self.table.blockSignals(True)
         self.table.setRowCount(0)
         self.table.blockSignals(False)
@@ -415,6 +652,7 @@ class SeriesFilesTableWidget(QWidget):
             row = self.files_list.index(path)
             self.files_list.remove(path)
             self.excluded_files.discard(path)
+            self._quality_results.pop(path, None)
             if self.ref_idx >= len(self.files_list):
                 self.ref_idx = max(0, len(self.files_list) - 1)
             self.table.blockSignals(True)
@@ -430,6 +668,21 @@ class SeriesFilesTableWidget(QWidget):
             self.ref_idx = idx
             self._update_ref_badges()
             self.reference_changed.emit(self.ref_idx)
+
+    def set_reference_file(self, path: str) -> None:
+        """Fija la toma de referencia por su ruta de archivo."""
+        if path in self.files_list:
+            self.set_reference_index(self.files_list.index(path))
+
+    def set_quality_results(self, results: Dict[str, Any]) -> None:
+        """Asigna los resultados del análisis de calidad óptica (culling) y actualiza la tabla."""
+        self._quality_results.update(results)
+        if self.col_quality >= 0:
+            self.table.blockSignals(True)
+            for row, p in enumerate(self.files_list):
+                if p in self._quality_results:
+                    self._populate_quality_cell(row, p)
+            self.table.blockSignals(False)
 
     def get_reference_index(self) -> int:
         return self.ref_idx
@@ -498,6 +751,10 @@ class SeriesFilesTableWidget(QWidget):
             chk_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             chk_item.setCheckState(Qt.Checked if is_included else Qt.Unchecked)
             self.table.setItem(row, self.col_use, chk_item)
+
+        # Columna Calidad
+        if self.col_quality >= 0:
+            self._populate_quality_cell(row, path)
 
         # Columna REF
         if self.col_ref >= 0:
@@ -633,7 +890,12 @@ class SeriesFilesTableWidget(QWidget):
         self.lbl_scan_status.setText(f"Extrayendo metadatos: 0 / {len(missing_paths)} (0%)")
         self.status_container.setVisible(True)
 
-        self._worker = MetadataScanWorker(missing_paths, meta_batch=meta_batch, parent=self)
+        self._worker = MetadataScanWorker(
+            missing_paths,
+            meta_batch=meta_batch,
+            max_workers=self.max_workers,
+            parent=self
+        )
         self._worker.progress.connect(self._on_scan_progress)
         self._worker.finished.connect(self._on_scan_finished)
         self._worker.start()
@@ -652,6 +914,14 @@ class SeriesFilesTableWidget(QWidget):
 
     def _on_scan_finished(self) -> None:
         self.status_container.setVisible(False)
+        # Auto-ordenar cronológicamente si no hubo orden manual del usuario y hay timestamps
+        if not self._user_sorted and self.mode in ("lights", "meteors") and self.col_time >= 0:
+            has_timestamps = any(
+                self._metadata_cache.get(p, {}).get("timestamp") is not None
+                for p in self.files_list
+            )
+            if has_timestamps:
+                self.sort_by_time(ascending=True)
         self.scan_finished.emit()
 
     def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
@@ -669,3 +939,73 @@ class SeriesFilesTableWidget(QWidget):
         row = self.selected_row()
         if 0 <= row < len(self.files_list):
             self.file_selected.emit(row, self.files_list[row])
+
+    def _on_table_cell_clicked(self, row: int, col: int) -> None:
+        if self.col_ref >= 0 and col == self.col_ref:
+            self.set_reference_index(row)
+
+    def _on_table_cell_double_clicked(self, row: int, col: int) -> None:
+        if 0 <= row < len(self.files_list):
+            self.file_double_clicked.emit(row, self.files_list[row])
+
+    def _populate_quality_cell(self, row: int, path: str) -> None:
+        if self.col_quality < 0:
+            return
+        res = self._quality_results.get(path)
+        if res is None:
+            item = ScoreTableWidgetItem("—")
+            item.setTextAlignment(Qt.AlignCenter)
+            item.setForeground(QColor("#71717a"))
+            item.setData(Qt.UserRole, -1.0)
+            self.table.setItem(row, self.col_quality, item)
+            return
+
+        score_val = getattr(res, "score", None)
+        score_int = int(round(score_val)) if (score_val is not None and score_val == score_val) else 0
+        status = getattr(res, "status", "ACCEPTABLE")
+        status_label = getattr(res, "status_label", "")
+
+        defect_type = ""
+        if "Movida" in status_label:
+            defect_type = " Mov"
+        elif "Nubes" in status_label:
+            defect_type = " Nub"
+        elif "Desenfoque" in status_label:
+            defect_type = " Foc"
+
+        txt = f"● {score_int}%{defect_type}"
+        item = ScoreTableWidgetItem(txt)
+        item.setTextAlignment(Qt.AlignCenter)
+        item.setData(Qt.UserRole, float(score_val) if score_val is not None else -1.0)
+
+        if status == "EXCELLENT":
+            item.setForeground(QColor("#4ade80"))
+        elif status == "ACCEPTABLE":
+            item.setForeground(QColor("#facc15"))
+        else:
+            item.setForeground(QColor("#f87171"))
+
+        fwhm = getattr(res, "fwhm", None)
+        fwhm_str = f"{fwhm:.1f} px" if (fwhm is not None and fwhm > 0 and fwhm == fwhm) else "N/D"
+        c_ecc = getattr(res, "center_ecc", None)
+        c_ecc_str = f"{c_ecc:.2f}" if (c_ecc is not None and c_ecc == c_ecc) else "N/D"
+        cor_ecc = getattr(res, "corner_ecc", None)
+        cor_ecc_str = f"{cor_ecc:.2f}" if (cor_ecc is not None and cor_ecc == cor_ecc) else "N/D"
+
+        score_disp = f"{score_val:.1f}%" if (score_val is not None and score_val == score_val) else "N/D"
+        tip = (
+            f"Puntuación: {score_disp}\n"
+            f"Nitidez (FWHM): {fwhm_str}\n"
+            f"Redondez centro (eje óptico): {c_ecc_str}\n"
+            f"Coma esquinas: {cor_ecc_str}\n"
+            f"Estrellas detectadas: {getattr(res, 'star_count', 0)}"
+        )
+        diag = getattr(res, "optical_diagnosis_msg", "")
+        if diag:
+            tip += f"\nÓptica: {diag}"
+        defect = getattr(res, "defect_reason", "")
+        if defect:
+            tip += f"\nMotivo: {defect}"
+        item.setToolTip(tip)
+
+        self.table.setItem(row, self.col_quality, item)

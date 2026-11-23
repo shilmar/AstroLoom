@@ -22,6 +22,7 @@ from core.stacking import load_image_as_float32, scan_raw_batch_metadata
 from gui.canvas import MaskCanvas
 from gui.widgets.viewer_toolbar import CanvasFooterBar
 from gui.widgets.drop_widgets import DropListWidget
+from gui.widgets.series_table_widget import SeriesFilesTableWidget
 from gui.worker import StackingWorker, SubstackingWorker, QualityCullingWorker, AIHorizonWorker, ModelDownloadWorker
 from core.gpu_backend import is_gpu_enabled
 from core.config_manager import load_config
@@ -157,16 +158,89 @@ class StackerTab(QWidget):
     stacking_finished = Signal(str, object)
     session_title_changed = Signal(str)
     new_session_requested = Signal()
-    
+
+    @property
+    def lights_list(self) -> list:
+        if hasattr(self, 'table_widget_lights'):
+            return self.table_widget_lights.files_list
+        return self._lights_list
+
+    @lights_list.setter
+    def lights_list(self, val: list):
+        if hasattr(self, 'table_widget_lights'):
+            self.table_widget_lights.files_list = val
+        self._lights_list = val
+
+    @property
+    def darks_list(self) -> list:
+        if hasattr(self, 'table_widget_darks'):
+            return self.table_widget_darks.files_list
+        return self._darks_list
+
+    @darks_list.setter
+    def darks_list(self, val: list):
+        if hasattr(self, 'table_widget_darks'):
+            self.table_widget_darks.files_list = val
+        self._darks_list = val
+
+    @property
+    def flats_list(self) -> list:
+        if hasattr(self, 'table_widget_flats'):
+            return self.table_widget_flats.files_list
+        return self._flats_list
+
+    @flats_list.setter
+    def flats_list(self, val: list):
+        if hasattr(self, 'table_widget_flats'):
+            self.table_widget_flats.files_list = val
+        self._flats_list = val
+
+    @property
+    def bias_list(self) -> list:
+        if hasattr(self, 'table_widget_bias'):
+            return self.table_widget_bias.files_list
+        return self._bias_list
+
+    @bias_list.setter
+    def bias_list(self, val: list):
+        if hasattr(self, 'table_widget_bias'):
+            self.table_widget_bias.files_list = val
+        self._bias_list = val
+
+    @property
+    def ground_list(self) -> list:
+        if hasattr(self, 'table_widget_ground'):
+            return self.table_widget_ground.files_list
+        return self._ground_list
+
+    @ground_list.setter
+    def ground_list(self, val: list):
+        if hasattr(self, 'table_widget_ground'):
+            self.table_widget_ground.files_list = val
+        self._ground_list = val
+
+    @property
+    def excluded_lights(self) -> set:
+        if hasattr(self, 'table_widget_lights'):
+            return self.table_widget_lights.excluded_files
+        return getattr(self, '_excluded_lights', set())
+
+    @excluded_lights.setter
+    def excluded_lights(self, val: set):
+        new_set = set(val)
+        if hasattr(self, 'table_widget_lights'):
+            self.table_widget_lights.set_excluded_files(new_set)
+        self._excluded_lights = new_set
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.project_mgr = ProjectManager()
-        self.lights_list = []
-        self.darks_list = []
-        self.flats_list = []
-        self.bias_list = []
-        self.ground_list = []
-        self.excluded_lights = set()       # Conjunto de rutas de Lights desmarcadas / excluidas
+        self._lights_list = []
+        self._darks_list = []
+        self._flats_list = []
+        self._bias_list = []
+        self._ground_list = []
+        self._excluded_lights = set()
         self.culling_results = {}          # Diccionario filepath -> FrameQualityResult
         self.culling_worker = None         # Hilo secundario para análisis en lote
         self.computed_mask = None
@@ -304,27 +378,45 @@ class StackerTab(QWidget):
             }}
         """)
         
-        self.list_lights = DropListWidget()
-        self.list_lights.itemDoubleClicked.connect(self.on_light_double_clicked)
-        self.list_lights.files_dropped.connect(lambda paths: self.add_files_to_tab("Lights", paths))
-        self.tabs_files.addTab(self.list_lights, get_icon("star", size=14, color="#a1a1aa"), "Lights")
+        self.table_widget_lights = SeriesFilesTableWidget(mode="lights", show_quality=True, allow_delete=True)
+        self.table_widget_lights.setMinimumHeight(150)
+        self.table_widget_lights.files_changed.connect(self._on_lights_files_changed)
+        self.table_widget_lights.selection_changed.connect(self._on_lights_selection_changed)
+        self.table_widget_lights.file_double_clicked.connect(self._on_light_file_double_clicked)
+        self.table_widget_lights.reference_changed.connect(self._on_reference_changed)
+        self.table_widget_lights.file_removed.connect(self._on_light_file_removed)
+        self.table_widget_lights.files_dropped.connect(lambda paths: self.add_files_to_tab("Lights", paths))
+        self.list_lights = self.table_widget_lights.table
+        self.tabs_files.addTab(self.table_widget_lights, get_icon("star", size=14, color="#a1a1aa"), "Lights")
 
-        self.list_darks = DropListWidget()
-        self.list_darks.files_dropped.connect(lambda paths: self.add_files_to_tab("Darks", paths))
-        self.tabs_files.addTab(self.list_darks, get_icon("moon", size=14, color="#a1a1aa"), "Darks")
+        self.table_widget_darks = SeriesFilesTableWidget(mode="darks", allow_delete=True)
+        self.table_widget_darks.setMinimumHeight(150)
+        self.table_widget_darks.files_dropped.connect(lambda paths: self.add_files_to_tab("Darks", paths))
+        self.table_widget_darks.file_removed.connect(lambda p: self.log_message(f"Eliminado Dark: {os.path.basename(p)}"))
+        self.list_darks = self.table_widget_darks.table
+        self.tabs_files.addTab(self.table_widget_darks, get_icon("moon", size=14, color="#a1a1aa"), "Darks")
 
-        self.list_flats = DropListWidget()
-        self.list_flats.files_dropped.connect(lambda paths: self.add_files_to_tab("Flats", paths))
-        self.tabs_files.addTab(self.list_flats, get_icon("sun", size=14, color="#a1a1aa"), "Flats")
+        self.table_widget_flats = SeriesFilesTableWidget(mode="flats", allow_delete=True)
+        self.table_widget_flats.setMinimumHeight(150)
+        self.table_widget_flats.files_dropped.connect(lambda paths: self.add_files_to_tab("Flats", paths))
+        self.table_widget_flats.file_removed.connect(lambda p: self.log_message(f"Eliminado Flat: {os.path.basename(p)}"))
+        self.list_flats = self.table_widget_flats.table
+        self.tabs_files.addTab(self.table_widget_flats, get_icon("sun", size=14, color="#a1a1aa"), "Flats")
 
-        self.list_bias = DropListWidget()
-        self.list_bias.files_dropped.connect(lambda paths: self.add_files_to_tab("Bias", paths))
-        self.tabs_files.addTab(self.list_bias, get_icon("zap", size=14, color="#a1a1aa"), "Bias")
+        self.table_widget_bias = SeriesFilesTableWidget(mode="bias", allow_delete=True)
+        self.table_widget_bias.setMinimumHeight(150)
+        self.table_widget_bias.files_dropped.connect(lambda paths: self.add_files_to_tab("Bias", paths))
+        self.table_widget_bias.file_removed.connect(lambda p: self.log_message(f"Eliminado Bias: {os.path.basename(p)}"))
+        self.list_bias = self.table_widget_bias.table
+        self.tabs_files.addTab(self.table_widget_bias, get_icon("zap", size=14, color="#a1a1aa"), "Bias")
 
-        self.list_ground = DropListWidget()
-        self.list_ground.itemDoubleClicked.connect(self.on_ground_double_clicked)
-        self.list_ground.files_dropped.connect(lambda paths: self.add_files_to_tab("Suelo", paths))
-        self.tabs_files.addTab(self.list_ground, get_icon("mountain", size=14, color="#a1a1aa"), "Suelo")
+        self.table_widget_ground = SeriesFilesTableWidget(mode="ground", allow_delete=True)
+        self.table_widget_ground.setMinimumHeight(150)
+        self.table_widget_ground.file_double_clicked.connect(self._on_ground_file_double_clicked)
+        self.table_widget_ground.files_dropped.connect(lambda paths: self.add_files_to_tab("Suelo", paths))
+        self.table_widget_ground.file_removed.connect(lambda p: self.log_message(f"Eliminado Suelo: {os.path.basename(p)}"))
+        self.list_ground = self.table_widget_ground.table
+        self.tabs_files.addTab(self.table_widget_ground, get_icon("mountain", size=14, color="#a1a1aa"), "Suelo")
         
         files_layout.addWidget(self.tabs_files)
 
@@ -945,79 +1037,48 @@ class StackerTab(QWidget):
         if hasattr(self, 'culling_bar'):
             self.culling_bar.setVisible(idx == 0)
 
-    # --- Reconstrucción de la lista visual ---
+    # --- Reconstrucción y sincronización de listas ---
     def _refresh_list_view(self, tab_name: str):
         if tab_name == "Lights":
-            widget_list = self.list_lights
-            files_data = self.lights_list
-        elif tab_name == "Darks":
-            widget_list = self.list_darks
-            files_data = self.darks_list
-        elif tab_name == "Flats":
-            widget_list = self.list_flats
-            files_data = self.flats_list
-        elif tab_name == "Bias":
-            widget_list = self.list_bias
-            files_data = self.bias_list
-        else:
-            widget_list = self.list_ground
-            files_data = self.ground_list
-
-        widget_list.clear()
-        for idx, path in enumerate(files_data):
-            item = QListWidgetItem(widget_list)
-            is_ref = (tab_name == "Lights") and (path == self.current_ref_path)
-            is_included = (path not in self.excluded_lights) if tab_name == "Lights" else True
-            row_widget = FileListRow(path, tab_name=tab_name, is_ref=is_ref, is_included=is_included)
-            row_widget.delete_requested.connect(self.delete_single_file)
-            row_widget.include_toggled.connect(self.on_file_include_toggled)
-
-            if tab_name == "Lights" and path in self.culling_results:
-                row_widget.set_quality_result(self.culling_results[path])
-
-            item.setSizeHint(row_widget.sizeHint())
-            widget_list.setItemWidget(item, row_widget)
-
-        if tab_name == "Lights":
+            if hasattr(self, 'table_widget_lights'):
+                if self.table_widget_lights.files_list is not self._lights_list and self._lights_list:
+                    self.table_widget_lights.files_list = self._lights_list
+                self.table_widget_lights._refresh_all_rows()
+                if self.culling_results:
+                    self.table_widget_lights.set_quality_results(self.culling_results)
             self._update_culling_summary_label()
+        elif tab_name == "Darks":
+            if hasattr(self, 'table_widget_darks'):
+                if self.table_widget_darks.files_list is not self._darks_list and self._darks_list:
+                    self.table_widget_darks.files_list = self._darks_list
+                self.table_widget_darks._refresh_all_rows()
+        elif tab_name == "Flats":
+            if hasattr(self, 'table_widget_flats'):
+                if self.table_widget_flats.files_list is not self._flats_list and self._flats_list:
+                    self.table_widget_flats.files_list = self._flats_list
+                self.table_widget_flats._refresh_all_rows()
+        elif tab_name == "Bias":
+            if hasattr(self, 'table_widget_bias'):
+                if self.table_widget_bias.files_list is not self._bias_list and self._bias_list:
+                    self.table_widget_bias.files_list = self._bias_list
+                self.table_widget_bias._refresh_all_rows()
+        else:
+            if hasattr(self, 'table_widget_ground'):
+                if self.table_widget_ground.files_list is not self._ground_list and self._ground_list:
+                    self.table_widget_ground.files_list = self._ground_list
+                self.table_widget_ground._refresh_all_rows()
 
     def delete_single_file(self, tab_name: str, filepath: str):
         if tab_name == "Lights":
-            file_list = self.lights_list
+            self.table_widget_lights.remove_file(filepath)
         elif tab_name == "Darks":
-            file_list = self.darks_list
+            self.table_widget_darks.remove_file(filepath)
         elif tab_name == "Flats":
-            file_list = self.flats_list
+            self.table_widget_flats.remove_file(filepath)
         elif tab_name == "Bias":
-            file_list = self.bias_list
+            self.table_widget_bias.remove_file(filepath)
         else:
-            file_list = self.ground_list
-
-        if filepath in file_list:
-            file_list.remove(filepath)
-            self.log_message(f"Eliminada toma de {tab_name}: {os.path.basename(filepath)}")
-
-            if tab_name == "Lights":
-                if filepath == self.current_ref_path:
-                    if self.lights_list:
-                        self.load_frame_to_canvas(self.lights_list[0])
-                    else:
-                        self.current_ref_path = None
-                        self.clear_mask()
-                        self.canvas.clear_image()
-                elif not self.lights_list:
-                    self.current_ref_path = None
-                    self.clear_mask()
-                    self.canvas.clear_image()
-                self._refresh_list_view("Lights")
-            elif tab_name == "Darks":
-                self._refresh_list_view("Darks")
-            elif tab_name == "Flats":
-                self._refresh_list_view("Flats")
-            elif tab_name == "Bias":
-                self._refresh_list_view("Bias")
-            else:
-                self._refresh_list_view("Suelo")
+            self.table_widget_ground.remove_file(filepath)
 
     def add_current_tab_files(self):
         idx = self.tabs_files.currentIndex()
@@ -1054,38 +1115,36 @@ class StackerTab(QWidget):
         if tab_name == "Lights":
             first_add = len(self.lights_list) == 0
             new_paths = [p for p in paths if p not in self.lights_list]
-            self.lights_list.extend(new_paths)
+            self.table_widget_lights.add_files(new_paths, meta_batch=meta_batch)
             if first_add and self.lights_list:
+                self.current_ref_path = self.lights_list[0]
+                self.table_widget_lights.set_reference_index(0)
                 self.load_frame_to_canvas(self.lights_list[0])
-            self._refresh_list_view("Lights")
             self.tabs_files.setCurrentIndex(0)
+            self._update_culling_summary_label()
             self.log_message(f"Añadidos {len(new_paths)} Lights (Total: {len(self.lights_list)})")
 
         elif tab_name == "Darks":
             new_paths = [p for p in paths if p not in self.darks_list]
-            self.darks_list.extend(new_paths)
-            self._refresh_list_view("Darks")
+            self.table_widget_darks.add_files(new_paths, meta_batch=meta_batch)
             self.tabs_files.setCurrentIndex(1)
             self.log_message(f"Añadidos {len(new_paths)} Darks (Total: {len(self.darks_list)})")
 
         elif tab_name == "Flats":
             new_paths = [p for p in paths if p not in self.flats_list]
-            self.flats_list.extend(new_paths)
-            self._refresh_list_view("Flats")
+            self.table_widget_flats.add_files(new_paths, meta_batch=meta_batch)
             self.tabs_files.setCurrentIndex(2)
             self.log_message(f"Añadidos {len(new_paths)} Flats (Total: {len(self.flats_list)})")
 
         elif tab_name == "Bias":
             new_paths = [p for p in paths if p not in self.bias_list]
-            self.bias_list.extend(new_paths)
-            self._refresh_list_view("Bias")
+            self.table_widget_bias.add_files(new_paths, meta_batch=meta_batch)
             self.tabs_files.setCurrentIndex(3)
             self.log_message(f"Añadidos {len(new_paths)} Bias (Total: {len(self.bias_list)})")
 
         else:
             new_paths = [p for p in paths if p not in self.ground_list]
-            self.ground_list.extend(new_paths)
-            self._refresh_list_view("Suelo")
+            self.table_widget_ground.add_files(new_paths, meta_batch=meta_batch)
             self.tabs_files.setCurrentIndex(4)
             self.combo_ground.setCurrentIndex(2)
             self.log_message(f"Añadida(s) {len(new_paths)} toma(s) de Suelo. Modo suelo actualizado a 'Usar Toma de Pestaña Suelo'.")
@@ -1093,10 +1152,8 @@ class StackerTab(QWidget):
     def clear_current_tab_files(self):
         idx = self.tabs_files.currentIndex()
         if idx == 0:
-            self.lights_list.clear()
-            self.excluded_lights.clear()
+            self.table_widget_lights.clear_files()
             self.culling_results.clear()
-            self.list_lights.clear()
             if hasattr(self, 'lbl_cull_summary'):
                 self.lbl_cull_summary.setText("")
             self.current_ref_path = None
@@ -1104,30 +1161,68 @@ class StackerTab(QWidget):
             self.canvas.clear_image()
             self.log_message("Lista de Lights vaciada y máscara reiniciada.")
         elif idx == 1:
-            self.darks_list.clear()
-            self.list_darks.clear()
+            self.table_widget_darks.clear_files()
             self.log_message("Lista de Darks vaciada.")
         elif idx == 2:
-            self.flats_list.clear()
-            self.list_flats.clear()
+            self.table_widget_flats.clear_files()
             self.log_message("Lista de Flats vaciada.")
         elif idx == 3:
-            self.bias_list.clear()
-            self.list_bias.clear()
+            self.table_widget_bias.clear_files()
             self.log_message("Lista de Bias vaciada.")
         else:
-            self.ground_list.clear()
-            self.list_ground.clear()
+            self.table_widget_ground.clear_files()
             self.log_message("Lista de Suelo vaciada.")
 
     def on_file_include_toggled(self, tab_name: str, filepath: str, is_included: bool):
-        """Gestiona la inclusión/exclusión de tomas para el apilado."""
+        """Gestiona la inclusión/exclusión de tomas para el apilado (retrocompatibilidad)."""
         if tab_name == "Lights":
             if is_included:
                 self.excluded_lights.discard(filepath)
             else:
                 self.excluded_lights.add(filepath)
+            self.table_widget_lights.set_excluded_files(self.excluded_lights)
             self._update_culling_summary_label()
+
+    def _on_lights_files_changed(self, files: list):
+        self._update_culling_summary_label()
+
+    def _on_lights_selection_changed(self, excluded: set):
+        self._update_culling_summary_label()
+
+    def _on_reference_changed(self, idx: int):
+        if 0 <= idx < len(self.lights_list):
+            new_ref = self.lights_list[idx]
+            if new_ref != self.current_ref_path:
+                self.current_ref_path = new_ref
+                self.load_frame_to_canvas(new_ref)
+                self.log_message(f"[REFERENCIA] Base de alineación fijada: {os.path.basename(new_ref)}")
+
+    def _on_light_file_removed(self, filepath: str):
+        self.culling_results.pop(filepath, None)
+        self.log_message(f"Eliminada toma de Lights: {os.path.basename(filepath)}")
+        if filepath == self.current_ref_path:
+            if self.lights_list:
+                new_ref = self.lights_list[0]
+                self.current_ref_path = new_ref
+                self.table_widget_lights.set_reference_index(0)
+                self.load_frame_to_canvas(new_ref)
+            else:
+                self.current_ref_path = None
+                self.clear_mask()
+                self.canvas.clear_image()
+        elif not self.lights_list:
+            self.current_ref_path = None
+            self.clear_mask()
+            self.canvas.clear_image()
+        self._update_culling_summary_label()
+
+    def _on_light_file_double_clicked(self, row: int, filepath: str):
+        self.load_frame_to_canvas(filepath)
+        self.open_blink_viewer()
+
+    def _on_ground_file_double_clicked(self, row: int, filepath: str):
+        self.load_frame_to_canvas(filepath)
+        self.log_message(f"[SUELO] Vista previa de suelo: {os.path.basename(filepath)}")
 
     def _update_culling_summary_label(self):
         """Actualiza la etiqueta de balance de calidad en la barra de cribado."""
@@ -1180,7 +1275,8 @@ class StackerTab(QWidget):
             if not r.is_recommended:
                 defective_count += 1
 
-        self._refresh_list_view("Lights")
+        self.table_widget_lights.set_quality_results(self.culling_results)
+        self._update_culling_summary_label()
         total = len(results)
         aptas = total - defective_count
         self.log_message(f"✓ [CRIBADO] Análisis completado: {aptas}/{total} tomas excelentes/aceptables, {defective_count} con anomalías.")
@@ -1214,7 +1310,8 @@ class StackerTab(QWidget):
                 self.excluded_lights.add(path)
                 discarded_now += 1
 
-        self._refresh_list_view("Lights")
+        self.table_widget_lights.set_excluded_files(self.excluded_lights)
+        self._update_culling_summary_label()
         self.log_message(f"[CRIBADO] Auto-descartadas {discarded_now} tomas defectuosas (viento/nubes/foco).")
 
     def auto_select_best_reference(self, *args, silent: bool = False):
@@ -1236,10 +1333,9 @@ class StackerTab(QWidget):
 
         best_path = best.filepath
         if best_path in self.lights_list:
-            self.lights_list.remove(best_path)
-            self.lights_list.insert(0, best_path)
+            self.current_ref_path = best_path
+            self.table_widget_lights.set_reference_file(best_path)
             self.load_frame_to_canvas(best_path)
-            self._refresh_list_view("Lights")
             fwhm_str = f"{best.fwhm:.2f} px" if (best.fwhm and best.fwhm > 0) else "N/D"
             score_str = f"{best.score:.1f}" if (best.score is not None and not np.isnan(best.score)) else "N/D"
             self.log_message(
@@ -1247,10 +1343,15 @@ class StackerTab(QWidget):
                 f"(Score: {score_str}, FWHM: {fwhm_str}, Estrellas: {best.star_count})"
             )
 
-    def on_light_double_clicked(self, item):
-        row = self.list_lights.row(item)
-        if 0 <= row < len(self.lights_list):
-            selected_path = self.lights_list[row]
+    def on_light_double_clicked(self, *args):
+        selected_path = None
+        if args and hasattr(args[0], 'row'):
+            row = self.table_widget_lights.table.row(args[0])
+            if 0 <= row < len(self.lights_list):
+                selected_path = self.lights_list[row]
+        if not selected_path:
+            selected_path = self.table_widget_lights.selected_file() or (self.lights_list[0] if self.lights_list else None)
+        if selected_path:
             self.load_frame_to_canvas(selected_path)
             self.open_blink_viewer()
 
@@ -1268,51 +1369,51 @@ class StackerTab(QWidget):
 
         from gui.dialog_blink import BlinkDialog
         curr_idx = 0
-        cur_item = self.list_lights.currentItem()
-        if cur_item:
-            row_w = self.list_lights.itemWidget(cur_item)
-            if row_w and hasattr(row_w, "filepath") and row_w.filepath in lights:
-                curr_idx = lights.index(row_w.filepath)
-        elif 0 <= self.list_lights.currentRow() < len(lights):
-            curr_idx = self.list_lights.currentRow()
+        sel_row = self.table_widget_lights.selected_row()
+        if 0 <= sel_row < len(lights):
+            curr_idx = sel_row
         elif self.current_ref_path and self.current_ref_path in lights:
             curr_idx = lights.index(self.current_ref_path)
 
+        meta_cache = getattr(self.table_widget_lights, "_metadata_cache", None)
         dlg = BlinkDialog(
             file_list=lights,
             excluded_files=self.excluded_lights,
             culling_results=self.culling_results,
             current_index=curr_idx,
+            metadata_cache=meta_cache,
             parent=self
         )
         dlg.exclusion_changed.connect(self._on_blink_exclusion_changed)
         dlg.selection_applied.connect(self._on_blink_selection_applied)
+        dlg.order_changed.connect(self._on_blink_order_changed)
         dlg.exec()
+        if dlg.file_list != self.table_widget_lights.files_list:
+            self._on_blink_order_changed(dlg.file_list)
+        elif hasattr(self.table_widget_lights, "_refresh_all_rows"):
+            self.table_widget_lights._refresh_all_rows()
+
+    def _on_blink_order_changed(self, new_order: list):
+        self.table_widget_lights.files_list = list(new_order)
+        self.table_widget_lights._user_sorted = True
+        self.table_widget_lights._refresh_all_rows()
+        self.table_widget_lights.files_changed.emit(self.table_widget_lights.files_list)
 
     def _on_blink_exclusion_changed(self, filepath: str, is_included: bool):
         if is_included:
             self.excluded_lights.discard(filepath)
         else:
             self.excluded_lights.add(filepath)
-        self._sync_row_inclusion_checkbox(filepath, is_included)
+        self.table_widget_lights.set_excluded_files(self.excluded_lights)
         self._update_culling_summary_label()
 
     def _on_blink_selection_applied(self, excluded_set: set):
         self.excluded_lights = set(excluded_set)
-        for path in self.lights_list:
-            self._sync_row_inclusion_checkbox(path, path not in self.excluded_lights)
+        self.table_widget_lights.set_excluded_files(self.excluded_lights)
         self._update_culling_summary_label()
 
     def _sync_row_inclusion_checkbox(self, filepath: str, is_included: bool):
-        list_widget = self.list_lights
-        if not list_widget:
-            return
-        for i in range(list_widget.count()):
-            item = list_widget.item(i)
-            row_w = list_widget.itemWidget(item)
-            if row_w and getattr(row_w, "filepath", None) == filepath:
-                row_w.set_included(is_included)
-                break
+        self.table_widget_lights.set_excluded_files(self.excluded_lights)
 
     def load_frame_to_canvas(self, path: str):
         self.current_ref_path = path
@@ -1614,31 +1715,53 @@ class StackerTab(QWidget):
             self.clear_mask()
             self.canvas.clear_image()
 
-            self.lights_list.clear()
-            self.darks_list.clear()
-            self.flats_list.clear()
-            self.ground_list.clear()
-            self.bias_list.clear()
+            valid_lights = [fpath for fpath in data.get("light_frames", []) if os.path.exists(fpath)]
+            valid_darks = [fpath for fpath in data.get("dark_frames", []) if os.path.exists(fpath)]
+            valid_flats = [fpath for fpath in data.get("flat_frames", []) if os.path.exists(fpath)]
+            valid_bias = [fpath for fpath in data.get("bias_frames", []) if os.path.exists(fpath)]
+            valid_ground = [fpath for fpath in data.get("ground_frames", []) if os.path.exists(fpath)]
 
-            for fpath in data.get("light_frames", []):
-                if os.path.exists(fpath):
-                    self.lights_list.append(fpath)
+            cached_meta = data.get("metadata_cache", {})
+            if cached_meta:
+                self.table_widget_lights.set_metadata_cache(cached_meta)
+                self.table_widget_darks.set_metadata_cache(cached_meta)
+                self.table_widget_flats.set_metadata_cache(cached_meta)
+                self.table_widget_bias.set_metadata_cache(cached_meta)
+                self.table_widget_ground.set_metadata_cache(cached_meta)
 
-            for fpath in data.get("dark_frames", []):
-                if os.path.exists(fpath):
-                    self.darks_list.append(fpath)
+            self.table_widget_lights.set_files(valid_lights, meta_batch=cached_meta)
+            self.table_widget_darks.set_files(valid_darks, meta_batch=cached_meta)
+            self.table_widget_flats.set_files(valid_flats, meta_batch=cached_meta)
+            self.table_widget_bias.set_files(valid_bias, meta_batch=cached_meta)
+            self.table_widget_ground.set_files(valid_ground, meta_batch=cached_meta)
 
-            for fpath in data.get("flat_frames", []):
-                if os.path.exists(fpath):
-                    self.flats_list.append(fpath)
+            if "excluded_lights" in data:
+                self.excluded_lights = set(data["excluded_lights"])
+                self.table_widget_lights.set_excluded_files(self.excluded_lights)
 
-            for fpath in data.get("bias_frames", []):
-                if os.path.exists(fpath):
-                    self.bias_list.append(fpath)
-
-            for fpath in data.get("ground_frames", []):
-                if os.path.exists(fpath):
-                    self.ground_list.append(fpath)
+            raw_cull = data.get("culling_results", {})
+            if raw_cull:
+                from core.frame_culling import FrameQualityResult
+                restored_cull = {}
+                for fpath, cd in raw_cull.items():
+                    if fpath in valid_lights:
+                        restored_cull[fpath] = FrameQualityResult(
+                            filepath=cd.get("filepath", fpath),
+                            filename=cd.get("filename", os.path.basename(fpath)),
+                            fwhm=float(cd.get("fwhm", 0.0)),
+                            eccentricity=float(cd.get("eccentricity", 0.0)),
+                            star_count=int(cd.get("star_count", 0)),
+                            score=float(cd.get("score", 0.0)),
+                            status=str(cd.get("status", "ACCEPTABLE")),
+                            status_label=str(cd.get("status_label", "")),
+                            defect_reason=str(cd.get("defect_reason", "")),
+                            is_recommended=bool(cd.get("is_recommended", True)),
+                            center_ecc=float(cd.get("center_ecc", 0.0)),
+                            corner_ecc=float(cd.get("corner_ecc", 0.0)),
+                            optical_diagnosis_msg=str(cd.get("optical_diagnosis_msg", ""))
+                        )
+                self.culling_results = restored_cull
+                self.table_widget_lights.set_quality_results(self.culling_results)
 
             mode = data.get("mode", "fixed_tripod")
             self.combo_mode.setCurrentIndex(0 if mode == "fixed_tripod" else 1)
@@ -1655,14 +1778,17 @@ class StackerTab(QWidget):
             self.combo_lp_algo.setCurrentIndex(params.get("lp_method_idx", 0))
             self.slider_stack_lp.setValue(params.get("lp_strength", 50))
 
-            if self.lights_list:
+            saved_ref = data.get("current_ref_path")
+            if saved_ref and saved_ref in self.lights_list:
+                self.current_ref_path = saved_ref
+                self.table_widget_lights.set_reference_file(saved_ref)
+                self.load_frame_to_canvas(saved_ref)
+            elif self.lights_list:
+                self.current_ref_path = self.lights_list[0]
+                self.table_widget_lights.set_reference_index(0)
                 self.load_frame_to_canvas(self.lights_list[0])
 
-            self._refresh_list_view("Lights")
-            self._refresh_list_view("Darks")
-            self._refresh_list_view("Flats")
-            self._refresh_list_view("Suelo")
-            self._refresh_list_view("Bias")
+            self._update_culling_summary_label()
 
             if loaded_mask is not None:
                 self.computed_mask = loaded_mask
@@ -1689,6 +1815,35 @@ class StackerTab(QWidget):
         self.project_mgr.data["flat_frames"] = self.flats_list
         self.project_mgr.data["bias_frames"] = self.bias_list
         self.project_mgr.data["ground_frames"] = self.ground_list
+        self.project_mgr.data["excluded_lights"] = list(self.excluded_lights)
+        self.project_mgr.data["current_ref_path"] = self.current_ref_path
+
+        # Guardar caché de metadatos fotográficos (Hora, Exp, ISO, f/)
+        meta_cache = {}
+        for tw in [self.table_widget_lights, self.table_widget_darks, self.table_widget_flats, self.table_widget_bias, self.table_widget_ground]:
+            meta_cache.update(tw._metadata_cache)
+        self.project_mgr.data["metadata_cache"] = meta_cache
+
+        # Guardar resultados del cribado óptico de calidad
+        cull_data = {}
+        for path, res in self.culling_results.items():
+            cull_data[path] = {
+                "filepath": getattr(res, "filepath", path),
+                "filename": getattr(res, "filename", os.path.basename(path)),
+                "fwhm": getattr(res, "fwhm", 0.0),
+                "eccentricity": getattr(res, "eccentricity", 0.0),
+                "star_count": getattr(res, "star_count", 0),
+                "score": getattr(res, "score", 0.0),
+                "status": getattr(res, "status", "ACCEPTABLE"),
+                "status_label": getattr(res, "status_label", ""),
+                "defect_reason": getattr(res, "defect_reason", ""),
+                "is_recommended": getattr(res, "is_recommended", True),
+                "optical_diagnosis_msg": getattr(res, "optical_diagnosis_msg", ""),
+                "center_ecc": getattr(res, "center_ecc", 0.0),
+                "corner_ecc": getattr(res, "corner_ecc", 0.0),
+            }
+        self.project_mgr.data["culling_results"] = cull_data
+
         self.project_mgr.data["mode"] = "fixed_tripod" if self.combo_mode.currentIndex() == 0 else "star_tracker"
         self.project_mgr.data["ground_mode_idx"] = self.combo_ground.currentIndex()
         self.project_mgr.data["ground_algo_idx"] = self.combo_ground_algo.currentIndex() if hasattr(self, 'combo_ground_algo') else 0
@@ -1708,17 +1863,11 @@ class StackerTab(QWidget):
         QMessageBox.information(self, "Sesión Guardada", f"Guardada en:\n{filepath}")
 
     def reset_session(self):
-        self.lights_list.clear()
-        self.darks_list.clear()
-        self.flats_list.clear()
-        self.ground_list.clear()
-        self.list_lights.clear()
-        self.list_darks.clear()
-        self.list_flats.clear()
-        self.bias_list.clear()
-        self.list_bias.clear()      
-        self.list_ground.clear()
-        self.excluded_lights.clear()
+        self.table_widget_lights.clear_files()
+        self.table_widget_darks.clear_files()
+        self.table_widget_flats.clear_files()
+        self.table_widget_bias.clear_files()
+        self.table_widget_ground.clear_files()
         self.culling_results.clear()
         self._update_culling_summary_label()
         self.current_ref_path = None
@@ -2103,9 +2252,14 @@ class StackerTab(QWidget):
         self.btn_run.setStyleSheet(STYLE_RUN_IDLE)
         self._set_ui_busy(False)
         
-    def on_ground_double_clicked(self, item):
-        row = self.list_ground.row(item)
-        if 0 <= row < len(self.ground_list):
-            path = self.ground_list[row]
-            self.load_frame_to_canvas(path)
-            self.log_message(f"[SUELO] Vista previa de suelo: {os.path.basename(path)}")
+    def on_ground_double_clicked(self, *args):
+        selected_path = None
+        if args and hasattr(args[0], 'row'):
+            row = self.table_widget_ground.table.row(args[0])
+            if 0 <= row < len(self.ground_list):
+                selected_path = self.ground_list[row]
+        if not selected_path:
+            selected_path = self.table_widget_ground.selected_file() or (self.ground_list[0] if self.ground_list else None)
+        if selected_path:
+            self.load_frame_to_canvas(selected_path)
+            self.log_message(f"[SUELO] Vista previa de suelo: {os.path.basename(selected_path)}")

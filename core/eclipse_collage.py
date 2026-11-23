@@ -54,6 +54,8 @@ class EclipseFrameMetadata:
     is_ingress: bool           # True si es fase creciente (C1-C2), False si es decreciente (C3-C4)
     phase_label: str           # "Parcial Entrada", "Totalidad", "Parcial Salida", etc.
     is_recommended: bool = False
+    aperture: float = 0.0
+    focal_len: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -63,6 +65,8 @@ class EclipseFrameMetadata:
             "time_str": self.time_str,
             "exp_time": self.exp_time,
             "iso": self.iso,
+            "aperture": self.aperture,
+            "focal_len": self.focal_len,
             "center_x": self.center_x,
             "center_y": self.center_y,
             "radius": self.radius,
@@ -83,6 +87,8 @@ class EclipseFrameMetadata:
             time_str=str(data.get("time_str", "")),
             exp_time=float(data.get("exp_time", 0.0)),
             iso=int(data.get("iso", 0)),
+            aperture=float(data.get("aperture", 0.0)),
+            focal_len=float(data.get("focal_len", 0.0)),
             center_x=float(data.get("center_x", 0.0)),
             center_y=float(data.get("center_y", 0.0)),
             radius=float(data.get("radius", 0.0)),
@@ -406,6 +412,8 @@ def analyze_eclipse_frame(
     time_str = str(info.get("time_str") or "--:--:--")
     exp_time = float(info.get("exposure_s") or info.get("exp_time") or 0.001)
     iso = int(info.get("iso") or 100)
+    aperture = float(info.get("aperture") or info.get("f_number") or 0.0)
+    focal_len = float(info.get("focal_length") or info.get("focal_len") or 0.0)
 
     scale_factor = 1.0
     ext = os.path.splitext(filepath)[1].lower()
@@ -482,6 +490,8 @@ def analyze_eclipse_frame(
         time_str=time_str,
         exp_time=exp_time,
         iso=iso,
+        aperture=aperture,
+        focal_len=focal_len,
         center_x=float(cx),
         center_y=float(cy),
         radius=float(r),

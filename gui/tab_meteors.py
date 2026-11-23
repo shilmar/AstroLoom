@@ -886,7 +886,17 @@ class MeteorTab(QWidget):
         )
         dlg.exclusion_changed.connect(self._on_blink_exclusion_changed)
         dlg.selection_applied.connect(self._on_blink_selection_applied)
+        dlg.order_changed.connect(self._on_blink_order_changed)
         dlg.exec()
+        if dlg.file_list != self.files_list:
+            self._on_blink_order_changed(dlg.file_list)
+
+    def _on_blink_order_changed(self, new_order: list):
+        self.table_widget_files.files_list = list(new_order)
+        self.files_list = self.table_widget_files.files_list
+        self.table_widget_files._user_sorted = True
+        self.table_widget_files._refresh_all_rows()
+        self.table_widget_files.files_changed.emit(self.table_widget_files.files_list)
 
     def _on_blink_exclusion_changed(self, filepath: str, is_included: bool) -> None:
         if is_included:
