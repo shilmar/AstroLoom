@@ -205,24 +205,23 @@ def pick_donor_source(
     # Spokes for ring statistics
     spoke_angles = [k * (2.0 * math.pi / 24.0) for k in range(24)]
 
-    # Compute target surrounding samples
-    target_samples = []
+    # Compute target surrounding samples (preserving valid angles for candidate matching)
     r_around = r_px * 1.3
+    valid_spokes: List[Tuple[float, float]] = []
     for a in spoke_angles:
         sx = int(round(tx + math.cos(a) * r_around))
         sy = int(round(ty + math.sin(a) * r_around))
         if 0 <= sx < w and 0 <= sy < h:
-            target_samples.append(luma[sy, sx])
-    if not target_samples:
+            valid_spokes.append((a, float(luma[sy, sx])))
+    if len(valid_spokes) < 4:
         return None
-    target_mean = float(np.mean(target_samples))
 
     for dx, dy in candidates:
         cx = tx + dx
         cy = ty + dy
 
-        # 1. Boundary check: whole radius must fit inside the image
-        if cx - r_px < 0 or cx + r_px >= w or cy - r_px < 0 or cy + r_px >= h:
+        # 1. Boundary check: whole evaluation perimeter must fit inside the image
+        if cx - r_around < 0 or cx + r_around >= w or cy - r_around < 0 or cy + r_around >= h:
             continue
 
         # 2. Avoid offset if specified (e.g. refresh source)
@@ -250,12 +249,18 @@ def pick_donor_source(
 
         # 4. Measure candidate score: texture matching + inside variance
         cand_samples = []
-        for a in spoke_angles:
+        targ_samples = []
+        for a, t_val in valid_spokes:
             sx = int(round(cx + math.cos(a) * r_around))
             sy = int(round(cy + math.sin(a) * r_around))
-            cand_samples.append(luma[sy, sx])
+            if 0 <= sx < w and 0 <= sy < h:
+                cand_samples.append(luma[sy, sx])
+                targ_samples.append(t_val)
 
-        diff_score = float(np.mean((np.array(cand_samples) - np.array(target_samples)) ** 2))
+        if len(cand_samples) < 4:
+            continue
+
+        diff_score = float(np.mean((np.array(cand_samples, dtype=np.float32) - np.array(targ_samples, dtype=np.float32)) ** 2))
 
         # Check interior variance of donor patch (must be clean and smooth)
         r_inner = r_px * 0.6
@@ -263,7 +268,10 @@ def pick_donor_source(
         for a in spoke_angles:
             sx = int(round(cx + math.cos(a) * r_inner))
             sy = int(round(cy + math.sin(a) * r_inner))
-            inner_samples.append(luma[sy, sx])
+            if 0 <= sx < w and 0 <= sy < h:
+                inner_samples.append(luma[sy, sx])
+        if not inner_samples:
+            continue
         var_score = float(np.var(inner_samples))
 
         total_score = diff_score + 2.0 * var_score
@@ -340,7 +348,10 @@ def heal_single_spot(
     if mode == "inpaint" or (source_offset is None and mode == "heal"):
         # Auto-pick donor source if possible
         if mode == "heal":
-            source_offset = pick_donor_source(img, (spot["x"], spot["y"]), spot["radius"])
+            try:
+                source_offset = pick_donor_source(img, (spot["x"], spot["y"]), spot["radius"])
+            except Exception:
+                source_offset = None
 
     if source_offset is not None and mode in ("heal", "clone"):
         dx_px = source_offset[0] * w
@@ -414,8 +425,11 @@ def apply_dust_healing(
 
     out = img.copy()
     for spot in spots:
-        source_offset = spot.get("source_offset")
-        out = heal_single_spot(out, spot, source_offset=source_offset, mode=mode)
+        try:
+            source_offset = spot.get("source_offset")
+            out = heal_single_spot(out, spot, source_offset=source_offset, mode=mode)
+        except Exception:
+            pass
     return out
 
 

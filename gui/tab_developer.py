@@ -89,6 +89,7 @@ from gui.widgets.live_histogram import LiveRGBHistogramWidget
 from gui.widgets.mask_layers_widget import MaskLayersWidget
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow, PrecisionSpinBox
+from gui.widgets.export_button import ExportSplitButton
 from gui.icons import get_icon, get_svg_pixmap
 from gui.canvas import MaskCanvas
 from gui.widgets.viewer_toolbar import CanvasFooterBar
@@ -1022,46 +1023,23 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
         self.left_scroll_area.setWidget(left_panel)
         left_container_layout.addWidget(self.left_scroll_area, 1)
 
-        # Botón Exportar siempre fijado al pie del panel izquierdo (soporta TIFF, PSD multicapa 16-bit y JPEG)
-        self.btn_export = QPushButton("EXPORTAR IMAGEN REVELADA...")
-        self.btn_export.setIcon(get_icon("save", color="#ffffff", size=16))
+        # Botón Exportar dividido: Clic para maestro (TIFF/PSD/PNG/JPEG) y desplegable para formatos y Web
+        self.btn_export = ExportSplitButton(
+            text="EXPORTAR IMAGEN REVELADA...",
+            on_master_export=self.export_image,
+            on_web_export=self.export_web_image,
+            parent=self
+        )
+        self.btn_export.setup_standard_menu(
+            on_format_export=lambda fmt: self.export_image(force_format=fmt),
+            psd_label="Guardar Photoshop por Capas (PSD)..."
+        )
         self.btn_export.setFixedHeight(40)
-        self.btn_export.setCursor(Qt.PointingHandCursor)
-        self.btn_export.setStyleSheet("""
-            QPushButton {
-                font-weight: bold;
-                font-size: 13px;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3B82F6, stop:1 #2563EB);
-                color: #ffffff;
-                border: 1px solid #2563EB;
-                border-top: 1px solid #60A5FA;
-                border-radius: 6px;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #60A5FA, stop:1 #3B82F6);
-                border: 1px solid #3B82F6;
-                border-top: 1px solid #93C5FD;
-            }
-            QPushButton:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1D4ED8, stop:1 #1E40AF);
-                border: 1px solid #1E3A8A;
-                border-top: 1px solid #3B82F6;
-            }
-            QPushButton:disabled {
-                background-color: #1A1A1E;
-                color: #71717A;
-                border: 1px solid #2E2E35;
-            }
-        """)
         self.btn_export.setToolTip(
             "Exporta la imagen revelada a disco.\n"
-            "Formatos soportados según filtro o extensión:\n"
-            "• TIFF (*.tif, *.tiff): 16-bit o 32-bit float con perfil ICC incrustado\n"
-            "• Photoshop (*.psd): 16-bit nativo por capas y máscaras editables\n"
-            "• JPEG (*.jpg, *.jpeg): 8-bit comprimido de alta calidad"
+            "• Clic principal: Formatos maestros (TIFF 16/32-bit, PSD multicapa, PNG, JPEG directo).\n"
+            "• Desplegable (▼) o Ctrl+Alt+W: Acceso directo a formatos y Exportar para Web / Redes Sociales (sRGB 8-bit, Lanczos, WebP/JPEG/PNG)."
         )
-        self.btn_export.clicked.connect(self.export_image)
         left_container_layout.addWidget(self.btn_export, 0)
 
         # 3. Contenedor central (Visor y Lienzo interactivo)

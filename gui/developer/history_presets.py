@@ -560,6 +560,7 @@ class HistoryPresetsMixin:
                     "_cache_starless_ai": self._cache_starless_ai.copy() if getattr(self, "_cache_starless_ai", None) is not None else None,
                     "_cache_ground_ai": self._cache_ground_ai.copy() if getattr(self, "_cache_ground_ai", None) is not None else None,
                     "mask_layers": [l.shallow_snapshot() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
+                    "dust_spots": [dict(s) for s in self.canvas.get_dust_spots()] if hasattr(self, 'canvas') else [],
                 }
                 self.redo_stack.append(redo_item)
                 self.image_32bit = target["image_32bit"]
@@ -574,6 +575,17 @@ class HistoryPresetsMixin:
                     self.mask_layers_widget.blockSignals(True)
                     self.mask_layers_widget.set_state(target["mask_layers"] or [])
                     self.mask_layers_widget.blockSignals(False)
+                    self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
+                    self.mask_layers_widget.update_active_layer_histogram()
+                    if hasattr(self.mask_layers_widget, '_update_list_and_props_state'):
+                        self.mask_layers_widget._update_list_and_props_state()
+
+                if "dust_spots" in target and hasattr(self, 'canvas'):
+                    self.canvas.set_dust_spots(target["dust_spots"] or [])
+                    if hasattr(self, 'developer_state') and self.developer_state is not None:
+                        self.developer_state.dust_spots = target["dust_spots"] or []
+                    if hasattr(self, 'panel_dust') and self.panel_dust is not None:
+                        self.panel_dust.update_spot_count(len(target["dust_spots"] or []))
 
                 self.snapshot_before_pixmap = None
                 self.has_custom_snapshot = False
@@ -736,6 +748,7 @@ class HistoryPresetsMixin:
                     "_cache_starless_ai": self._cache_starless_ai.copy() if getattr(self, "_cache_starless_ai", None) is not None else None,
                     "_cache_ground_ai": self._cache_ground_ai.copy() if getattr(self, "_cache_ground_ai", None) is not None else None,
                     "mask_layers": [l.shallow_snapshot() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
+                    "dust_spots": [dict(s) for s in self.canvas.get_dust_spots()] if hasattr(self, 'canvas') else [],
                 }
                 self.undo_stack.append(undo_item)
                 self.image_32bit = target["image_32bit"]
@@ -750,6 +763,17 @@ class HistoryPresetsMixin:
                     self.mask_layers_widget.blockSignals(True)
                     self.mask_layers_widget.set_state(target["mask_layers"] or [])
                     self.mask_layers_widget.blockSignals(False)
+                    self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
+                    self.mask_layers_widget.update_active_layer_histogram()
+                    if hasattr(self.mask_layers_widget, '_update_list_and_props_state'):
+                        self.mask_layers_widget._update_list_and_props_state()
+
+                if "dust_spots" in target and hasattr(self, 'canvas'):
+                    self.canvas.set_dust_spots(target["dust_spots"] or [])
+                    if hasattr(self, 'developer_state') and self.developer_state is not None:
+                        self.developer_state.dust_spots = target["dust_spots"] or []
+                    if hasattr(self, 'panel_dust') and self.panel_dust is not None:
+                        self.panel_dust.update_spot_count(len(target["dust_spots"] or []))
 
                 self.snapshot_before_pixmap = None
                 self.has_custom_snapshot = False

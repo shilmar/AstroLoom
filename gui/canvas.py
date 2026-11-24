@@ -766,9 +766,10 @@ class MaskCanvas(QWidget):
         target_rect, _, scale = self.get_render_geometry()
         if scale <= 0:
             return None
-        h_f = self.base_pixmap.height()
-        w_f = self.base_pixmap.width()
-        long_edge = float(max(w_f, h_f))
+        if self.is_zoomed and self.external_zoom_handler and self.external_full_shape is not None:
+            long_edge = float(max(self.external_full_shape))
+        else:
+            long_edge = float(max(self.base_pixmap.width(), self.base_pixmap.height()))
 
         for idx in reversed(range(len(self.dust_spots))):
             spot = self.dust_spots[idx]
@@ -2487,9 +2488,10 @@ class MaskCanvas(QWidget):
 
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
-        h_f = self.base_pixmap.height()
-        w_f = self.base_pixmap.width()
-        long_edge = float(max(w_f, h_f))
+        if self.is_zoomed and self.external_zoom_handler and self.external_full_shape is not None:
+            long_edge = float(max(self.external_full_shape))
+        else:
+            long_edge = float(max(self.base_pixmap.width(), self.base_pixmap.height()))
 
         for idx, spot in enumerate(self.dust_spots):
             s_pt = self._norm_img_to_widget(spot["x"], spot["y"])

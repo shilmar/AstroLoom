@@ -323,11 +323,21 @@ class ProjectIOMixin:
             "TIFF 16-bit (*.tif *.tiff);;"
             "TIFF 32-bit Float (*.tif *.tiff);;"
             "Photoshop por Capas (*.psd);;"
+            "PNG (*.png);;"
             "JPEG (*.jpg *.jpeg)"
         )
         if force_format == "psd":
             filtro_por_defecto = "Photoshop por Capas (*.psd)"
             default_filename = "revelado_capas.psd"
+        elif force_format == "tiff32":
+            filtro_por_defecto = "TIFF 32-bit Float (*.tif *.tiff)"
+            default_filename = "revelado_32bit.tif"
+        elif force_format == "png":
+            filtro_por_defecto = "PNG (*.png)"
+            default_filename = "revelado_final.png"
+        elif force_format in ("jpg", "jpeg"):
+            filtro_por_defecto = "JPEG (*.jpg *.jpeg)"
+            default_filename = "revelado_final.jpg"
         else:
             filtro_por_defecto = "TIFF 16-bit (*.tif *.tiff)"
             default_filename = "revelado_final.tif"
@@ -354,6 +364,8 @@ class ProjectIOMixin:
         if not ext:
             if "Photoshop" in selected_filter or "*.psd" in selected_filter:
                 ext = ".psd"
+            elif "PNG" in selected_filter or "*.png" in selected_filter:
+                ext = ".png"
             elif "JPEG" in selected_filter or "*.jpg" in selected_filter:
                 ext = ".jpg"
             else:
@@ -573,6 +585,14 @@ class ProjectIOMixin:
                 cv2.imwrite(p, bgr8, [cv2.IMWRITE_JPEG_QUALITY, 96])
                 desc = "JPEG 8-bit"
                 self.set_canvas_progress(100, "JPEG completado")
+            elif ext == '.png' or "PNG" in selected_filter:
+                self.set_canvas_progress(75, "Guardando PNG 16-bit...")
+                u16 = np.empty(processed.shape, dtype=np.uint16)
+                np.clip(processed * 65535.0 + 0.5, 0, 65535, out=u16, casting='unsafe')
+                bgr16 = cv2.cvtColor(u16, cv2.COLOR_RGB2BGR) if u16.ndim == 3 else u16
+                cv2.imwrite(p, bgr16, [cv2.IMWRITE_PNG_COMPRESSION, 6])
+                desc = "PNG 16-bit"
+                self.set_canvas_progress(100, "PNG guardado")
             elif "32-bit" in selected_filter:
                 self.set_canvas_progress(75, "Guardando TIFF 32-bit...")
                 out32 = np.ascontiguousarray(np.clip(processed, 0.0, 1.0), dtype=np.float32)
@@ -606,6 +626,52 @@ class ProjectIOMixin:
         finally:
             self.hide_canvas_progress()
             self.unsetCursor()
+
+    def export_web_image(self) -> None:
+        """Abre inmediatamente el diálogo modal de exportación web mientras la composición se genera en segundo plano."""
+        if self.image_32bit is None:
+            QMessageBox.warning(self, "Atención", "No hay ninguna imagen cargada para exportar.")
+            return
+
+        h_full, w_full = self.image_32bit.shape[:2]
+        self.log_message(f"Abriendo exportación Web y componiendo imagen en segundo plano ({w_full}x{h_full} px)...")
+
+        def _render_full_composite() -> Optional[np.ndarray]:
+            full_base, _ = self._compose_active_base(for_export=True)
+
+            full_mask = None
+            if self.current_mask is not None:
+                clean_m = np.squeeze(self.current_mask)
+                if clean_m.ndim > 2:
+                    clean_m = clean_m[..., 0]
+                clean_m = clean_m.astype(np.float32)
+
+                if clean_m.shape != (h_full, w_full):
+                    clean_m = cv2.resize(clean_m, (w_full, h_full), interpolation=cv2.INTER_LINEAR)
+
+                ksize = int(max(15, (min(h_full, w_full) // 150) | 1))
+                if ksize % 2 == 0:
+                    ksize += 1
+                sm = cv2.GaussianBlur(clean_m, (ksize, ksize), sigmaX=ksize / 3.0)
+                full_mask = np.ascontiguousarray(np.repeat(sm[..., np.newaxis], 3, axis=2), dtype=np.float32)
+
+            return self._apply_pipeline_on_image(full_base, precomputed_mask=full_mask, is_preview=False)
+
+        from gui.dialog_web_export import WebExportDialog, extract_exif_bytes
+        exif_bytes = extract_exif_bytes(self.active_filepath) if getattr(self, 'active_filepath', None) else None
+        base_name = os.path.splitext(os.path.basename(self.active_filepath))[0] if getattr(self, 'active_filepath', None) else "revelado_astroloom"
+        src_cs = getattr(self, 'current_color_space', 'srgb')
+
+        dlg = WebExportDialog(
+            image_buffer=None,
+            render_fn=_render_full_composite,
+            initial_dimensions=(w_full, h_full),
+            default_filename=base_name,
+            exif_bytes=exif_bytes,
+            source_colorspace=src_cs,
+            parent=self,
+        )
+        dlg.exec()
             
     def save_project(self) -> bool:
         """Guarda el proyecto en el archivo actual (.devloom) o solicita ruta si es nuevo (Ctrl+S)."""

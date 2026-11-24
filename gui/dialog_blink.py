@@ -20,10 +20,11 @@ import numpy as np
 from PySide6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSlider, QCheckBox, QComboBox, QFrame, QSizePolicy, QApplication,
-    QSplitter, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
+    QSplitter, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QStyledItemDelegate, QStyleOptionViewItem, QStyle
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QSize, QPointF, QRectF
-from PySide6.QtGui import QImage, QPixmap, QKeyEvent, QColor, QPainter, QWheelEvent, QMouseEvent, QFont
+from PySide6.QtCore import Qt, Signal, QTimer, QSize, QPointF, QRectF, QRect, QModelIndex
+from PySide6.QtGui import QImage, QPixmap, QKeyEvent, QColor, QPainter, QWheelEvent, QMouseEvent, QFont, QPalette, QBrush
 
 from gui.theme import apply_theme, BG_CARD, BORDER_BASE, TEXT_MUTED, BG_CANVAS, BG_PANEL
 from gui.icons import get_icon
@@ -311,6 +312,174 @@ class BlinkCanvas(QWidget):
             painter.drawText(self.rect(), Qt.AlignCenter, "Cargando fotograma...")
 
 
+def _format_schematic_phase(phase_label: Optional[str]) -> Tuple[str, QColor, bool]:
+    """
+    Retorna (texto_esquemático, color, es_bold) para la fase del eclipse:
+    - Totalidad
+    - Anillo C2 / Anillo C3 (o Anillo)
+    - Baily C2 / Baily C3 (o Baily)
+    - C1-C2
+    - C3-C4
+    """
+    if not phase_label or phase_label in ("—", "Pendiente"):
+        return ("—", QColor("#64748b"), False)
+    pl_upper = phase_label.upper()
+    if "TOTALIDAD" in pl_upper:
+        return ("Totalidad", QColor("#c084fc"), True)
+    elif "ANILLO" in pl_upper or "DIAMANTE" in pl_upper:
+        if "C3" in pl_upper or "SALIDA" in pl_upper or "EGRESO" in pl_upper:
+            txt = "Anillo C3"
+        elif "C2" in pl_upper or "ENTRADA" in pl_upper or "INGRESO" in pl_upper:
+            txt = "Anillo C2"
+        else:
+            txt = "Anillo"
+        return (txt, QColor("#fbbf24"), True)
+    elif "BAILY" in pl_upper or "PERLAS" in pl_upper:
+        if "C3" in pl_upper or "SALIDA" in pl_upper or "EGRESO" in pl_upper:
+            txt = "Baily C3"
+        elif "C2" in pl_upper or "ENTRADA" in pl_upper or "INGRESO" in pl_upper:
+            txt = "Baily C2"
+        else:
+            txt = "Baily"
+        return (txt, QColor("#f59e0b"), True)
+    elif "C1-C2" in pl_upper or "ENTRADA" in pl_upper:
+        return ("C1-C2", QColor("#38bdf8"), False)
+    elif "C3-C4" in pl_upper or "SALIDA" in pl_upper:
+        return ("C3-C4", QColor("#fb923c"), False)
+    clean = phase_label.split("(")[0].strip()
+    return (clean[:12], QColor("#94a3b8"), False)
+
+
+def _format_obscuration(obsc: Optional[float]) -> str:
+    if obsc is None or obsc < 0:
+        return "—"
+    return f"{obsc:.1f}%"
+
+
+def _format_sharpness(score: Optional[float], is_trepidated: bool = False) -> Tuple[str, QColor]:
+    if score is None or score <= 0:
+        return ("—", QColor("#64748b"))
+    if is_trepidated:
+        return (f"● {score:.0f} (Mov)", QColor("#ef4444"))
+    elif score >= 80:
+        return (f"● {score:.0f}", QColor("#38bdf8"))
+    elif score >= 50:
+        return (f"● {score:.0f}", QColor("#94a3b8"))
+    else:
+        return (f"● {score:.0f}", QColor("#cbd5e1"))
+
+
+class BlinkTableDelegate(QStyledItemDelegate):
+    """
+    Delegado de renderizado de alto contraste y silencio visual para la tabla lateral Blink.
+    - Filas seleccionadas (incluidas): tinte completo (#122336/#0F291E), barra de acento 3px en col 0,
+      etiqueta destacada en col 1 (★ COL / ✓ INCL), nombre de archivo en blanco puro negrita (#F8FAFC).
+    - Filas no seleccionadas (descartadas): fondo oscuro neutro (#14171D), silencio visual en col 1 (·),
+      tipografía atenuada en gris (#7C8798).
+    - Fila activa en el visor: fondo reforzado (#1E3A5F/#163E2E o #1C222C).
+    """
+
+    def __init__(self, dialog: "BlinkDialog"):
+        super().__init__(dialog)
+        self.dialog = dialog
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+
+        row = index.row()
+        col = index.column()
+        if row < 0 or row >= len(self.dialog.file_list):
+            super().paint(painter, option, index)
+            return
+
+        path = self.dialog.file_list[row]
+        is_included = (path not in self.dialog.excluded_files)
+        is_eclipse = (self.dialog.mode == "eclipse")
+        is_current = bool(opt.state & QStyle.State_Selected) or (row == self.dialog.current_idx)
+
+        # 1. Tinte de fondo completo
+        if is_included:
+            if is_current:
+                bg_color = QColor("#1E3A5F") if is_eclipse else QColor("#163E2E")
+            else:
+                bg_color = QColor("#122336") if is_eclipse else QColor("#0F291E")
+        else:
+            if is_current:
+                bg_color = QColor("#1C222C")
+            else:
+                bg_color = QColor("#14171D")
+
+        painter.save()
+        painter.fillRect(opt.rect, bg_color)
+
+        # 2. Barra lateral de acento (3px) en la primera columna (#)
+        if col == 0 and is_included:
+            accent_color = QColor("#38BDF8") if is_eclipse else QColor("#10B981")
+            accent_rect = QRect(opt.rect.left(), opt.rect.top(), 3, opt.rect.height())
+            painter.fillRect(accent_rect, accent_color)
+
+        # 3. Tipografía y color de texto según columna y estado
+        opt.state &= ~QStyle.State_Selected
+        opt.backgroundBrush = QBrush(Qt.NoBrush)
+
+        if not is_included:
+            # Fila no seleccionada: atenuada
+            opt.palette.setColor(QPalette.Text, QColor("#7C8798"))
+            opt.palette.setColor(QPalette.WindowText, QColor("#7C8798"))
+            opt.palette.setColor(QPalette.HighlightedText, QColor("#7C8798"))
+            if col == 1:
+                # Silencio visual en columna de estado: punto central minimalista
+                opt.text = "·"
+                opt.displayAlignment = Qt.AlignCenter
+                opt.palette.setColor(QPalette.Text, QColor("#334155"))
+                opt.palette.setColor(QPalette.WindowText, QColor("#334155"))
+                opt.palette.setColor(QPalette.HighlightedText, QColor("#334155"))
+                f = opt.font
+                f.setBold(True)
+                opt.font = f
+        else:
+            # Fila seleccionada (incluida)
+            if col == 1:
+                # Etiqueta compacta en negrita
+                col_text = "★ COL" if is_eclipse else "✓ INCL"
+                color = QColor("#38BDF8") if is_eclipse else QColor("#10B981")
+                opt.text = col_text
+                opt.displayAlignment = Qt.AlignCenter
+                opt.palette.setColor(QPalette.Text, color)
+                opt.palette.setColor(QPalette.WindowText, color)
+                opt.palette.setColor(QPalette.HighlightedText, color)
+                f = opt.font
+                f.setBold(True)
+                opt.font = f
+            elif col == 2:
+                # Nombre de archivo en blanco puro y negrita
+                opt.palette.setColor(QPalette.Text, QColor("#F8FAFC"))
+                opt.palette.setColor(QPalette.WindowText, QColor("#F8FAFC"))
+                opt.palette.setColor(QPalette.HighlightedText, QColor("#F8FAFC"))
+                f = opt.font
+                f.setBold(True)
+                opt.font = f
+            else:
+                # Resto de columnas (#, HORA, EXP, ISO, Fase, Ocult, Nitidez)
+                table_widget = opt.widget
+                item = table_widget.item(row, col) if isinstance(table_widget, QTableWidget) else None
+                if item and item.foreground().color().isValid() and col in (3, 5) and is_eclipse:
+                    c = item.foreground().color()
+                    opt.palette.setColor(QPalette.Text, c)
+                    opt.palette.setColor(QPalette.WindowText, c)
+                    opt.palette.setColor(QPalette.HighlightedText, c)
+                else:
+                    opt.palette.setColor(QPalette.Text, QColor("#E2E8F0"))
+                    opt.palette.setColor(QPalette.WindowText, QColor("#E2E8F0"))
+                    opt.palette.setColor(QPalette.HighlightedText, QColor("#E2E8F0"))
+
+        widget = opt.widget
+        style = widget.style() if widget else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, widget)
+        painter.restore()
+
+
 class BlinkDialog(QDialog):
     """
     Diálogo flotante interactivo para inspección ultrarrápida (Blink) y cribado de tomas.
@@ -336,9 +505,10 @@ class BlinkDialog(QDialog):
         self.mode: str = (mode or "general").lower()
         if self.mode == "eclipse":
             self.setWindowTitle("AstroLoom - Visor Rápido (Blink & Selección Eclipse)")
+            self.resize(1280, 780)
         else:
             self.setWindowTitle("AstroLoom - Visor Rápido de Subframes (Blink & Culling)")
-        self.resize(1150, 750)
+            self.resize(1150, 750)
         apply_theme(self)
 
         self.file_list: List[str] = list(file_list)
@@ -406,9 +576,15 @@ class BlinkDialog(QDialog):
 
         self.btn_toggle_side = QPushButton("Ocultar Lista")
         self.btn_toggle_side.setIcon(get_icon("sidebar", size=13))
-        self.btn_toggle_side.setToolTip("Muestra u oculta la lista lateral de tomas de la serie")
+        self.btn_toggle_side.setToolTip("Muestra u oculta la lista lateral de tomas de la serie (Atajo: L)")
         self.btn_toggle_side.clicked.connect(self._toggle_side_panel)
         h_layout.addWidget(self.btn_toggle_side)
+
+        self.btn_toggle_timeline = QPushButton("Ocultar Timeline")
+        self.btn_toggle_timeline.setIcon(get_icon("activity", size=13))
+        self.btn_toggle_timeline.setToolTip("Muestra u oculta la barra gráfica de línea de tiempo interactiva (Atajo: T)")
+        self.btn_toggle_timeline.clicked.connect(self._toggle_timeline)
+        h_layout.addWidget(self.btn_toggle_timeline)
 
         self.chk_auto_stretch = QCheckBox("Auto-Estirado (LUT)")
         self.chk_auto_stretch.setChecked(True)
@@ -426,52 +602,90 @@ class BlinkDialog(QDialog):
 
         # Panel lateral con tabla de tomas
         self.side_panel = QFrame()
-        self.side_panel.setMinimumWidth(280)
-        self.side_panel.setMaximumWidth(480)
+        is_eclipse = (self.mode == "eclipse")
+        if is_eclipse:
+            self.side_panel.setMinimumWidth(380)
+            self.side_panel.setMaximumWidth(680)
+        else:
+            self.side_panel.setMinimumWidth(280)
+            self.side_panel.setMaximumWidth(480)
         self.side_panel.setStyleSheet(f"background-color: {BG_CARD}; border: 1px solid {BORDER_BASE}; border-radius: 6px;")
         side_layout = QVBoxLayout(self.side_panel)
         side_layout.setContentsMargins(6, 6, 6, 6)
         side_layout.setSpacing(4)
 
         side_hdr = QHBoxLayout()
-        lbl_list_title = QLabel("Tomas del Eclipse" if self.mode == "eclipse" else "Tomas de la Serie")
+        lbl_list_title = QLabel("Tomas del Eclipse" if is_eclipse else "Tomas de la Serie")
         lbl_list_title.setStyleSheet("font-weight: bold; font-size: 11px; color: #cbd5e1;")
         side_hdr.addWidget(lbl_list_title)
         side_hdr.addStretch()
 
         total = len(self.file_list)
         inc = total - len(self.excluded_files)
-        term = "en collage" if self.mode == "eclipse" else "activas"
+        term = "en collage" if is_eclipse else "activas"
         self.lbl_blink_summary = QLabel(f"{inc}/{total} {term}")
         self.lbl_blink_summary.setStyleSheet("color: #94a3b8; font-size: 10px;")
         side_hdr.addWidget(self.lbl_blink_summary)
         side_layout.addLayout(side_hdr)
 
-        col1_name = "Collage" if self.mode == "eclipse" else "Uso"
-        self.table_blink = QTableWidget(len(self.file_list), 5)
-        self.table_blink.setHorizontalHeaderLabels(["#", col1_name, "Archivo", "Exp.", "ISO"])
-        hdr_blink = self.table_blink.horizontalHeader()
-        hdr_blink.setMinimumSectionSize(28)
-        hdr_blink.setSectionResizeMode(0, QHeaderView.Interactive)
-        hdr_blink.setSectionResizeMode(1, QHeaderView.Interactive)
-        hdr_blink.setSectionResizeMode(2, QHeaderView.Stretch)
-        hdr_blink.setSectionResizeMode(3, QHeaderView.Interactive)
-        hdr_blink.setSectionResizeMode(4, QHeaderView.Interactive)
-        self.table_blink.setColumnWidth(0, 38)
-        self.table_blink.setColumnWidth(1, 68)
-        self.table_blink.setColumnWidth(3, 58)
-        self.table_blink.setColumnWidth(4, 54)
+        col1_name = "Collage" if is_eclipse else "Uso"
+        if is_eclipse:
+            self.table_blink = QTableWidget(len(self.file_list), 8)
+            self.table_blink.setHorizontalHeaderLabels([
+                "#", col1_name, "Archivo", "Fase", "% Ocult.", "Nitidez", "Exp.", "ISO"
+            ])
+            hdr_blink = self.table_blink.horizontalHeader()
+            hdr_blink.setMinimumSectionSize(28)
+            hdr_blink.setSectionResizeMode(0, QHeaderView.Interactive)
+            hdr_blink.setSectionResizeMode(1, QHeaderView.Interactive)
+            hdr_blink.setSectionResizeMode(2, QHeaderView.Stretch)
+            hdr_blink.setSectionResizeMode(3, QHeaderView.Interactive)
+            hdr_blink.setSectionResizeMode(4, QHeaderView.Interactive)
+            hdr_blink.setSectionResizeMode(5, QHeaderView.Interactive)
+            hdr_blink.setSectionResizeMode(6, QHeaderView.Interactive)
+            hdr_blink.setSectionResizeMode(7, QHeaderView.Interactive)
+            self.table_blink.setColumnWidth(0, 36)
+            self.table_blink.setColumnWidth(1, 64)
+            self.table_blink.setColumnWidth(3, 76)
+            self.table_blink.setColumnWidth(4, 58)
+            self.table_blink.setColumnWidth(5, 74)
+            self.table_blink.setColumnWidth(6, 54)
+            self.table_blink.setColumnWidth(7, 48)
+            tooltips = {
+                0: "Ordenar por orden de lista",
+                1: "Ordenar por inclusión en collage",
+                2: "Ordenar alfabéticamente por nombre de archivo",
+                3: "Ordenar por fase del eclipse",
+                4: "Ordenar por % de ocultación solar/lunar",
+                5: "Ordenar por nitidez óptica",
+                6: "Ordenar por tiempo de exposición",
+                7: "Ordenar por sensibilidad ISO",
+            }
+        else:
+            self.table_blink = QTableWidget(len(self.file_list), 5)
+            self.table_blink.setHorizontalHeaderLabels(["#", col1_name, "Archivo", "Exp.", "ISO"])
+            hdr_blink = self.table_blink.horizontalHeader()
+            hdr_blink.setMinimumSectionSize(28)
+            hdr_blink.setSectionResizeMode(0, QHeaderView.Interactive)
+            hdr_blink.setSectionResizeMode(1, QHeaderView.Interactive)
+            hdr_blink.setSectionResizeMode(2, QHeaderView.Stretch)
+            hdr_blink.setSectionResizeMode(3, QHeaderView.Interactive)
+            hdr_blink.setSectionResizeMode(4, QHeaderView.Interactive)
+            self.table_blink.setColumnWidth(0, 38)
+            self.table_blink.setColumnWidth(1, 68)
+            self.table_blink.setColumnWidth(3, 58)
+            self.table_blink.setColumnWidth(4, 54)
+            tooltips = {
+                0: "Ordenar por orden de lista",
+                1: "Ordenar por estado de uso",
+                2: "Ordenar alfabéticamente por nombre de archivo",
+                3: "Ordenar por tiempo de exposición",
+                4: "Ordenar por sensibilidad ISO",
+            }
         hdr_blink.setSectionsClickable(True)
         hdr_blink.setSortIndicatorShown(True)
         hdr_blink.sectionClicked.connect(self._on_header_section_clicked)
 
-        tooltips = {
-            0: "Ordenar por orden de lista",
-            1: "Ordenar por estado de uso",
-            2: "Ordenar alfabéticamente por nombre de archivo",
-            3: "Ordenar por tiempo de exposición",
-            4: "Ordenar por sensibilidad ISO",
-        }
         for c, tip in tooltips.items():
             h_item = self.table_blink.horizontalHeaderItem(c)
             if h_item:
@@ -488,13 +702,9 @@ class BlinkDialog(QDialog):
                 gridline-color: #1a1a1e;
                 font-size: 11px;
             }}
-            QTableWidget::item {{
-                padding: 1px 4px;
-                color: #e2e8f0;
-            }}
-            QTableWidget::item:selected {{
-                background-color: #132238;
-                color: #ffffff;
+            QTableWidget::item, QTableWidget::item:selected, QTableWidget::item:hover {{
+                background-color: transparent;
+                border: none;
             }}
             QHeaderView::section {{
                 background-color: {BG_PANEL};
@@ -505,7 +715,11 @@ class BlinkDialog(QDialog):
                 border: 1px solid {BORDER_BASE};
             }}
         """)
+        self.table_delegate = BlinkTableDelegate(self)
+        self.table_blink.setItemDelegate(self.table_delegate)
         self.table_blink.itemSelectionChanged.connect(self._on_table_selection_changed)
+        self.table_blink.cellClicked.connect(self._on_table_cell_clicked)
+        self.table_blink.cellDoubleClicked.connect(self._on_table_cell_double_clicked)
         side_layout.addWidget(self.table_blink)
 
         self.canvas = BlinkCanvas(self)
@@ -513,7 +727,10 @@ class BlinkDialog(QDialog):
         self.splitter.addWidget(self.canvas)
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([340, 810])
+        if is_eclipse:
+            self.splitter.setSizes([480, 770])
+        else:
+            self.splitter.setSizes([340, 810])
 
         root_layout.addWidget(self.splitter, stretch=1)
         self._populate_table()
@@ -526,6 +743,12 @@ class BlinkDialog(QDialog):
         f_layout = QVBoxLayout(footer)
         f_layout.setContentsMargins(8, 6, 8, 6)
         f_layout.setSpacing(6)
+
+        # Contenedor de la línea de tiempo interactiva y leyenda de fases (ocultable con botón/atajo T)
+        self.timeline_container = QWidget()
+        tl_layout = QVBoxLayout(self.timeline_container)
+        tl_layout.setContentsMargins(0, 0, 0, 0)
+        tl_layout.setSpacing(4)
 
         # Fila 1: Línea de tiempo astronómica interactiva (Timeline con hitos y gaps)
         from gui.widgets.session_timeline_widget import SessionTimelineWidget
@@ -542,7 +765,7 @@ class BlinkDialog(QDialog):
         self.timeline.gap_selected.connect(self._on_timeline_gap_selected)
         if self.mode == "eclipse":
             self.timeline.auto_select_requested.connect(self._on_timeline_auto_select)
-        f_layout.addWidget(self.timeline)
+        tl_layout.addWidget(self.timeline)
 
         # Barra de Leyenda de Fases (Modo Eclipse)
         if self.mode == "eclipse":
@@ -569,7 +792,9 @@ class BlinkDialog(QDialog):
                 legend_layout.addWidget(dot)
 
             legend_layout.addStretch()
-            f_layout.addWidget(legend_frame)
+            tl_layout.addWidget(legend_frame)
+
+        f_layout.addWidget(self.timeline_container)
 
         # Fila 2: Deslizador de posición compacto
         self.slider = QSlider(Qt.Horizontal)
@@ -851,37 +1076,102 @@ class BlinkDialog(QDialog):
 
         selected_path = self.file_list[self.current_idx] if 0 <= self.current_idx < len(self.file_list) else None
 
-        if col == 0:  # "#"
-            def _key(p):
-                return os.path.basename(p).lower()
-        elif col == 1:  # "Uso" / "Collage"
-            def _key(p):
-                return (0 if p not in self.excluded_files else 1, os.path.basename(p).lower())
-        elif col == 2:  # "Archivo"
-            def _key(p):
-                return os.path.basename(p).lower()
-        elif col == 3:  # "Exp."
-            def _key(p):
-                meta = self._metadata_cache.get(p, {})
-                exp = meta.get("exp")
-                if exp is not None:
-                    try:
-                        return (0, float(exp))
-                    except (ValueError, TypeError):
-                        pass
-                return (1, 0.0)
-        elif col == 4:  # "ISO"
-            def _key(p):
-                meta = self._metadata_cache.get(p, {})
-                iso = meta.get("iso")
-                if iso is not None:
-                    try:
-                        return (0, int(iso))
-                    except (ValueError, TypeError):
-                        pass
-                return (1, 0)
+        if self.mode == "eclipse":
+            if col == 0:  # "#"
+                def _key(p):
+                    return os.path.basename(p).lower()
+            elif col == 1:  # "Collage"
+                def _key(p):
+                    return (0 if p not in self.excluded_files else 1, os.path.basename(p).lower())
+            elif col == 2:  # "Archivo"
+                def _key(p):
+                    return os.path.basename(p).lower()
+            elif col == 3:  # "Fase"
+                def _key(p):
+                    meta = self._metadata_cache.get(p, {})
+                    ts = meta.get("timestamp")
+                    if ts is not None:
+                        try:
+                            return (0, float(ts))
+                        except (ValueError, TypeError):
+                            pass
+                    return (1, meta.get("phase_label") or "")
+            elif col == 4:  # "% Ocult."
+                def _key(p):
+                    meta = self._metadata_cache.get(p, {})
+                    obsc = meta.get("obscuration_pct")
+                    if obsc is not None:
+                        try:
+                            return (0, float(obsc))
+                        except (ValueError, TypeError):
+                            pass
+                    return (1, -1.0)
+            elif col == 5:  # "Nitidez"
+                def _key(p):
+                    meta = self._metadata_cache.get(p, {})
+                    score = meta.get("sharpness_score")
+                    trep = meta.get("is_trepidated", False)
+                    if score is not None:
+                        try:
+                            val = float(score) - (100.0 if trep else 0.0)
+                            return (0, val)
+                        except (ValueError, TypeError):
+                            pass
+                    return (1, -1000.0)
+            elif col == 6:  # "Exp."
+                def _key(p):
+                    meta = self._metadata_cache.get(p, {})
+                    exp = meta.get("exp")
+                    if exp is not None:
+                        try:
+                            return (0, float(exp))
+                        except (ValueError, TypeError):
+                            pass
+                    return (1, 0.0)
+            elif col == 7:  # "ISO"
+                def _key(p):
+                    meta = self._metadata_cache.get(p, {})
+                    iso = meta.get("iso")
+                    if iso is not None:
+                        try:
+                            return (0, int(iso))
+                        except (ValueError, TypeError):
+                            pass
+                    return (1, 0)
+            else:
+                return
         else:
-            return
+            if col == 0:  # "#"
+                def _key(p):
+                    return os.path.basename(p).lower()
+            elif col == 1:  # "Uso"
+                def _key(p):
+                    return (0 if p not in self.excluded_files else 1, os.path.basename(p).lower())
+            elif col == 2:  # "Archivo"
+                def _key(p):
+                    return os.path.basename(p).lower()
+            elif col == 3:  # "Exp."
+                def _key(p):
+                    meta = self._metadata_cache.get(p, {})
+                    exp = meta.get("exp")
+                    if exp is not None:
+                        try:
+                            return (0, float(exp))
+                        except (ValueError, TypeError):
+                            pass
+                    return (1, 0.0)
+            elif col == 4:  # "ISO"
+                def _key(p):
+                    meta = self._metadata_cache.get(p, {})
+                    iso = meta.get("iso")
+                    if iso is not None:
+                        try:
+                            return (0, int(iso))
+                        except (ValueError, TypeError):
+                            pass
+                    return (1, 0)
+            else:
+                return
 
         self.file_list.sort(key=_key, reverse=not self._sort_asc)
 
@@ -966,20 +1256,50 @@ class BlinkDialog(QDialog):
         self._update_current_frame()
         self._preload_neighbors()
 
-    def _toggle_current_frame_status(self):
-        """Alterna el estado de inclusión/exclusión de la toma activa sin avanzar de fotograma."""
-        if not self.file_list:
+    def _toggle_frame_status_at(self, row: int):
+        """Alterna el estado de inclusión/exclusión del fotograma en la fila especificada."""
+        if row < 0 or row >= len(self.file_list):
             return
-        path = self.file_list[self.current_idx]
+        path = self.file_list[row]
+        is_now_included = False
         if path in self.excluded_files:
             self.excluded_files.remove(path)
+            is_now_included = True
             self.exclusion_changed.emit(path, True)
         else:
             self.excluded_files.add(path)
+            is_now_included = False
             self.exclusion_changed.emit(path, False)
+
         if hasattr(self, 'timeline'):
             self.timeline.set_excluded_files(self.excluded_files)
-        self._update_badges()
+
+        is_eclipse = (self.mode == "eclipse")
+        status_item = self.table_blink.item(row, 1)
+        if status_item:
+            if is_now_included:
+                status_item.setText("★ COL" if is_eclipse else "✓ INCL")
+                status_item.setForeground(QColor("#38bdf8") if is_eclipse else QColor("#10b981"))
+                status_item.setToolTip("En Collage (Clic para alternar)" if is_eclipse else "Incluida (Clic para alternar)")
+            else:
+                status_item.setText("·")
+                status_item.setForeground(QColor("#334155"))
+                status_item.setToolTip("Disponible (Clic para alternar)" if is_eclipse else "Descartada (Clic para alternar)")
+
+        if hasattr(self, 'lbl_blink_summary'):
+            total = len(self.file_list)
+            inc = total - len(self.excluded_files)
+            term = "en collage" if is_eclipse else "activas"
+            self.lbl_blink_summary.setText(f"{inc}/{total} {term}")
+
+        if row == self.current_idx:
+            self._update_badges()
+
+        self.table_blink.viewport().update()
+
+    def _toggle_current_frame_status(self):
+        """Alterna el estado de inclusión/exclusión de la toma activa sin avanzar de fotograma."""
+        self._toggle_frame_status_at(self.current_idx)
 
     def keep_current_frame(self):
         if not self.file_list:
@@ -990,6 +1310,13 @@ class BlinkDialog(QDialog):
             self.exclusion_changed.emit(path, True)
             if hasattr(self, 'timeline'):
                 self.timeline.set_excluded_files(self.excluded_files)
+            status_item = self.table_blink.item(self.current_idx, 1)
+            if status_item:
+                is_eclipse = (self.mode == "eclipse")
+                status_item.setText("★ COL" if is_eclipse else "✓ INCL")
+                status_item.setForeground(QColor("#38bdf8") if is_eclipse else QColor("#10b981"))
+                status_item.setToolTip("En Collage (Clic para alternar)" if is_eclipse else "Incluida (Clic para alternar)")
+            self.table_blink.viewport().update()
         self._update_badges()
         self.next_frame()
 
@@ -1002,8 +1329,25 @@ class BlinkDialog(QDialog):
             self.exclusion_changed.emit(path, False)
             if hasattr(self, 'timeline'):
                 self.timeline.set_excluded_files(self.excluded_files)
+            status_item = self.table_blink.item(self.current_idx, 1)
+            if status_item:
+                status_item.setText("·")
+                status_item.setForeground(QColor("#334155"))
+                is_eclipse = (self.mode == "eclipse")
+                status_item.setToolTip("Disponible (Clic para alternar)" if is_eclipse else "Descartada (Clic para alternar)")
+            self.table_blink.viewport().update()
         self._update_badges()
         self.next_frame()
+
+    def _on_table_cell_clicked(self, row: int, col: int):
+        """Un clic directo en la columna de estado (col 1) alterna inmediatamente el estado de esa toma."""
+        if col == 1:
+            self._toggle_frame_status_at(row)
+
+    def _on_table_cell_double_clicked(self, row: int, col: int):
+        """Doble clic sobre cualquier celda de la fila alterna el estado de esa toma."""
+        if col != 1:  # En col 1 el primer clic ya realizó el toggle
+            self._toggle_frame_status_at(row)
 
     def _update_badges(self):
         if not self.file_list:
@@ -1032,11 +1376,13 @@ class BlinkDialog(QDialog):
             status_item = self.table_blink.item(self.current_idx, 1)
             if status_item:
                 if is_eclipse:
-                    status_item.setText("● COL" if is_included else "○ DISP")
-                    status_item.setForeground(QColor("#38bdf8") if is_included else QColor("#94a3b8"))
+                    status_item.setText("★ COL" if is_included else "·")
+                    status_item.setForeground(QColor("#38bdf8") if is_included else QColor("#334155"))
+                    status_item.setToolTip("En Collage (Clic para alternar)" if is_included else "Disponible (Clic para alternar)")
                 else:
-                    status_item.setText("● INCL" if is_included else "✕ DESC")
-                    status_item.setForeground(QColor("#4ade80") if is_included else QColor("#f87171"))
+                    status_item.setText("✓ INCL" if is_included else "·")
+                    status_item.setForeground(QColor("#10b981") if is_included else QColor("#334155"))
+                    status_item.setToolTip("Incluida (Clic para alternar)" if is_included else "Descartada (Clic para alternar)")
         if hasattr(self, 'lbl_blink_summary'):
             total = len(self.file_list)
             inc = total - len(self.excluded_files)
@@ -1047,7 +1393,18 @@ class BlinkDialog(QDialog):
             self._update_startrails_continuity()
 
         # Métricas ópticas si están disponibles
-        if path in self.culling_results:
+        if self.mode == "eclipse":
+            meta = self._metadata_cache.get(path, {})
+            score = meta.get("sharpness_score")
+            if score is not None and score > 0:
+                is_trep = meta.get("is_trepidated", False)
+                trep_str = " · ⚠️ Trepidada" if is_trep else " · Estable"
+                obsc = meta.get("obscuration_pct")
+                obsc_str = f" · Ocultación: {obsc:.1f}%" if (obsc is not None and obsc >= 0) else ""
+                self.lbl_quality_badge.setText(f"Nitidez: {score:.0f}/100{trep_str}{obsc_str}")
+            else:
+                self.lbl_quality_badge.setText("")
+        elif path in self.culling_results:
             r = self.culling_results[path]
             fwhm_str = f"{r.fwhm:.1f} px" if (r.fwhm is not None and not np.isnan(r.fwhm) and r.fwhm > 0) else "N/D"
             ecc_str = f"{r.eccentricity:.2f}" if (r.eccentricity is not None and not np.isnan(r.eccentricity)) else "N/D"
@@ -1098,6 +1455,7 @@ class BlinkDialog(QDialog):
             if item:
                 self.table_blink.scrollToItem(item)
             self.table_blink.blockSignals(False)
+            self.table_blink.viewport().update()
 
         # Obtener imagen de caché o cargar
         if path in self._cache:
@@ -1114,6 +1472,15 @@ class BlinkDialog(QDialog):
         self._side_panel_visible = not getattr(self, '_side_panel_visible', True)
         self.side_panel.setVisible(self._side_panel_visible)
         self.btn_toggle_side.setText("Ocultar Lista" if self._side_panel_visible else "Mostrar Lista")
+
+    def _toggle_timeline(self):
+        """Muestra u oculta la barra gráfica de timeline para dar más espacio vertical al lienzo."""
+        self._timeline_visible = not getattr(self, '_timeline_visible', True)
+        if hasattr(self, 'timeline_container'):
+            self.timeline_container.setVisible(self._timeline_visible)
+        elif hasattr(self, 'timeline'):
+            self.timeline.setVisible(self._timeline_visible)
+        self.btn_toggle_timeline.setText("Ocultar Timeline" if self._timeline_visible else "Mostrar Timeline")
 
     def _populate_table(self):
         """Rellena la tabla lateral con la lista de tomas e inicia escaneo asíncrono si falta metadatos."""
@@ -1134,15 +1501,18 @@ class BlinkDialog(QDialog):
             idx_item.setForeground(QColor("#94a3b8"))
 
             if is_eclipse:
-                status_text = "● COL" if is_inc else "○ DISP"
-                status_color = QColor("#38bdf8") if is_inc else QColor("#94a3b8")
+                status_text = "★ COL" if is_inc else "·"
+                status_color = QColor("#38bdf8") if is_inc else QColor("#334155")
+                status_tip = "En Collage (Clic para alternar)" if is_inc else "Disponible (Clic para alternar)"
             else:
-                status_text = "● INCL" if is_inc else "✕ DESC"
-                status_color = QColor("#4ade80") if is_inc else QColor("#f87171")
+                status_text = "✓ INCL" if is_inc else "·"
+                status_color = QColor("#10b981") if is_inc else QColor("#334155")
+                status_tip = "Incluida (Clic para alternar)" if is_inc else "Descartada (Clic para alternar)"
 
             status_item = QTableWidgetItem(status_text)
             status_item.setTextAlignment(Qt.AlignCenter)
             status_item.setForeground(status_color)
+            status_item.setToolTip(status_tip)
 
             name_item = QTableWidgetItem(os.path.basename(path))
             dt_tip = meta.get("datetime_str") or meta.get("time_str")
@@ -1160,17 +1530,61 @@ class BlinkDialog(QDialog):
                 except (ValueError, TypeError):
                     pass
 
-            exp_item = QTableWidgetItem(meta.get("exp_str", "..." if path not in self._metadata_cache else "—"))
-            exp_item.setTextAlignment(Qt.AlignCenter)
+            if is_eclipse:
+                phase_raw = meta.get("phase_label")
+                phase_txt, phase_color, is_bold = _format_schematic_phase(phase_raw)
+                phase_item = QTableWidgetItem(phase_txt)
+                phase_item.setTextAlignment(Qt.AlignCenter)
+                phase_item.setForeground(phase_color)
+                if is_bold:
+                    fnt = phase_item.font()
+                    fnt.setBold(True)
+                    phase_item.setFont(fnt)
+                if phase_raw and phase_raw != "—":
+                    phase_item.setToolTip(f"Fase detectada: {phase_raw}")
 
-            iso_item = QTableWidgetItem(meta.get("iso_str", "..." if path not in self._metadata_cache else "—"))
-            iso_item.setTextAlignment(Qt.AlignCenter)
+                obsc_val = meta.get("obscuration_pct")
+                obsc_txt = _format_obscuration(obsc_val)
+                obsc_item = QTableWidgetItem(obsc_txt)
+                obsc_item.setTextAlignment(Qt.AlignCenter)
+                obsc_item.setForeground(QColor("#e2e8f0"))
 
-            self.table_blink.setItem(row, 0, idx_item)
-            self.table_blink.setItem(row, 1, status_item)
-            self.table_blink.setItem(row, 2, name_item)
-            self.table_blink.setItem(row, 3, exp_item)
-            self.table_blink.setItem(row, 4, iso_item)
+                sharp_val = meta.get("sharpness_score")
+                is_trep = meta.get("is_trepidated", False)
+                sharp_txt, sharp_col = _format_sharpness(sharp_val, is_trep)
+                sharp_item = QTableWidgetItem(sharp_txt)
+                sharp_item.setTextAlignment(Qt.AlignCenter)
+                sharp_item.setForeground(sharp_col)
+                if sharp_val is not None and sharp_val > 0:
+                    trep_str = " (Trepidación detectada)" if is_trep else " (Estable)"
+                    sharp_item.setToolTip(f"Puntuación de nitidez: {sharp_val:.1f}/100{trep_str}")
+
+                exp_item = QTableWidgetItem(meta.get("exp_str", "..." if path not in self._metadata_cache else "—"))
+                exp_item.setTextAlignment(Qt.AlignCenter)
+
+                iso_item = QTableWidgetItem(meta.get("iso_str", "..." if path not in self._metadata_cache else "—"))
+                iso_item.setTextAlignment(Qt.AlignCenter)
+
+                self.table_blink.setItem(row, 0, idx_item)
+                self.table_blink.setItem(row, 1, status_item)
+                self.table_blink.setItem(row, 2, name_item)
+                self.table_blink.setItem(row, 3, phase_item)
+                self.table_blink.setItem(row, 4, obsc_item)
+                self.table_blink.setItem(row, 5, sharp_item)
+                self.table_blink.setItem(row, 6, exp_item)
+                self.table_blink.setItem(row, 7, iso_item)
+            else:
+                exp_item = QTableWidgetItem(meta.get("exp_str", "..." if path not in self._metadata_cache else "—"))
+                exp_item.setTextAlignment(Qt.AlignCenter)
+
+                iso_item = QTableWidgetItem(meta.get("iso_str", "..." if path not in self._metadata_cache else "—"))
+                iso_item.setTextAlignment(Qt.AlignCenter)
+
+                self.table_blink.setItem(row, 0, idx_item)
+                self.table_blink.setItem(row, 1, status_item)
+                self.table_blink.setItem(row, 2, name_item)
+                self.table_blink.setItem(row, 3, exp_item)
+                self.table_blink.setItem(row, 4, iso_item)
 
         if 0 <= self.current_idx < len(self.file_list):
             self.table_blink.selectRow(self.current_idx)
@@ -1217,12 +1631,47 @@ class BlinkDialog(QDialog):
         self._metadata_cache[path] = meta
         if row < self.table_blink.rowCount():
             self.table_blink.blockSignals(True)
-            exp_item = self.table_blink.item(row, 3)
-            if exp_item:
-                exp_item.setText(meta.get("exp_str", "—"))
-            iso_item = self.table_blink.item(row, 4)
-            if iso_item:
-                iso_item.setText(meta.get("iso_str", "—"))
+            if self.mode == "eclipse":
+                phase_raw = meta.get("phase_label")
+                phase_item = self.table_blink.item(row, 3)
+                if phase_item:
+                    txt, col, bold = _format_schematic_phase(phase_raw)
+                    phase_item.setText(txt)
+                    phase_item.setForeground(col)
+                    if bold:
+                        fnt = phase_item.font()
+                        fnt.setBold(True)
+                        phase_item.setFont(fnt)
+                    if phase_raw and phase_raw != "—":
+                        phase_item.setToolTip(f"Fase detectada: {phase_raw}")
+
+                obsc_item = self.table_blink.item(row, 4)
+                if obsc_item:
+                    obsc_item.setText(_format_obscuration(meta.get("obscuration_pct")))
+
+                sharp_item = self.table_blink.item(row, 5)
+                if sharp_item:
+                    txt, col = _format_sharpness(meta.get("sharpness_score"), meta.get("is_trepidated", False))
+                    sharp_item.setText(txt)
+                    sharp_item.setForeground(col)
+                    sharp_val = meta.get("sharpness_score")
+                    if sharp_val is not None and sharp_val > 0:
+                        trep_str = " (Trepidación detectada)" if meta.get("is_trepidated", False) else " (Estable)"
+                        sharp_item.setToolTip(f"Puntuación de nitidez: {sharp_val:.1f}/100{trep_str}")
+
+                exp_item = self.table_blink.item(row, 6)
+                if exp_item:
+                    exp_item.setText(meta.get("exp_str", "—"))
+                iso_item = self.table_blink.item(row, 7)
+                if iso_item:
+                    iso_item.setText(meta.get("iso_str", "—"))
+            else:
+                exp_item = self.table_blink.item(row, 3)
+                if exp_item:
+                    exp_item.setText(meta.get("exp_str", "—"))
+                iso_item = self.table_blink.item(row, 4)
+                if iso_item:
+                    iso_item.setText(meta.get("iso_str", "—"))
             name_item = self.table_blink.item(row, 2)
             if name_item:
                 dt_tip = meta.get("datetime_str") or meta.get("time_str")
@@ -1321,6 +1770,10 @@ class BlinkDialog(QDialog):
             self.discard_current_frame()
         elif key in (Qt.Key_P, Qt.Key_Insert):
             self.keep_current_frame()
+        elif key == Qt.Key_T:
+            self._toggle_timeline()
+        elif key == Qt.Key_L:
+            self._toggle_side_panel()
         elif key == Qt.Key_Up:
             if hasattr(self, 'table_blink') and self.table_blink.hasFocus():
                 super().keyPressEvent(event)

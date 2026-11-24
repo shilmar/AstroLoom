@@ -47,6 +47,7 @@ from gui.theme import (
 from gui.icons import get_icon, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_MUTED
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
+from gui.widgets.export_button import ExportSplitButton
 
 
 class StartrailWorker(QThread):
@@ -729,26 +730,40 @@ class StartrailsTab(QWidget):
         export_layout.setContentsMargins(10, 8, 10, 10)
         export_layout.setSpacing(8)
 
-        btn_tiff_row = QHBoxLayout()
-        self.btn_save_tiff_16 = QPushButton("Guardar TIFF 16-bit...")
-        self.btn_save_tiff_16.setIcon(get_icon("save", size=13, color="#a1a1aa"))
-        self.btn_save_tiff_16.setStyleSheet(STYLE_SECONDARY_BTN)
-        self.btn_save_tiff_16.clicked.connect(lambda: self._on_save_tiff_clicked(bit_depth=16))
+        btn_row_exp = QHBoxLayout()
+        self.btn_save_tiff = ExportSplitButton(
+            text="Guardar",
+            on_master_export=self._on_save_master_clicked,
+            on_web_export=self._on_export_web_clicked,
+            style="secondary",
+            parent=self
+        )
+        self.btn_save_tiff.setup_standard_menu(
+            on_format_export=lambda fmt: self._on_save_master_clicked(force_format=fmt),
+            psd_label="Guardar Photoshop (PSD)..."
+        )
+        self.btn_save_tiff.setFixedHeight(36)
+        self.btn_save_tiff.setToolTip(
+            "Guarda la imagen de trazas generada.\n"
+            "• Clic principal: Formatos maestros (TIFF 16/32-bit, PSD, PNG, JPEG directo).\n"
+            "• Desplegable (▼) o Ctrl+Alt+W: Acceso directo a formatos y Exportar para Web / Redes Sociales (sRGB 8-bit, Lanczos, WebP/JPEG/PNG)."
+        )
 
-        self.btn_save_tiff_32 = QPushButton("Guardar TIFF 32-bit...")
-        self.btn_save_tiff_32.setIcon(get_icon("save", size=13, color="#a1a1aa"))
-        self.btn_save_tiff_32.setStyleSheet(STYLE_SECONDARY_BTN)
-        self.btn_save_tiff_32.clicked.connect(lambda: self._on_save_tiff_clicked(bit_depth=32))
+        # Aliases de compatibilidad hacia atrás
+        self.btn_save = self.btn_save_tiff
+        self.btn_save_tiff_16 = self.btn_save_tiff
+        self.btn_save_tiff_32 = self.btn_save_tiff
 
-        btn_tiff_row.addWidget(self.btn_save_tiff_16)
-        btn_tiff_row.addWidget(self.btn_save_tiff_32)
-        export_layout.addLayout(btn_tiff_row)
-
-        self.btn_send_to_dev = QPushButton("Enviar al Revelador / Editor")
+        self.btn_send_to_dev = QPushButton("Enviar al Revelador")
         self.btn_send_to_dev.setIcon(get_icon("sliders", size=13, color="#2f81f7"))
+        self.btn_send_to_dev.setFixedHeight(36)
         self.btn_send_to_dev.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
+        self.btn_send_to_dev.setToolTip("Transfiere la imagen de trazas generada directamente al Revelador / Editor.")
         self.btn_send_to_dev.clicked.connect(self._on_send_to_developer_clicked)
-        export_layout.addWidget(self.btn_send_to_dev)
+
+        btn_row_exp.addWidget(self.btn_save_tiff, 1)
+        btn_row_exp.addWidget(self.btn_send_to_dev, 1)
+        export_layout.addLayout(btn_row_exp)
 
         left_layout.addWidget(grp_export)
         left_layout.addStretch()
@@ -1695,29 +1710,124 @@ class StartrailsTab(QWidget):
             return self.final_startrail_img
         return self.current_preview_img
 
-    def _on_save_tiff_clicked(self, bit_depth: int = 16) -> None:
+    def _on_save_master_clicked(self, force_format: Optional[str] = None) -> None:
+        """Abre el diálogo unificado de guardado permitiendo elegir formato por extensión o filtro (TIFF 16/32, PSD, PNG, JPEG)."""
         img = self._get_best_image()
         if img is None:
             QMessageBox.warning(self, "Atención", "No hay imagen disponible para guardar.")
             return
 
-        default_name = f"startrail_{bit_depth}bit.tif"
-        if bit_depth == 16:
-            filters = "TIFF 16-bit (*.tif *.tiff);;TIFF 32-bit (*.tif *.tiff);;Todos (*.*)"
-            title = "Guardar Trazas de Estrellas (TIFF 16-bit)"
-        else:
-            filters = "TIFF 32-bit (*.tif *.tiff);;TIFF 16-bit (*.tif *.tiff);;Todos (*.*)"
-            title = "Guardar Trazas de Estrellas (TIFF 32-bit Float)"
+        filtros = (
+            "TIFF 16-bit (*.tif *.tiff);;"
+            "TIFF 32-bit Float (*.tif *.tiff);;"
+            "Photoshop PSD (*.psd);;"
+            "PNG (*.png);;"
+            "JPEG (*.jpg *.jpeg)"
+        )
+        first_file = self.files_list[0] if getattr(self, 'files_list', None) and len(self.files_list) > 0 else None
+        base_name = os.path.splitext(os.path.basename(first_file))[0] if first_file else "startrail"
 
-        path, selected_filter = QFileDialog.getSaveFileName(self, title, default_name, filters)
+        if force_format == "psd":
+            filtro_por_defecto = "Photoshop PSD (*.psd)"
+            default_name = f"{base_name}.psd"
+        elif force_format == "tiff32":
+            filtro_por_defecto = "TIFF 32-bit Float (*.tif *.tiff)"
+            default_name = f"{base_name}_32bit.tif"
+        elif force_format == "png":
+            filtro_por_defecto = "PNG (*.png)"
+            default_name = f"{base_name}.png"
+        elif force_format in ("jpg", "jpeg"):
+            filtro_por_defecto = "JPEG (*.jpg *.jpeg)"
+            default_name = f"{base_name}.jpg"
+        else:
+            filtro_por_defecto = "TIFF 16-bit (*.tif *.tiff)"
+            default_name = f"{base_name}_16bit.tif"
+
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Guardar Trazas de Estrellas",
+            default_name,
+            filtros,
+            selectedFilter=filtro_por_defecto
+        )
         if not path:
             return
 
-        is_32 = ("32-bit" in selected_filter) if selected_filter else (bit_depth == 32)
-        photometric = 'minisblack' if img.ndim == 2 else 'rgb'
+        path = os.path.abspath(os.path.normpath(str(path).strip()))
+        ext = os.path.splitext(path)[1].lower()
+        if not ext:
+            if "Photoshop" in selected_filter or "*.psd" in selected_filter:
+                ext = ".psd"
+            elif "PNG" in selected_filter or "*.png" in selected_filter:
+                ext = ".png"
+            elif "JPEG" in selected_filter or "*.jpg" in selected_filter:
+                ext = ".jpg"
+            else:
+                ext = ".tif"
+            path += ext
 
+        if ext == ".psd" or ("Photoshop" in selected_filter and ext not in [".tif", ".tiff", ".jpg", ".jpeg", ".png"]):
+            self._do_save_psd(path, img)
+        elif ext == ".png" or "PNG" in selected_filter:
+            self._do_save_png(path, img)
+        elif ext in [".jpg", ".jpeg"] or ("JPEG" in selected_filter and ext not in [".tif", ".tiff"]):
+            self._do_save_jpg(path, img)
+        elif "32-bit" in selected_filter or (ext in [".tif", ".tiff"] and "32-bit" in path):
+            self._do_save_tiff(path, img, bit_depth=32)
+        else:
+            self._do_save_tiff(path, img, bit_depth=16)
+
+    def _on_save_direct(self, bit_depth: int = 16, force_format: str = "tiff") -> None:
+        """Alias para compatibilidad."""
+        if force_format in ("jpeg", "jpg"):
+            self._on_save_master_clicked(force_format="jpg")
+        elif force_format == "png":
+            self._on_save_master_clicked(force_format="png")
+        elif force_format == "psd":
+            self._on_save_master_clicked(force_format="psd")
+        elif bit_depth == 32:
+            self._on_save_master_clicked(force_format="tiff32")
+        else:
+            self._on_save_master_clicked(force_format="tiff16")
+
+    def _on_save_tiff_clicked(self, bit_depth: int = 16) -> None:
+        """Alias de compatibilidad hacia atrás."""
+        self._on_save_master_clicked(force_format="tiff32" if bit_depth == 32 else "tiff16")
+
+    def _do_save_png(self, path: str, img: np.ndarray) -> None:
         try:
-            if is_32:
+            u16 = np.ascontiguousarray(np.clip(img * 65535.0 + 0.5, 0.0, 65535.0), dtype=np.uint16)
+            bgr16 = cv2.cvtColor(u16, cv2.COLOR_RGB2BGR) if img.ndim == 3 else u16
+            cv2.imwrite(path, bgr16, [cv2.IMWRITE_PNG_COMPRESSION, 6])
+            self.log(f"Imagen guardada exitosamente (PNG 16-bit): {path}")
+            QMessageBox.information(
+                self, "Exportación Completada",
+                f"Imagen de trazas guardada con éxito en:\n{path}\n\nFormato: PNG 16-bit ({u16.shape[1]}x{u16.shape[0]} px)"
+            )
+        except Exception as e:
+            self.log(f"ERROR al guardar imagen: {e}")
+            QMessageBox.critical(self, "Error de Exportación", f"No se pudo guardar la imagen:\n{e}")
+
+    def _do_save_psd(self, path: str, img: np.ndarray) -> None:
+        try:
+            from core.psd_export import export_developer_psd
+            ok, desc, _ = export_developer_psd(path, composite_image=img, base_image=img, depth=16)
+            if ok:
+                self.log(f"Imagen guardada exitosamente (PSD 16-bit): {path}")
+                QMessageBox.information(
+                    self, "Exportación Completada",
+                    f"Imagen de trazas guardada con éxito en:\n{path}\n\nFormato: PSD 16-bit ({img.shape[1]}x{img.shape[0]} px)"
+                )
+            else:
+                raise RuntimeError(desc)
+        except Exception as e:
+            self.log(f"ERROR al guardar PSD: {e}")
+            QMessageBox.critical(self, "Error de Exportación", f"No se pudo guardar la imagen PSD:\n{e}")
+
+    def _do_save_tiff(self, path: str, img: np.ndarray, bit_depth: int = 16) -> None:
+        photometric = 'minisblack' if img.ndim == 2 else 'rgb'
+        try:
+            if bit_depth == 32:
                 out_img = np.ascontiguousarray(np.clip(img, 0.0, 1.0), dtype=np.float32)
                 desc = "TIFF 32-bit float (HDR)"
             else:
@@ -1733,6 +1843,41 @@ class StartrailsTab(QWidget):
         except Exception as e:
             self.log(f"ERROR al guardar imagen: {e}")
             QMessageBox.critical(self, "Error de Exportación", f"No se pudo guardar la imagen:\n{e}")
+
+    def _do_save_jpg(self, path: str, img: np.ndarray) -> None:
+        try:
+            u8 = np.clip(img * 255.0 + 0.5, 0, 255).astype(np.uint8)
+            bgr = cv2.cvtColor(u8, cv2.COLOR_RGB2BGR) if u8.ndim == 3 else u8
+            cv2.imwrite(path, bgr, [cv2.IMWRITE_JPEG_QUALITY, 96])
+            self.log(f"Imagen guardada exitosamente (JPEG 8-bit): {path}")
+            QMessageBox.information(
+                self, "Exportación Completada",
+                f"Imagen de trazas guardada con éxito en:\n{path}\n\nFormato: JPEG ({u8.shape[1]}x{u8.shape[0]} px)"
+            )
+        except Exception as e:
+            self.log(f"ERROR al guardar imagen: {e}")
+            QMessageBox.critical(self, "Error de Exportación", f"No se pudo guardar la imagen:\n{e}")
+
+    def _on_export_web_clicked(self) -> None:
+        """Abre el diálogo modal de exportación optimizada para Web y Redes Sociales."""
+        img = self._get_best_image()
+        if img is None:
+            QMessageBox.warning(self, "Atención", "No hay imagen disponible para guardar.")
+            return
+
+        from gui.dialog_web_export import WebExportDialog, extract_exif_bytes
+        first_file = self.files_list[0] if getattr(self, 'files_list', None) and len(self.files_list) > 0 else None
+        exif_bytes = extract_exif_bytes(first_file) if first_file else None
+        base_name = os.path.splitext(os.path.basename(first_file))[0] if first_file else "startrail"
+
+        dlg = WebExportDialog(
+            image_buffer=img,
+            default_filename=base_name,
+            exif_bytes=exif_bytes,
+            source_colorspace="srgb",
+            parent=self,
+        )
+        dlg.exec()
 
     def _on_send_to_developer_clicked(self) -> None:
         """Transfiere la imagen generada directamente al Revelador / Editor."""

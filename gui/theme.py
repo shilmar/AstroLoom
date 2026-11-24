@@ -105,6 +105,109 @@ STYLE_RUN_IDLE = f"""
     }}
 """
 
+# Botón Dividido Principal (Split Button con Menú Desplegable)
+STYLE_SPLIT_RUN_BTN = f"""
+    QToolButton {{
+        font-weight: bold;
+        font-size: 13px;
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3B82F6, stop:1 #2563EB);
+        color: #ffffff;
+        border: 1px solid #2563EB;
+        border-top: 1px solid #60A5FA;
+        border-radius: 6px;
+        padding: 8px 14px;
+        padding-right: 28px;
+    }}
+    QToolButton:hover {{
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #60A5FA, stop:1 #3B82F6);
+        border: 1px solid #3B82F6;
+        border-top: 1px solid #93C5FD;
+    }}
+    QToolButton:pressed {{
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1D4ED8, stop:1 #1E40AF);
+        border: 1px solid #1E3A8A;
+        border-top: 1px solid #3B82F6;
+    }}
+    QToolButton:disabled {{
+        background-color: {BG_PANEL};
+        color: {TEXT_MUTED};
+        border: 1px solid {BORDER_BASE};
+    }}
+    QToolButton::menu-button {{
+        border-left: 1px solid rgba(255, 255, 255, 0.28);
+        border-top-right-radius: 6px;
+        border-bottom-right-radius: 6px;
+        width: 24px;
+    }}
+    QToolButton::menu-button:hover {{
+        background-color: rgba(255, 255, 255, 0.18);
+    }}
+    QToolButton::menu-button:pressed {{
+        background-color: rgba(0, 0, 0, 0.25);
+    }}
+    QToolButton::menu-arrow {{
+        image: url({CHEVRON_DOWN_PATH});
+        width: 8px;
+        height: 8px;
+    }}
+    QToolButton::menu-arrow:hover {{
+        image: url({CHEVRON_DOWN_HOVER_PATH});
+    }}
+    QToolButton::menu-arrow:disabled {{
+        image: url({CHEVRON_DOWN_DISABLED_PATH});
+    }}
+"""
+
+# Botón Dividido Secundario (Split Button Gris Neutro con Menú)
+STYLE_SPLIT_SECONDARY_BTN = f"""
+    QToolButton {{
+        font-weight: 500;
+        font-size: 11px;
+        background-color: {BG_INPUT};
+        color: {TEXT_PRIMARY};
+        border: 1px solid {BORDER_BASE};
+        border-radius: 4px;
+        padding: 6px 12px;
+        padding-right: 28px;
+    }}
+    QToolButton:hover {{
+        background-color: #383840;
+        border-color: {BORDER_HOVER};
+        color: #ffffff;
+    }}
+    QToolButton:pressed {{
+        background-color: {BG_CARD};
+    }}
+    QToolButton:disabled {{
+        background-color: {BG_PANEL};
+        color: {TEXT_MUTED};
+        border-color: #242429;
+    }}
+    QToolButton::menu-button {{
+        border-left: 1px solid {BORDER_BASE};
+        border-top-right-radius: 4px;
+        border-bottom-right-radius: 4px;
+        width: 22px;
+    }}
+    QToolButton::menu-button:hover {{
+        background-color: rgba(255, 255, 255, 0.08);
+    }}
+    QToolButton::menu-button:pressed {{
+        background-color: rgba(0, 0, 0, 0.2);
+    }}
+    QToolButton::menu-arrow {{
+        image: url({CHEVRON_DOWN_PATH});
+        width: 8px;
+        height: 8px;
+    }}
+    QToolButton::menu-arrow:hover {{
+        image: url({CHEVRON_DOWN_HOVER_PATH});
+    }}
+    QToolButton::menu-arrow:disabled {{
+        image: url({CHEVRON_DOWN_DISABLED_PATH});
+    }}
+"""
+
 # Acción Principal Activa (Procesando / Solicitud de Cancelar)
 STYLE_RUN_ACTIVE = f"""
     QPushButton {{
@@ -739,6 +842,33 @@ def get_application_stylesheet() -> str:
             color: {TEXT_SECONDARY};
             font-size: 11px;
             padding: 2px 8px;
+        }}
+
+        /* --- MENÚS DESPLEGABLES Y CONTEXTUALES (QMenu) --- */
+        QMenu {{
+            background-color: {BG_PANEL};
+            border: 1px solid {BORDER_BASE};
+            border-radius: 6px;
+            padding: 4px;
+            color: {TEXT_PRIMARY};
+        }}
+        QMenu::item {{
+            padding: 6px 20px 6px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            color: {TEXT_PRIMARY};
+        }}
+        QMenu::item:selected {{
+            background-color: {ACCENT_COBALT};
+            color: #ffffff;
+        }}
+        QMenu::item:disabled {{
+            color: {TEXT_MUTED};
+        }}
+        QMenu::separator {{
+            height: 1px;
+            background-color: {BORDER_BASE};
+            margin: 4px 6px;
         }}
 
         /* --- BARRA SUPERIOR DEL LIENZO (CANVAS TOOLBAR) --- */

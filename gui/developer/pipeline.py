@@ -215,7 +215,28 @@ def apply_developer_pipeline(
                 # 0. Curación de Manchas de Polvo de Sensor (Fase Lineal Temprana)
                 if getattr(state, "dust_spots", None):
                     from core.dust import apply_dust_healing
-                    base_img = apply_dust_healing(target_img, state.dust_spots, mode=getattr(state, "dust_mode", "heal"))
+                    if crop_rect is not None and full_shape is not None:
+                        x1, y1, x2, y2 = crop_rect
+                        h_f, w_f = full_shape
+                        cw = max(1, x2 - x1)
+                        ch = max(1, y2 - y1)
+                        max_full = max(w_f, h_f)
+                        max_crop = max(cw, ch)
+                        cropped_spots = []
+                        for sp in state.dust_spots:
+                            sx = sp["x"] * w_f
+                            sy = sp["y"] * h_f
+                            r_px = sp.get("radius", 0.015) * max_full
+                            if sx + r_px < x1 or sx - r_px > x2 or sy + r_px < y1 or sy - r_px > y2:
+                                continue
+                            sp_c = dict(sp)
+                            sp_c["x"] = float(np.clip((sx - x1) / float(cw), 0.0, 1.0))
+                            sp_c["y"] = float(np.clip((sy - y1) / float(ch), 0.0, 1.0))
+                            sp_c["radius"] = float(r_px / float(max_crop))
+                            cropped_spots.append(sp_c)
+                        base_img = apply_dust_healing(target_img, cropped_spots, mode=getattr(state, "dust_mode", "heal")) if cropped_spots else target_img
+                    else:
+                        base_img = apply_dust_healing(target_img, state.dust_spots, mode=getattr(state, "dust_mode", "heal"))
                 else:
                     base_img = target_img
 

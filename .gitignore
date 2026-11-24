@@ -18,6 +18,10 @@ __pycache__/
 venv/
 env/
 
+# Registros de depuracion y caidas
+logs/
+*.log
+
 # Entorno de desarrollo e IDEs
 .vscode/
 INDEX.md

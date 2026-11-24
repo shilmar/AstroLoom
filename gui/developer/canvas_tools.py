@@ -4,7 +4,7 @@ import os
 import time
 import cv2
 import numpy as np
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 from PySide6.QtCore import Qt, QCoreApplication, QTimer, QPoint, QEvent, QRectF
 from PySide6.QtGui import QPixmap, QImage, QColor, QCursor, QFont, QKeySequence, QShortcut
@@ -440,6 +440,7 @@ class CanvasToolsMixin:
             "_cache_starless_ai": self._cache_starless_ai.copy() if getattr(self, "_cache_starless_ai", None) is not None else None,
             "_cache_ground_ai": self._cache_ground_ai.copy() if getattr(self, "_cache_ground_ai", None) is not None else None,
             "mask_layers": [l.shallow_snapshot() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
+            "dust_spots": [dict(s) for s in self.canvas.get_dust_spots()] if hasattr(self, 'canvas') else [],
         }
         self.undo_stack.append(undo_item)
         if len(self.undo_stack) > self.MAX_UNDO_STEPS:
@@ -466,6 +467,8 @@ class CanvasToolsMixin:
             return np.ascontiguousarray(arr[px_y:px_y + px_h, px_x:px_x + px_w], dtype=np.float32)
 
         self.image_32bit = rotate_and_crop(self.image_32bit)
+        new_h, new_w = self.image_32bit.shape[:2]
+
         if self.image_starless is not None:
             self.image_starless = rotate_and_crop(self.image_starless)
         if getattr(self, "raw_linear_starless", None) is not None:
@@ -486,23 +489,121 @@ class CanvasToolsMixin:
             else:
                 self._cache_ground_ai = None
 
+        def transform_norm_pt(px: float, py: float) -> Tuple[float, float]:
+            if no_angle:
+                return (px - norm.x()) / max(1e-6, norm.width()), (py - norm.y()) / max(1e-6, norm.height())
+            x_px = px * orig_w
+            y_px = py * orig_h
+            center_pt = (orig_w / 2.0, orig_h / 2.0)
+            rot_mat = cv2.getRotationMatrix2D(center_pt, -angle, 1.0)
+            pt_rot = rot_mat @ np.array([x_px, y_px, 1.0])
+            crop_x = norm.x() * orig_w
+            crop_y = norm.y() * orig_h
+            return float((pt_rot[0] - crop_x) / float(new_w)), float((pt_rot[1] - crop_y) / float(new_h))
+
         if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers:
             for l in self.mask_layers_widget.layers:
+                # 1. Capas ráster con datos de imagen (l.image_data)
+                if getattr(l, 'image_data', None) is not None:
+                    if getattr(l, 'is_transform_identity', lambda: True)():
+                        if l.image_data.shape[:2] == (orig_h, orig_w):
+                            l.set_image_data(rotate_and_crop(l.image_data))
+                        else:
+                            resized = cv2.resize(l.image_data, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+                            l.set_image_data(rotate_and_crop(resized))
+                    else:
+                        # Hornear la transformación 2D previa en el lienzo original y resetear a identidad
+                        scale_x = max(0.01, float(getattr(l, 'scale_x', getattr(l, 'scale', 1.0))))
+                        scale_y = max(0.01, float(getattr(l, 'scale_y', getattr(l, 'scale', 1.0))))
+                        angle_val = float(getattr(l, 'angle', 0.0))
+                        theta = np.deg2rad(angle_val)
+                        cos_t, sin_t = np.cos(theta), np.sin(theta)
+                        a = scale_x * cos_t
+                        b = -scale_y * sin_t
+                        c = scale_x * sin_t
+                        d = scale_y * cos_t
+                        h_r, w_r = l.image_data.shape[:2]
+                        cx = orig_w / 2.0
+                        cy = orig_h / 2.0
+                        tx = float(getattr(l, 'offset_x', 0.0)) * orig_w
+                        ty = float(getattr(l, 'offset_y', 0.0)) * orig_h
+                        M = np.array([
+                            [a * (orig_w / float(w_r)), b * (orig_h / float(h_r)), cx - a * cx - b * cy + tx],
+                            [c * (orig_w / float(w_r)), d * (orig_h / float(h_r)), cy - c * cx - d * cy + ty]
+                        ], dtype=np.float32)
+                        baked = cv2.warpAffine(
+                            l.image_data, M, (orig_w, orig_h),
+                            flags=cv2.INTER_LINEAR,
+                            borderMode=cv2.BORDER_CONSTANT,
+                            borderValue=(0.0, 0.0, 0.0)
+                        )
+                        l.offset_x = 0.0
+                        l.offset_y = 0.0
+                        l.scale_x = 1.0
+                        l.scale_y = 1.0
+                        l.scale = 1.0
+                        l.angle = 0.0
+                        l.set_image_data(rotate_and_crop(baked))
+                    l._cached_resized = None
+
+                # 2. Máscara de pincel (l.brush_mask)
                 if getattr(l, 'brush_mask', None) is not None:
                     if l.brush_mask.shape[:2] == (orig_h, orig_w):
                         l.brush_mask = rotate_and_crop(l.brush_mask, is_mask=True)
                         l.invalidate_brush_proxies()
                     else:
                         l.set_brush_mask(None)
+
+                # 3. Máscara personalizada en memoria (l.custom_mask)
+                if getattr(l, 'custom_mask', None) is not None:
+                    if l.custom_mask.shape[:2] == (orig_h, orig_w):
+                        l.custom_mask = rotate_and_crop(l.custom_mask, is_mask=True)
+                    else:
+                        l.custom_mask = None
+
+                # 4. Gradientes vectoriales (remapear coordenadas al marco recortado)
+                if getattr(l, 'mask_type', None) == "gradient_radial":
+                    rcx, rcy = getattr(l, 'radial_center', (0.5, 0.5))
+                    l.radial_center = transform_norm_pt(rcx, rcy)
+                    l.radial_radius_x = float(l.radial_radius_x) * (orig_w / float(new_w))
+                    l.radial_radius_y = float(l.radial_radius_y) * (orig_h / float(new_h))
+                    if not no_angle:
+                        l.radial_angle = float(l.radial_angle) + angle
+                    l._cached_grad_mask = None
+                    l._cached_grad_key = None
+                elif getattr(l, 'mask_type', None) == "gradient_linear":
+                    p0 = getattr(l, 'linear_p0', (0.5, 0.75))
+                    p1 = getattr(l, 'linear_p1', (0.5, 0.35))
+                    l.linear_p0 = transform_norm_pt(p0[0], p0[1])
+                    l.linear_p1 = transform_norm_pt(p1[0], p1[1])
+                    l._cached_grad_mask = None
+                    l._cached_grad_key = None
+
             self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
             self.mask_layers_widget.update_active_layer_histogram()
+            if hasattr(self.mask_layers_widget, '_update_list_and_props_state'):
+                self.mask_layers_widget._update_list_and_props_state()
+
+        if hasattr(self, 'canvas') and getattr(self.canvas, 'dust_spots', None):
+            new_spots = []
+            for s in self.canvas.dust_spots:
+                nx, ny = transform_norm_pt(s["x"], s["y"])
+                if 0.0 <= nx <= 1.0 and 0.0 <= ny <= 1.0:
+                    s_copy = dict(s)
+                    s_copy["x"] = nx
+                    s_copy["y"] = ny
+                    new_spots.append(s_copy)
+            self.canvas.set_dust_spots(new_spots)
+            if hasattr(self, 'developer_state') and self.developer_state is not None:
+                self.developer_state.dust_spots = new_spots
+            if hasattr(self, 'panel_dust') and self.panel_dust is not None:
+                self.panel_dust.update_spot_count(len(new_spots))
 
         self.btn_crop.setChecked(False)
         if hasattr(self, 'slider_crop_angle'):
             self.slider_crop_angle.setValue(0)
         self.canvas.reset_crop_rect()
 
-        new_h, new_w = self.image_32bit.shape[:2]
         self.canvas.set_native_image_size((new_w, new_h))
         self._generate_preview_proxy()
         self.snapshot_before_pixmap = None
@@ -2203,6 +2304,19 @@ class CanvasToolsMixin:
                 return
             elif event.key() == Qt.Key_X:
                 self._on_crop_flip_ratio()
+                event.accept()
+                return
+
+        if event.key() == Qt.Key_Escape:
+            if hasattr(self, 'canvas') and getattr(self.canvas, 'dust_spot_mode', False):
+                if hasattr(self, 'panel_dust') and hasattr(self.panel_dust, 'btn_manual_spot'):
+                    self.panel_dust.btn_manual_spot.setChecked(False)
+                else:
+                    self.canvas.set_dust_spot_mode(False)
+                event.accept()
+                return
+            if getattr(self, 'is_zoomed_100', False):
+                self.on_canvas_zoom_toggled(False, 0.5, 0.5)
                 event.accept()
                 return
 

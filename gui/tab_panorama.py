@@ -53,6 +53,7 @@ from gui.theme import (
 from gui.icons import get_icon, get_svg_pixmap, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_ACCENT
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
+from gui.widgets.export_button import ExportSplitButton
 
 
 class MetadataExtractWorker(QThread):
@@ -696,16 +697,38 @@ class PanoramaTab(QWidget):
         line.setStyleSheet("color: #37474f;")
         proc_layout.addWidget(line)
 
-        self.btn_save_tiff = QPushButton("Guardar Panorámica (TIFF 16/32-bit)")
-        self.btn_save_tiff.setIcon(get_icon("save", color="#80cbc4"))
-        self.btn_save_tiff.setEnabled(False)
-        proc_layout.addWidget(self.btn_save_tiff)
+        btn_row_exp = QHBoxLayout()
+        btn_row_exp.setSpacing(6)
 
-        self.btn_to_developer = QPushButton("Enviar Panorámica al Revelador / Editor")
-        self.btn_to_developer.setIcon(get_icon("arrow_right", color="#ffffff"))
+        self.btn_save_tiff = ExportSplitButton(
+            text="Guardar...",
+            on_master_export=self._on_save_tiff,
+            on_web_export=self._on_export_web_clicked,
+            style="secondary",
+            parent=self
+        )
+        self.btn_save_tiff.setup_standard_menu(
+            on_format_export=lambda fmt: self._on_save_tiff(force_format=fmt),
+            psd_label="Guardar Photoshop (PSD)..."
+        )
+        self.btn_save_tiff.setFixedHeight(36)
+        self.btn_save_tiff.setEnabled(False)
+        self.btn_save_tiff.setToolTip(
+            "Guarda la panorámica cosida en disco.\n"
+            "• Clic principal: Formatos maestros (TIFF 16/32-bit, PSD, PNG, JPEG directo).\n"
+            "• Desplegable (▼) o Ctrl+Alt+W: Acceso directo a formatos y Exportar para Web / Redes Sociales (sRGB 8-bit, Lanczos, WebP/JPEG/PNG)."
+        )
+
+        self.btn_to_developer = QPushButton("Enviar al Revelador")
+        self.btn_to_developer.setIcon(get_icon("sliders", size=13, color="#2f81f7"))
         self.btn_to_developer.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
+        self.btn_to_developer.setFixedHeight(36)
         self.btn_to_developer.setEnabled(False)
-        proc_layout.addWidget(self.btn_to_developer)
+        self.btn_to_developer.setToolTip("Transfiere la panorámica cosida directamente al Revelador / Editor.")
+
+        btn_row_exp.addWidget(self.btn_save_tiff, 1)
+        btn_row_exp.addWidget(self.btn_to_developer, 1)
+        proc_layout.addLayout(btn_row_exp)
 
         sess_bar = QHBoxLayout()
         self.btn_save_sess = QPushButton("Guardar Sesión")
@@ -885,7 +908,6 @@ class PanoramaTab(QWidget):
         self.btn_cancel.clicked.connect(self._cancel_stitching)
 
         # Exportación
-        self.btn_save_tiff.clicked.connect(self._on_save_tiff)
         self.btn_to_developer.clicked.connect(self._on_export_to_developer)
         self.btn_save_sess.clicked.connect(self._on_save_session)
         self.btn_load_sess.clicked.connect(self._on_load_session)
@@ -1337,7 +1359,7 @@ class PanoramaTab(QWidget):
         self.btn_remove.setEnabled(not is_processing)
         self.btn_clear.setEnabled(not is_processing)
 
-    def _on_save_tiff(self):
+    def _on_save_tiff(self, force_format: Optional[str] = None):
         if self.current_result is None:
             return
 
@@ -1348,24 +1370,113 @@ class PanoramaTab(QWidget):
             else self.current_result.image
         )
 
-        path, _ = QFileDialog.getSaveFileName(
+        filtros = (
+            "TIFF 16-bit (*.tif *.tiff);;"
+            "TIFF 32-bit Float (*.tif *.tiff);;"
+            "Photoshop PSD (*.psd);;"
+            "PNG (*.png);;"
+            "JPEG (*.jpg *.jpeg)"
+        )
+
+        if force_format == "psd":
+            filtro_por_defecto = "Photoshop PSD (*.psd)"
+            default_name = "panoramica_nocturna.psd"
+        elif force_format == "tiff32":
+            filtro_por_defecto = "TIFF 32-bit Float (*.tif *.tiff)"
+            default_name = "panoramica_nocturna_32bit.tif"
+        elif force_format == "png":
+            filtro_por_defecto = "PNG (*.png)"
+            default_name = "panoramica_nocturna.png"
+        elif force_format in ("jpg", "jpeg"):
+            filtro_por_defecto = "JPEG (*.jpg *.jpeg)"
+            default_name = "panoramica_nocturna.jpg"
+        else:
+            filtro_por_defecto = "TIFF 16-bit (*.tif *.tiff)"
+            default_name = "panoramica_nocturna.tif"
+
+        path, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Guardar Panorámica",
-            "panoramica_nocturna.tif",
-            "TIFF 16-bit / 32-bit (*.tif *.tiff)"
+            default_name,
+            filtros,
+            selectedFilter=filtro_por_defecto
         )
         if not path:
             return
 
+        path = os.path.abspath(os.path.normpath(str(path).strip()))
+        ext = os.path.splitext(path)[1].lower()
+        if not ext:
+            if "Photoshop" in selected_filter or "*.psd" in selected_filter:
+                ext = ".psd"
+            elif "PNG" in selected_filter or "*.png" in selected_filter:
+                ext = ".png"
+            elif "JPEG" in selected_filter or "*.jpg" in selected_filter:
+                ext = ".jpg"
+            else:
+                ext = ".tif"
+            path += ext
+
         try:
-            save_tiff_with_icc(path, img_to_save, compression='zlib', photometric='rgb')
+            if ext == ".psd" or ("Photoshop" in selected_filter and ext not in [".tif", ".tiff", ".jpg", ".jpeg", ".png"]):
+                from core.psd_export import export_developer_psd
+                ok, desc_err, _ = export_developer_psd(path, composite_image=img_to_save, base_image=img_to_save, depth=16)
+                if not ok:
+                    raise RuntimeError(desc_err)
+                desc = "PSD 16-bit"
+            elif ext == ".png" or "PNG" in selected_filter:
+                u16 = np.ascontiguousarray(np.clip(img_to_save * 65535.0 + 0.5, 0.0, 65535.0), dtype=np.uint16)
+                bgr16 = cv2.cvtColor(u16, cv2.COLOR_RGB2BGR) if img_to_save.ndim == 3 else u16
+                cv2.imwrite(path, bgr16, [cv2.IMWRITE_PNG_COMPRESSION, 6])
+                desc = "PNG 16-bit"
+            elif ext in [".jpg", ".jpeg"] or ("JPEG" in selected_filter and ext not in [".tif", ".tiff"]):
+                u8 = (np.clip(img_to_save, 0.0, 1.0) * 255.0).astype(np.uint8)
+                bgr = cv2.cvtColor(u8, cv2.COLOR_RGB2BGR) if img_to_save.ndim == 3 else u8
+                cv2.imwrite(path, bgr, [cv2.IMWRITE_JPEG_QUALITY, 96])
+                desc = "JPEG 8-bit"
+            elif "32-bit" in selected_filter:
+                out32 = np.ascontiguousarray(np.clip(img_to_save, 0.0, 1.0), dtype=np.float32)
+                save_tiff_with_icc(path, out32, compression='zlib', photometric='rgb')
+                desc = "TIFF 32-bit float"
+            else:
+                u16 = np.ascontiguousarray(np.clip(img_to_save * 65535.0 + 0.5, 0.0, 65535.0), dtype=np.uint16)
+                save_tiff_with_icc(path, u16, compression='zlib', photometric='rgb')
+                desc = "TIFF 16-bit"
+
             h, w = img_to_save.shape[:2]
             mode_crop = "recortada" if is_cropped else "completa"
-            self.log(f"Panorámica guardada exitosamente ({mode_crop}, {w}x{h} px): {path}")
-            QMessageBox.information(self, "Panorámica Guardada", f"Panorámica guardada exitosamente en:\n{path}")
+            self.log(f"Panorámica guardada exitosamente ({desc}, {mode_crop}, {w}x{h} px): {path}")
+            QMessageBox.information(self, "Panorámica Guardada", f"Panorámica guardada exitosamente en:\n{path}\n\nFormato: {desc} ({w}x{h} px)")
         except Exception as e:
             self.log(f"❌ [ERROR GUARDADO] No se pudo guardar la imagen: {e}")
             QMessageBox.critical(self, "Error al Guardar", f"No se pudo guardar la imagen:\n{e}")
+
+    def _on_export_web_clicked(self):
+        """Abre el diálogo modal de exportación optimizada para Web y Redes Sociales."""
+        if self.current_result is None:
+            QMessageBox.warning(self, "Atención", "No hay panorámica procesada para exportar.")
+            return
+
+        is_cropped = self.btn_toggle_crop.isChecked() and self.current_result.cropped_image is not None
+        img = (
+            self.current_result.cropped_image
+            if is_cropped
+            else self.current_result.image
+        )
+
+        from gui.dialog_web_export import WebExportDialog, extract_exif_bytes
+        first_panel = self.panels_metadata[0].filepath if getattr(self, 'panels_metadata', None) and len(self.panels_metadata) > 0 else None
+        exif_bytes = extract_exif_bytes(first_panel) if first_panel else None
+        base_name = "panoramica_nocturna"
+
+        dlg = WebExportDialog(
+            image_buffer=img,
+            default_filename=base_name,
+            exif_bytes=exif_bytes,
+            source_colorspace="srgb",
+            parent=self,
+        )
+        dlg.exec()
 
     def _on_export_to_developer(self):
         if self.current_result is None:

@@ -71,6 +71,7 @@ from gui.widgets.drop_widgets import DropTableWidget
 from gui.icons import get_icon, get_svg_pixmap, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_ACCENT
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
+from gui.widgets.export_button import ExportSplitButton
 
 
 class CollageInteractiveCanvas(QWidget):
@@ -560,31 +561,42 @@ class EclipseCollageTab(QWidget):
         box_exp = self.sec_exp.content_layout
         box_exp.setSpacing(6)
 
-        self.btn_save_image = QPushButton("Guardar Collage...")
-        self.btn_save_image.setIcon(get_icon("save"))
+        btn_row_exp = QHBoxLayout()
+        btn_row_exp.setSpacing(6)
+
+        self.btn_save_image = ExportSplitButton(
+            text="Guardar...",
+            on_master_export=self._on_save_collage_clicked,
+            on_web_export=self._on_export_web_clicked,
+            style="secondary",
+            parent=self
+        )
+        self.btn_save_image.setup_standard_menu(
+            on_format_export=lambda fmt: self._on_save_collage_clicked(force_format=fmt),
+            psd_label="Guardar Photoshop en Capas (PSD)..."
+        )
         self.btn_save_image.setFixedHeight(36)
-        self.btn_save_image.setStyleSheet(STYLE_SECONDARY_BTN)
         self.btn_save_image.setToolTip(
             "Exporta el collage según la extensión seleccionada en el diálogo:\n"
-            "• TIFF 16-bit (*.tif, *.tiff)\n"
-            "• Photoshop Multicapa (*.psd)\n"
-            "• JPEG Alta Calidad (*.jpg, *.jpeg)"
+            "• Clic principal: Formatos maestros (TIFF 16/32-bit, PSD multicapa, PNG, JPEG directo).\n"
+            "• Desplegable (▼) o Ctrl+Alt+W: Acceso directo a formatos y Exportar para Web / Redes Sociales (sRGB 8-bit, Lanczos, WebP/JPEG/PNG)."
         )
-        self.btn_save_image.clicked.connect(self._on_save_collage_clicked)
-        box_exp.addWidget(self.btn_save_image)
 
         # Aliases para compatibilidad hacia atrás
         self.btn_export_flat = self.btn_save_image
         self.btn_export_psd = self.btn_save_image
 
-        # Enlace directo al Revelador
-        self.btn_export_developer = QPushButton("Enviar Collage al Revelador / Editor")
-        self.btn_export_developer.setIcon(get_icon("arrow_right"))
+        # Enlace directo al Revelador (en línea a la derecha de Guardar)
+        self.btn_export_developer = QPushButton("Enviar al Revelador")
+        self.btn_export_developer.setIcon(get_icon("sliders", size=13, color="#2f81f7"))
         self.btn_export_developer.setFixedHeight(36)
         self.btn_export_developer.setStyleSheet(STYLE_TRANSFER_BTN)
         self.btn_export_developer.setToolTip("Exporta el collage como imagen plana y la abre inmediatamente en el Revelador para ajuste tonal y color")
         self.btn_export_developer.clicked.connect(self._export_to_developer_clicked)
-        box_exp.addWidget(self.btn_export_developer)
+
+        btn_row_exp.addWidget(self.btn_save_image, 1)
+        btn_row_exp.addWidget(self.btn_export_developer, 1)
+        box_exp.addLayout(btn_row_exp)
 
         left_layout.addWidget(self.sec_exp)
         left_layout.addStretch()
@@ -1087,6 +1099,8 @@ class EclipseCollageTab(QWidget):
                 "phase_label": f.phase_label,
                 "obscuration_pct": f.obscuration_pct,
                 "is_ingress": f.is_ingress,
+                "sharpness_score": f.sharpness_score,
+                "is_trepidated": f.is_trepidated,
             }
 
         contacts = self._compute_eclipse_contacts()
@@ -1323,8 +1337,8 @@ class EclipseCollageTab(QWidget):
     # -----------------------------------------------------------------
     # Exportaciones y Guardado Unificado
     # -----------------------------------------------------------------
-    def _on_save_collage_clicked(self):
-        """Guarda el collage en el formato seleccionado por extensión o filtro (TIFF, PSD, JPG)."""
+    def _on_save_collage_clicked(self, force_format: Optional[str] = None):
+        """Guarda el collage en el formato seleccionado por extensión o filtro (TIFF 16/32, PSD, PNG, JPG)."""
         selected = self._get_selected_frames()
         if not selected:
             QMessageBox.warning(self, "Aviso", "No hay fases seleccionadas para exportar.")
@@ -1332,19 +1346,39 @@ class EclipseCollageTab(QWidget):
 
         export_dir = get_config_val("export_dir", "exportaciones")
         os.makedirs(export_dir, exist_ok=True)
-        default_path = os.path.join(export_dir, "eclipse_collage_final.tif")
 
         filtros = (
             "TIFF 16-bit (*.tif *.tiff);;"
+            "TIFF 32-bit Float (*.tif *.tiff);;"
             "Photoshop Multicapa (*.psd);;"
+            "PNG (*.png);;"
             "JPEG Alta Calidad (*.jpg *.jpeg)"
         )
+
+        if force_format == "psd":
+            filtro_por_defecto = "Photoshop Multicapa (*.psd)"
+            default_name = "eclipse_collage_capas.psd"
+        elif force_format == "tiff32":
+            filtro_por_defecto = "TIFF 32-bit Float (*.tif *.tiff)"
+            default_name = "eclipse_collage_32bit.tif"
+        elif force_format == "png":
+            filtro_por_defecto = "PNG (*.png)"
+            default_name = "eclipse_collage.png"
+        elif force_format in ("jpg", "jpeg"):
+            filtro_por_defecto = "JPEG Alta Calidad (*.jpg *.jpeg)"
+            default_name = "eclipse_collage.jpg"
+        else:
+            filtro_por_defecto = "TIFF 16-bit (*.tif *.tiff)"
+            default_name = "eclipse_collage_16bit.tif"
+
+        default_path = os.path.join(export_dir, default_name)
+
         filepath, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Guardar Collage de Eclipse",
             default_path,
             filtros,
-            selectedFilter="TIFF 16-bit (*.tif *.tiff)"
+            selectedFilter=filtro_por_defecto
         )
         if not filepath:
             return
@@ -1354,16 +1388,19 @@ class EclipseCollageTab(QWidget):
         if not ext:
             if "Photoshop" in selected_filter or "*.psd" in selected_filter:
                 ext = ".psd"
+            elif "PNG" in selected_filter or "*.png" in selected_filter:
+                ext = ".png"
             elif "JPEG" in selected_filter or "*.jpg" in selected_filter:
                 ext = ".jpg"
             else:
                 ext = ".tif"
             filepath += ext
 
-        if ext == ".psd" or ("Photoshop" in selected_filter and ext not in [".tif", ".tiff", ".jpg", ".jpeg"]):
+        is_32bit = ("32-bit" in selected_filter)
+        if ext == ".psd" or ("Photoshop" in selected_filter and ext not in [".tif", ".tiff", ".jpg", ".jpeg", ".png"]):
             self._do_export_psd(filepath, selected)
         else:
-            self._do_export_flat(filepath, selected, ext)
+            self._do_export_flat(filepath, selected, ext, is_32bit=is_32bit)
 
     def _export_psd_clicked(self):
         """Alias de compatibilidad para exportación a PSD."""
@@ -1372,6 +1409,51 @@ class EclipseCollageTab(QWidget):
     def _export_flat_clicked(self):
         """Alias de compatibilidad para exportación plana (TIFF/JPG)."""
         self._on_save_collage_clicked()
+
+    def _on_export_web_clicked(self):
+        """Abre inmediatamente el diálogo modal de exportación web mientras el collage se genera en segundo plano."""
+        selected = self._get_selected_frames()
+        if not selected:
+            QMessageBox.warning(self, "Aviso", "No hay fases seleccionadas para exportar.")
+            return
+
+        layout_mode = self._get_current_layout_mode()
+        gap = self.slider_gap.value()
+        tot_scale = self.slider_tot_scale.value() / 100.0
+        crop_factor = self.slider_pad.value() / 100.0
+        draw_caps = self.chk_captions.isChecked()
+        workers = self._get_configured_workers()
+        bg_col = self.canvas_bg_color
+
+        def _render_full_collage() -> Optional[np.ndarray]:
+            cw, ch, placements = compute_collage_layout(
+                selected,
+                layout_type=layout_mode,
+                canvas_width=3840,
+                target_disk_radius=150,
+                gap_spacing=gap,
+                totality_scale=tot_scale,
+                crop_margin_factor=crop_factor,
+                fast_preview=False,
+                max_workers=workers
+            )
+            return render_flat_collage(cw, ch, placements, bg_color=bg_col, draw_captions=draw_caps)
+
+        from gui.dialog_web_export import WebExportDialog, extract_exif_bytes
+        first_path = selected[0].filepath if selected and hasattr(selected[0], "filepath") else None
+        exif_bytes = extract_exif_bytes(first_path) if first_path else None
+        base_name = "eclipse_collage"
+
+        dlg = WebExportDialog(
+            image_buffer=None,
+            render_fn=_render_full_collage,
+            initial_dimensions=(3840, 2160),
+            default_filename=base_name,
+            exif_bytes=exif_bytes,
+            source_colorspace="srgb",
+            parent=self,
+        )
+        dlg.exec()
 
     def _do_export_psd(self, filepath: str, selected: List[EclipseFrameMetadata]):
         if not HAS_PYTOSHOP:
@@ -1426,7 +1508,7 @@ class EclipseCollageTab(QWidget):
         finally:
             self.progress_bar.setVisible(False)
 
-    def _do_export_flat(self, filepath: str, selected: List[EclipseFrameMetadata], ext: str):
+    def _do_export_flat(self, filepath: str, selected: List[EclipseFrameMetadata], ext: str, is_32bit: bool = False):
         layout_mode = self._get_current_layout_mode()
         gap = self.slider_gap.value()
         tot_scale = self.slider_tot_scale.value() / 100.0
@@ -1456,7 +1538,15 @@ class EclipseCollageTab(QWidget):
             flat = render_flat_collage(cw, ch, placements, bg_color=self.canvas_bg_color, draw_captions=draw_caps)
 
             if ext in (".tif", ".tiff"):
-                save_tiff_with_icc(filepath, flat, bit_depth=16, profile_name="sRGB")
+                if is_32bit:
+                    out_img = np.ascontiguousarray(np.clip(flat, 0.0, 1.0), dtype=np.float32)
+                else:
+                    out_img = (np.clip(flat, 0.0, 1.0) * 65535.0 + 0.5).astype(np.uint16)
+                save_tiff_with_icc(filepath, out_img, photometric='rgb')
+            elif ext == ".png":
+                u16 = (np.clip(flat, 0.0, 1.0) * 65535.0 + 0.5).astype(np.uint16)
+                bgr16 = cv2.cvtColor(u16, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(filepath, bgr16, [cv2.IMWRITE_PNG_COMPRESSION, 6])
             else:
                 u8 = (np.clip(flat, 0.0, 1.0) * 255.0).astype(np.uint8)
                 bgr = cv2.cvtColor(u8, cv2.COLOR_RGB2BGR)

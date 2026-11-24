@@ -65,6 +65,7 @@ from gui.theme import (
 from gui.icons import get_icon
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
+from gui.widgets.export_button import ExportSplitButton
 
 
 class MeteorWorker(QThread):
@@ -530,26 +531,37 @@ class MeteorTab(QWidget):
         exp_l = sec_export.content_layout
 
         btn_row_exp = QHBoxLayout()
-        self.btn_save_tiff = QPushButton("Guardar TIFF 32-bit...")
-        self.btn_save_tiff.setIcon(get_icon("save", color="#a1a1aa"))
-        self.btn_save_tiff.setStyleSheet(STYLE_SECONDARY_BTN)
-        self.btn_save_tiff.clicked.connect(self._on_save_tiff_clicked)
+        self.btn_save_tiff = ExportSplitButton(
+            text="Guardar...",
+            on_master_export=self._on_save_master_clicked,
+            on_web_export=self._on_export_web_clicked,
+            style="secondary",
+            parent=self
+        )
+        self.btn_save_tiff.setup_standard_menu(
+            on_format_export=lambda fmt: self._on_save_master_clicked(force_format=fmt),
+            psd_label="Exportar PSD en Capas..."
+        )
+        self.btn_save_tiff.setFixedHeight(36)
+        self.btn_save_tiff.setToolTip(
+            "Guarda el compuesto final de la lluvia de meteoros.\n"
+            "• Clic principal: Formatos maestros (TIFF 16/32-bit, PSD en capas, PNG, JPEG directo).\n"
+            "• Desplegable (▼) o Ctrl+Alt+W: Acceso directo a formatos y Exportar para Web / Redes Sociales (sRGB 8-bit, Lanczos, WebP/JPEG/PNG)."
+        )
 
-        self.btn_save_psd = QPushButton("Exportar PSD Capas...")
-        self.btn_save_psd.setIcon(get_icon("layers", color="#a1a1aa"))
-        self.btn_save_psd.setStyleSheet(STYLE_SECONDARY_BTN)
-        self.btn_save_psd.setToolTip("Exporta un archivo Photoshop con cada meteoro en su propia capa Screen para control individual de opacidad.")
-        self.btn_save_psd.clicked.connect(self._on_save_psd_clicked)
+        # Alias de compatibilidad hacia atrás
+        self.btn_save_psd = self.btn_save_tiff
 
-        btn_row_exp.addWidget(self.btn_save_tiff)
-        btn_row_exp.addWidget(self.btn_save_psd)
-        exp_l.addLayout(btn_row_exp)
-
-        self.btn_send_dev = QPushButton("Enviar al Revelador / Editor")
+        self.btn_send_dev = QPushButton("Enviar al Revelador")
         self.btn_send_dev.setIcon(get_icon("sliders", color="#2f81f7"))
+        self.btn_send_dev.setFixedHeight(36)
         self.btn_send_dev.setStyleSheet(STYLE_SPECIAL_ACTION_BTN)
+        self.btn_send_dev.setToolTip("Transfiere el compuesto de meteoros 32-bit directamente al Revelador.")
         self.btn_send_dev.clicked.connect(self._on_send_to_developer_clicked)
-        exp_l.addWidget(self.btn_send_dev)
+
+        btn_row_exp.addWidget(self.btn_save_tiff, 1)
+        btn_row_exp.addWidget(self.btn_send_dev, 1)
+        exp_l.addLayout(btn_row_exp)
 
         panel_layout.addWidget(sec_export)
         panel_layout.addStretch()
@@ -1519,31 +1531,130 @@ class MeteorTab(QWidget):
     # -------------------------------------------------------------
     # EXPORTACIÓN Y REVELADOR
     # -------------------------------------------------------------
-    def _on_save_tiff_clicked(self) -> None:
+    def _on_save_master_clicked(self, force_format: Optional[str] = None) -> None:
+        """Abre el diálogo unificado de guardado permitiendo elegir formato por extensión o filtro (TIFF 16/32, PSD, PNG, JPEG)."""
         img = self.composite_result if self.composite_result is not None else self.base_reference_img
         if img is None:
             QMessageBox.warning(self, "Aviso", "No hay imagen compuesta disponible para guardar.")
             return
 
-        path, _ = QFileDialog.getSaveFileName(self, "Guardar Compuesto de Meteoros TIFF", "lluvia_meteoros_32bit.tif", "TIFF (*.tif *.tiff)")
+        filtros = (
+            "TIFF 16-bit (*.tif *.tiff);;"
+            "TIFF 32-bit Float (*.tif *.tiff);;"
+            "Photoshop PSD por Capas (*.psd);;"
+            "PNG (*.png);;"
+            "JPEG (*.jpg *.jpeg)"
+        )
+        export_dir = get_config_val("export_dir", os.getcwd())
+        os.makedirs(export_dir, exist_ok=True)
+
+        if force_format == "psd":
+            filtro_por_defecto = "Photoshop PSD por Capas (*.psd)"
+            default_name = "lluvia_meteoros_capas.psd"
+        elif force_format == "tiff16":
+            filtro_por_defecto = "TIFF 16-bit (*.tif *.tiff)"
+            default_name = "lluvia_meteoros_16bit.tif"
+        elif force_format == "png":
+            filtro_por_defecto = "PNG (*.png)"
+            default_name = "lluvia_meteoros.png"
+        elif force_format in ("jpg", "jpeg"):
+            filtro_por_defecto = "JPEG (*.jpg *.jpeg)"
+            default_name = "lluvia_meteoros.jpg"
+        else:
+            filtro_por_defecto = "TIFF 32-bit Float (*.tif *.tiff)"
+            default_name = "lluvia_meteoros_32bit.tif"
+
+        default_path = os.path.join(export_dir, default_name)
+
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Guardar Compuesto de Meteoros",
+            default_path,
+            filtros,
+            selectedFilter=filtro_por_defecto
+        )
         if not path:
             return
 
+        path = os.path.abspath(os.path.normpath(str(path).strip()))
+        ext = os.path.splitext(path)[1].lower()
+        if not ext:
+            if "Photoshop" in selected_filter or "*.psd" in selected_filter:
+                ext = ".psd"
+            elif "PNG" in selected_filter or "*.png" in selected_filter:
+                ext = ".png"
+            elif "JPEG" in selected_filter or "*.jpg" in selected_filter:
+                ext = ".jpg"
+            else:
+                ext = ".tif"
+            path += ext
+
+        if ext == ".psd" or ("Photoshop" in selected_filter and ext not in ['.tif', '.tiff', '.jpg', '.jpeg', '.png']):
+            self._do_save_psd(path)
+        elif ext == ".png" or "PNG" in selected_filter:
+            self._do_save_png(path)
+        elif ext in ['.jpg', '.jpeg'] or ("JPEG" in selected_filter and ext not in ['.tif', '.tiff']):
+            self._do_save_jpg(path)
+        elif "32-bit" in selected_filter or (ext in ['.tif', '.tiff'] and "32-bit" in path):
+            self._do_save_tiff(path, bit_depth=32)
+        else:
+            self._do_save_tiff(path, bit_depth=16)
+
+    def _on_save_tiff_clicked(self, bit_depth: int = 32) -> None:
+        """Abre el diálogo directo para guardar TIFF."""
+        self._on_save_master_clicked(force_format="tiff32" if bit_depth == 32 else "tiff16")
+
+    def _do_save_tiff(self, path: str, bit_depth: int = 32) -> None:
+        img = self.composite_result if self.composite_result is not None else self.base_reference_img
+        if img is None:
+            return
         try:
-            save_tiff_with_icc(path, img.astype(np.float32), bit_depth=32, target_icc="sRGB")
-            self.log(f"Compuesto de meteoros guardado en: {path}")
-            QMessageBox.information(self, "Guardado Exitoso", f"Archivo TIFF guardado:\n{path}")
+            if bit_depth == 32:
+                save_tiff_with_icc(path, img.astype(np.float32), photometric='rgb')
+                desc = "TIFF 32-bit float"
+            else:
+                u16 = np.ascontiguousarray(np.clip(img * 65535.0 + 0.5, 0.0, 65535.0), dtype=np.uint16)
+                save_tiff_with_icc(path, u16, photometric='rgb')
+                desc = "TIFF 16-bit"
+            self.log(f"Compuesto de meteoros guardado ({desc}): {path}")
+            QMessageBox.information(self, "Guardado Exitoso", f"Archivo {desc} guardado:\n{path}")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo guardar: {e}")
+            QMessageBox.critical(self, "Error", f"No se pudo guardar TIFF: {e}")
+
+    def _do_save_png(self, path: str) -> None:
+        img = self.composite_result if self.composite_result is not None else self.base_reference_img
+        if img is None:
+            return
+        try:
+            u16 = np.ascontiguousarray(np.clip(img * 65535.0 + 0.5, 0.0, 65535.0), dtype=np.uint16)
+            bgr16 = cv2.cvtColor(u16, cv2.COLOR_RGB2BGR) if img.ndim == 3 else u16
+            cv2.imwrite(path, bgr16, [cv2.IMWRITE_PNG_COMPRESSION, 6])
+            self.log(f"Compuesto de meteoros guardado (PNG 16-bit): {path}")
+            QMessageBox.information(self, "Guardado Exitoso", f"Archivo PNG guardado con éxito:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo guardar PNG: {e}")
+
+    def _do_save_jpg(self, path: str) -> None:
+        img = self.composite_result if self.composite_result is not None else self.base_reference_img
+        if img is None:
+            return
+        try:
+            u8 = np.clip(img * 255.0 + 0.5, 0, 255).astype(np.uint8)
+            bgr = cv2.cvtColor(u8, cv2.COLOR_RGB2BGR) if img.ndim == 3 else u8
+            cv2.imwrite(path, bgr, [cv2.IMWRITE_JPEG_QUALITY, 96])
+            self.log(f"Compuesto de meteoros guardado (JPEG 8-bit): {path}")
+            QMessageBox.information(self, "Guardado Exitoso", f"Archivo JPEG guardado con éxito:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo guardar JPEG: {e}")
 
     def _on_save_psd_clicked(self) -> None:
+        """Abre el diálogo directo para exportar PSD en capas."""
+        self._on_save_master_clicked(force_format="psd")
+
+    def _do_save_psd(self, path: str) -> None:
         base = self.custom_stacked_sky if self.custom_stacked_sky is not None else self.base_reference_img
         if base is None:
             QMessageBox.warning(self, "Aviso", "No hay imagen base para exportar en capas PSD.")
-            return
-
-        path, _ = QFileDialog.getSaveFileName(self, "Exportar PSD Multicapa Photoshop", "lluvia_meteoros_capas.psd", "Photoshop PSD (*.psd)")
-        if not path:
             return
 
         ok = export_meteor_layered_psd(
@@ -1560,6 +1671,34 @@ class MeteorTab(QWidget):
             QMessageBox.information(self, "PSD Exportado", f"Archivo PSD multicapa generado con éxito:\n{path}")
         else:
             QMessageBox.warning(self, "Aviso", "La librería pytoshop no está disponible o falló la exportación.")
+
+    def _on_export_web_clicked(self) -> None:
+        """Abre el diálogo modal de exportación optimizada para Web y Redes Sociales."""
+        img = self.composite_result if self.composite_result is not None else self.base_reference_img
+        if img is None:
+            QMessageBox.warning(self, "Aviso", "No hay imagen compuesta disponible para guardar.")
+            return
+
+        from gui.dialog_web_export import WebExportDialog, extract_exif_bytes
+        ref_path = None
+        if hasattr(self, 'files_list') and self.files_list:
+            idx = getattr(self, 'ref_idx', 0)
+            if 0 <= idx < len(self.files_list):
+                ref_path = self.files_list[idx]
+            else:
+                ref_path = self.files_list[0]
+
+        exif_bytes = extract_exif_bytes(ref_path) if ref_path else None
+        base_name = os.path.splitext(os.path.basename(ref_path))[0] if ref_path else "lluvia_meteoros"
+
+        dlg = WebExportDialog(
+            image_buffer=img,
+            default_filename=base_name,
+            exif_bytes=exif_bytes,
+            source_colorspace="srgb",
+            parent=self,
+        )
+        dlg.exec()
 
     def _on_send_to_developer_clicked(self) -> None:
         img = self.composite_result if self.composite_result is not None else self.base_reference_img
