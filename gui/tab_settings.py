@@ -262,10 +262,64 @@ class SettingsTab(QWidget):
         row_sn.addWidget(btn_browse_sn)
         tools_layout.addLayout(row_sn)
 
-        # Indicador de estado de StarNet
+        # Panel de diagnóstico de Modelos de Inteligencia Artificial (ONNX)
+        card_ai = QFrame()
+        card_ai.setStyleSheet(
+            "background: #141722; border: 1px solid #232738; border-radius: 6px; padding: 4px;"
+        )
+        card_ai_layout = QVBoxLayout(card_ai)
+        card_ai_layout.setContentsMargins(8, 8, 8, 8)
+        card_ai_layout.setSpacing(6)
+
+        lbl_ai_title = QLabel("Diagnóstico y Modelos de Inteligencia Artificial (ONNX):")
+        lbl_ai_title.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 600;")
+        card_ai_layout.addWidget(lbl_ai_title)
+
         self.lbl_sn_status = QLabel("")
-        self.lbl_sn_status.setStyleSheet("font-size: 11px; margin-top: 2px;")
-        tools_layout.addWidget(self.lbl_sn_status)
+        self.lbl_sn_status.setStyleSheet("font-size: 11px;")
+        card_ai_layout.addWidget(self.lbl_sn_status)
+
+        self.lbl_nafnet_status = QLabel("")
+        self.lbl_nafnet_status.setStyleSheet("font-size: 11px;")
+        card_ai_layout.addWidget(self.lbl_nafnet_status)
+
+        self.lbl_skyseg_status = QLabel("")
+        self.lbl_skyseg_status.setStyleSheet("font-size: 11px;")
+        card_ai_layout.addWidget(self.lbl_skyseg_status)
+
+        row_ai_btns = QHBoxLayout()
+        row_ai_btns.setSpacing(8)
+
+        self.btn_check_models = QPushButton("Comprobar Integridad de Modelos IA")
+        self.btn_check_models.setIcon(get_icon("check", color="#38bdf8"))
+        self.btn_check_models.setStyleSheet("""
+            QPushButton {
+                background: #1c202e; border: 1px solid #2e354a; color: #38bdf8;
+                border-radius: 4px; padding: 5px 12px; font-size: 11px; font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #252b3d; border-color: #38bdf8; color: #ffffff;
+            }
+        """)
+        self.btn_check_models.clicked.connect(lambda: self._verify_all_ai_models(show_dialog=True))
+        row_ai_btns.addWidget(self.btn_check_models)
+
+        self.btn_open_models_dir = QPushButton("Abrir Carpeta models/")
+        self.btn_open_models_dir.setIcon(get_icon("folder", color="#cbd5e1"))
+        self.btn_open_models_dir.setStyleSheet("""
+            QPushButton {
+                background: #1c202e; border: 1px solid #2e354a; color: #cbd5e1;
+                border-radius: 4px; padding: 5px 12px; font-size: 11px;
+            }
+            QPushButton:hover {
+                background: #252b3d; border-color: #cbd5e1; color: #ffffff;
+            }
+        """)
+        self.btn_open_models_dir.clicked.connect(self._open_models_directory)
+        row_ai_btns.addWidget(self.btn_open_models_dir)
+
+        card_ai_layout.addLayout(row_ai_btns)
+        tools_layout.addWidget(card_ai)
 
         # Nota de atribución y agradecimiento a Mikita Misiura (creador de StarNet)
         self.lbl_sn_credits = QLabel(
@@ -543,7 +597,7 @@ class SettingsTab(QWidget):
         row_author_title.addWidget(lbl_work_title)
         row_author_title.addStretch()
 
-        self.lbl_engine_badge = QLabel("AstroLoom v0.17.2")
+        self.lbl_engine_badge = QLabel("AstroLoom v0.18.0")
         self.lbl_engine_badge.setStyleSheet("color: #80d8ff; font-size: 11px; font-weight: bold;")
         row_author_title.addWidget(self.lbl_engine_badge)
 
@@ -628,23 +682,77 @@ class SettingsTab(QWidget):
             }}
         """)
 
+    def _open_models_directory(self) -> None:
+        """Abre la carpeta de modelos ONNX en el explorador de archivos nativo del sistema."""
+        models_dir = os.path.abspath(os.path.join(os.getcwd(), "models"))
+        os.makedirs(models_dir, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(models_dir))
+
     def _update_starnet_status(self) -> None:
-        """Actualiza el indicador visual de disponibilidad de StarNet (ONNX nativo o CLI)."""
+        """Actualiza el estado de StarNet y todos los modelos de IA."""
+        self._verify_all_ai_models(show_dialog=False)
+
+    def _verify_all_ai_models(self, show_dialog: bool = False) -> None:
+        """Verifica la presencia e integridad de los modelos neuronales ONNX (StarNet, NAFNet, SkySeg)."""
         from core.starnet_onnx import is_starnet_onnx_available, get_starnet_model_path
-        path = self.txt_starnet.text().strip()
+        from core.ai_denoise import is_nafnet_available, get_nafnet_model_path
+        from core.ai_horizon import is_ai_model_available, get_model_path
+
+        report = []
+
+        # 1. StarNet v2
+        cli_path = self.txt_starnet.text().strip()
         if is_starnet_onnx_available():
-            onnx_path = get_starnet_model_path()
-            self.lbl_sn_status.setText(f"● StarNet v2 ONNX activo con aceleración GPU DirectML ({os.path.basename(onnx_path)})")
+            sn_path = get_starnet_model_path()
+            sz_mb = (os.path.getsize(sn_path) / (1024 * 1024)) if sn_path and os.path.exists(sn_path) else 0.0
+            self.lbl_sn_status.setText(f"● StarNet v2 ONNX: Listo ({sz_mb:.1f} MB, GPU DirectML)")
             self.lbl_sn_status.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: 600;")
-        elif path and os.path.isfile(path):
-            self.lbl_sn_status.setText("● StarNet++ CLI detectado y listo")
+            report.append(f"✓ StarNet v2 ONNX: {os.path.basename(sn_path)} ({sz_mb:.1f} MB) - Listo")
+        elif cli_path and os.path.isfile(cli_path):
+            self.lbl_sn_status.setText(f"● StarNet++ CLI: Listo ({os.path.basename(cli_path)})")
             self.lbl_sn_status.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: 600;")
-        elif path:
-            self.lbl_sn_status.setText("● El archivo CLI especificado no existe o la ruta no es accesible")
+            report.append(f"✓ StarNet++ CLI: {cli_path} - Listo")
+        elif cli_path:
+            self.lbl_sn_status.setText("● StarNet++ CLI: Ruta no accesible o archivo no encontrado")
             self.lbl_sn_status.setStyleSheet("color: #fbbf24; font-size: 11px; font-weight: 600;")
+            report.append("⚠ StarNet++ CLI: Ruta inválida o inaccesible")
         else:
-            self.lbl_sn_status.setText("● Modelo no detectado (se descargará automáticamente al usar la herramienta en el Revelador)")
+            self.lbl_sn_status.setText("○ StarNet v2: No instalado (descarga automática bajo demanda)")
             self.lbl_sn_status.setStyleSheet("color: #94a3b8; font-size: 11px;")
+            report.append("○ StarNet v2: No instalado (se descargará al usar en Revelador)")
+
+        # 2. NAFNet Denoise
+        if is_nafnet_available():
+            naf_path = get_nafnet_model_path()
+            sz_mb = (os.path.getsize(naf_path) / (1024 * 1024)) if naf_path and os.path.exists(naf_path) else 0.0
+            self.lbl_nafnet_status.setText(f"● NAFNet Denoise AI: Listo ({sz_mb:.1f} MB, GPU DirectML)")
+            self.lbl_nafnet_status.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: 600;")
+            report.append(f"✓ NAFNet Denoise: {os.path.basename(naf_path)} ({sz_mb:.1f} MB) - Listo")
+        else:
+            self.lbl_nafnet_status.setText("○ NAFNet Denoise AI: No instalado (descarga automática bajo demanda)")
+            self.lbl_nafnet_status.setStyleSheet("color: #94a3b8; font-size: 11px;")
+            report.append("○ NAFNet Denoise: No instalado (se descargará al usar en Revelador)")
+
+        # 3. SkySeg / AI Horizon
+        if is_ai_model_available():
+            sky_path = get_model_path()
+            sz_mb = (os.path.getsize(sky_path) / (1024 * 1024)) if sky_path and os.path.exists(sky_path) else 0.0
+            self.lbl_skyseg_status.setText(f"● SkySeg Horizon AI: Listo ({sz_mb:.1f} MB, GPU DirectML)")
+            self.lbl_skyseg_status.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: 600;")
+            report.append(f"✓ SkySeg Horizon: {os.path.basename(sky_path)} ({sz_mb:.1f} MB) - Listo")
+        else:
+            self.lbl_skyseg_status.setText("○ SkySeg Horizon AI: No instalado (descarga automática bajo demanda)")
+            self.lbl_skyseg_status.setStyleSheet("color: #94a3b8; font-size: 11px;")
+            report.append("○ SkySeg Horizon: No instalado (se descargará al usar en Revelador)")
+
+        if show_dialog:
+            QMessageBox.information(
+                self,
+                "Integridad de Modelos Neuronales",
+                "Diagnóstico del subsistema de Inteligencia Artificial:\n\n"
+                + "\n".join(report)
+                + "\n\nPuedes copiar manualmente archivos .onnx adicionales dentro de la carpeta 'models/' para uso offline."
+            )
 
     def _browse_directory(self, target_line_edit: QLineEdit, dialog_title: str) -> None:
         """Abre un diálogo nativo para seleccionar una carpeta física."""

@@ -962,6 +962,11 @@ class HistoryPresetsMixin:
 
         if hasattr(self, 'panel_sharpening') and self.panel_sharpening is not None:
             self.panel_sharpening.set_state(state)
+            self.sharp_amount = getattr(self.panel_sharpening, 'row_amount', None) and self.panel_sharpening.row_amount.slider.value() or 0
+            self.sharp_radius = getattr(self.panel_sharpening, 'row_radius', None) and self.panel_sharpening.row_radius.slider.value() or 10
+            self.sharp_detail = getattr(self.panel_sharpening, 'row_detail', None) and self.panel_sharpening.row_detail.slider.value() or 25
+            self.sharp_masking = getattr(self.panel_sharpening, 'row_masking', None) and self.panel_sharpening.row_masking.slider.value() or 0
+            self.sharp_scope_idx = getattr(self.panel_sharpening, 'combo_scope', None) and self.panel_sharpening.combo_scope.currentIndex() or 0
 
         if hasattr(self, 'panel_color_wb'):
             self.panel_color_wb.set_state(state)
@@ -970,6 +975,11 @@ class HistoryPresetsMixin:
             self.sat_sky_val = self.panel_color_wb.sat_sky_val
             self.sat_gnd_val = self.panel_color_wb.sat_gnd_val
             self.vibrance_val = self.panel_color_wb.vibrance_val
+            self.scnr_green_val = getattr(self.panel_color_wb, 'scnr_green_val', 0)
+            self.unpurple_val = getattr(self.panel_color_wb, 'unpurple_val', 0)
+            self.dualband_mode = getattr(self.panel_color_wb, 'dualband_mode', 'none')
+            self.pcc_kr = getattr(self.panel_color_wb, 'pcc_kr', 1.0)
+            self.pcc_kb = getattr(self.panel_color_wb, 'pcc_kb', 1.0)
 
         if hasattr(self, 'panel_starnet'):
             self.panel_starnet.set_state(state)
@@ -998,6 +1008,9 @@ class HistoryPresetsMixin:
 
         if hasattr(self, 'panel_ground_sky'):
             self.panel_ground_sky.set_state(state)
+            self.gnd_ev_val = self.panel_ground_sky.slider_gnd_ev.value() / 100.0
+            self.gnd_shadows_val = self.panel_ground_sky.slider_gnd_sh.value() / 100.0
+            self.gnd_bp_val = self.panel_ground_sky.slider_gnd_bp.value() / 1000.0
 
         if hasattr(self, 'panel_dust') and self.panel_dust is not None:
             spots = state.get("dust_spots", [])
@@ -1018,10 +1031,7 @@ class HistoryPresetsMixin:
                 if hasattr(self, 'developer_state') and self.developer_state is not None:
                     self.developer_state.dust_mode = mode
         if "starless_is_stretched" in state:
-            self.starless_is_stretched = state["starless_is_stretched"]
-            self.gnd_ev_val = self.panel_ground_sky.slider_gnd_ev.value() / 100.0
-            self.gnd_shadows_val = self.panel_ground_sky.slider_gnd_sh.value() / 100.0
-            self.gnd_bp_val = self.panel_ground_sky.slider_gnd_bp.value() / 1000.0
+            self.starless_is_stretched = bool(state["starless_is_stretched"])
 
         if hasattr(self, 'mask_layers_widget'):
             self.mask_layers_widget.set_ground_tone_values(

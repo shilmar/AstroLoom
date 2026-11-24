@@ -3,6 +3,54 @@
 Todas las novedades, mejoras y correcciones notables de **AstroLoom** (anteriormente *Apilator*) se documentan en este archivo.
 El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.18.0] - 2026-11-25
+
+### Añadido
+* **Nuevo Diálogo y Motor de Exportación Web y Redes Sociales (`gui/dialog_web_export.py`, `gui/widgets/export_button.py`):**
+  - **Plantillas Predefinidas Multiformato:** Exportación optimizada en un clic para Instagram Cuadrado (1:1, 1080x1080), Instagram Retrato (4:5, 1080x1350), Stories / Reels / TikTok (9:16, 1080x1920), Twitter/X Horizontal (16:9, 1200x675), AstroBin (4K UHD) y Web General (Full HD 1920 px).
+  - **Conversión de Espacio de Color sRGB y Re-enfoque Adaptativo:** Conversión estricta al estándar sRGB para evitar desviaciones tonales en navegadores web y dispositivos móviles, acompañada de un filtro adaptativo de máscara de enfoque (USM) para compensar la pérdida de nitidez inherente al escalado descendente.
+  - **Firma y Marcas de Agua Personalizadas:** Soporte para marcas de agua de texto o logotipos gráficos en PNG transparente con posicionamiento en 9 cuadrantes, escala y opacidad configurables.
+  - **Control de Compresión con Estimación en Tiempo Real:** Ajuste fino de calidad JPEG y WebP con estimación interactiva del tamaño de archivo resultante en KB/MB.
+  - **Botón de Exportación Unificado (`ExportButton`):** Componente integrado de forma homogénea en los módulos de procesado (Revelador, Eclipses HDR, Eclipses Collage, Startrails, Meteoros y Panorámicas) con menú desplegable para exportación rápida (TIFF 16-bit / PSD / etc.) o exportación web directa.
+* **Lanzador de Diagnóstico y Depuración para Windows (`astroloom_debug.bat`):**
+  - Nuevo script de arranque por lotes con consola de depuración abierta, detección de entorno virtual, registro exhaustivo de trazas (*stack traces*) y volcado de excepciones no controladas antes del cierre.
+* **Modularización de Componentes de Gestión de Series Temporales (`gui/widgets/series_table_widget.py`, `gui/widgets/session_timeline_widget.py`):**
+  - **`SeriesFilesTableWidget`:** Componente tabular reutilizable de alto rendimiento con generación asíncrona de miniaturas en memoria, lectura de metadatos EXIF fotográficos (exposición, ISO, apertura, focal), indicadores de calibración y ordenación avanzada.
+  - **`SessionTimelineWidget`:** Cronograma temporal interactivo que segmenta tomas en bloques cronológicos de sesión para selección, filtrado, descarte por rangos y navegación reactiva.
+  - Integración transversal en el comparador rápido **Blink Viewer**, **Startrails**, **Meteoros** y **Eclipses Collage**.
+* **Modernización del Visor de Inspección Rápida y Descarte Blink (`gui/dialog_blink.py`):**
+  - Modo de reproducción secuencial cíclica continua (*Blink Loop*) a velocidad regulable en fotogramas por segundo (FPS) y avance paso a paso con teclas de flecha.
+  - Inspección de métricas estelares en tiempo real: cálculo de FWHM, excentricidad/redondez de estrellas, conteo estelar y calidad de fondo de cielo.
+  - Integración del cronograma temporal de sesión y tabla con miniaturas para filtrado y descarte masivo con la tecla `Espacio`.
+* **Arrastrar y Soltar Global (Global Drag & Drop) y Clasificación Inteligente (`gui/main_window.py`, `gui/widgets/drop_widgets.py`, `gui/tab_stacker.py`):**
+  - Detección global de arrastre de archivos sobre la ventana principal: apertura inmediata de proyectos `.devloom` en el Revelador y enrutado automático de imágenes astronómicas hacia la pestaña activa.
+  - Algoritmo de clasificación astronómica (`classify_astro_files`): catalogación automática por carpetas y nombres en *Darks*, *Flats*, *Bias*, *Suelo* y *Lights*.
+  - En el Apilador, soltar archivos sobre el lienzo interactivo los asigna directamente a la pestaña de calibración activa.
+* **Calibración Completa en Circumpolares (Startrails, `gui/tab_startrails.py`, `core/startrails.py`):**
+  - Pestañas de calibración unificadas (Lights, Darks, Flats, Bias, Suelo) con soporte de calibración por Master Flat antes de la composición de trazas o cometas.
+* **Panel de Diagnóstico de Modelos de Inteligencia Artificial (`gui/tab_settings.py`):**
+  - Monitorización en tiempo real de la presencia, tamaño en disco y aceleración GPU DirectML de los pesos neuronales de StarNet++ v2 ONNX, NAFNet Denoise y SkySeg Horizon AI, con botón de informe de diagnóstico manual.
+
+### Modificado
+* **Resiliencia ante Falta de Memoria (OOM) en Pipelines de Inteligencia Artificial (`core/ai_denoise.py`, `core/starnet_onnx.py`, `gui/developer/ai_workers_controller.py`):**
+  - Captura proactiva de `MemoryError` y excepciones de asignación en GPU DirectML y CPU durante la inferencia de StarNet v2 y NAFNet Denoise (cielo y suelo).
+  - Recolección de basura forzada (`gc.collect()`) y diálogos explicativos con recomendaciones directas (aumentar el *Stride*, realizar recortes, activar caché en disco o liberar VRAM).
+* **Gestión de Cierre de Aplicación y Purga de Archivos Temporales (`gui/main_window.py`):**
+  - Confirmación interactiva antes de salir si existen modificaciones sin guardar en el proyecto del Revelador.
+  - Limpieza automática y segura de directorios temporales residuales en `%TEMP%` (`starnet_run_*`, `astroloom_pano_burst_*`, `astroloom_temp_*`) y detención de temporizadores de monitorización de RAM.
+* **Sincronización Global de Versión:**
+  - Actualización transversal a `v0.18.0` en motor Rust (`Cargo.toml`, `Cargo.lock`, `pyproject.toml`), ventana principal, pantalla splash, diálogos y localizaciones multilingües (`es.json`, `en.json`).
+
+### Corregido
+* **Restauración de Parámetros Finos en Presets e Historial del Revelador (`gui/developer/history_presets.py`):**
+  - Corregida la omisión de controles finos de enfoque/nitidez (radio, detalle, máscara, alcance), balance de color (SCNR verde, desaturación de magentas/unpurple, paleta dualband, balance fotométrico PCC Kr/Kb) y tono de suelo (EV, sombras, punto negro) al aplicar presets o deshacer/rehacer acciones.
+* **Marcado de Proyectos Recortados (`gui/developer/io_project_manager.py`):**
+  - Asegurada la activación de la bandera `_is_cropped` al recargar proyectos `.devloom` que contenían un recorte espacial previo.
+* **Cancelación Reactiva de Segmentación de Horizonte (`gui/worker.py`):**
+  - Incorporada señal de cancelación (`cancelled`) y comprobación de parada en `AIHorizonWorker` para evitar bloqueos de interfaz al detener la detección asistida de horizonte.
+* **Depuración de Alias y Normalización de Señales (`core/`, `gui/developer/panels/`):**
+  - Eliminación de alias obsoletos en submódulos de `core/` y normalización de señales PySide6 en paneles de control del Revelador.
+
 ## [0.17.2] - 2026-11-22
 
 ### Añadido

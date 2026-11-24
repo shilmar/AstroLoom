@@ -3,6 +3,10 @@
 gui/main_window.py - Ventana principal contenedora de la aplicación AstroLoom.
 Coordina las pestañas principales (Apilador, Revelador, Eclipses, Startrails, Panorámicas y Ajustes).
 """
+import os
+import shutil
+import glob
+import tempfile
 from typing import Optional
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QLabel, QWidget, QHBoxLayout, QPushButton
@@ -23,7 +27,7 @@ from gui.tab_settings import SettingsTab
 class MainWindow(QMainWindow):
     """Ventana principal de la interfaz gráfica de AstroLoom."""
 
-    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.17.2)"
+    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.18.0)"
     gpu_fallback_signal = Signal(str)
 
     def __init__(self, splash: Optional[object] = None):
@@ -37,6 +41,7 @@ class MainWindow(QMainWindow):
         self._setup_ui(splash=splash)
         self._setup_tab_bar_corner()
         self.setStatusBar(None)
+        self.setAcceptDrops(True)
 
         # Conectar señal de degradación de hardware GPU a CPU
         self.gpu_fallback_signal.connect(self._on_gpu_fallback)
@@ -71,7 +76,7 @@ class MainWindow(QMainWindow):
         corner_layout.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
 
         # 1. Píldora del Motor AstroLoom (versión)
-        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.17.2")
+        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.18.0")
         self.lbl_engine_badge.setStyleSheet(STYLE_STATUS_PILL)
         corner_layout.addWidget(self.lbl_engine_badge)
 
@@ -132,7 +137,7 @@ class MainWindow(QMainWindow):
         """Actualiza todos los textos estáticos principales al cambiar de idioma."""
         self.setWindowTitle(tr("app.title", self.BASE_TITLE))
         if hasattr(self, 'lbl_engine_badge'):
-            self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.17.2"))
+            self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.18.0"))
         if hasattr(self, 'btn_activity_log'):
             self.btn_activity_log.setText(tr("app.log_btn", " Registro"))
             self.btn_activity_log.setToolTip(tr("app.log_btn_tooltip", "Abrir Registro de Actividad y Telemetría"))
@@ -304,3 +309,100 @@ class MainWindow(QMainWindow):
         """
         self.tab_developer.load_image_direct(output_path, mask=None)
         self.tab_widget.setCurrentIndex(1)
+
+    def closeEvent(self, event) -> None:
+        """Gestiona el cierre ordenado de la aplicación, guardado de proyectos y purga de temporales."""
+        # 1. Comprobar si hay cambios sin guardar en el Revelador
+        if hasattr(self, 'tab_developer') and hasattr(self.tab_developer, '_check_unsaved_changes'):
+            if not self.tab_developer._check_unsaved_changes():
+                event.ignore()
+                return
+
+        # 2. Detener temporizadores activos
+        if hasattr(self, 'stats_timer') and self.stats_timer.isActive():
+            self.stats_timer.stop()
+
+        # 3. Limpiar archivos y directorios temporales residuales
+        self._cleanup_temp_files()
+
+        event.accept()
+
+    def _cleanup_temp_files(self) -> None:
+        """Elimina carpetas temporales huérfanas creadas por procesos de AstroLoom en %TEMP%."""
+        base_temp = tempfile.gettempdir()
+        patterns = [
+            os.path.join(base_temp, "starnet_run_*"),
+            os.path.join(base_temp, "astroloom_pano_burst_*"),
+            os.path.join(base_temp, "astroloom_temp_*"),
+        ]
+        for pattern in patterns:
+            try:
+                for match in glob.glob(pattern):
+                    if os.path.isdir(match):
+                        shutil.rmtree(match, ignore_errors=True)
+                    elif os.path.isfile(match):
+                        try:
+                            os.remove(match)
+                        except OSError:
+                            pass
+            except Exception:
+                pass
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event) -> None:
+        from gui.widgets.drop_widgets import collect_image_files_from_mime
+        paths = collect_image_files_from_mime(event.mimeData())
+        if not paths:
+            event.ignore()
+            return
+
+        event.acceptProposedAction()
+        first_file = paths[0]
+
+        # 1. Si se suelta un proyecto .devloom, conmutar al Revelador y cargarlo
+        if first_file.lower().endswith((".devloom", ".loom")):
+            self.tab_widget.setCurrentIndex(1)
+            if hasattr(self, 'tab_developer'):
+                self.tab_developer._on_canvas_files_dropped([first_file])
+            return
+
+        # 2. Si no es proyecto, enrutar según la pestaña actualmente activa
+        current_tab_idx = self.tab_widget.currentIndex()
+        if current_tab_idx == 0:  # Apilador
+            if hasattr(self, 'tab_stacker'):
+                self.tab_stacker._on_canvas_files_dropped(paths)
+        elif current_tab_idx == 1:  # Revelador
+            if hasattr(self, 'tab_developer'):
+                self.tab_developer._on_canvas_files_dropped([first_file])
+        elif current_tab_idx in (2, 3):  # Eclipses
+            if hasattr(self, 'tab_eclipse'):
+                self.tab_eclipse.add_bracketing_paths(paths)
+        elif current_tab_idx == 4:  # Startrails
+            if hasattr(self, 'tab_startrails'):
+                self.tab_startrails.add_series_files(paths)
+        elif current_tab_idx == 5:  # Meteoros
+            if hasattr(self, 'tab_meteors'):
+                self.tab_meteors.add_series_files(paths)
+        elif current_tab_idx == 6:  # Panorámicas
+            if hasattr(self, 'tab_panorama'):
+                self.tab_panorama.load_filepaths(paths)
+        else:
+            if len(paths) == 1:
+                self.tab_widget.setCurrentIndex(1)
+                if hasattr(self, 'tab_developer'):
+                    self.tab_developer._on_canvas_files_dropped([first_file])
+            else:
+                self.tab_widget.setCurrentIndex(0)
+                if hasattr(self, 'tab_stacker'):
+                    self.tab_stacker._on_canvas_files_dropped(paths)

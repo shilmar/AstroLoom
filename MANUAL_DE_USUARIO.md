@@ -10,6 +10,7 @@ Este manual ha sido redactado pensando en fotógrafos y aficionados: **sin fórm
 
 1. [Filosofía y Módulos de la Aplicación](#1-filosofía-y-módulos-de-la-aplicación)
    - [Arranque Rápido en Windows (astroloom.bat)](#-arranque-rápido-en-windows-astroloombat)
+   - [Diagnóstico y Depuración en Windows (astroloom_debug.bat)](#-diagnóstico-y-depuración-en-windows-astroloom_debugbat)
 2. [Flujo de Trabajo Recomendado (Paso a Paso)](#2-flujo-de-trabajo-recomendado-paso-a-paso)
 3. [Módulo 1: Apilador (Stacker)](#3-módulo-1-apilador-stacker)
 4. [Módulo 2: Revelador / Editor (Guía Detallada de Parámetros)](#4-módulo-2-revelador--editor-guía-detallada)
@@ -44,9 +45,20 @@ Para iniciar AstroLoom en Windows de la manera más cómoda y sin ventanas negra
 * Si no hay entorno virtual, recurre automáticamente a la instalación de Python del sistema.
 * En entornos Linux/macOS o desde la terminal, puedes iniciar la suite ejecutando `./astroloom.sh` (o directamente `python run_app.py`).
 
-### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.17.2)
-A partir de las versiones **v0.14.0** a **v0.17.2**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
+### 🐞 Modo Diagnóstico y Depuración en Windows (`astroloom_debug.bat`, Novedad v0.18.0)
+Si experimentas problemas técnicos, deseas reportar una incidencia o necesitas inspeccionar la traza completa de consola:
+* Haz **doble clic sobre `astroloom_debug.bat`** en la carpeta principal del proyecto.
+* Lanza AstroLoom manteniendo una ventana de consola secundaria activa donde se muestran en tiempo real las trazas completas (*stack traces*), eventos de inicialización de GPU DirectML y registros de `LogHub`.
+* En caso de cierre o excepción inesperada, la ventana no se cerrará automáticamente, permitiéndote copiar el diagnóstico o capturar la pantalla.
+
+### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.18.0)
+A partir de las versiones **v0.14.0** a **v0.18.0**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
 * **Fluidez Total a 60-160+ FPS:** El renderizado del lienzo (`MaskCanvas`) vuelca directamente a búferes de memoria continua `BGRA8888` compatibles de forma nativa con `QImage(Format_RGB32)`. Las alertas de clipping (`J`) y el comparador Antes/Después con cortina (`Y`) se procesan en microsegundos sin crear copias intermedias en NumPy ni capas secundarias de `QPixmap`.
+* **Arrastrar y Soltar Global y Clasificación Inteligente (v0.18.0):** Soporte de *Drag & Drop* universal sobre la ventana principal: los proyectos `.devloom` se abren directamente en el Revelador y las imágenes se enrutan a la pestaña activa. El algoritmo `classify_astro_files` cataloga automáticamente lotes de archivos en tomas de *Darks*, *Flats*, *Bias*, *Suelo* y *Lights*.
+* **Resiliencia ante Agotamiento de Memoria (OOM) en IA (v0.18.0):** Interceptación guiada de fallos de memoria RAM o GPU DirectML (`MemoryError` / `bad_alloc`) en StarNet++ v2 y NAFNet Denoise (cielo y suelo), liberando memoria de inmediato con `gc.collect()` y mostrando al usuario recomendaciones directas de optimización (aumento de Stride, recorte previo o caché en disco).
+* **Diagnóstico de Modelos Neuronales en Ajustes (v0.18.0):** Panel de supervisión en tiempo real del estado de los pesos ONNX de StarNet v2, NAFNet y SkySeg Horizon, reportando tamaño en disco, GPU DirectML y verificación manual en un clic.
+* **Cierre Seguro y Purga Automática de Temporales (v0.18.0):** Comprobación interactiva de cambios pendientes en proyectos del Revelador al cerrar la suite, junto con la eliminación automática garantizada de archivos y carpetas temporales huérfanas en `%TEMP%` (`starnet_run_*`, `astroloom_pano_burst_*`).
+* **Exportación Web y Redes Sociales Integrada (v0.18.0):** Motor de re-escalado de alta fidelidad con espacio de color sRGB estandarizado, re-enfoque adaptativo USM, firmas/marcas de agua en 9 cuadrantes y plantillas dedicadas para Instagram, Twitter/X, Stories y AstroBin.
 * **Viñeteo, Ganancia In-Place y Curvatura de Arco Zero-Mesh en Rust (v0.17.2):** Corrección analítica continua de caída perimétrica de luz y deformación geométrica vertical del arco panorámico en Rust multihilo con Rayon, evaluada *in-place* en memoria contigua sin copias intermedias.
 * **Fusión Robusta y Previsualización Rápida Borrador en Panorámicas (v0.17.2):** Generación ultrarrápida del mosaico previo a escala 25% (*Draft*) para validación ágil de teselas antes del cosido final, y margen de seguridad de 8192 niveles en `MultiBandBlender` contra desbordamiento en zonas hiperluminosas.
 * **Filtros Coronales NAFE y WOW Nativos en Rust (v0.17.1):** Evaluación de ecualización difusa adaptativa NAFE con convolución FFT 2D en memoria nativa (`realfft`) y paralelización Rayon multinivel, junto al blanqueamiento de ondículas WOW con suavizado recursivo IIR acelerado al 100% en CPU.
@@ -70,9 +82,9 @@ A partir de las versiones **v0.14.0** a **v0.17.2**, AstroLoom incorpora un moto
 * **Tiling ONNX y Filtro Guiado O(1):** Pre y post-procesado acelerado para StarNet++ v2 y NAFNet con ventanas 2D de Hann continuas, y refinado de bordes de horizonte con imágenes integrales (SAT) en ~21 ms.
 * **Resiliencia Automática (*Drop-in Fallback*):** Si en algún entorno el módulo binario no estuviera presente, AstroLoom conmuta de forma transparente y automática a su motor de reserva en Python/NumPy sin que el usuario experimente errores.
 
-### 🖥️ Cabecera de Telemetría Superior y Espacio Útil (v0.16.0 / v0.17.2)
+### 🖥️ Cabecera de Telemetría Superior y Espacio Útil (v0.16.0 / v0.18.0)
 Para maximizar el área de trabajo vertical dedicada al lienzo de revelado y apilado, se ha suprimido la barra de estado inferior (*status bar*), reubicando toda la información de diagnóstico y monitorización en la esquina superior derecha de la barra de pestañas:
-* **Insignia del Motor:** Identifica en todo momento la versión activa de la suite (`● AstroLoom Engine v0.17.2`).
+* **Insignia del Motor:** Identifica en todo momento la versión activa de la suite (`● AstroLoom Engine v0.18.0`).
 * **Píldora de Alerta Fallback GPU $\rightarrow$ CPU:** Si tu tarjeta gráfica se satura de memoria (VRAM) durante la ejecución de StarNet++ o AI Denoise, se enciende una píldora ámbar (`⚠️ Fallback CPU (VRAM)`) indicando que el proceso continuó en CPU de forma segura. Puedes pinchar en ella para ocultarla.
 * **Monitor de RAM en Tiempo Real:** Muestra el porcentaje y los gigabytes de memoria en uso del sistema operativo (`RAM: XX% (used / total GB)`), actualizado mediante telemetría cada 2.5 segundos.
 * **Botón de Registro de Actividad:** Abre una ventana flotante con el histórico cronológico de operaciones, advertencias, tiempos de ejecución y telemetría de depuración.
@@ -532,7 +544,22 @@ El compositor multicapa de AstroLoom funciona de manera análoga a Adobe Photosh
     - **Máscara de Pincel Espacial Integrada:** Puedes pintar o borrar sobre la capa ráster con el pincel interactivo (`[ / ]` para tamaño, `Shift` para borrar) para aplicar el filtro coronal exclusivamente en las regiones de interés (por ejemplo, protegiendo las protuberancias o aislando los streamers exteriores).
     - **Ajustes y Curvas Dedicadas:** Cada capa ráster cuenta con sus propios controles tonales (EV, contraste, sombras, luces, balance) y su propia curva spline LUT independiente.
 * **Capas de Ajuste Personalizadas:** Crea capas locales para iluminar un árbol, apagar una farola o dar volumen a una nube.
-* **Exportación Profesional:**
+* **Exportación Profesional y Redes Sociales (Novedad v0.18.0):**
+  - **Botón de Exportación Unificado (`ExportButton`):** Disponible de manera consistente en todos los módulos creativos (Revelador, Eclipses HDR, Eclipses Collage, Startrails, Meteoros y Panorámicas). Al pulsar sobre el icono principal ejecuta la exportación por defecto, y mediante su flecha desplegable permite elegir entre:
+    - *Exportación Maestra:* Archivo TIFF de 16 bits sin pérdidas o proyecto Adobe Photoshop PSD multicapa con máscaras reales editables.
+    - *Exportar para Web y Redes Sociales...:* Abre el nuevo diálogo optimizador interactivo (`WebExportDialog`).
+  - **Diálogo de Exportación Web y Redes Sociales (`WebExportDialog`, Novedad v0.18.0):**
+    - **Plantillas Predefinidas de Aspecto y Resolución:** Ajusta al instante la imagen a los estándares de publicación sin deformar el encuadre:
+      - *Instagram Cuadrado (1:1):* $1080 \times 1080\text{ px}$.
+      - *Instagram Retrato (4:5):* $1080 \times 1350\text{ px}$ (máxima superficie en feed móvil).
+      - *Stories / Reels / TikTok (9:16):* $1080 \times 1920\text{ px}$.
+      - *Twitter / X Paisaje (16:9):* $1200 \times 675\text{ px}$.
+      - *AstroBin Máxima Calidad:* $3840\text{ px}$ en el lado mayor (Ultra HD 4K).
+      - *Web General / Portafolio:* $1920\text{ px}$ en el lado mayor (Full HD).
+    - **Conversión de Espacio de Color sRGB:** Transforma matemáticamente el espacio lineal de 32 bits al perfil estándar internacional sRGB, evitando que los colores y la saturación se apaguen o distorsionen al subir la foto a plataformas web y aplicaciones móviles.
+    - **Máscara de Enfoque Adaptativa (USM Post-Escalado):** Compensa la suavización natural generada por el algoritmo de reducción de resolución mediante un filtro de nitidez adaptativo con controles de *Cantidad* y *Radio*, resaltando estrellas puntuales y detalles nebulares sin producir halos.
+    - **Firmas y Marcas de Agua:** Permite estampar texto de copyright o un logotipo PNG transparente con posicionamiento en 9 cuadrantes (esquinas, centros y bordes), control de escala porcentual y deslizador de opacidad (transparencia).
+    - **Control Fino de Compresión JPEG / WebP:** Deslizador de calidad porcentual que calcula y muestra en tiempo real una estimación exacta del peso del archivo en disco (KB/MB) antes de guardarlo.
   - **TIFF 16-bit:** Para impresión o archivo maestro de máxima calidad.
   - **PSD Multicapa (Photoshop):** Exporta el proyecto completo conservando cada capa separada (Cielo, Suelo, Estrellas, Fondo Nebular, Capas Ráster con transformaciones afines espaciales 2D y Capas de Ajuste) y **con sus máscaras de capa reales y editables**, listas para continuar trabajando en Photoshop sin perder nada.
 
@@ -648,6 +675,12 @@ Especializado en transformar cientos de fotos fijas en espectaculares círculos 
   * Detecta y suprime automáticamente las luces intermitentes rojas y verdes de los aviones para que no estropeen las trazas.
 * **Suelo Estático:**
   * Fusiona una toma limpia del terreno para que los árboles o rocas se vean nítidos y libres de ruido.
+* **Pestañas de Calibración Unificadas y Master Flat (Novedad v0.18.0):**
+  - Soporte integral de calibración científica mediante pestañas especializadas: **Lights** (tomas de trazas), **Darks** (ruido térmico), **Flats** (viñeteo y motas ópticas), **Bias** (ruido de lectura) y **Suelo** (paisaje estático).
+  - Generación y aplicación matemática automática de Master Flat para corregir la caída perimétrica de luz y manchas antes de acumular las trazas estelares.
+* **Gestor Tabular y Cronograma de Sesión (`SeriesFilesTableWidget` y `SessionTimelineWidget`, Novedad v0.18.0):**
+  - Tabla de fotogramas enriquecida con miniaturas cacheadas en memoria, lectura de metadatos EXIF e indicadores de calibración.
+  - Cronograma visual interactivo que permite seleccionar, aislar o recortar segmentos temporales de la noche con un solo gesto del ratón.
 * **Barra de Progreso Integrada en Lienzo (`CanvasFooterBar`, Novedad v0.17.0):**
   * Muestra el porcentaje y fotograma activo directamente en la base del lienzo con soporte de cancelación reactiva instantánea.
 
@@ -763,13 +796,15 @@ Permite ensamblar mosaicos gigantes del cielo nocturno (por ejemplo, el arco com
 
 ---
 
-## 9. Visor de Inspección Rápida y Descarte (Blink Viewer, Novedad v0.17.0)
+## 9. Visor de Inspección Rápida y Descarte (Blink Viewer, Novedades v0.17.0 / v0.18.0)
 
 AstroLoom incorpora un visor de inspección secuencial (*Blink Viewer*) diseñado para examinar y cribar a gran velocidad series temporales de capturas astronómicas (tomas RAW/TIFF para apilado, circumpolares, meteoros o eclipses):
-* **Reproducción Automática (Blink):** Reproduce la secuencia de tomas hacia delante o hacia atrás con velocidad regulable en fotogramas por segundo (FPS), permitiendo detectar de un vistazo nubes en movimiento, variaciones de transparencia atmosférica, trazas de satélites o saltos en el seguimiento de la montura.
-* **Navegación Manual por Teclado:** Utiliza las flechas de dirección para avanzar o retroceder fotograma a fotograma al instante.
-* **Inspección de Zoom y Pan Sincronizados:** Examina detalles a escala 1:1 o cualquier factor de zoom; la posición se mantiene idéntica al conmutar entre fotogramas para verificar la puntualidad de las estrellas.
-* **Marcado y Cribado de Tomas:** Marca o desmarca rápidamente fotogramas defectuosos con desenfoque, viento o tráfico aéreo para excluirlos del flujo de procesado.
+* **Reproducción Cíclica en Bucle (Blink Loop, Novedad v0.18.0):** Reproduce la secuencia de tomas hacia delante o en ciclo continuo con velocidad regulable en fotogramas por segundo (FPS) y conmutación automática de avance, permitiendo detectar de un vistazo nubes en movimiento, variaciones de transparencia atmosférica, trazas de satélites o saltos de montura.
+* **Navegación Manual Ágil y Cribado con Teclado:** Utiliza las flechas de dirección (`←` / `→`) para avanzar o retroceder fotograma a fotograma, y pulsa la tecla `Espacio` para descartar o re-incluir la toma activa al instante.
+* **Cronograma de Sesión y Tabla con Miniaturas (`SessionTimelineWidget` y `SeriesFilesTableWidget`, Novedad v0.18.0):** Barra de tiempo interactiva integrada que agrupa las tomas por sesiones horarias, permitiendo acotar intervalos temporales y cribar fotogramas desde la tabla con miniaturas generadas en segundo plano.
+* **Métricas Estelares y Calidad en Tiempo Real (Novedad v0.18.0):** Análisis fotométrico instantáneo de cada toma mostrando en la barra lateral el valor medio de FWHM (anchura a media altura estelar), la excentricidad/redondez de estrellas, el número total de estrellas detectadas y la puntuación de calidad de fondo de cielo.
+* **Inspección de Zoom y Pan Sincronizados:** Examina detalles a escala 1:1 o cualquier factor de zoom; la posición se mantiene idéntica al conmutar entre fotogramas para verificar la puntualidad y el foco de las estrellas.
+* **Histograma y Estadísticas Dinámicas:** Representación gráfica en tiempo real de los canales RGB con percentiles de clipping para detectar subexposición o saturación excesiva.
 
 ---
 
@@ -782,6 +817,8 @@ AstroLoom incorpora un visor de inspección secuencial (*Blink Viewer*) diseñad
 | `Ctrl + O` | Abrir proyecto `.devloom` o imagen base en el Revelador. |
 | `Ctrl + Z` | Deshacer el último cambio de parámetros o pincel. |
 | `Ctrl + Y` / `Ctrl + Shift + Z` | Rehacer la acción deshecha. |
+| `Espacio` | Conmutar inclusión / descarte del fotograma activo en el visor Blink Viewer. |
+| `←` / `→` | Fotograma anterior / siguiente en el visor Blink Viewer. |
 | `J` | Alternar advertencia de recorte (Clipping: sombras azules, luces rojas). |
 | `Y` | Activar / Desactivar el comparador Antes / Después (Split-View). |
 | `Shift + Y` | Conmutar orientación del comparador Antes / Después (Vertical ↔ Horizontal). |

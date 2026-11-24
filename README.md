@@ -4,7 +4,7 @@
 
 **Suite y Estación de Trabajo Integral para Astrofotografía de Paisaje, Cielo Profundo y Eventos Astronómicos**
 
-[![Version](https://img.shields.io/badge/version-v0.17.2-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
+[![Version](https://img.shields.io/badge/version-v0.18.0-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -46,18 +46,27 @@ Impulsada por una arquitectura híbrida que combina una interfaz gráfica reacti
 
 ---
 
-## 🚀 Novedades de la Versión v0.17.2
+## 🚀 Novedades de la Versión v0.18.0
 
-* **Aceleración Nativa en Rust para Panorámicas y Corrección Geométrica (`astroloom_rs`, `core/panorama.py`):**
-  - **Kernels In-Place de Viñeteo y Ganancia:** Evaluación polinomial continua de viñeteo radial (orden 4/6) y ganancia directamente en memoria nativa sobre los paneles del mosaico, eliminando copias intermedias en Python.
-  - **Curvatura de Arco Zero-Mesh:** Algoritmo analítico de curvatura en Rust multihilo con Rayon para modelar la comba del arco galáctico o el horizonte terrestre con deformación geométrica continua y sin malla triangular.
-  - **Previsualización Rápida Borrador (*Fast Draft Preview* al 25%):** Flujo de trabajo acelerado que genera el mosaico previo a un cuarto de escala en segundos, permitiendo validar la alineación de teselas, solapes y curvatura antes de lanzar el cosido final de gigapíxeles.
-  - **Fusión Multibanda Robusta con Headroom (8192 niveles):** Prevención de desbordamiento de enteros con signo de 16 bits en `MultiBandBlender`, garantizando transiciones suaves y continuas en zonas de alta luminosidad y núcleos galácticos.
-  - **Arrastre de Archivos (Drag & Drop) y Telemetría en Panorámicas:** Soporte completo para arrastrar imágenes directamente al lienzo del mosaico y registro detallado de cada fase en `LogHub`.
+* **Nuevo Diálogo y Motor de Exportación Web y Redes Sociales (`gui/dialog_web_export.py`, `gui/widgets/export_button.py`):**
+  - **Plantillas Predefinidas de Aspecto y Resolución:** Exportación optimizada en un clic para Instagram Cuadrado (1:1, 1080x1080), Instagram Retrato (4:5, 1080x1350), Stories / Reels / TikTok (9:16, 1080x1920), Twitter/X Horizontal (16:9, 1200x675), AstroBin (4K UHD) y Web General (Full HD 1920 px).
+  - **Espacio de Color sRGB y Re-enfoque Adaptativo:** Conversión estricta a perfil sRGB para fidelidad cromática en pantallas móviles y máscara de enfoque adaptativa (USM) para compensar la pérdida de micro-detalle al reducir resolución.
+  - **Marcas de Agua y Firmas Personalizadas:** Inserción de texto o logotipo gráfico con cuadrícula de 9 cuadrantes, escala y opacidad ajustables.
+  - **Botón Unificado de Exportación (`ExportButton`):** Desplegable homogéneo presente en todos los módulos de procesado (Revelador, Eclipses HDR, Eclipses Collage, Startrails, Meteoros y Panorámicas) con acceso directo a guardado maestro (TIFF/PSD) o exportación web.
 
-* **Refactorización Modular y Alta Resiliencia en el Revelador (`gui/developer/`):**
-  - **Desacoplamiento Modular de `DeveloperTab`:** Descomposición limpia en 6 mixins especializados (`RenderMixin`, `AIWorkersMixin`, `CanvasToolsMixin`, `LayerSyncMixin`, `HistoryPresetsMixin` y `ProjectIOMixin`), reduciendo la complejidad ciclomática y optimizando el ciclo de vida de los eventos.
-  - **Preservación Robusta de Cachés IA y Capas de Máscaras:** Protección de las cachés de inferencia de StarNet++ v2 y AI Denoise frente a operaciones de recorte (*crop*) y la pila de deshacer/rehacer (*undo/redo*), eliminando esperas y recomputaciones innecesarias.
+* **Modularización de Series Temporales y Salto Cualitativo en Blink Viewer (`gui/widgets/`, `gui/dialog_blink.py`):**
+  - **Componentes `SeriesFilesTableWidget` y `SessionTimelineWidget`:** Gestión tabular con miniaturas en memoria y cronograma temporal interactivo por bloques de sesión integrado de forma homogénea en Blink Viewer, Startrails, Meteoros y Eclipses Collage.
+  - **Visor Blink Avanzado:** Reproducción secuencial cíclica continua (*Blink Loop*) a velocidad configurable en FPS, navegación por teclado, inspección de calidad estelar en tiempo real (FWHM, excentricidad, conteo) e histograma sincronizado.
+
+* **Arrastrar y Soltar Global (Global Drag & Drop) y Clasificación Inteligente (`gui/main_window.py`, `gui/widgets/drop_widgets.py`):**
+  - **Recepción Global en Ventana Principal:** Detección automática de proyectos `.devloom` para apertura directa en el Revelador y enrutado dinámico de imágenes astronómicas hacia la pestaña activa.
+  - **Clasificador Astronómico Inteligente:** Catalogación automática de colecciones de carpetas en tomas de *Darks*, *Flats*, *Bias*, *Suelo* y *Lights* por análisis de rutas y nombres.
+  - **Calibración Completa en Startrails:** Pestañas de calibración unificadas (Lights, Darks, Flats, Bias, Suelo) con corrección matemática de Master Flat.
+
+* **Diagnóstico y Resiliencia en Inteligencia Artificial y Cierre Seguro (`gui/tab_settings.py`, `core/`):**
+  - **Panel de Integridad de Modelos IA:** Monitoreo del estado y peso en MB de StarNet++ v2 ONNX, NAFNet Denoise y SkySeg Horizon en Ajustes, con verificación de GPU DirectML y botón de diagnóstico.
+  - **Protección Frente a Falta de Memoria (OOM):** Manejo guiado de excepciones de memoria en GPU/CPU con recolección de basura forzada y consejos prácticos de configuración.
+  - **Cierre Seguro y Purga Automática:** Aviso de cambios sin guardar en el Revelador y eliminación garantizada de temporales residuales en `%TEMP%`.
 
 ---
 

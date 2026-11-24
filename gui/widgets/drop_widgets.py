@@ -14,7 +14,8 @@ from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDragLeaveEvent, QDro
 
 SUPPORTED_IMAGE_EXTENSIONS: Set[str] = {
     ".nef", ".cr2", ".cr3", ".arw", ".dng", ".raw", ".raf", ".orf", ".rw2",
-    ".tif", ".tiff", ".fits", ".fit", ".fts", ".jpg", ".jpeg", ".png"
+    ".tif", ".tiff", ".fits", ".fit", ".fts", ".jpg", ".jpeg", ".png",
+    ".devloom", ".loom"
 }
 
 
@@ -51,6 +52,42 @@ def collect_image_files_from_mime(mime_data) -> List[str]:
             seen.add(p)
             result.append(p)
     return result
+
+
+def classify_astro_files(paths: List[str]) -> dict:
+    """
+    Clasifica automáticamente una lista de rutas de archivo en categorías de astrofotografía:
+    'Darks', 'Flats', 'Bias', 'Suelo' y 'Lights' basándose en subcarpetas y nombres de archivo.
+    """
+    categories = {
+        "Darks": [],
+        "Flats": [],
+        "Bias": [],
+        "Suelo": [],
+        "Lights": []
+    }
+    for p in paths:
+        norm = p.replace("\\", "/").lower()
+        fname = os.path.basename(norm)
+        parts = norm.split("/")
+
+        # 1. Darks
+        if any(d in parts[:-1] for d in ("dark", "darks", "tomas_oscuras")) or fname.startswith("dark") or "_dark" in fname:
+            categories["Darks"].append(p)
+        # 2. Flats
+        elif any(f in parts[:-1] for f in ("flat", "flats", "tomas_planas")) or fname.startswith("flat") or "_flat" in fname:
+            categories["Flats"].append(p)
+        # 3. Bias / Offset
+        elif any(b in parts[:-1] for b in ("bias", "biases", "offset", "offsets")) or fname.startswith("bias") or fname.startswith("offset") or "_bias" in fname or "_offset" in fname:
+            categories["Bias"].append(p)
+        # 4. Suelo / Paisaje
+        elif any(s in parts[:-1] for s in ("suelo", "ground", "foreground", "paisaje")) or fname.startswith("suelo") or fname.startswith("ground") or "_suelo" in fname:
+            categories["Suelo"].append(p)
+        # 5. Lights (tomas de luz por defecto)
+        else:
+            categories["Lights"].append(p)
+
+    return categories
 
 
 class DropListWidget(QListWidget):

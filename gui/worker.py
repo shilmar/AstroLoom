@@ -778,6 +778,7 @@ class AIHorizonWorker(QThread):
     """Hilo secundario para detección y segmentación automática de horizonte mediante IA / Algoritmo."""
     finished_success = Signal(object, str)  # (mask_array: np.ndarray float32, method_name: str)
     error_occurred = Signal(str)
+    cancelled = Signal()
 
     def __init__(
         self,
@@ -792,13 +793,25 @@ class AIHorizonWorker(QThread):
         self.feather_radius = feather_radius
         self.threshold = threshold
         self.force_algorithmic = force_algorithmic
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
 
     def run(self):
         try:
+            if self._is_cancelled:
+                self.cancelled.emit()
+                return
+
             target = self.image_rgb
             if isinstance(target, str):
                 from core.stacking import load_image_as_float32
                 target = load_image_as_float32(target)
+
+            if self._is_cancelled:
+                self.cancelled.emit()
+                return
 
             if target is None:
                 raise ValueError("No se proporciono una imagen valida para la deteccion de horizonte.")
@@ -810,9 +823,13 @@ class AIHorizonWorker(QThread):
                 threshold=self.threshold,
                 force_algorithmic=self.force_algorithmic
             )
+            if self._is_cancelled:
+                self.cancelled.emit()
+                return
             self.finished_success.emit(mask, method)
         except Exception as e:
-            self.error_occurred.emit(str(e))
+            if not self._is_cancelled:
+                self.error_occurred.emit(str(e))
 
 
 class ModelDownloadWorker(QThread):

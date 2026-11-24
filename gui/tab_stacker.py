@@ -261,7 +261,7 @@ class StackerTab(QWidget):
         # 1. Lienzo Interactivo con soporte de arrastrar y soltar
         self.canvas = MaskCanvas(self, enable_masking=True)
         self.canvas.brush_size_changed.connect(self.on_canvas_brush_changed)
-        self.canvas.files_dropped.connect(lambda paths: self.add_files_to_tab("Lights", paths))
+        self.canvas.files_dropped.connect(self._on_canvas_files_dropped)
 
         # 2. Panel lateral (Scrollable con Log y Ejecución Fijos Abajo)
         left_panel = QWidget()
@@ -1093,6 +1093,15 @@ class StackerTab(QWidget):
             return
 
         self.add_files_to_tab(tab_name, paths)
+
+    def _on_canvas_files_dropped(self, paths: list) -> None:
+        """Añade los archivos arrastrados sobre el lienzo directamente a la pestaña de calibración activa."""
+        if not paths:
+            return
+        idx = self.tabs_files.currentIndex() if hasattr(self, 'tabs_files') else 0
+        tab_names = ["Lights", "Darks", "Flats", "Bias", "Suelo"]
+        target_name = tab_names[idx] if 0 <= idx < len(tab_names) else "Lights"
+        self.add_files_to_tab(target_name, paths)
 
     def add_files_to_tab(self, tab_name: str, paths: list):
         """Añade tomas a la pestaña indicada, deduplicando y actualizando vista previa si procede."""

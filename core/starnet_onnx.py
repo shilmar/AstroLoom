@@ -412,7 +412,12 @@ def run_starnet_onnx(
         log(f"Dividiendo imagen en {total_tiles} bloques ({tile_size}x{tile_size}, paso={stride}, margen={border}px)...")
 
         sess = _create_inference_session(path)
-        out_tiles = np.zeros_like(tiles_4d)
+        try:
+            out_tiles = np.zeros_like(tiles_4d)
+        except MemoryError:
+            import gc
+            gc.collect()
+            raise MemoryError("Memoria RAM insuficiente para asignar los bloques de StarNet. Aumenta el Stride para generar menos bloques.")
 
         for tile_idx in range(total_tiles):
             if cancel_check and cancel_check():

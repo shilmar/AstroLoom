@@ -209,7 +209,21 @@ class AIWorkersMixin:
     def on_starnet_error(self, err_msg: str):
         self._set_ai_processing_state(False)
         self.log_message(f"[ERROR STARNET] {err_msg}")
-        QMessageBox.warning(self, "Error en StarNet++", err_msg)
+        import gc; gc.collect()
+        err_lower = str(err_msg).lower()
+        if any(k in err_lower for k in ("out of memory", "outofmemory", "memoryerror", "bad_alloc", "0x8007000e", "unable to allocate", "memoria insuficiente")):
+            QMessageBox.critical(
+                self,
+                "Memoria Insuficiente (StarNet v2)",
+                "La tarjeta gráfica (GPU) o la memoria RAM se han quedado sin espacio para procesar la imagen completa con StarNet.\n\n"
+                "Sugerencias para resolverlo:\n"
+                "• Aumenta el Stride (desplazamiento) en el panel StarNet (ej. 256 o 384 px) para reducir la cantidad de bloques en memoria.\n"
+                "• Si la imagen es muy grande, realiza un recorte previo del área que deseas desacoplar.\n"
+                "• En Ajustes > Rendimiento, selecciona almacenamiento intermedio en Disco.\n"
+                "• Cierra navegadores web u otros programas que consuman memoria de vídeo (VRAM)."
+            )
+        else:
+            QMessageBox.warning(self, "Error en StarNet++", err_msg)
 
     def _start_starnet_model_download(self):
         """Descarga asistida del modelo ONNX de StarNet v2 con barra modal de progreso."""
@@ -383,7 +397,19 @@ class AIWorkersMixin:
         def on_error(err):
             progress.close()
             self.log_message(f"[ERROR IA SUELO] {err}")
-            QMessageBox.warning(self, "Error en Inferencia", f"Ocurrió un error en la inferencia NAFNet de suelo:\n{err}")
+            import gc; gc.collect()
+            err_lower = str(err).lower()
+            if any(k in err_lower for k in ("out of memory", "outofmemory", "memoryerror", "bad_alloc", "0x8007000e", "unable to allocate", "memoria insuficiente")):
+                QMessageBox.critical(
+                    self,
+                    "Memoria Insuficiente (IA Suelo)",
+                    "No hay suficiente memoria RAM o VRAM disponible para procesar el suelo con NAFNet.\n\n"
+                    "Sugerencias:\n"
+                    "• Asegúrate de cerrar programas pesados en segundo plano.\n"
+                    "• Prueba a procesar un recorte o seleccionar una zona más acotada de la imagen."
+                )
+            else:
+                QMessageBox.warning(self, "Error en Inferencia", f"Ocurrió un error en la inferencia NAFNet de suelo:\n{err}")
 
         def on_cancel():
             self.ground_ai_denoise_worker.cancel()
@@ -552,7 +578,20 @@ class AIWorkersMixin:
         def on_error(err):
             progress.close()
             self.log_message(f"[ERROR IA DENOISE] {err}")
-            QMessageBox.warning(self, "Error en Inferencia", f"Ocurrió un error en la inferencia NAFNet:\n{err}")
+            import gc; gc.collect()
+            err_lower = str(err).lower()
+            if any(k in err_lower for k in ("out of memory", "outofmemory", "memoryerror", "bad_alloc", "0x8007000e", "unable to allocate", "memoria insuficiente")):
+                QMessageBox.critical(
+                    self,
+                    "Memoria Insuficiente (NAFNet Denoise)",
+                    "No hay suficiente memoria RAM o VRAM disponible para completar la reducción de ruido con NAFNet.\n\n"
+                    "Sugerencias:\n"
+                    "• Asegúrate de cerrar programas pesados en segundo plano.\n"
+                    "• Si la imagen supera los 40–50 Mpx, considera realizar un recorte del área de interés antes de aplicar IA.\n"
+                    "• En Ajustes > Rendimiento, activa almacenamiento temporal en Disco."
+                )
+            else:
+                QMessageBox.warning(self, "Error en Inferencia", f"Ocurrió un error en la inferencia NAFNet:\n{err}")
 
         def on_cancel():
             self.ai_denoise_worker.cancel()

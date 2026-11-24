@@ -874,6 +874,7 @@ class ProjectIOMixin:
             if cropped_base is not None:
                 self.image_32bit = np.ascontiguousarray(cropped_base, dtype=np.float32)
                 self.canvas.set_native_image_size((self.image_32bit.shape[1], self.image_32bit.shape[0]))
+                self._is_cropped = True
 
             # 3. Restaurar capas StarNet si estaban empaquetadas
             starnet_dict = proj_data.get("starnet", {})
@@ -895,6 +896,7 @@ class ProjectIOMixin:
                     base_reconstructed = self.raw_linear_starless + self.image_stars
                     self.image_32bit = np.clip(base_reconstructed, 0.0, 1.0).astype(np.float32)
                     self.canvas.set_native_image_size((self.image_32bit.shape[1], self.image_32bit.shape[0]))
+                    self._is_cropped = True
 
                 self._set_starnet_tools_enabled(True)
                 self.combo_layer.setEnabled(True)

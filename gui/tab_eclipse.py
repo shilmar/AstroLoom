@@ -583,6 +583,9 @@ class EclipseWorker(QThread):
                                 pct = int(10 + (completed / total) * 85)
                                 self.progress.emit(pct, f"Escaneando limbo ({completed}/{total}): {bname}")
 
+                if self.isInterruptionRequested():
+                    return
+
                 self.progress.emit(100, "Detección subpíxel completada para todas las tomas.")
                 self.finished.emit(detections, "batch_detect")
 
@@ -677,6 +680,9 @@ class EclipseWorker(QThread):
                                     int(5 + (completed / total) * 40),
                                     f"Cargando ({completed}/{total}): {bname}"
                                 )
+
+                    if self.isInterruptionRequested():
+                        return
 
                     if auto_align and len(final_centers) == len(loaded_images) and all(img is not None for img in loaded_images):
                         self.progress.emit(50, "Alineando tomas por centro de limbo (interpolación Lanczos4)...")

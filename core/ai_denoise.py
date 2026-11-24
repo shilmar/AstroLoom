@@ -388,8 +388,13 @@ def _run_single_scale_tiled(
 
     hann_win = compute_hann_2d_window(tile_size, tile_size)
 
-    accumulator_img = np.zeros((h_pad, w_pad, 3), dtype=np.float32)
-    accumulator_weights = np.zeros((h_pad, w_pad, 1), dtype=np.float32)
+    try:
+        accumulator_img = np.zeros((h_pad, w_pad, 3), dtype=np.float32)
+        accumulator_weights = np.zeros((h_pad, w_pad, 1), dtype=np.float32)
+    except MemoryError:
+        import gc
+        gc.collect()
+        raise MemoryError("Memoria RAM insuficiente para asignar el acumulador de reducción de ruido NAFNet.")
 
     current_tile = 0
     for y in y_coords:
@@ -407,11 +412,19 @@ def _run_single_scale_tiled(
                 if active_providers and active_providers[0] != "CPUExecutionProvider" and model_path:
                     logger.warning(f"Error GPU en NAFNet ({run_err}). Degradando a CPU...")
                     notify_gpu_fallback(f"NAFNet AI Denoise: {run_err}")
-                    session = _create_inference_session(model_path, use_cache=True, force_cpu=True)
-                    input_name = session.get_inputs()[0].name
-                    output_name = session.get_outputs()[0].name
-                    outputs = session.run([output_name], {input_name: tensor_in})
+                    import gc
+                    gc.collect()
+                    try:
+                        session = _create_inference_session(model_path, use_cache=True, force_cpu=True)
+                        input_name = session.get_inputs()[0].name
+                        output_name = session.get_outputs()[0].name
+                        outputs = session.run([output_name], {input_name: tensor_in})
+                    except Exception as cpu_err:
+                        gc.collect()
+                        raise cpu_err
                 else:
+                    import gc
+                    gc.collect()
                     raise run_err
             out_tile = outputs[0].squeeze(0)
             out_tile = np.transpose(out_tile, (1, 2, 0))
