@@ -58,11 +58,6 @@ def apply_display_lut16_dual(
     out_u8[:] = np.clip(v_sl + v_st, 0, 255).astype(np.uint8)
 
 
-# Alias para retrocompatibilidad absoluta
-apply_display_lut16_numba = apply_display_lut16
-apply_display_lut16_dual_numba = apply_display_lut16_dual
-
-
 def compute_combined_stf_lut(
     stretch_mode: str = "mtf",
     bp: float = 0.0,

@@ -378,9 +378,6 @@ class CollapsibleSection(QWidget):
             self.lbl_badge.setToolTip("")
             self.lbl_badge.setVisible(False)
 
-    # Alias para compatibilidad con código existente que use setTitle() de QGroupBox
-    setTitle = set_title
-
     def setContentLayout(self, layout) -> None:
         if layout is not None and hasattr(layout, 'parentWidget'):
             pw = layout.parentWidget()

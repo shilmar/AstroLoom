@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QComboBox, QCheckBox, QDoubleSpinBox
 )
-from PySide6.QtCore import Qt, Signal as pyqtSignal
+from PySide6.QtCore import Qt, Signal
 
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
@@ -18,20 +18,20 @@ from gui.theme import STYLE_SECONDARY_BTN, STYLE_SPECIAL_ACTION_BTN
 class LightPollutionPanel(QWidget):
     """Encapsulates background gradient reduction and 2D light pollution dome controls."""
 
-    parameter_changed = pyqtSignal()
-    action_committed = pyqtSignal()
-    interaction_started = pyqtSignal()
-    interaction_finished = pyqtSignal()
-    extract_bg_requested = pyqtSignal()
-    auto_abe_requested = pyqtSignal()
-    auto_detect_lp_requested = pyqtSignal()
-    center_pipette_toggled = pyqtSignal(bool)
-    color_pipette_toggled = pyqtSignal(bool)
-    sample_tool_toggled = pyqtSignal(bool)
-    auto_grid_requested = pyqtSignal()
-    clear_points_requested = pyqtSignal()
-    sample_box_size_changed = pyqtSignal(int)
-    rbf_mode_changed = pyqtSignal(str)
+    parameter_changed = Signal()
+    action_committed = Signal()
+    interaction_started = Signal()
+    interaction_finished = Signal()
+    extract_bg_requested = Signal()
+    auto_abe_requested = Signal()
+    auto_detect_lp_requested = Signal()
+    center_pipette_toggled = Signal(bool)
+    color_pipette_toggled = Signal(bool)
+    sample_tool_toggled = Signal(bool)
+    auto_grid_requested = Signal()
+    clear_points_requested = Signal()
+    sample_box_size_changed = Signal(int)
+    rbf_mode_changed = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)

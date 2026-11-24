@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QGroupBox, QSlider, QComboBox
 )
-from PySide6.QtCore import Qt, Signal as pyqtSignal
+from PySide6.QtCore import Qt, Signal
 
 from gui.icons import get_icon
 
@@ -15,12 +15,12 @@ class EffectsPanel(QWidget):
     """Encapsulates Orton Glow and Star Diffusion (Star Mist) effects."""
 
     # Reactive signals
-    parameter_changed = pyqtSignal()
-    action_committed = pyqtSignal()
-    interaction_started = pyqtSignal()
-    interaction_finished = pyqtSignal()
-    orton_changed = pyqtSignal(int, int, int, str, str)       # strength, radius, threshold, tint_key, mode_key
-    star_diff_changed = pyqtSignal(int, int, int, int, str)   # strength, radius, threshold, color, mode_key
+    parameter_changed = Signal()
+    action_committed = Signal()
+    interaction_started = Signal()
+    interaction_finished = Signal()
+    orton_changed = Signal(int, int, int, str, str)       # strength, radius, threshold, tint_key, mode_key
+    star_diff_changed = Signal(int, int, int, int, str)   # strength, radius, threshold, color, mode_key
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)

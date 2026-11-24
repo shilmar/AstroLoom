@@ -1416,7 +1416,4 @@ class SessionTimelineWidget(QWidget):
             QToolTip.showText(event.globalPosition().toPoint(), tip, self)
 
 
-# Alias para máxima retrocompatibilidad y ergonomía
-BlinkTimelineWidget = SessionTimelineWidget
-
-__all__ = ["SessionTimelineWidget", "BlinkTimelineWidget"]
+__all__ = ["SessionTimelineWidget"]

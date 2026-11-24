@@ -40,9 +40,6 @@ def _compute_histogram_cv(img: np.ndarray, step: int) -> np.ndarray:
         hist[3] = cv2.calcHist([luma], [0], None, [256], [0, 256]).ravel()
     return hist
 
-# Alias de compatibilidad
-_hist_numpy_fallback = _compute_histogram_cv
-
 
 def compute_live_histogram(
     img: Optional[np.ndarray],

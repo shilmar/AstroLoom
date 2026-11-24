@@ -433,10 +433,6 @@ def apply_dust_healing(
     return out
 
 
-# Alias for consistency
-heal_dust_spots = apply_dust_healing
-
-
 def visualize_dust_spots(
     img: np.ndarray,
     threshold: float = 50.0,

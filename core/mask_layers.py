@@ -14,8 +14,7 @@ import numpy as np
 from core.masking import (
     generate_luminance_mask,
     generate_color_range_mask,
-    refine_mask_guided_cross,
-    guided_cross
+    refine_mask_guided_cross
 )
 from core.stretch import apply_white_balance, adjust_contrast
 

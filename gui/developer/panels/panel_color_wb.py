@@ -5,7 +5,7 @@ from typing import Optional, Callable
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QComboBox
 )
-from PySide6.QtCore import Qt, Signal as pyqtSignal
+from PySide6.QtCore import Qt, Signal
 
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
@@ -17,12 +17,12 @@ class ColorWbPanel(QWidget):
     """Encapsulates White Balance, PCC, Saturation, and Dual-Band Narrowband controls."""
 
     # Signals for reactive pipeline updates
-    parameter_changed = pyqtSignal()
-    pipette_toggled = pyqtSignal(bool)
-    pcc_requested = pyqtSignal()
-    action_committed = pyqtSignal()
-    interaction_started = pyqtSignal()
-    interaction_finished = pyqtSignal()
+    parameter_changed = Signal()
+    pipette_toggled = Signal(bool)
+    pcc_requested = Signal()
+    action_committed = Signal()
+    interaction_started = Signal()
+    interaction_finished = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)

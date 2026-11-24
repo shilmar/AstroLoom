@@ -2236,7 +2236,7 @@ class EclipseTab(QWidget):
         self.log(f"Modo cambiado a: Eclipse {mode_label}")
 
         if is_solar:
-            self.grp_hdr.setTitle("3. Fusión HDR (Lineal 32-bit)")
+            self.grp_hdr.set_title("3. Fusión HDR (Lineal 32-bit)")
             self.slider_asinh.setValue(35)
             if hasattr(self, "lbl_mode_badge"):
                 self.lbl_mode_badge.setText("● Modo: Solar (HDR)")
@@ -2244,7 +2244,7 @@ class EclipseTab(QWidget):
                     "background-color: #222227; border: 1px solid #2e2e35; border-radius: 4px; padding: 2px 8px; color: #2f81f7; font-weight: bold; font-size: 11px;"
                 )
         else:
-            self.grp_hdr.setTitle("3. Fusión HDR (Mertens Multiescala)")
+            self.grp_hdr.set_title("3. Fusión HDR (Mertens Multiescala)")
             self.slider_asinh.setValue(0)
             if hasattr(self, "lbl_mode_badge"):
                 self.lbl_mode_badge.setText("● Modo: Lunar (Mertens)")

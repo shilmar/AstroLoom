@@ -529,6 +529,3 @@ def refine_mask_guided_cross(
         return alpha_final[..., np.newaxis]
     return alpha_final
 
-
-# Alias canónico
-guided_cross = refine_mask_guided_cross

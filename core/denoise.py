@@ -133,6 +133,3 @@ def apply_astro_denoise(
     out_rgb = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
     return np.clip(out_rgb, 0.0, 1.0).astype(np.float32)
 
-
-# Alias de retrocompatibilidad directa con callers existentes
-apply_denoise = apply_astro_denoise

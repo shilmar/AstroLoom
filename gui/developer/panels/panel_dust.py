@@ -5,7 +5,7 @@ from typing import Optional, Callable, List, Dict, Any
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QComboBox, QCheckBox, QFrame
 )
-from PySide6.QtCore import Qt, Signal as pyqtSignal
+from PySide6.QtCore import Qt, Signal
 
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
@@ -26,14 +26,14 @@ class DustPanel(QWidget):
     """
 
     # Señales reactivas
-    parameter_changed = pyqtSignal()
-    auto_detect_requested = pyqtSignal(int)          # sensitivity (0..100)
-    visualize_toggled = pyqtSignal(bool, int)        # is_active, threshold (0..100)
-    spot_mode_toggled = pyqtSignal(bool)             # modo colocación manual en canvas
-    clear_spots_requested = pyqtSignal()
-    action_committed = pyqtSignal()
-    interaction_started = pyqtSignal()
-    interaction_finished = pyqtSignal()
+    parameter_changed = Signal()
+    auto_detect_requested = Signal(int)          # sensitivity (0..100)
+    visualize_toggled = Signal(bool, int)        # is_active, threshold (0..100)
+    spot_mode_toggled = Signal(bool)             # modo colocación manual en canvas
+    clear_spots_requested = Signal()
+    action_committed = Signal()
+    interaction_started = Signal()
+    interaction_finished = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)

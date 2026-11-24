@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QComboBox, QCheckBox
 )
-from PySide6.QtCore import Qt, Signal as pyqtSignal
+from PySide6.QtCore import Qt, Signal
 
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
@@ -18,11 +18,11 @@ from gui.theme import STYLE_SPECIAL_ACTION_BTN, TEXT_SECONDARY
 class DeconvolutionPanel(QWidget):
     """Encapsulates Richardson-Lucy optical deconvolution and PSF configuration controls."""
 
-    parameter_changed = pyqtSignal()
-    action_committed = pyqtSignal()
-    interaction_started = pyqtSignal()
-    interaction_finished = pyqtSignal()
-    auto_psf_requested = pyqtSignal()
+    parameter_changed = Signal()
+    action_committed = Signal()
+    interaction_started = Signal()
+    interaction_finished = Signal()
+    auto_psf_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)

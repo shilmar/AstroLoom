@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QButtonGroup
 )
-from PySide6.QtCore import Qt, Signal as pyqtSignal
+from PySide6.QtCore import Qt, Signal
 
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
@@ -17,13 +17,13 @@ from gui.icons import get_icon
 class StretchingPanel(QWidget):
     """Encapsulates Midtone Transfer Function (MTF) and Generalized Hyperbolic Stretch (GHS) controls."""
 
-    parameter_changed = pyqtSignal()
-    action_committed = pyqtSignal()
-    interaction_started = pyqtSignal()
-    interaction_finished = pyqtSignal()
-    auto_mtf_requested = pyqtSignal()
-    auto_ghs_requested = pyqtSignal()
-    ghs_pipette_toggled = pyqtSignal(bool)
+    parameter_changed = Signal()
+    action_committed = Signal()
+    interaction_started = Signal()
+    interaction_finished = Signal()
+    auto_mtf_requested = Signal()
+    auto_ghs_requested = Signal()
+    ghs_pipette_toggled = Signal(bool)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
