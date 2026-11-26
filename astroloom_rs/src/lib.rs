@@ -9,6 +9,7 @@ pub mod fits_io;
 pub mod meteors;
 pub mod panorama;
 pub mod photometry;
+pub mod plate_solver;
 pub mod project_codec;
 pub mod psd_writer;
 pub mod renderer;
@@ -151,6 +152,10 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 16. Serialización Paralela de Proyectos .devloom - Prioridad 14 (core/project_io.py)
     m.add_function(wrap_pyfunction!(project_codec::write_devloom_project_rs, m)?)?;
     m.add_function(wrap_pyfunction!(project_codec::read_devloom_project_rs, m)?)?;
+
+    // 17. Plate Solving Local Offline (Quads 4D + ALCAT001)
+    m.add_function(wrap_pyfunction!(plate_solver::detect_plate_stars_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(plate_solver::plate_solve_stars_rs, m)?)?;
 
     Ok(())
 }

@@ -89,6 +89,11 @@ class PanoramaSettings:
     use_auto_mask: bool = True             # Desacoplamiento cielo/suelo con auto-máscara IA y anti-ghosting
     vignette_amount: float = 0.5           # Fuerza de compensación de viñeteo (0.0 a 1.0)
     star_matching: bool = True             # Alineación guiada por identificación de estrellas (asterismos)
+    use_plate_solving: bool = True         # Plate solving local offline (catálogo ALCAT001)
+    plate_catalog_profile: str = "lite"    # Perfil de catálogo: "lite", "standard", "deep"
+    view_pitch_deg: float = 0.0            # Inclinación 3D de la esfera de proyección (-45° a +45°)
+    view_roll_deg: float = 0.0             # Rotación / nivelación 3D del horizonte (-20° a +20°)
+    view_yaw_deg: float = 0.0              # Centrado horizontal 3D de la panorámica (-60° a +60°)
     arch_curvature: float = 0.0            # Deformación de arco / curvatura de horizonte (-0.25 a +0.25)
     preview_scale: float = 1.0             # 1.0 = alta resolución completa, <1.0 (ej. 0.25) = borrador rápido
 
@@ -558,52 +563,296 @@ def _find_reachable_nodes(start_node: int, edges: Dict[Tuple[int, int], Any]) ->
     return visited
 
 
-def _level_and_center_rotations(rmats: List[np.ndarray]) -> List[np.ndarray]:
+def _level_and_center_rotations(
+    rmats: List[np.ndarray],
+    level_horizon: bool = True,
+    half_fov_v_rad: float = 0.65,
+    max_elev_deg: float = 76.0,
+) -> List[np.ndarray]:
     """
-    Alinea el eje medio de rotación del barrido con el eje vertical (Y)
-    y centra el panel central en yaw = 0.
+    Nivela el horizonte astronómico/terrestre y centra el barrido en yaw = 0 sobre SO(3).
+    Nota: OpenCV PyRotationWarper proyecta p_world = R @ p_cam, por lo que toda rotación
+    global de la esfera panorámica DEBE multiplicarse por la izquierda (R_global @ R_i)
+    para preservar intacta la alineación relativa entre paneles.
     """
     n = len(rmats)
-    if n < 2:
-        return [r.astype(np.float32) for r in rmats]
+    if n < 1:
+        return []
     try:
-        axes = []
-        for i in range(n - 1):
-            opt_curr = rmats[i].T @ np.array([0, 0, 1], dtype=np.float32)
-            opt_next = rmats[i + 1].T @ np.array([0, 0, 1], dtype=np.float32)
-            axis_w = np.cross(opt_curr, opt_next)
-            norm_ax = np.linalg.norm(axis_w)
-            if norm_ax > 1e-4:
-                axes.append(axis_w / norm_ax)
-        if axes:
-            tripod_axis = np.median(axes, axis=0)
-            tripod_axis /= np.linalg.norm(tripod_axis)
-            target_up = np.array([0, -1, 0], dtype=np.float32)
-            if np.dot(tripod_axis, target_up) < 0:
-                target_up = -target_up
-            v_rot = np.cross(tripod_axis, target_up)
-            cos_a = np.dot(tripod_axis, target_up)
-            sin_a = np.linalg.norm(v_rot)
-            if sin_a > 1e-4:
-                k = v_rot / sin_a
-                K_mat = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]], dtype=np.float32)
-                R_align = np.eye(3, dtype=np.float32) + sin_a * K_mat + (1.0 - cos_a) * (K_mat @ K_mat)
-            else:
-                R_align = np.eye(3, dtype=np.float32)
-            R_new = [r @ R_align.T for r in rmats]
+        R_step = [r.astype(np.float64) for r in rmats]
 
-            mid_idx = n // 2
-            opt_mid = R_new[mid_idx].T @ np.array([0, 0, 1], dtype=np.float32)
-            yaw_mid = np.arctan2(opt_mid[0], opt_mid[2])
-            R_yaw_center = np.array([
-                [np.cos(-yaw_mid), 0, np.sin(-yaw_mid)],
-                [0, 1, 0],
-                [-np.sin(-yaw_mid), 0, np.cos(-yaw_mid)]
-            ], dtype=np.float32)
-            return [(r @ R_yaw_center.T).astype(np.float32) for r in R_new]
+        if level_horizon and n >= 2:
+            horiz_vecs = []
+            cam_ups = []
+            opts = [r @ np.array([0.0, 0.0, 1.0]) for r in R_step]
+            for r in R_step:
+                horiz_vecs.append(r @ np.array([1.0, 0.0, 0.0]))
+                cam_ups.append(r @ np.array([0.0, -1.0, 0.0]))
+            for i in range(n - 1):
+                dz = opts[i + 1] - opts[i]
+                nrm = np.linalg.norm(dz)
+                if nrm > 1e-4:
+                    horiz_vecs.append(dz / nrm)
+
+            if len(horiz_vecs) >= 2:
+                _, _, Vt = np.linalg.svd(np.asarray(horiz_vecs, dtype=np.float64))
+                zenith = Vt[-1] / max(1e-12, float(np.linalg.norm(Vt[-1])))
+                if np.dot(zenith, np.mean(cam_ups, axis=0)) < 0.0:
+                    zenith = -zenith
+
+                target_up = np.array([0.0, -1.0, 0.0], dtype=np.float64)
+                v_rot = np.cross(zenith, target_up)
+                sin_a = float(np.linalg.norm(v_rot))
+                cos_a = float(np.clip(np.dot(zenith, target_up), -1.0, 1.0))
+                if sin_a > 1e-6:
+                    k = v_rot / sin_a
+                    K_mat = np.array(
+                        [[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]],
+                        dtype=np.float64,
+                    )
+                    R_align = np.eye(3, dtype=np.float64) + sin_a * K_mat + (1.0 - cos_a) * (K_mat @ K_mat)
+                    R_step = [R_align @ r for r in R_step]
+
+        # Centrar acimut medio en yaw = 0 (+Z) para no cruzar la costura ±180° de la esfera
+        opts_lvl = [r @ np.array([0.0, 0.0, 1.0]) for r in R_step]
+        mean_xz = np.mean([[o[0], o[2]] for o in opts_lvl], axis=0)
+        if np.hypot(mean_xz[0], mean_xz[1]) > 1e-5:
+            yaw_mid = float(np.arctan2(mean_xz[0], mean_xz[1]))
+            cy, sy = np.cos(-yaw_mid), np.sin(-yaw_mid)
+            R_yaw = np.array([[cy, 0.0, sy], [0.0, 1.0, 0.0], [-sy, 0.0, cy]], dtype=np.float64)
+            R_step = [R_yaw @ r for r in R_step]
+
+        # Guardia polar: evitar que bordes superiores rocen el polo ±90° en proyección esférica
+        opts_centered = [r @ np.array([0.0, 0.0, 1.0]) for r in R_step]
+        elevs = [float(np.arcsin(np.clip(-o[1], -1.0, 1.0))) for o in opts_centered]
+        max_lim = np.radians(max_elev_deg)
+        max_top = max(elevs) + half_fov_v_rad
+        min_bot = min(elevs) - half_fov_v_rad
+        if max_top > max_lim:
+            pitch_down = min(max_top - max_lim, max(0.0, 0.5 * (max_top + min_bot)))
+            if pitch_down > 1e-4:
+                cp, sp = np.cos(-pitch_down), np.sin(-pitch_down)
+                R_p = np.array([[1.0, 0.0, 0.0], [0.0, cp, -sp], [0.0, sp, cp]], dtype=np.float64)
+                R_step = [R_p @ r for r in R_step]
+        elif min_bot < -max_lim:
+            pitch_up = min(-max_lim - min_bot, max(0.0, -0.5 * (max_top + min_bot)))
+            if pitch_up > 1e-4:
+                cp, sp = np.cos(pitch_up), np.sin(pitch_up)
+                R_p = np.array([[1.0, 0.0, 0.0], [0.0, cp, -sp], [0.0, sp, cp]], dtype=np.float64)
+                R_step = [R_p @ r for r in R_step]
+
+        return [r.astype(np.float32) for r in R_step]
     except Exception:
-        pass
-    return [r.astype(np.float32) for r in rmats]
+        return [r.astype(np.float32) for r in rmats]
+
+
+def _unproject_radtan_rays(
+    px: np.ndarray,
+    py: np.ndarray,
+    focal: float,
+    k1: float,
+    k2: float,
+    cx: float,
+    cy: float,
+) -> np.ndarray:
+    """Desproyecta coordenadas de píxel a rayos unitarios 3D invirtiendo distorsión radial (k1, k2)."""
+    dx = (px - cx) * (1.0 / focal)
+    dy = (py - cy) * (1.0 / focal)
+    rd = np.hypot(dx, dy)
+    ru = rd.copy()
+    for _ in range(4):
+        r2 = ru * ru
+        r4 = r2 * r2
+        f_val = ru * (1.0 + k1 * r2 + k2 * r4) - rd
+        df = np.maximum(1.0 + 3.0 * k1 * r2 + 5.0 * k2 * r4, 1e-6)
+        ru = ru - f_val / df
+    scale = np.where(rd > 1e-9, ru / np.maximum(rd, 1e-9), 1.0)
+    vx = dx * scale
+    vy = dy * scale
+    inv_norm = 1.0 / np.sqrt(vx * vx + vy * vy + 1.0)
+    return np.stack([vx * inv_norm, vy * inv_norm, inv_norm], axis=-1)
+
+
+def _refine_astro_camera_rig(
+    R_init: List[np.ndarray],
+    pair_matches: List[Tuple[int, int, np.ndarray, np.ndarray, np.ndarray]],
+    full_w: int,
+    full_h: int,
+    f_init: float,
+    k1_init: float = 0.0,
+    anchor_idx: Optional[int] = None,
+) -> Tuple[List[np.ndarray], float, float, float, float, float]:
+    """
+    Ajuste de haces conjunto (Bundle Adjustment) sobre la esfera celeste:
+    optimiza simultáneamente las rotaciones 3D SO(3) de todos los paneles y los
+    parámetros intrínsecos compartidos de la lente (focal, k1, k2, dcx, dcy).
+    """
+    n = len(R_init)
+    if anchor_idx is None:
+        anchor_idx = n // 2
+    r_ref = R_init[anchor_idx].astype(np.float64)
+    R_norm = [r_ref.T @ r.astype(np.float64) for r in R_init]
+
+    if not pair_matches:
+        return R_norm, float(f_init), float(k1_init), 0.0, 0.0, 0.0
+
+    p_i_list, p_j_list, xa_l, ya_l, xb_l, yb_l, w_l = [], [], [], [], [], [], []
+    for i, j, pts_a, pts_b, weights in pair_matches:
+        m = len(pts_a)
+        if m == 0:
+            continue
+        p_i_list.append(np.full(m, i, dtype=np.int32))
+        p_j_list.append(np.full(m, j, dtype=np.int32))
+        xa_l.append(pts_a[:, 0])
+        ya_l.append(pts_a[:, 1])
+        xb_l.append(pts_b[:, 0])
+        yb_l.append(pts_b[:, 1])
+        w_l.append(weights)
+
+    if not p_i_list:
+        return R_norm, float(f_init), float(k1_init), 0.0, 0.0, 0.0
+
+    p_i = np.concatenate(p_i_list)
+    p_j = np.concatenate(p_j_list)
+    xa = np.concatenate(xa_l).astype(np.float64)
+    ya = np.concatenate(ya_l).astype(np.float64)
+    xb = np.concatenate(xb_l).astype(np.float64)
+    yb = np.concatenate(yb_l).astype(np.float64)
+    sqrt_w = np.sqrt(np.clip(np.concatenate(w_l).astype(np.float64), 0.05, 1.0))
+
+    if len(xa) < 6:
+        return R_norm, float(f_init), float(k1_init), 0.0, 0.0, 0.0
+
+    try:
+        from scipy.optimize import least_squares
+
+        rot_indices = [idx for idx in range(n) if idx != anchor_idx]
+        fit_intrinsics = len(xa) >= 18
+
+        if fit_intrinsics:
+            x0_list = [float(f_init), float(k1_init), 0.0, 0.0, 0.0]
+            lo_list = [f_init * 0.82, -0.35, -0.25, -full_w * 0.04, -full_h * 0.04]
+            hi_list = [f_init * 1.18, 0.25, 0.25, full_w * 0.04, full_h * 0.04]
+        else:
+            x0_list, lo_list, hi_list = [], [], []
+
+        for idx in rot_indices:
+            rv, _ = cv2.Rodrigues(R_norm[idx])
+            x0_list.extend(rv.ravel().tolist())
+            lo_list.extend([-np.inf, -np.inf, -np.inf])
+            hi_list.extend([np.inf, np.inf, np.inf])
+
+        x0 = np.asarray(x0_list, dtype=np.float64)
+        cx_base = full_w * 0.5
+        cy_base = full_h * 0.5
+        base_off = 5 if fit_intrinsics else 0
+
+        def _res_fn(params: np.ndarray) -> np.ndarray:
+            if fit_intrinsics:
+                f_v, k1_v, k2_v, dcx_v, dcy_v = params[:5]
+            else:
+                f_v, k1_v, k2_v, dcx_v, dcy_v = float(f_init), float(k1_init), 0.0, 0.0, 0.0
+            Rs = [None] * n
+            Rs[anchor_idx] = np.eye(3, dtype=np.float64)
+            for k_idx, pan_idx in enumerate(rot_indices):
+                rv = params[base_off + 3 * k_idx : base_off + 3 * (k_idx + 1)]
+                Rs[pan_idx], _ = cv2.Rodrigues(rv)
+            Rs_arr = np.asarray(Rs, dtype=np.float64)
+            va = _unproject_radtan_rays(xa, ya, f_v, k1_v, k2_v, cx_base + dcx_v, cy_base + dcy_v)
+            vb = _unproject_radtan_rays(xb, yb, f_v, k1_v, k2_v, cx_base + dcx_v, cy_base + dcy_v)
+            wa = np.einsum("nij,nj->ni", Rs_arr[p_i], va)
+            wb = np.einsum("nij,nj->ni", Rs_arr[p_j], vb)
+            return ((wa - wb) * (f_v * sqrt_w[:, None])).ravel()
+
+        opt = least_squares(
+            _res_fn,
+            x0,
+            bounds=(np.asarray(lo_list, dtype=np.float64), np.asarray(hi_list, dtype=np.float64)),
+            method="trf",
+            loss="soft_l1",
+            f_scale=1.5,
+            max_nfev=80,
+        )
+        if fit_intrinsics:
+            f_out, k1_out, k2_out, dcx_out, dcy_out = [float(v) for v in opt.x[:5]]
+        else:
+            f_out, k1_out, k2_out, dcx_out, dcy_out = float(f_init), float(k1_init), 0.0, 0.0, 0.0
+
+        R_out = [np.eye(3, dtype=np.float64) for _ in range(n)]
+        for k_idx, pan_idx in enumerate(rot_indices):
+            rv = opt.x[base_off + 3 * k_idx : base_off + 3 * (k_idx + 1)]
+            R_out[pan_idx], _ = cv2.Rodrigues(rv)
+        return R_out, f_out, k1_out, k2_out, dcx_out, dcy_out
+    except Exception as e_ba:
+        logger.warning(f"Refinamiento conjunto de haces omitido, usando poses base: {e_ba}")
+        return R_norm, float(f_init), float(k1_init), 0.0, 0.0, 0.0
+
+
+def _warp_panel_with_distortion(
+    warper: Any,
+    src: np.ndarray,
+    K: np.ndarray,
+    R: np.ndarray,
+    k1: float = 0.0,
+    k2: float = 0.0,
+    dcx: float = 0.0,
+    dcy: float = 0.0,
+    interp: int = cv2.INTER_LINEAR,
+) -> Tuple[Tuple[int, int], np.ndarray]:
+    """
+    Proyecta un panel directamente al lienzo panorámico incorporando el modelo
+    de distorsión radial de gran angular (1 + k1*r^2 + k2*r^4) y descentrado (dcx, dcy)
+    en una única pasada de remuestreo (sin doble interpolación).
+    """
+    if abs(k1) < 1e-6 and abs(k2) < 1e-6 and abs(dcx) < 1e-2 and abs(dcy) < 1e-2:
+        return warper.warp(src, K, R, interp, cv2.BORDER_CONSTANT)
+
+    h_s, w_s = src.shape[:2]
+    roi, xmap, ymap = warper.buildMaps((w_s, h_s), K, R)
+    f = np.float32(K[0, 0])
+    inv_f = np.float32(1.0 / max(1e-6, float(K[0, 0])))
+    cx0 = np.float32(K[0, 2])
+    cy0 = np.float32(K[1, 2])
+
+    valid = (xmap >= 0.0) & (ymap >= 0.0)
+    xu = (xmap - cx0) * inv_f
+    yu = (ymap - cy0) * inv_f
+    r2 = xu * xu + yu * yu
+    f_dist = f * (np.float32(1.0) + np.float32(k1) * r2 + np.float32(k2) * (r2 * r2))
+    x_dist = np.where(valid, np.float32(float(cx0) + dcx) + xu * f_dist, np.float32(-1.0))
+    y_dist = np.where(valid, np.float32(float(cy0) + dcy) + yu * f_dist, np.float32(-1.0))
+    dst = cv2.remap(src, x_dist, y_dist, interp, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    return (int(roi[0]), int(roi[1])), dst
+
+
+def _apply_view_orientation(
+    rmats: List[np.ndarray],
+    pitch_deg: float = 0.0,
+    roll_deg: float = 0.0,
+    yaw_deg: float = 0.0,
+) -> List[np.ndarray]:
+    """
+    Aplica una rotación 3D virtual (Pitch, Roll, Yaw) sobre la esfera panorámica
+    antes del warp, permitiendo aplanar el horizonte y moldear el arco sin doble remuestreo.
+    """
+    if abs(pitch_deg) < 1e-3 and abs(roll_deg) < 1e-3 and abs(yaw_deg) < 1e-3:
+        return rmats
+
+    p = np.radians(pitch_deg)
+    r = np.radians(roll_deg)
+    y = np.radians(yaw_deg)
+
+    cp, sp = np.cos(p), np.sin(p)
+    cr, sr = np.cos(r), np.sin(r)
+    cy, sy = np.cos(y), np.sin(y)
+
+    R_pitch = np.array([[1.0, 0.0, 0.0], [0.0, cp, -sp], [0.0, sp, cp]], dtype=np.float64)
+    R_roll = np.array([[cr, -sr, 0.0], [sr, cr, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    R_yaw = np.array([[cy, 0.0, sy], [0.0, 1.0, 0.0], [-sy, 0.0, cy]], dtype=np.float64)
+
+    R_view = R_roll @ R_pitch @ R_yaw
+    # OpenCV PyRotationWarper usa p_world = R @ p_cam => rotar la esfera se multiplica por la izquierda
+    return [(R_view @ rm.astype(np.float64)).astype(np.float32) for rm in rmats]
 
 
 def apply_arch_curvature_deformation(image: np.ndarray, curvature: float = 0.0) -> np.ndarray:
@@ -812,7 +1061,12 @@ def stitch_nightscape_panorama(
         progress_callback(10, f"Generando vistas previas optimizadas para {n} paneles...")
 
     imgs_small = []
-    clean_imgs_small = [] if getattr(settings, 'preview_scale', 1.0) < 1.0 else None
+    need_clean_small = (
+        (getattr(settings, 'preview_scale', 1.0) < 1.0)
+        or getattr(settings, 'use_plate_solving', False)
+        or getattr(settings, 'exposure_comp', False)
+    )
+    clean_imgs_small = [] if need_clean_small else None
     for i, path in enumerate(panels_paths):
         if abort_flag and abort_flag():
             raise InterruptedError("Operación cancelada por el usuario.")
@@ -821,19 +1075,30 @@ def stitch_nightscape_panorama(
         if ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw']:
             try:
                 import rawpy
+                from core.config_manager import get_config_val
+                from core.icc_manager import get_rawpy_colorspace
+                raw_cs = get_rawpy_colorspace(get_config_val("icc_profile", "srgb"))
                 with rawpy.imread(path) as r:
-                    rgb_half = r.postprocess(half_size=True, use_camera_wb=True)
-                small = cv2.resize(rgb_half, (rgb_half.shape[1] // 2, rgb_half.shape[0] // 2))
+                    # Mismos parámetros fotométricos que load_image_as_float32 para igualar borrador y alta resolución
+                    rgb_half = r.postprocess(
+                        half_size=True,
+                        gamma=(2.222, 4.5),
+                        no_auto_bright=True,
+                        use_camera_wb=True,
+                        output_color=raw_cs,
+                        adjust_maximum_thr=0.0,
+                    )
+                small = cv2.resize(rgb_half, (rgb_half.shape[1] // 2, rgb_half.shape[0] // 2), interpolation=cv2.INTER_AREA)
                 del rgb_half
             except Exception:
                 img_f = load_image_as_float32(path)
                 u8 = (np.clip(img_f, 0.0, 1.0) * 255.0).astype(np.uint8)
-                small = cv2.resize(u8, (u8.shape[1] // 4, u8.shape[0] // 4))
+                small = cv2.resize(u8, (u8.shape[1] // 4, u8.shape[0] // 4), interpolation=cv2.INTER_AREA)
                 del img_f, u8
         else:
             img_f = load_image_as_float32(path)
             u8 = (np.clip(img_f, 0.0, 1.0) * 255.0).astype(np.uint8)
-            small = cv2.resize(u8, (u8.shape[1] // 4, u8.shape[0] // 4))
+            small = cv2.resize(u8, (u8.shape[1] // 4, u8.shape[0] // 4), interpolation=cv2.INTER_AREA)
             del img_f, u8
 
         # Preservar miniatura limpia para borrador rápido sin distorsión CLAHE de detección
@@ -891,13 +1156,216 @@ def stitch_nightscape_panorama(
 
     star_edges_affine = {}
     star_edges_rot = {}
+    astro_pair_matches: List[Tuple[int, int, np.ndarray, np.ndarray, np.ndarray]] = []
+    lens_k1, lens_k2, lens_dcx_full, lens_dcy_full = 0.0, 0.0, 0.0, 0.0
 
-    # 3.1 Calibración Estelar Pura guiada por Máscara IA (Evita interferencia de árboles y rotación terrestre)
-    if settings.projection != "plane":
+    # 3.0 Plate Solving Local Offline (Quads 4D + catálogo ALCAT001) + Ajuste Conjunto de Lente y Poses SO(3)
+    if getattr(settings, 'use_plate_solving', False) and clean_imgs_small is not None:
+        try:
+            from core.plate_solver import (
+                HAS_RUST_PLATE_SOLVER,
+                get_best_available_catalog,
+                solve_frame,
+                build_star_anchors_between_frames,
+            )
+            cat_path = get_best_available_catalog(getattr(settings, 'plate_catalog_profile', 'lite'))
+            if HAS_RUST_PLATE_SOLVER and cat_path:
+                if progress_callback:
+                    progress_callback(21, "Ejecutando plate solving astrométrico sobre el cielo...")
+                plate_sols: List[Optional[Dict[str, Any]]] = []
+                for i in range(n):
+                    if abort_flag and abort_flag():
+                        raise InterruptedError("Operación cancelada por el usuario.")
+                    sm_mask = sky_masks_sm[i] if (sky_masks_sm is not None and i < len(sky_masks_sm)) else None
+                    sol = solve_frame(
+                        clean_imgs_small[i],
+                        sky_mask=sm_mask,
+                        focal_px_hint=focal_work,
+                        catalog_path=cat_path,
+                        scale_to_full=scale_to_full,
+                        filepath=panels_paths[i],
+                    )
+                    plate_sols.append(sol)
+
+                solved_valid = [s for s in plate_sols if s is not None]
+                if len(solved_valid) >= 2:
+                    focal_full = float(np.median([s["focal_px"] for s in solved_valid]))
+                    k1_med = float(np.median([s.get("k1", 0.0) for s in solved_valid]))
+                    focal_work = focal_full / scale_to_full
+                    logger.info(
+                        f"Plate solving: {len(solved_valid)}/{n} paneles resueltos "
+                        f"(focal calibrada={focal_full:.1f} px, k1={k1_med:.4f})."
+                    )
+
+                    min_ps_anchors = max(4, min(settings.min_inliers, 6))
+                    for i in range(n):
+                        if plate_sols[i] is None:
+                            continue
+                        for j in range(i + 1, n):
+                            if plate_sols[j] is None:
+                                continue
+                            pair = build_star_anchors_between_frames(
+                                plate_sols[i],
+                                plate_sols[j],
+                                os.path.basename(panels_paths[i]),
+                                os.path.basename(panels_paths[j]),
+                            )
+                            anchors = pair["anchors"]
+                            if len(anchors) >= min_ps_anchors:
+                                R_j_to_i = pair["rotation_b_to_a"]
+                                star_edges_rot[(j, i)] = (R_j_to_i, len(anchors))
+                                star_edges_rot[(i, j)] = (R_j_to_i.T, len(anchors))
+
+                                pts_a = np.array([[a["x_a"], a["y_a"]] for a in anchors], dtype=np.float32)
+                                pts_b = np.array([[a["x_b"], a["y_b"]] for a in anchors], dtype=np.float32)
+                                w_anc = np.array([a["weight"] for a in anchors], dtype=np.float32)
+                                astro_pair_matches.append((i, j, pts_a, pts_b, w_anc))
+
+                                M_aff, _ = cv2.estimateAffinePartial2D(
+                                    pts_b, pts_a, method=cv2.RANSAC, ransacReprojThreshold=8.0
+                                )
+                                if M_aff is not None:
+                                    H_j_to_i = np.vstack([M_aff, [0, 0, 1]])
+                                    try:
+                                        H_i_to_j = np.linalg.inv(H_j_to_i)
+                                        star_edges_affine[(j, i)] = (H_j_to_i, len(anchors))
+                                        star_edges_affine[(i, j)] = (H_i_to_j, len(anchors))
+                                    except np.linalg.LinAlgError:
+                                        pass
+
+                    if len(solved_valid) == n and settings.projection != "plane":
+                        anchor_idx = n // 2
+                        r_anchor = np.asarray(plate_sols[anchor_idx]["rotation_icrf"], dtype=np.float64)
+                        r_init = [
+                            r_anchor.T @ np.asarray(plate_sols[i]["rotation_icrf"], dtype=np.float64)
+                            for i in range(n)
+                        ]
+                        r_ref, focal_full, lens_k1, lens_k2, lens_dcx_full, lens_dcy_full = _refine_astro_camera_rig(
+                            r_init,
+                            astro_pair_matches,
+                            full_w,
+                            full_h,
+                            focal_full,
+                            k1_med,
+                            anchor_idx=anchor_idx,
+                        )
+                        focal_work = focal_full / scale_to_full
+                        half_fov_v = float(np.arctan(0.5 * full_h / max(100.0, focal_full)))
+                        rmats_corr = _level_and_center_rotations(
+                            r_ref,
+                            level_horizon=settings.wave_correction,
+                            half_fov_v_rad=half_fov_v,
+                        )
+                        cameras = [True] * n
+                        logger.info(
+                            f"Ajuste astrométrico conjunto: f={focal_full:.1f} px, "
+                            f"k1={lens_k1:.4f}, k2={lens_k2:.4f}, dcx={lens_dcx_full:.1f}, dcy={lens_dcy_full:.1f}."
+                        )
+                        if progress_callback:
+                            progress_callback(35, f"Alineación astrométrica 3D completada ({n}/{n} paneles resueltos).")
+        except InterruptedError:
+            raise
+        except Exception as e_ps:
+            logger.warning(f"Plate solving omitido por error, usando fallback clásico: {e_ps}")
+
+    # 3.1 Identificación Estelar por Asterismos (si Plate Solving fue parcial o está desactivado)
+    if (cameras is None or rmats_corr is None) and settings.star_matching and settings.projection != "plane":
+        if progress_callback:
+            progress_callback(25, "Identificando estrellas brillantes y asterismos estelares...")
+
+        stars_per_panel = [extract_bright_stars(sm, max_stars=120) for sm in imgs_small]
+        quads_per_panel = [build_star_asterisms(pts, k_neighbors=7) for pts in stars_per_panel]
+        min_star_inliers = max(4, min(settings.min_inliers, 5))
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                if abort_flag and abort_flag():
+                    raise InterruptedError("Operación cancelada por el usuario.")
+                if (j, i) in star_edges_rot and (i, j) in star_edges_rot:
+                    continue
+                if len(stars_per_panel[i]) < 4 or len(stars_per_panel[j]) < 4:
+                    continue
+
+                pts_i_m, pts_j_m, n_inl = match_star_asterisms(
+                    quads_per_panel[i][0], quads_per_panel[i][1], stars_per_panel[i],
+                    quads_per_panel[j][0], quads_per_panel[j][1], stars_per_panel[j],
+                    tolerance=0.038, min_votes=2
+                )
+
+                if n_inl >= min_star_inliers:
+                    pts_i_full = pts_i_m * scale_to_full
+                    pts_j_full = pts_j_m * scale_to_full
+                    astro_pair_matches.append((i, j, pts_i_full, pts_j_full, np.ones(len(pts_i_full), dtype=np.float32)))
+                    M_aff, _ = cv2.estimateAffinePartial2D(pts_j_full, pts_i_full, method=cv2.RANSAC, ransacReprojThreshold=8.0)
+                    if M_aff is not None:
+                        H_j_to_i = np.vstack([M_aff, [0, 0, 1]])
+                        try:
+                            H_i_to_j = np.linalg.inv(H_j_to_i)
+                            star_edges_affine[(j, i)] = (H_j_to_i, n_inl)
+                            star_edges_affine[(i, j)] = (H_i_to_j, n_inl)
+                        except np.linalg.LinAlgError:
+                            pass
+
+                    R_j_to_i, n_rot_inl = estimate_camera_rotation_from_stars(
+                        pts_i_m, pts_j_m, small_w, small_h, focal_work
+                    )
+                    if R_j_to_i is not None and n_rot_inl >= min_star_inliers:
+                        star_edges_rot[(j, i)] = (R_j_to_i, n_rot_inl)
+                        star_edges_rot[(i, j)] = (R_j_to_i.T, n_rot_inl)
+
+        if star_edges_rot:
+            best_anchor = n // 2
+            best_reach = 0
+            for cand in range(n):
+                reach = len(_find_reachable_nodes(cand, star_edges_rot))
+                if reach > best_reach:
+                    best_reach = reach
+                    best_anchor = cand
+
+            if best_reach == n:
+                R_global = {best_anchor: np.eye(3, dtype=np.float64)}
+                queue = [best_anchor]
+                visited = {best_anchor}
+                while queue:
+                    curr = queue.pop(0)
+                    # Ordenar vecinos por mayor número de estrellas coincidentes para minimizar deriva BFS
+                    nbrs = [
+                        (j, star_edges_rot[(j, curr)][0], star_edges_rot[(j, curr)][1])
+                        for j in range(n)
+                        if (j, curr) in star_edges_rot and j not in visited
+                    ]
+                    nbrs.sort(key=lambda item: item[2], reverse=True)
+                    for j, R_j_to_curr, _ in nbrs:
+                        visited.add(j)
+                        R_global[j] = R_global[curr] @ R_j_to_curr
+                        queue.append(j)
+
+                r_ref, focal_full, lens_k1, lens_k2, lens_dcx_full, lens_dcy_full = _refine_astro_camera_rig(
+                    [R_global[i] for i in range(n)],
+                    astro_pair_matches,
+                    full_w,
+                    full_h,
+                    focal_full,
+                    0.0,
+                    anchor_idx=best_anchor,
+                )
+                focal_work = focal_full / scale_to_full
+                half_fov_v = float(np.arctan(0.5 * full_h / max(100.0, focal_full)))
+                rmats_corr = _level_and_center_rotations(
+                    r_ref,
+                    level_horizon=settings.wave_correction,
+                    half_fov_v_rad=half_fov_v,
+                )
+                cameras = [True] * n
+                if progress_callback:
+                    progress_callback(35, f"Alineación por asterismos estelares completada ({len(star_edges_rot) // 2} solapamientos).")
+
+    # 3.2 Fallback a calibración SIFT + Ajuste de Haces de Rayos (cielos nublados, crepúsculo o sin estrellas)
+    if (cameras is None or rmats_corr is None) and settings.projection != "plane":
         if sky_masks_sm is not None:
             try:
                 if progress_callback:
-                    progress_callback(25, "Calibrando cámaras sobre estrellas (horizonte protegido)...")
+                    progress_callback(25, "Calibrando cámaras sobre rasgos del cielo (horizonte protegido)...")
                 sift_sky = cv2.SIFT_create(contrastThreshold=0.015, edgeThreshold=15)
                 feats_sky = [
                     cv2.detail.computeImageFeatures2(sift_sky, im, (m > 0.5).astype(np.uint8) * 255)
@@ -918,12 +1386,12 @@ def stitch_nightscape_panorama(
                         cameras = list(cams_ba)
                         scale_work_to_full = full_w / (cameras[0].ppx * 2.0)
                         focal_full = float(np.median([c.focal * scale_work_to_full for c in cameras]))
-                        rmats_corr = _level_and_center_rotations([c.R for c in cameras])
-                        if settings.wave_correction:
-                            try:
-                                rmats_corr = cv2.detail.waveCorrect([r.astype(np.float32) for r in rmats_corr], cv2.detail.WAVE_CORRECT_HORIZ)
-                            except Exception:
-                                pass
+                        half_fov_v = float(np.arctan(0.5 * full_h / max(100.0, focal_full)))
+                        rmats_corr = _level_and_center_rotations(
+                            [c.R for c in cameras],
+                            level_horizon=settings.wave_correction,
+                            half_fov_v_rad=half_fov_v,
+                        )
                         if progress_callback:
                             progress_callback(35, "Alineación estelar completada con ajuste de haces de rayos.")
             except Exception:
@@ -942,86 +1410,14 @@ def stitch_nightscape_panorama(
                 cameras = list(stitcher.cameras())
                 scale_work_to_full = full_w / (cameras[0].ppx * 2.0)
                 focal_full = float(np.median([c.focal * scale_work_to_full for c in cameras]))
-                rmats_corr = _level_and_center_rotations([c.R for c in cameras])
-                if settings.wave_correction:
-                    try:
-                        rmats_corr = cv2.detail.waveCorrect([r.astype(np.float32) for r in rmats_corr], cv2.detail.WAVE_CORRECT_HORIZ)
-                    except Exception:
-                        pass
+                half_fov_v = float(np.arctan(0.5 * full_h / max(100.0, focal_full)))
+                rmats_corr = _level_and_center_rotations(
+                    [c.R for c in cameras],
+                    level_horizon=settings.wave_correction,
+                    half_fov_v_rad=half_fov_v,
+                )
                 if progress_callback:
                     progress_callback(35, "Alineación 3D global completada con ajuste de haces óptimo.")
-
-    # 3.2 Si el Bundle Adjuster no converge (cielo oscuro puro sin horizonte), aplicar Identificación Estelar
-    if (cameras is None or rmats_corr is None) and settings.star_matching:
-        if progress_callback:
-            progress_callback(25, "Identificando estrellas brillantes y asterismos estelares...")
-
-        stars_per_panel = [extract_bright_stars(sm, max_stars=120) for sm in imgs_small]
-        quads_per_panel = [build_star_asterisms(pts, k_neighbors=7) for pts in stars_per_panel]
-        min_star_inliers = max(4, min(settings.min_inliers, 5))
-
-        for i in range(n):
-            for j in range(i + 1, n):
-                if abort_flag and abort_flag():
-                    raise InterruptedError("Operación cancelada por el usuario.")
-
-                if len(stars_per_panel[i]) < 4 or len(stars_per_panel[j]) < 4:
-                    continue
-
-                pts_i_m, pts_j_m, n_inl = match_star_asterisms(
-                    quads_per_panel[i][0], quads_per_panel[i][1], stars_per_panel[i],
-                    quads_per_panel[j][0], quads_per_panel[j][1], stars_per_panel[j],
-                    tolerance=0.038, min_votes=2
-                )
-
-                if n_inl >= min_star_inliers:
-                    # Guardar homografía afín escalada a tamaño completo para fallback 2D
-                    pts_i_full = pts_i_m * scale_to_full
-                    pts_j_full = pts_j_m * scale_to_full
-                    M_aff, aff_inl = cv2.estimateAffinePartial2D(pts_j_full, pts_i_full, method=cv2.RANSAC, ransacReprojThreshold=8.0)
-                    if M_aff is not None:
-                        H_j_to_i = np.vstack([M_aff, [0, 0, 1]])
-                        try:
-                            H_i_to_j = np.linalg.inv(H_j_to_i)
-                            star_edges_affine[(j, i)] = (H_j_to_i, n_inl)
-                            star_edges_affine[(i, j)] = (H_i_to_j, n_inl)
-                        except np.linalg.LinAlgError:
-                            pass
-
-                    # Estimar rotación 3D sobre la esfera celeste con Kabsch SVD
-                    R_j_to_i, n_rot_inl = estimate_camera_rotation_from_stars(
-                        pts_i_m, pts_j_m, small_w, small_h, focal_work
-                    )
-                    if R_j_to_i is not None and n_rot_inl >= min_star_inliers:
-                        star_edges_rot[(j, i)] = (R_j_to_i, n_rot_inl)
-                        star_edges_rot[(i, j)] = (R_j_to_i.T, n_rot_inl)
-
-        # Si los asterismos conectan todos los paneles, resolver rotación global exacta
-        if star_edges_rot:
-            best_anchor = n // 2
-            best_reach = 0
-            for cand in range(n):
-                reach = len(_find_reachable_nodes(cand, star_edges_rot))
-                if reach > best_reach:
-                    best_reach = reach
-                    best_anchor = cand
-
-            if best_reach == n and settings.projection != "plane":
-                R_global = {best_anchor: np.eye(3, dtype=np.float64)}
-                queue = [best_anchor]
-                visited = {best_anchor}
-                while queue:
-                    curr = queue.pop(0)
-                    for j in range(n):
-                        if (j, curr) in star_edges_rot and j not in visited:
-                            visited.add(j)
-                            R_global[j] = star_edges_rot[(j, curr)][0] @ R_global[curr]
-                            queue.append(j)
-
-                rmats_corr = _level_and_center_rotations([R_global[i] for i in range(n)])
-                cameras = [True] * n
-                if progress_callback:
-                    progress_callback(35, f"Alineación por asterismos estelares completada ({len(star_edges_rot) // 2} solapamientos).")
 
     # Fallback a grafo 2D de homografías si la calibración 3D no converge o es proyección plana
     if cameras is None or rmats_corr is None:
@@ -1057,12 +1453,21 @@ def stitch_nightscape_panorama(
         progress_callback(50, "Calculando dimensiones del lienzo panorámico...")
 
     proj_type = settings.projection
-    if proj_type not in ("spherical", "cylindrical", "plane"):
+    valid_projs = ("spherical", "cylindrical", "plane", "stereographic", "mercator", "paniniA2B1")
+    if proj_type not in valid_projs:
         proj_type = "spherical"
 
     MAX_CANVAS_PIXELS = 65_000_000  # 65 Megapíxeles para estabilidad garantizada de RAM en cualquier PC
 
     if cameras is not None and rmats_corr is not None:
+        # Aplicar orientación 3D virtual (Pitch / Roll / Yaw) antes de proyectar
+        rmats_corr = _apply_view_orientation(
+            rmats_corr,
+            pitch_deg=getattr(settings, 'view_pitch_deg', 0.0),
+            roll_deg=getattr(settings, 'view_roll_deg', 0.0),
+            yaw_deg=getattr(settings, 'view_yaw_deg', 0.0),
+        )
+
         warper = cv2.PyRotationWarper(proj_type, focal_full)
         corners = []
         sizes = []
@@ -1083,6 +1488,30 @@ def stitch_nightscape_panorama(
 
         canvas_w = int(max_x - min_x)
         canvas_h = int(max_y - min_y)
+
+        # Fallback seguro a esférica si stereographic/panini/mercator diverge en FOV extremo (>160°)
+        max_panel_dim = max((max(s[0], s[1]) for s in sizes), default=0)
+        if (
+            canvas_w <= 0
+            or canvas_h <= 0
+            or max(canvas_w, canvas_h) > max(full_w, full_h) * 18
+            or max_panel_dim > max(full_w, full_h) * 8
+        ) and proj_type != "spherical":
+            logger.warning(f"Proyección '{proj_type}' excedió límites de lienzo ({canvas_w}x{canvas_h}); usando 'spherical'.")
+            proj_type = "spherical"
+            warper = cv2.PyRotationWarper(proj_type, focal_full)
+            corners, sizes = [], []
+            for i in range(n):
+                K = np.array([[focal_full, 0, full_w / 2.0], [0, focal_full, full_h / 2.0], [0, 0, 1]], dtype=np.float32)
+                roi = warper.warpRoi((full_w, full_h), K, rmats_corr[i].astype(np.float32))
+                corners.append((roi[0], roi[1]))
+                sizes.append((roi[2], roi[3]))
+            min_x = min(c[0] for c in corners)
+            min_y = min(c[1] for c in corners)
+            max_x = max(c[0] + s[0] for c, s in zip(corners, sizes))
+            max_y = max(c[1] + s[1] for c, s in zip(corners, sizes))
+            canvas_w = int(max_x - min_x)
+            canvas_h = int(max_y - min_y)
 
         base_scale = float(settings.preview_scale) if getattr(settings, 'preview_scale', 1.0) < 1.0 else 1.0
         max_dim = max(canvas_w, canvas_h)
@@ -1123,6 +1552,8 @@ def stitch_nightscape_panorama(
 
         cur_w = int(full_w * scale_canvas)
         cur_h = int(full_h * scale_canvas)
+        cur_dcx = lens_dcx_full * scale_canvas
+        cur_dcy = lens_dcy_full * scale_canvas
         K = np.array([
             [focal_full, 0, cur_w / 2.0],
             [0, focal_full, cur_h / 2.0],
@@ -1130,42 +1561,66 @@ def stitch_nightscape_panorama(
         ], dtype=np.float32)
 
         # -------------------------------------------------------------
-        # 5. Compensación de Ganancia Fotométrica (Gain Compensator)
+        # 5. Compensación de Ganancia Fotométrica por Bloques (BlocksGainCompensator)
         # -------------------------------------------------------------
-        # Nivelación de exposición y balance entre paneles contiguos para eliminar
-        # por completo las marcas de luz o saltos de brillo verticales en el cielo.
-        gain_comp = cv2.detail_GainCompensator() if settings.exposure_comp else None
-        if gain_comp is not None and 'imgs_small' in locals():
+        # Nivelación suave 2D sobre imágenes limpias (sin CLAHE) con viñeteo aplicado,
+        # eliminando tanto viñeteo residual como gradientes de contaminación lumínica entre paneles.
+        panel_gain_maps: List[Optional[np.ndarray]] = [None] * n
+        panel_gains = [1.0] * n
+        src_for_gain = clean_imgs_small if (clean_imgs_small is not None and len(clean_imgs_small) == n) else (imgs_small if 'imgs_small' in locals() else None)
+        if settings.exposure_comp and src_for_gain is not None:
             try:
-                gc_scale = 0.20
-                gc_w, gc_h = max(10, int(cur_w * gc_scale)), max(10, int(cur_h * gc_scale))
+                gc_scale = min(0.25, 320.0 / max(1.0, float(max(cur_w, cur_h))))
+                gc_w, gc_h = max(32, int(cur_w * gc_scale)), max(32, int(cur_h * gc_scale))
                 gc_focal = focal_full * gc_scale
+                gc_dcx = cur_dcx * gc_scale
+                gc_dcy = cur_dcy * gc_scale
                 gc_warper = cv2.PyRotationWarper(proj_type, gc_focal)
                 K_gc = np.array([
                     [gc_focal, 0, gc_w / 2.0],
                     [0, gc_focal, gc_h / 2.0],
                     [0, 0, 1]
                 ], dtype=np.float32)
+                v_amt_gc = getattr(settings, 'vignette_amount', 0.35)
                 gc_corners, gc_imgs, gc_masks = [], [], []
+                max_gc_dim = 0
                 for idx_c in range(n):
-                    im_sm = cv2.resize(imgs_small[idx_c], (gc_w, gc_h))
-                    c_gc, w_im_gc = gc_warper.warp(im_sm, K_gc, rmats_corr[idx_c].astype(np.float32), cv2.INTER_LINEAR, cv2.BORDER_CONSTANT)
+                    im_sm = cv2.resize(src_for_gain[idx_c], (gc_w, gc_h), interpolation=cv2.INTER_AREA)
+                    if v_amt_gc > 0.01:
+                        im_f_gc = np.ascontiguousarray(im_sm.astype(np.float32) * (1.0 / 255.0))
+                        if HAS_RUST and hasattr(astroloom_rs, "apply_vignette_and_gain_rs"):
+                            astroloom_rs.apply_vignette_and_gain_rs(im_f_gc, float(v_amt_gc), 1.0)
+                        im_sm = (np.clip(im_f_gc, 0.0, 1.0) * 255.0).astype(np.uint8)
+                    c_gc, w_im_gc = _warp_panel_with_distortion(
+                        gc_warper, im_sm, K_gc, rmats_corr[idx_c].astype(np.float32),
+                        lens_k1, lens_k2, gc_dcx, gc_dcy, cv2.INTER_LINEAR
+                    )
+                    max_gc_dim = max(max_gc_dim, w_im_gc.shape[0], w_im_gc.shape[1])
                     w_m_gc = (np.max(w_im_gc, axis=2) > 1).astype(np.uint8) * 255
                     gc_corners.append(c_gc)
                     gc_imgs.append(w_im_gc)
                     gc_masks.append(w_m_gc)
-                gain_comp.feed(gc_corners, gc_imgs, gc_masks)
-                del gc_corners, gc_imgs, gc_masks
-            except Exception:
-                gain_comp = None
 
-        panel_gains = [1.0] * n
-        if gain_comp is not None:
-            try:
+                # Limitar bloques a ~6x6 por panel para que BlocksGainCompensator use <2 MB RAM y <30 ms
+                bl_size = max(48, int(max_gc_dim // 5))
+                if hasattr(cv2, "detail_BlocksGainCompensator") and max_gc_dim <= 1200:
+                    gain_comp = cv2.detail_BlocksGainCompensator(bl_size, bl_size, 1)
+                else:
+                    gain_comp = cv2.detail_GainCompensator()
+                gain_comp.feed(gc_corners, gc_imgs, gc_masks)
                 m_gains = gain_comp.getMatGains()
                 if len(m_gains) == n:
-                    panel_gains = [float(g[0, 0]) for g in m_gains]
-            except Exception:
+                    for idx_c in range(n):
+                        g_arr = np.asarray(m_gains[idx_c], dtype=np.float32)
+                        if g_arr.ndim == 2 and (g_arr.shape[0] > 1 or g_arr.shape[1] > 1):
+                            panel_gain_maps[idx_c] = np.clip(g_arr, 0.65, 1.55)
+                            panel_gains[idx_c] = 1.0
+                        else:
+                            panel_gains[idx_c] = float(np.clip(g_arr.flat[0], 0.65, 1.55))
+                del gc_corners, gc_imgs, gc_masks
+            except Exception as e_gc:
+                logger.warning(f"Compensador de ganancia por bloques omitido: {e_gc}")
+                panel_gain_maps = [None] * n
                 panel_gains = [1.0] * n
 
         if 'imgs_small' in locals():
@@ -1181,12 +1636,19 @@ def stitch_nightscape_panorama(
         # -------------------------------------------------------------
         best_dist = np.zeros((canvas_h, canvas_w), dtype=np.float32)
         best_idx = np.full((canvas_h, canvas_w), -1, dtype=np.int16)
-        panel_mask = np.ones((cur_h, cur_w), dtype=np.uint8) * 255
+        panel_mask = np.zeros((cur_h, cur_w), dtype=np.uint8)
+        if cur_h > 4 and cur_w > 4:
+            panel_mask[2:-2, 2:-2] = 255
+        else:
+            panel_mask[:, :] = 255
 
         for i in range(n):
             if abort_flag and abort_flag():
                 raise InterruptedError("Operación cancelada por el usuario.")
-            c_m, w_mask = warper.warp(panel_mask, K, rmats_corr[i].astype(np.float32), cv2.INTER_NEAREST, cv2.BORDER_CONSTANT)
+            c_m, w_mask = _warp_panel_with_distortion(
+                warper, panel_mask, K, rmats_corr[i].astype(np.float32),
+                lens_k1, lens_k2, cur_dcx, cur_dcy, cv2.INTER_NEAREST
+            )
             dist = cv2.distanceTransform(w_mask, cv2.DIST_L2, 3)
             gx = c_m[0] - min_x
             gy = c_m[1] - min_y
@@ -1231,7 +1693,7 @@ def stitch_nightscape_panorama(
                 prog = int(65 + 25 * (i / n))
                 progress_callback(prog, f"Proyectando y fusionando panel {i + 1}/{n}: {os.path.basename(panels_paths[i])}...")
 
-            if clean_imgs_small is not None and i < len(clean_imgs_small):
+            if getattr(settings, 'preview_scale', 1.0) < 1.0 and clean_imgs_small is not None and i < len(clean_imgs_small):
                 img_f = (clean_imgs_small[i].astype(np.float32) / 255.0)
                 if img_f.shape[:2] != (cur_h, cur_w):
                     img_f = cv2.resize(img_f, (cur_w, cur_h), interpolation=cv2.INTER_AREA)
@@ -1264,10 +1726,18 @@ def stitch_nightscape_panorama(
                     vignette_corr = (1.0 + vig_factor * r_sq + 0.05 * (r_sq**2)).astype(np.float32)[..., np.newaxis]
                     img_f = np.clip(img_f * vignette_corr, 0.0, 1.0)
 
-            corner, w_img = warper.warp(img_f, K, rmats_corr[i].astype(np.float32), cv2.INTER_LINEAR, cv2.BORDER_CONSTANT)
+            corner, w_img = _warp_panel_with_distortion(
+                warper, img_f, K, rmats_corr[i].astype(np.float32),
+                lens_k1, lens_k2, cur_dcx, cur_dcy, cv2.INTER_LINEAR
+            )
             del img_f
 
-            if not applied_in_rust and abs(panel_gains[i] - 1.0) > 1e-4:
+            if panel_gain_maps[i] is not None:
+                h_gm, w_gm = w_img.shape[:2]
+                g_smooth = cv2.resize(panel_gain_maps[i], (w_gm, h_gm), interpolation=cv2.INTER_CUBIC)
+                g_smooth = np.clip(g_smooth, 0.65, 1.55)
+                w_img = np.clip(w_img * g_smooth[..., np.newaxis], 0.0, 1.0)
+            elif not applied_in_rust and abs(panel_gains[i] - 1.0) > 1e-4:
                 w_img = np.clip(w_img * panel_gains[i], 0.0, 1.0)
 
             gx = corner[0] - min_x
@@ -1290,7 +1760,10 @@ def stitch_nightscape_panorama(
 
             if has_ground:
                 m_sky_full = cv2.resize(sky_masks_sm[i], (cur_w, cur_h), interpolation=cv2.INTER_LINEAR)
-                _, w_mask_sky = warper.warp(m_sky_full, K, rmats_corr[i].astype(np.float32), cv2.INTER_LINEAR, cv2.BORDER_CONSTANT)
+                _, w_mask_sky = _warp_panel_with_distortion(
+                    warper, m_sky_full, K, rmats_corr[i].astype(np.float32),
+                    lens_k1, lens_k2, cur_dcx, cur_dcy, cv2.INTER_LINEAR
+                )
                 ground_canvas[y1:y2, x1:x2][local_part] = w_img[iy1:iy2, ix1:ix2][local_part]
                 sky_mask_canvas[y1:y2, x1:x2][local_part] = w_mask_sky[iy1:iy2, ix1:ix2][local_part]
                 del m_sky_full, w_mask_sky
@@ -1373,7 +1846,7 @@ def stitch_nightscape_panorama(
                 prog = int(60 + 30 * (i / num_conn))
                 progress_callback(prog, f"Proyectando y fusionando panel {i + 1}/{num_conn}...")
 
-            if clean_imgs_small is not None and idx < len(clean_imgs_small):
+            if getattr(settings, 'preview_scale', 1.0) < 1.0 and clean_imgs_small is not None and idx < len(clean_imgs_small):
                 img_f = (clean_imgs_small[idx].astype(np.float32) / 255.0)
                 h, w = img_f.shape[:2]
                 mask_src = np.ones((h, w), dtype=np.uint8) * 255
@@ -1760,7 +2233,8 @@ def estimate_series_vignetting(paths: List[str]) -> float:
             edge_val = float(np.median(bg[(r_norm > 0.65) & (r_norm < 0.95)]))
 
             if center_val > 5.0:
-                fo = max(0.0, min(0.85, 1.0 - (edge_val / center_val)))
+                # Amortiguar caída medida sobre miniatura con gamma para no sobrecorregir esquinas en float32
+                fo = max(0.0, min(0.45, (1.0 - (edge_val / center_val)) * 0.55))
                 falloffs.append(fo)
         except Exception:
             continue

@@ -64,9 +64,10 @@ samples/
 fotos_prueba/
 scratch/
 
-# Modelos de inferencia IA (pesados)
+# Modelos de inferencia IA y catálogos astrométricos (pesados)
 models/*.onnx
 models/.cache/
+models/catalogs/
 !models/.gitkeep
 
 # Graphify

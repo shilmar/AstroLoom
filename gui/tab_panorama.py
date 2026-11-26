@@ -526,6 +526,9 @@ class PanoramaTab(QWidget):
         geo_layout.addWidget(QLabel("Proyección Cartográfica:"))
         self.combo_projection = QComboBox()
         self.combo_projection.addItem("Esférica (Paisajes nocturnos, gran angular y Vía Láctea - Recomendado)", "spherical")
+        self.combo_projection.addItem("Estereográfica (Arco Vía Láctea natural, estrellas redondas)", "stereographic")
+        self.combo_projection.addItem("Mercator (Horizonte y árboles verticales rectos)", "mercator")
+        self.combo_projection.addItem("Panini (Gran angular natural sin aplastar bordes)", "paniniA2B1")
         self.combo_projection.addItem("Cilíndrica (Panoramas horizontales estándar)", "cylindrical")
         self.combo_projection.addItem("Plana / Rectilínea (Mosaicos pequeños y teleobjetivo)", "plane")
         geo_layout.addWidget(self.combo_projection)
@@ -546,6 +549,46 @@ class PanoramaTab(QWidget):
         self.chk_wave_correction = QCheckBox("Corrección de Onda / Nivelación de Horizonte")
         self.chk_wave_correction.setChecked(True)
         geo_layout.addWidget(self.chk_wave_correction)
+
+        # Orientación 3D de la esfera de proyección (estilo PTGui / Hugin)
+        self.slider_pitch = PrecisionSliderRow(
+            title="Inclinación 3D (Pitch)",
+            min_val=-45.0,
+            max_val=45.0,
+            default_val=0.0,
+            unit="°",
+            decimals=1,
+            label_width=140,
+        )
+        self.slider_pitch.setToolTip(
+            "Inclina la esfera de proyección antes del warp (como en PTGui/Hugin).\n"
+            "Ajusta la curvatura del horizonte y la altura del arco de la Vía Láctea sin pérdida de nitidez."
+        )
+        geo_layout.addWidget(self.slider_pitch)
+
+        self.slider_roll = PrecisionSliderRow(
+            title="Nivelación 3D (Roll)",
+            min_val=-20.0,
+            max_val=20.0,
+            default_val=0.0,
+            unit="°",
+            decimals=1,
+            label_width=140,
+        )
+        self.slider_roll.setToolTip("Rota la esfera panorámica para nivelar un horizonte inclinado.")
+        geo_layout.addWidget(self.slider_roll)
+
+        self.slider_yaw = PrecisionSliderRow(
+            title="Centrado 3D (Yaw)",
+            min_val=-60.0,
+            max_val=60.0,
+            default_val=0.0,
+            unit="°",
+            decimals=1,
+            label_width=140,
+        )
+        self.slider_yaw.setToolTip("Desplaza horizontalmente el punto central de la panorámica sobre la esfera.")
+        geo_layout.addWidget(self.slider_yaw)
 
         arch_bar = QHBoxLayout()
         arch_bar.addWidget(QLabel("Deformación de Arco / Curvatura:"))
@@ -584,6 +627,20 @@ class PanoramaTab(QWidget):
             "Identifica las estrellas más brillantes y empareja constelaciones con precisión subpíxel para coser el cielo nocturno."
         )
         fusion_layout.addWidget(self.chk_star_matching)
+
+        self.chk_plate_solving = QCheckBox("Plate Solving Astrométrico (Catálogo Offline)")
+        try:
+            from core.plate_solver import get_best_available_catalog
+            has_cat = get_best_available_catalog("lite") is not None
+        except Exception:
+            has_cat = False
+        self.chk_plate_solving.setChecked(has_cat)
+        self.chk_plate_solving.setToolTip(
+            "Resuelve el campo estelar contra el catálogo offline (Hipparcos/Tycho-2/Gaia) para calibrar focal exacta,\n"
+            "generar anclajes estelares (StarAnchor) y alinear cielo puro o tomas con star tracker."
+            + ("" if has_cat else "\n(Catálogo no encontrado en models/catalogs/; usará fallback clásico.)")
+        )
+        fusion_layout.addWidget(self.chk_plate_solving)
 
         self.chk_auto_mask_pano = QCheckBox("Desacoplar Cielo / Suelo (Auto-Máscara IA)")
         self.chk_auto_mask_pano.setChecked(True)
@@ -1241,6 +1298,7 @@ class PanoramaTab(QWidget):
             projection=self.combo_projection.currentData(),
             astro_mode=self.chk_astro_mode.isChecked(),
             star_matching=self.chk_star_matching.isChecked(),
+            use_plate_solving=self.chk_plate_solving.isChecked(),
             min_inliers=int(self.spin_min_inliers.value()),
             exposure_comp=self.chk_exposure_comp.isChecked(),
             blend_mode=self.combo_blend.currentData(),
@@ -1256,6 +1314,9 @@ class PanoramaTab(QWidget):
             mount_mode=self.combo_mount_mode.currentData() if is_burst else "tripod",
             use_auto_mask=self.chk_auto_mask_pano.isChecked(),
             vignette_amount=(self.slider_vignette.value() / 100.0) if self.chk_exposure_comp.isChecked() else 0.0,
+            view_pitch_deg=float(self.slider_pitch.value()),
+            view_roll_deg=float(self.slider_roll.value()),
+            view_yaw_deg=float(self.slider_yaw.value()),
             arch_curvature=(self.slider_arch.value() / 100.0),
             preview_scale=scale
         )
