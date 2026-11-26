@@ -642,6 +642,18 @@ class PanoramaTab(QWidget):
         )
         fusion_layout.addWidget(self.chk_plate_solving)
 
+        cat_bar = QHBoxLayout()
+        cat_bar.addWidget(QLabel("Catálogo Astrométrico:"))
+        self.combo_plate_catalog = QComboBox()
+        self.combo_plate_catalog.addItem("Auto (según focal EXIF)", "auto")
+        self.combo_plate_catalog.addItem("Lite · Hipparcos (14–24 mm, rápido)", "lite")
+        self.combo_plate_catalog.addItem("Standard · mag ≤ 11.5 (20–50 mm)", "standard")
+        self.combo_plate_catalog.addItem("Deep · Gaia DR3 mag ≤ 13.5 (50–135+ mm)", "deep")
+        self.combo_plate_catalog.setEnabled(self.chk_plate_solving.isChecked())
+        self.chk_plate_solving.toggled.connect(self.combo_plate_catalog.setEnabled)
+        cat_bar.addWidget(self.combo_plate_catalog, 1)
+        fusion_layout.addLayout(cat_bar)
+
         self.chk_auto_mask_pano = QCheckBox("Desacoplar Cielo / Suelo (Auto-Máscara IA)")
         self.chk_auto_mask_pano.setChecked(True)
         self.chk_auto_mask_pano.setToolTip(
@@ -1299,6 +1311,7 @@ class PanoramaTab(QWidget):
             astro_mode=self.chk_astro_mode.isChecked(),
             star_matching=self.chk_star_matching.isChecked(),
             use_plate_solving=self.chk_plate_solving.isChecked(),
+            plate_catalog_profile=self.combo_plate_catalog.currentData(),
             min_inliers=int(self.spin_min_inliers.value()),
             exposure_comp=self.chk_exposure_comp.isChecked(),
             blend_mode=self.combo_blend.currentData(),

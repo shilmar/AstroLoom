@@ -643,9 +643,19 @@ fn match_and_refine(
     let mut k1 = 0.0f64;
 
     let center = [r[(0, 2)], r[(1, 2)], r[(2, 2)]];
-    let fov_stars = cat.stars_in_cone(&center, half_diag_rad, 8500);
+    let max_mag_milli: i16 = match cat.profile_id {
+        1 => 8500,
+        2 => 11500,
+        _ => 13500,
+    };
+    let mut fov_stars = cat.stars_in_cone(&center, half_diag_rad, max_mag_milli);
     if fov_stars.len() < 8 {
         return None;
+    }
+    if fov_stars.len() > 600 {
+        fov_stars.select_nth_unstable_by_key(600, |&idx| cat.stars[idx].mag_milli);
+        fov_stars.truncate(600);
+        fov_stars.sort_unstable_by_key(|&idx| cat.stars[idx].mag_milli);
     }
 
     let mut last_matches: Vec<(usize, usize, f32)> = Vec::new();

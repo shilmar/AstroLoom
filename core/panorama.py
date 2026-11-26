@@ -1168,7 +1168,16 @@ def stitch_nightscape_panorama(
                 solve_frame,
                 build_star_anchors_between_frames,
             )
-            cat_path = get_best_available_catalog(getattr(settings, 'plate_catalog_profile', 'lite'))
+            req_profile = getattr(settings, 'plate_catalog_profile', 'auto')
+            if req_profile == "auto":
+                f_mm = settings.focal_length_override or metas[0].focal_length_mm or 24.0
+                if f_mm <= 26.0:
+                    req_profile = "lite"
+                elif f_mm <= 55.0:
+                    req_profile = "standard"
+                else:
+                    req_profile = "deep"
+            cat_path = get_best_available_catalog(req_profile)
             if HAS_RUST_PLATE_SOLVER and cat_path:
                 if progress_callback:
                     progress_callback(21, "Ejecutando plate solving astrométrico sobre el cielo...")

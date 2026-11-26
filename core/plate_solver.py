@@ -38,12 +38,12 @@ CATALOG_PROFILES: Dict[str, Dict[str, Any]] = {
     },
     "standard": {
         "id": "standard",
-        "name": "Standard (Tycho-2)",
+        "name": "Standard (Gaia DR3 / Tycho-2)",
         "recommended_fov_mm": "20-50 mm (FF)",
         "mag_limit": 11.5,
         "filename": "alcat_std_tycho2_v1.bin",
         "url": "https://github.com/shilmar/AstroLoom/releases/download/catalogs-v1/alcat_std_tycho2_v1.bin.gz",
-        "sha256": "",
+        "sha256": "fbf588f35323456fb43a7ff00fa923ffabd56046724771c7f4ab50ad9a288935",
     },
     "deep": {
         "id": "deep",
@@ -52,7 +52,7 @@ CATALOG_PROFILES: Dict[str, Dict[str, Any]] = {
         "mag_limit": 13.5,
         "filename": "alcat_deep_gaia_v1.bin",
         "url": "https://github.com/shilmar/AstroLoom/releases/download/catalogs-v1/alcat_deep_gaia_v1.bin.gz",
-        "sha256": "",
+        "sha256": "b179cbd2bf26d59cdc51237490a65c2bbf55827907320c208704968a60149b79",
     },
 }
 
