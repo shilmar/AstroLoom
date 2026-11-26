@@ -930,6 +930,7 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
         self.mask_layers_widget.ground_edge_shift_changed.connect(self.on_gnd_edge_shift_changed)
         self.mask_layers_widget.ground_ai_denoise_requested.connect(self.on_run_ground_ai_denoise_requested)
         self.mask_layers_widget.raster_layer_import_requested.connect(self._on_import_raster_layer)
+        self.mask_layers_widget.sky_annotations_requested.connect(self._on_generate_sky_annotations)
         self.mask_layers_widget.master_mask_updated.connect(self._on_master_mask_updated_from_raster)
         self.mask_layers_widget.layer_move_tool_toggled.connect(self._on_layer_move_tool_toggled)
         self.canvas.layer_move_offset_dragged.connect(self._on_canvas_layer_offset_dragged)

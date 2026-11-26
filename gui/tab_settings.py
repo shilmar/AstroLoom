@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QPushButton, QFileDialog, QMessageBox, QDoubleSpinBox,
     QSpinBox, QComboBox, QScrollArea, QSplitter, QSizePolicy, QFrame
 )
+from core import APP_VERSION
 from core.config_manager import load_config, save_config
 from core.i18n import tr, get_i18n
 from gui.theme import STYLE_RUN_IDLE, BG_CARD, BG_INPUT, BORDER_BASE
@@ -597,7 +598,7 @@ class SettingsTab(QWidget):
         row_author_title.addWidget(lbl_work_title)
         row_author_title.addStretch()
 
-        self.lbl_engine_badge = QLabel("AstroLoom v0.18.0")
+        self.lbl_engine_badge = QLabel(f"AstroLoom v{APP_VERSION}")
         self.lbl_engine_badge.setStyleSheet("color: #80d8ff; font-size: 11px; font-weight: bold;")
         row_author_title.addWidget(self.lbl_engine_badge)
 

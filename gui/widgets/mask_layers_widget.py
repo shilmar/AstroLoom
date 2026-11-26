@@ -108,6 +108,7 @@ class MaskLayersWidget(QWidget):
     interaction_started = Signal()
     interaction_finished = Signal()
     raster_layer_import_requested = Signal()     # Petición para importar capa de imagen ráster externa
+    sky_annotations_requested = Signal()         # Petición para generar capa de constelaciones/estrellas vía plate solving
     layer_move_tool_toggled = Signal(bool)       # (activo) conmuta el modo interactivo de mover en el lienzo
     gradient_tool_toggled = Signal(bool, object) # (activo, layer) activa manipulación de gradiente en el lienzo
     master_mask_updated = Signal(object)        # (np.ndarray float32) máscara maestra de horizonte sincronizada desde capa ráster
@@ -397,6 +398,33 @@ class MaskLayersWidget(QWidget):
         row_create_2.addWidget(self.btn_add_sky)
 
         layout_create.addLayout(row_create_2)
+
+        row_create_3 = QHBoxLayout()
+        row_create_3.setSpacing(4)
+        self.btn_add_sky_annotations = QPushButton(" Anotar Constelaciones y Estrellas (Plate Solving)")
+        self.btn_add_sky_annotations.setIcon(get_icon("sparkles", size=13))
+        self.btn_add_sky_annotations.setCursor(Qt.PointingHandCursor)
+        self.btn_add_sky_annotations.setToolTip(
+            "Resuelve el campo estelar (Plate Solving) y genera una capa con las constelaciones, estrellas y objetos Messier/NGC"
+        )
+        self.btn_add_sky_annotations.clicked.connect(self.sky_annotations_requested.emit)
+        row_create_3.addWidget(self.btn_add_sky_annotations)
+        layout_create.addLayout(row_create_3)
+
+        row_annot_opts = QHBoxLayout()
+        row_annot_opts.setSpacing(8)
+        self.chk_annot_constellations = QCheckBox("Constelaciones")
+        self.chk_annot_constellations.setChecked(True)
+        self.chk_annot_stars = QCheckBox("Estrellas")
+        self.chk_annot_stars.setChecked(True)
+        self.chk_annot_dso = QCheckBox("Messier/NGC")
+        self.chk_annot_dso.setChecked(True)
+        for chk in (self.chk_annot_constellations, self.chk_annot_stars, self.chk_annot_dso):
+            chk.setStyleSheet("font-size: 10px; color: #94a3b8;")
+            row_annot_opts.addWidget(chk)
+        row_annot_opts.addStretch(1)
+        layout_create.addLayout(row_annot_opts)
+
         main_layout.addLayout(layout_create)
 
         # Panel superior: Cabecera con selector S/M/L + Lista de capas + Acciones

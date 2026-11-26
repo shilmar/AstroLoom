@@ -3,6 +3,23 @@
 Todas las novedades, mejoras y correcciones notables de **AstroLoom** (anteriormente *Apilator*) se documentan en este archivo.
 El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.19.0] - 2026-11-26
+
+### Añadido
+* **Motor de Plate Solving Offline en Rust (`astroloom_rs/src/plate_solver.rs`, `core/plate_solver.py`):**
+  - Resolución astrométrica completamente offline mediante índices ALCAT con soporte para catálogos estándar y profundos (*standard/deep*) desde la interfaz de Panorámicas y Revelador.
+* **Ajuste Radial Conjunto y Nivelación de Horizonte SO(3) en Panorámicas (`core/panorama.py`, `gui/tab_panorama.py`):**
+  - Optimización global mediante *joint radial bundle adjustment* y nivelación geométrica SO(3) del horizonte asistida por plate solving.
+* **Capa de Anotaciones Astronómicas (`core/sky_annotations.py`, `core/data/sky_annotations.json`, `gui/widgets/mask_layers_widget.py`, `gui/developer/io_project_manager.py`, `Astroloom.spec`):**
+  - Proyección geodésica desde ICRF y renderizado de capa RGBA transparente con las 88 constelaciones IAU, 325 estrellas nombradas y objetos Messier/NGC sobre imágenes resueltas por plate solving (disponible en el Revelador y en Panorámicas).
+
+### Modificado
+* **Refinamiento de Eclipses HDR (`astroloom_rs/src/eclipse.rs`, `core/eclipse.py`, `gui/tab_eclipse.py`, `gui/dialog_blink.py`, `gui/dialog_coronal_stack.py`):**
+  - Mejoras en la fusión HDR de bracketing, estirado *asinh*, detección del disco solar e interfaz de usuario de Eclipses.
+* **Unificación Centralizada de Versión (`core/__init__.py`, `locales/es.json`, `locales/en.json`, `gui/`):**
+  - Centralización de la versión en `APP_VERSION` con interpolación dinámica `{version}` en traducciones, ventana principal, pantalla splash y pestaña de ajustes.
+  - Actualización transversal a `v0.19.0` en `core/__init__.py`, motor Rust (`Cargo.toml`, `Cargo.lock`, `pyproject.toml`) y documentación.
+
 ## [0.18.0] - 2026-11-25
 
 ### Añadido

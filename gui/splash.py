@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QPixmap, QPainter, QColor, QFont, QPen, QBrush
 from PySide6.QtWidgets import QApplication, QSplashScreen
 
+from core import APP_VERSION
 from gui.icons import get_svg_pixmap
 
 
@@ -68,7 +69,7 @@ class AstroSplashScreen(QSplashScreen):
         f_ver = QFont("Segoe UI", 8, QFont.Bold)
         painter.setFont(f_ver)
         painter.setPen(QColor("#64748b"))
-        painter.drawText(QRectF(0, 138, self.w, 18), Qt.AlignCenter, "v0.18.0 • Rust Rayon Engine")
+        painter.drawText(QRectF(0, 138, self.w, 18), Qt.AlignCenter, f"v{APP_VERSION} • Rust Rayon Engine")
 
         # 6. Barra de progreso moderna
         bar_w = 340

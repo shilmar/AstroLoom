@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all, collect_data_files
 
-datas = [('locales', 'locales')]
+datas = [('locales', 'locales'), ('core/data', 'core/data')]
 binaries = []
 hiddenimports = []
 

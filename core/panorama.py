@@ -96,6 +96,7 @@ class PanoramaSettings:
     view_yaw_deg: float = 0.0              # Centrado horizontal 3D de la panorámica (-60° a +60°)
     arch_curvature: float = 0.0            # Deformación de arco / curvatura de horizonte (-0.25 a +0.25)
     preview_scale: float = 1.0             # 1.0 = alta resolución completa, <1.0 (ej. 0.25) = borrador rápido
+    annotate_constellations: bool = False  # Generar capa RGBA de constelaciones y estrellas nombradas
 
 
 @dataclass
@@ -111,6 +112,7 @@ class PanoramaResult:
     projection: str
     processing_time_s: float
     message: str = "Éxito"
+    annotation_rgba: Optional[np.ndarray] = None  # Capa RGBA uint8 de constelaciones y estrellas
 
 
 def extract_panel_metadata(filepath: str, index: int = 0) -> PanoramaPanelMetadata:
@@ -1158,6 +1160,8 @@ def stitch_nightscape_panorama(
     star_edges_rot = {}
     astro_pair_matches: List[Tuple[int, int, np.ndarray, np.ndarray, np.ndarray]] = []
     lens_k1, lens_k2, lens_dcx_full, lens_dcy_full = 0.0, 0.0, 0.0, 0.0
+    plate_sols: List[Optional[Dict[str, Any]]] = []
+    pano_anchor_idx: int = n // 2
 
     # 3.0 Plate Solving Local Offline (Quads 4D + catálogo ALCAT001) + Ajuste Conjunto de Lente y Poses SO(3)
     if getattr(settings, 'use_plate_solving', False) and clean_imgs_small is not None:
@@ -1244,6 +1248,7 @@ def stitch_nightscape_panorama(
 
                     if len(solved_valid) == n and settings.projection != "plane":
                         anchor_idx = n // 2
+                        pano_anchor_idx = anchor_idx
                         r_anchor = np.asarray(plate_sols[anchor_idx]["rotation_icrf"], dtype=np.float64)
                         r_init = [
                             r_anchor.T @ np.asarray(plate_sols[i]["rotation_icrf"], dtype=np.float64)
@@ -1787,12 +1792,17 @@ def stitch_nightscape_panorama(
         total_mask = (best_idx >= 0).astype(np.uint8) * 255
         del best_dist, best_idx
 
+        sky_mask_final_pano: Optional[np.ndarray] = None
         if has_ground and np.mean(sky_mask_canvas) <= 0.98:
             if progress_callback:
                 progress_callback(92, "Componiendo cielo y suelo con protección de horizonte y follaje...")
             from core.stacking import compose_sky_ground_with_anti_ghosting
             blended_img = compose_sky_ground_with_anti_ghosting(stitched_sky, ground_canvas, sky_mask_canvas)
-            del ground_canvas, sky_mask_canvas, stitched_sky
+            if getattr(settings, 'annotate_constellations', False):
+                sky_mask_final_pano = sky_mask_canvas
+            else:
+                del sky_mask_canvas
+            del ground_canvas, stitched_sky
         else:
             blended_img = stitched_sky
             if has_ground:
@@ -1898,6 +1908,84 @@ def stitch_nightscape_panorama(
         blended_img = apply_arch_curvature_deformation(blended_img, settings.arch_curvature)
         if total_mask is not None:
             total_mask = apply_arch_curvature_deformation(total_mask, settings.arch_curvature)
+        if 'sky_mask_final_pano' in locals() and sky_mask_final_pano is not None:
+            sky_mask_final_pano = (
+                apply_arch_curvature_deformation((np.clip(sky_mask_final_pano, 0.0, 1.0) * 255.0).astype(np.uint8), settings.arch_curvature).astype(np.float32) / 255.0
+            )
+
+    # 5.6 Capa opcional de Constelaciones y Estrellas Nombradas sobre la proyección panorámica
+    annotation_rgba = None
+    if (
+        getattr(settings, 'annotate_constellations', False)
+        and cameras is not None
+        and rmats_corr is not None
+        and plate_sols
+        and pano_anchor_idx < len(plate_sols)
+        and plate_sols[pano_anchor_idx] is not None
+    ):
+        try:
+            from core.sky_annotations import project_sky_annotations, render_sky_annotations_rgba
+
+            # Promediar R_icrf_to_world sobre los paneles resueltos compensando descentrado (dcx, dcy)
+            pp_vec = np.array([lens_dcx_full / max(1.0, focal_full / scale_canvas), lens_dcy_full / max(1.0, focal_full / scale_canvas), 1.0], dtype=np.float64)
+            pp_vec /= np.linalg.norm(pp_vec)
+            z_axis = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+            v_pp = np.cross(pp_vec, z_axis)
+            s_pp = float(np.linalg.norm(v_pp))
+            c_pp = float(np.dot(pp_vec, z_axis))
+            if s_pp > 1e-7:
+                k_pp = v_pp / s_pp
+                Km_pp = np.array([[0.0, -k_pp[2], k_pp[1]], [k_pp[2], 0.0, -k_pp[0]], [-k_pp[1], k_pp[0], 0.0]])
+                R_pp = np.eye(3) + s_pp * Km_pp + (1.0 - c_pp) * (Km_pp @ Km_pp)
+            else:
+                R_pp = np.eye(3)
+
+            H_acc = np.zeros((3, 3), dtype=np.float64)
+            for i_s, ps_i in enumerate(plate_sols):
+                if ps_i is None:
+                    continue
+                R_i_est = rmats_corr[i_s].astype(np.float64) @ R_pp @ np.asarray(ps_i["rotation_icrf"], dtype=np.float64).T
+                H_acc += R_i_est
+            U_h, _, Vt_h = np.linalg.svd(H_acc)
+            R_icrf_to_world = U_h @ Vt_h
+            if np.linalg.det(R_icrf_to_world) < 0:
+                U_h[:, -1] *= -1
+                R_icrf_to_world = U_h @ Vt_h
+
+            half_cw = canvas_w * 0.5
+            curv_val = float(settings.arch_curvature)
+            cx_k, cy_k = float(K[0, 2]), float(K[1, 2])
+
+            def _pano_proj(u_icrf: np.ndarray) -> Optional[Tuple[float, float]]:
+                ray_w = R_icrf_to_world @ u_icrf
+                up = np.array([0.0, 1.0, 0.0]) if abs(ray_w[1]) < 0.9 else np.array([1.0, 0.0, 0.0])
+                ex = np.cross(up, ray_w)
+                ex /= np.linalg.norm(ex)
+                ey = np.cross(ray_w, ex)
+                R_dir = np.column_stack([ex, ey, ray_w]).astype(np.float32)
+                wx, wy = warper.warpPoint((cx_k, cy_k), K, R_dir)
+                px_c = float(wx) - float(min_x)
+                py_c = float(wy) - float(min_y)
+                if not np.isfinite(px_c) or not np.isfinite(py_c):
+                    return None
+                if abs(curv_val) > 1e-4 and half_cw > 1.0:
+                    nx = (px_c - half_cw) / half_cw
+                    py_c += curv_val * float(canvas_h) * (1.0 - nx * nx)
+                if px_c < -canvas_w * 0.15 or px_c > canvas_w * 1.15 or py_c < -canvas_h * 0.15 or py_c > canvas_h * 1.15:
+                    return None
+                return (px_c, py_c)
+
+            mask_for_annot = sky_mask_final_pano if 'sky_mask_final_pano' in locals() else None
+            polylines, labels = project_sky_annotations(
+                _pano_proj, canvas_w, canvas_h, sky_mask=mask_for_annot, subdivide_steps=10
+            )
+            annotation_rgba = render_sky_annotations_rgba(canvas_w, canvas_h, polylines, labels)
+        except Exception as e_ann:
+            logger.warning(f"No se pudo generar capa de anotaciones en panorámica: {e_ann}")
+            annotation_rgba = None
+
+    if 'sky_mask_final_pano' in locals() and sky_mask_final_pano is not None:
+        del sky_mask_final_pano
 
     # -------------------------------------------------------------
     # 6. Recorte Automático de Rectángulo Máximo Inscrito
@@ -1940,7 +2028,8 @@ def stitch_nightscape_panorama(
         resolution=(canvas_w, canvas_h),
         projection=settings.projection,
         processing_time_s=total_time,
-        message=f"{msg_prefix}Se cosieron exitosamente {len(connected_indices)} de {n} paneles en {total_time:.1f} segundos."
+        message=f"{msg_prefix}Se cosieron exitosamente {len(connected_indices)} de {n} paneles en {total_time:.1f} segundos.",
+        annotation_rgba=annotation_rgba,
     )
 
 

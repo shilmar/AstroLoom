@@ -652,7 +652,24 @@ class PanoramaTab(QWidget):
         self.combo_plate_catalog.setEnabled(self.chk_plate_solving.isChecked())
         self.chk_plate_solving.toggled.connect(self.combo_plate_catalog.setEnabled)
         cat_bar.addWidget(self.combo_plate_catalog, 1)
+
+        self.btn_download_catalog = QPushButton("Descargar")
+        self.btn_download_catalog.setToolTip("Descarga desde GitHub Releases el catálogo astrométrico seleccionado si no está instalado.")
+        self.btn_download_catalog.clicked.connect(self._on_download_plate_catalog)
+        self.combo_plate_catalog.currentIndexChanged.connect(self._update_catalog_download_btn)
+        self.chk_plate_solving.toggled.connect(self._update_catalog_download_btn)
+        cat_bar.addWidget(self.btn_download_catalog)
+        self._update_catalog_download_btn()
         fusion_layout.addLayout(cat_bar)
+
+        self.chk_annotate_constellations = QCheckBox("Anotar Constelaciones y Estrellas (Capa en Revelador)")
+        self.chk_annotate_constellations.setChecked(False)
+        self.chk_annotate_constellations.setEnabled(self.chk_plate_solving.isChecked())
+        self.chk_plate_solving.toggled.connect(self.chk_annotate_constellations.setEnabled)
+        self.chk_annotate_constellations.setToolTip(
+            "Proyecta las constelaciones y estrellas principales sobre la panorámica y las transfiere como capa opcional al Revelador."
+        )
+        fusion_layout.addWidget(self.chk_annotate_constellations)
 
         self.chk_auto_mask_pano = QCheckBox("Desacoplar Cielo / Suelo (Auto-Máscara IA)")
         self.chk_auto_mask_pano.setChecked(True)
@@ -1331,7 +1348,8 @@ class PanoramaTab(QWidget):
             view_roll_deg=float(self.slider_roll.value()),
             view_yaw_deg=float(self.slider_yaw.value()),
             arch_curvature=(self.slider_arch.value() / 100.0),
-            preview_scale=scale
+            preview_scale=scale,
+            annotate_constellations=self.chk_annotate_constellations.isChecked() and self.chk_plate_solving.isChecked(),
         )
 
         self._last_progress_msg = ""
@@ -1552,6 +1570,59 @@ class PanoramaTab(QWidget):
         )
         dlg.exec()
 
+    def _update_catalog_download_btn(self):
+        if not hasattr(self, "btn_download_catalog"):
+            return
+        prof = self.combo_plate_catalog.currentData()
+        if prof == "auto":
+            prof = "lite"
+        try:
+            from core.plate_solver import get_catalog_path
+            installed = get_catalog_path(prof) is not None
+        except Exception:
+            installed = False
+        self.btn_download_catalog.setVisible(not installed)
+        self.btn_download_catalog.setEnabled(self.chk_plate_solving.isChecked() and not installed)
+
+    def _on_download_plate_catalog(self):
+        prof = self.combo_plate_catalog.currentData()
+        if prof == "auto":
+            prof = "lite"
+        from PySide6.QtWidgets import QProgressDialog
+        from PySide6.QtCore import QThread, Signal
+        from core.plate_solver import download_catalog
+
+        dlg = QProgressDialog(f"Descargando catálogo '{prof}' desde GitHub Releases...", "Cancelar", 0, 100, self)
+        dlg.setWindowTitle("Catálogo Astrométrico")
+        dlg.setMinimumDuration(0)
+        dlg.setValue(0)
+
+        cancelled = {"flag": False}
+
+        class _CatDlWorker(QThread):
+            prog = Signal(int, float, float)
+            done = Signal(str)
+            err = Signal(str)
+
+            def run(self):
+                try:
+                    path = download_catalog(
+                        prof,
+                        progress_callback=lambda pct, dl, tot: self.prog.emit(pct, dl, tot),
+                        cancel_check=lambda: cancelled["flag"],
+                    )
+                    self.done.emit(path)
+                except Exception as exc:
+                    self.err.emit(str(exc))
+
+        worker = _CatDlWorker(self)
+        dlg.canceled.connect(lambda: cancelled.__setitem__("flag", True))
+        worker.prog.connect(lambda pct, dl, tot: (dlg.setValue(pct), dlg.setLabelText(f"Descargando '{prof}': {dl:.1f} / {tot:.1f} MB ({pct}%)")))
+        worker.done.connect(lambda p: (dlg.close(), self._update_catalog_download_btn(), self.chk_plate_solving.setChecked(True), self.log(f"Catálogo '{prof}' instalado: {p}")))
+        worker.err.connect(lambda e: (dlg.close(), QMessageBox.warning(self, "Descarga de Catálogo", e)))
+        self._cat_dl_worker = worker
+        worker.start()
+
     def _on_export_to_developer(self):
         if self.current_result is None:
             return
@@ -1564,6 +1635,25 @@ class PanoramaTab(QWidget):
         )
 
         try:
+            self._pending_developer_layers = None
+            ann_rgba = getattr(self.current_result, "annotation_rgba", None)
+            if ann_rgba is not None:
+                if is_cropped and self.current_result.crop_rect is not None:
+                    rx, ry, rw, rh = self.current_result.crop_rect
+                    ann_slice = ann_rgba[ry:ry + rh, rx:rx + rw]
+                else:
+                    ann_slice = ann_rgba
+                if ann_slice.shape[:2] == img_to_export.shape[:2]:
+                    rgb_f32 = np.ascontiguousarray(ann_slice[..., :3].astype(np.float32) * (1.0 / 255.0))
+                    alpha_f32 = np.ascontiguousarray(ann_slice[..., 3].astype(np.float32) * (1.0 / 255.0))
+                    self._pending_developer_layers = [{
+                        "name": "Constelaciones y Estrellas",
+                        "image_data": rgb_f32,
+                        "brush_mask": alpha_f32,
+                        "blend_mode": "normal",
+                        "opacity": 0.90,
+                    }]
+
             temp_path = os.path.join(tempfile.gettempdir(), f"astroloom_panorama_{int(time.time())}.tif")
             save_tiff_with_icc(temp_path, img_to_export, compression='zlib', photometric='rgb')
             self.export_to_developer.emit(temp_path)

@@ -4,7 +4,7 @@
 
 **Suite y Estación de Trabajo Integral para Astrofotografía de Paisaje, Cielo Profundo y Eventos Astronómicos**
 
-[![Version](https://img.shields.io/badge/version-v0.18.0-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
+[![Version](https://img.shields.io/badge/version-v0.19.0-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -43,6 +43,19 @@ Impulsada por una arquitectura híbrida que combina una interfaz gráfica reacti
 | **5. Startrails** | Circumpolares continuas o efecto cometa en streaming $O(1)$, supresión automática de satélites y aviones, relleno de pausas (*gap filling*), recuperación cromática de estrellas y exportación de vídeo 4K. |
 | **6. Lluvias de Meteoros** | Detección algorítmica de bólidos, cribado en galería interactiva, filtros anti-aviones/satélites y reproyección al radiante celeste con flujo neto. |
 | **7. Panorámicas (Mosaicos)** | Cosido 2D multifila de ultra-alta resolución, alineación por asterismos en Rust (<2 ms), fusión híbrida *Dual-Zone* (árboles nítidos sin efecto fantasma) y auto-recorte rectangular $O(H \times W)$. |
+
+---
+
+## 🚀 Novedades de la Versión v0.19.0
+
+* **Motor de Plate Solving Offline en Rust (`astroloom_rs/src/plate_solver.rs`, `core/plate_solver.py`):**
+  - Resolución astrométrica offline mediante catálogos estándar y profundos (*standard/deep*) sin necesidad de conexión a internet.
+* **Panorámicas con Ajuste Radial Conjunto y Nivelación SO(3) (`core/panorama.py`, `gui/tab_panorama.py`):**
+  - Alineación global mediante *joint radial bundle adjustment* y nivelación automática de horizonte en SO(3).
+* **Anotaciones Astronómicas de Cielo (`core/sky_annotations.py`, `gui/widgets/mask_layers_widget.py`):**
+  - Generación de capas RGBA con las 88 constelaciones IAU, 325 estrellas nombradas y objetos Messier/NGC sobre imágenes y panorámicas resueltas.
+* **Refinamiento de Eclipses HDR (`astroloom_rs/src/eclipse.rs`, `core/eclipse.py`, `gui/tab_eclipse.py`):**
+  - Mejoras en la fusión HDR de bracketing, estirado *asinh* y detección del disco solar.
 
 ---
 

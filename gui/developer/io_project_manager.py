@@ -185,18 +185,171 @@ class ProjectIOMixin:
                 blend_mode = layer_dict.get("blend_mode", "normal")
                 opacity = float(layer_dict.get("opacity", 1.0))
                 if img_data is not None:
-                    self.mask_layers_widget.add_raster_layer(
+                    layer = self.mask_layers_widget.add_raster_layer(
                         name=name,
                         image_data=img_data,
                         blend_mode=blend_mode,
                         opacity=opacity,
                         position=0
                     )
+                    if layer_dict.get("brush_mask") is not None:
+                        layer.set_brush_mask(layer_dict["brush_mask"])
 
             self.update_stretch_preview(immediate=True)
             self._last_committed_state = self._capture_state()
             self._update_undo_redo_buttons()
             self.log_message(f"Multicapa coronal transferida con éxito ({len(raster_layers)} capas ráster activas).")
+
+    def _on_generate_sky_annotations(self) -> None:
+        """Ejecuta plate solving sobre la imagen base del Revelador y crea una capa con constelaciones y estrellas."""
+        if self.image_32bit is None:
+            QMessageBox.information(
+                self, "Sin Imagen Base",
+                "Carga primero una imagen en el Revelador antes de anotar constelaciones."
+            )
+            return
+
+        from PySide6.QtCore import QThread, Signal
+        from core.plate_solver import get_best_available_catalog, download_catalog
+
+        if get_best_available_catalog("lite") is None:
+            reply = QMessageBox.question(
+                self,
+                "Catálogo Astrométrico Requerido",
+                "No hay ningún catálogo astrométrico instalado en models/catalogs/.\n"
+                "¿Quieres descargar el catálogo 'Lite (Hipparcos)' (~6 MB) desde GitHub Releases ahora?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if reply != QMessageBox.Yes:
+                return
+            from PySide6.QtWidgets import QProgressDialog
+
+            dlg = QProgressDialog("Descargando catálogo 'lite' desde GitHub Releases...", "Cancelar", 0, 100, self)
+            dlg.setWindowTitle("Catálogo Astrométrico")
+            dlg.setMinimumDuration(0)
+            dlg.setValue(0)
+            cancelled = {"flag": False}
+
+            class _DevCatDlWorker(QThread):
+                prog = Signal(int, float, float)
+                done = Signal(str)
+                err = Signal(str)
+
+                def run(self):
+                    try:
+                        path = download_catalog(
+                            "lite",
+                            progress_callback=lambda pct, dl, tot: self.prog.emit(pct, dl, tot),
+                            cancel_check=lambda: cancelled["flag"],
+                        )
+                        self.done.emit(path)
+                    except Exception as exc:
+                        self.err.emit(str(exc))
+
+            dl_worker = _DevCatDlWorker(self)
+            dlg.canceled.connect(lambda: cancelled.__setitem__("flag", True))
+            dl_worker.prog.connect(lambda pct, dl, tot: (dlg.setValue(pct), dlg.setLabelText(f"Descargando 'lite': {dl:.1f} / {tot:.1f} MB ({pct}%)")))
+            dl_worker.done.connect(lambda p: (dlg.close(), self.log_message(f"Catálogo 'lite' instalado: {p}"), self._on_generate_sky_annotations()))
+            dl_worker.err.connect(lambda e: (dlg.close(), QMessageBox.warning(self, "Descarga de Catálogo", e)))
+            self._dev_cat_dl_worker = dl_worker
+            dl_worker.start()
+            return
+
+        btn = getattr(self.mask_layers_widget, "btn_add_sky_annotations", None)
+        if btn is not None:
+            btn.setEnabled(False)
+        self.log_message("Resolviendo campo estelar (Plate Solving) para anotar constelaciones...")
+
+        img_ref = self.image_32bit
+        mask_ref = self.current_mask
+        fp_ref = getattr(self, "current_filepath", None)
+        show_con = getattr(getattr(self.mask_layers_widget, "chk_annot_constellations", None), "isChecked", lambda: True)()
+        show_stars = getattr(getattr(self.mask_layers_widget, "chk_annot_stars", None), "isChecked", lambda: True)()
+        show_dso = getattr(getattr(self.mask_layers_widget, "chk_annot_dso", None), "isChecked", lambda: True)()
+
+        class _SkyAnnotWorker(QThread):
+            done = Signal(object)
+            failed = Signal(str)
+
+            def run(self):
+                try:
+                    from core.sky_annotations import generate_sky_annotation_layer_data
+                    res = generate_sky_annotation_layer_data(
+                        img_ref,
+                        sky_mask=mask_ref,
+                        filepath=fp_ref,
+                        show_constellations=show_con,
+                        show_constellation_names=show_con,
+                        show_star_names=show_stars,
+                        show_dso=show_dso,
+                    )
+                    self.done.emit(res)
+                except Exception as exc:
+                    self.failed.emit(str(exc))
+
+        def _cleanup():
+            if btn is not None:
+                btn.setEnabled(True)
+
+        def _on_done(res):
+            _cleanup()
+            if res is None:
+                self.log_message("No se pudo resolver el campo estelar con los catálogos disponibles.")
+                QMessageBox.information(
+                    self, "Plate Solving sin coincidencias",
+                    "No se encontraron suficientes estrellas de catálogo en la imagen "
+                    "(o la imagen usa proyección panorámica curva)."
+                )
+                return
+            rgb_f32, alpha_f32, sol = res
+            reliable = bool(sol.get("reliable", True))
+            n_inliers = int(sol.get("num_inliers", 0))
+            rms_px = float(sol.get("rms_px", 0.0))
+            layer_name = (
+                "Constelaciones y Estrellas"
+                if reliable
+                else "Constelaciones y Estrellas (Baja confianza)"
+            )
+            layer = self.mask_layers_widget.add_raster_layer(
+                name=layer_name,
+                image_data=rgb_f32,
+                blend_mode="normal",
+                opacity=0.90,
+                position=0,
+            )
+            layer.set_brush_mask(alpha_f32)
+            self.update_stretch_preview(immediate=True)
+            self._commit_action()
+            if reliable:
+                self.log_message(
+                    f"Capa 'Constelaciones y Estrellas' añadida "
+                    f"(RA={sol['ra_deg']:.1f}°, Dec={sol['dec_deg']:.1f}°, {n_inliers} estrellas, RMS={rms_px:.2f} px)."
+                )
+            else:
+                self.log_message(
+                    f"⚠ Solución astrométrica poco fiable "
+                    f"(RA={sol['ra_deg']:.1f}°, Dec={sol['dec_deg']:.1f}°, {n_inliers} estrellas, RMS={rms_px:.2f} px). "
+                    f"Verifica visualmente que las estrellas coincidan."
+                )
+                QMessageBox.warning(
+                    self,
+                    "Plate Solving poco fiable",
+                    f"Se encontraron pocas coincidencias ({n_inliers} estrellas, RMS {rms_px:.2f} px) "
+                    "y la posición de las constelaciones podría ser incorrecta.\n\n"
+                    "Consejo: activa o genera primero una máscara de cielo para excluir suelo/árboles, "
+                    "y comprueba con zoom si las estrellas con nombre coinciden.",
+                )
+
+        def _on_failed(err_msg: str):
+            _cleanup()
+            self.log_message(f"Error al generar capa de constelaciones: {err_msg}")
+            QMessageBox.critical(self, "Error en Anotación Estelar", err_msg)
+
+        self._sky_annot_worker = _SkyAnnotWorker(self)
+        self._sky_annot_worker.done.connect(_on_done)
+        self._sky_annot_worker.failed.connect(_on_failed)
+        self._sky_annot_worker.start()
 
     def _on_import_raster_layer(self) -> None:
         """Abre un diálogo de archivo para cargar una imagen externa como nueva capa ráster (H-Alfa, Suelo, etc.)."""

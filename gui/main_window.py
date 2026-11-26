@@ -11,6 +11,7 @@ from typing import Optional
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QLabel, QWidget, QHBoxLayout, QPushButton
 
+from core import APP_VERSION
 from core.i18n import tr, get_i18n
 from gui.theme import apply_theme, STYLE_STATUS_PILL
 from gui.icons import get_icon
@@ -27,7 +28,7 @@ from gui.tab_settings import SettingsTab
 class MainWindow(QMainWindow):
     """Ventana principal de la interfaz gráfica de AstroLoom."""
 
-    BASE_TITLE = "AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v0.18.0)"
+    BASE_TITLE = f"AstroLoom - Suite de Astrofotografía y Paisaje Nocturno (v{APP_VERSION})"
     gpu_fallback_signal = Signal(str)
 
     def __init__(self, splash: Optional[object] = None):
@@ -76,7 +77,7 @@ class MainWindow(QMainWindow):
         corner_layout.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
 
         # 1. Píldora del Motor AstroLoom (versión)
-        self.lbl_engine_badge = QLabel("● AstroLoom Engine v0.18.0")
+        self.lbl_engine_badge = QLabel(f"● AstroLoom Engine v{APP_VERSION}")
         self.lbl_engine_badge.setStyleSheet(STYLE_STATUS_PILL)
         corner_layout.addWidget(self.lbl_engine_badge)
 
@@ -135,9 +136,9 @@ class MainWindow(QMainWindow):
 
     def _retranslate_ui(self) -> None:
         """Actualiza todos los textos estáticos principales al cambiar de idioma."""
-        self.setWindowTitle(tr("app.title", self.BASE_TITLE))
+        self.setWindowTitle(tr("app.title", self.BASE_TITLE, version=APP_VERSION))
         if hasattr(self, 'lbl_engine_badge'):
-            self.lbl_engine_badge.setText(tr("app.engine_badge", "● AstroLoom Engine v0.18.0"))
+            self.lbl_engine_badge.setText(tr("app.engine_badge", f"● AstroLoom Engine v{APP_VERSION}", version=APP_VERSION))
         if hasattr(self, 'btn_activity_log'):
             self.btn_activity_log.setText(tr("app.log_btn", " Registro"))
             self.btn_activity_log.setToolTip(tr("app.log_btn_tooltip", "Abrir Registro de Actividad y Telemetría"))
@@ -307,7 +308,12 @@ class MainWindow(QMainWindow):
         Transfiere la imagen generada en el módulo de Panorámicas directamente
         al Revelador / Editor y conmuta automáticamente a la pestaña 2.
         """
-        self.tab_developer.load_image_direct(output_path, mask=None)
+        layers = getattr(self.tab_panorama, "_pending_developer_layers", None)
+        self.tab_panorama._pending_developer_layers = None
+        if layers:
+            self.tab_developer.load_coronal_stack(output_path, layers)
+        else:
+            self.tab_developer.load_image_direct(output_path, mask=None)
         self.tab_widget.setCurrentIndex(1)
 
     def closeEvent(self, event) -> None:

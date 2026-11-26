@@ -5,9 +5,9 @@
     "version": "1.0"
   },
   "app": {
-    "title": "AstroLoom - Astrophotography & Nightscape Suite (v0.18.0)",
+    "title": "AstroLoom - Astrophotography & Nightscape Suite (v{version})",
     "ready": "Ready to process",
-    "engine_badge": "● AstroLoom Engine v0.18.0",
+    "engine_badge": "● AstroLoom Engine v{version}",
     "ram_monitor": "RAM: {pct}% ({used:.1f} / {total:.1f} GB)",
     "language": "Language",
     "log_btn": " Log",

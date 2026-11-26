@@ -625,6 +625,8 @@ struct SolveSolution {
     focal_px: f64,
     k1: f64,
     rms_px: f64,
+    expected_random: f64,
+    reliable: bool,
     matches: Vec<(usize, usize, f32)>, // (img_idx, cat_star_idx, residual_px)
 }
 
@@ -761,7 +763,7 @@ fn match_and_refine(
         last_matches = pairs;
     }
 
-    // Recalcular residuos finales exactos
+    // Recalcular residuos finales exactos y estimar coincidencias esperadas por azar
     let mut sum_sq = 0.0f64;
     let mut final_matches = Vec::with_capacity(last_matches.len());
     for &(i, c, _) in &last_matches {
@@ -773,15 +775,33 @@ fn match_and_refine(
             }
         }
     }
-    if final_matches.len() < 10 {
+    let in_frame_cat = fov_stars
+        .iter()
+        .filter(|&&c| {
+            project_icrf_to_pixel(&cat.stars[c].u, &r, cx, cy, focal, k1)
+                .map_or(false, |(px, py)| px >= 0.0 && px < w && py >= 0.0 && py < h)
+        })
+        .count();
+    let area_frac = ((stars_xy.len() as f64 * std::f64::consts::PI * 4.5 * 4.5) / (w * h).max(1.0)).min(0.5);
+    let expected_random = (in_frame_cat as f64) * area_frac;
+    let min_required = (expected_random * 3.2 + 8.0).ceil().max(16.0) as usize;
+    if final_matches.len() < min_required {
         return None;
     }
     let rms_px = (sum_sq / final_matches.len() as f64).sqrt();
+    if rms_px > 3.2 {
+        return None;
+    }
+    let reliable = final_matches.len() >= 24
+        && rms_px < 2.6
+        && (final_matches.len() as f64) >= (expected_random * 4.5 + 10.0);
     Some(SolveSolution {
         r_cam_to_icrf: r,
         focal_px: focal,
         k1,
         rms_px,
+        expected_random,
+        reliable,
         matches: final_matches,
     })
 }
@@ -966,7 +986,7 @@ fn solve_with_focal_guess(
                                     if is_better {
                                         local_best = Some(sol);
                                         if let Some(ref lb) = local_best {
-                                            if lb.matches.len() >= 30 && lb.rms_px < 2.2 {
+                                            if lb.matches.len() >= 40 && lb.rms_px < 2.0 {
                                                 return local_best;
                                             }
                                         }
@@ -1040,7 +1060,7 @@ pub fn plate_solve_stars_rs<'py>(
         let mut best: Option<SolveSolution> = None;
         for f_guess in guesses {
             if let Some(sol) = solve_with_focal_guess(&cat, &stars_vec, wf, hf, f_guess, scale_tol, quad_tol) {
-                let good_enough = sol.matches.len() >= 18 && sol.rms_px < 2.8;
+                let good_enough = sol.reliable && sol.matches.len() >= 28 && sol.rms_px < 2.4;
                 let better = match &best {
                     None => true,
                     Some(prev) => sol.matches.len() > prev.matches.len(),
@@ -1086,6 +1106,8 @@ pub fn plate_solve_stars_rs<'py>(
     dict.set_item("k1", sol.k1)?;
     dict.set_item("rms_px", sol.rms_px)?;
     dict.set_item("num_inliers", sol.matches.len())?;
+    dict.set_item("expected_random", sol.expected_random)?;
+    dict.set_item("reliable", sol.reliable)?;
     dict.set_item("rotation_icrf", r_arr.into_pyarray(py))?;
 
     let matched_list = PyList::empty(py);
