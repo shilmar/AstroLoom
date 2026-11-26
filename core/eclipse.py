@@ -391,6 +391,23 @@ def fit_circular_arc_convex_hull(
     return float(cx), float(cy), float(R)
 
 
+def _prestretch_limb_luminance(gray: np.ndarray, force: bool = False) -> np.ndarray:
+    """
+    Pre-estira temporalmente la luminancia lineal de tomas ultrarrápidas muy oscuras
+    (donde incluso el 0.1% más brillante de la corona está por debajo de 0.06)
+    para revelar el borde lunar sin alterar los datos originales de fusión HDR.
+    Usa p75 como suelo de cielo para no levantar el ruido de lectura por encima de hole_thresholds.
+    """
+    p_75, p_999 = np.percentile(gray, [75.0, 99.9])
+    if not force and p_999 >= 0.06:
+        return gray
+    span = max(float(p_999 - p_75), 1e-6)
+    g_norm = np.clip((gray - float(p_75)) / span, 0.0, 1.0)
+    k = 40.0 if p_999 < 0.015 else 20.0
+    stretched = (np.arcsinh(k * g_norm) / np.arcsinh(k)).astype(np.float32)
+    return cv2.GaussianBlur(stretched, (0, 0), 1.5)
+
+
 def detect_eclipse_disk(
     image: np.ndarray,
     mode: str = "solar",
@@ -418,6 +435,8 @@ def detect_eclipse_disk(
     else:
         gray = image.copy()
     gray = gray.astype(np.float32)
+    if mode == "solar":
+        gray = _prestretch_limb_luminance(gray)
 
     # Coarse detection via downsampled image (1000 px max, sin sobreescalar)
     scale = min(1.0, 1000.0 / float(max(h, w)))
@@ -598,11 +617,18 @@ def detect_eclipse_disk(
 
     # Si expected_radius está disponible y es válido, optimizar centro anclando R
     if expected_radius is not None and expected_radius > 10:
-        max_search = min(20.0, max(8.0, expected_radius * 0.08)) if expected_center is not None else None
+        if mode == "solar" and best_hole is not None:
+            p_scan = _radial_limb_scan(
+                gray, init_cx, init_cy,
+                max(5.0, expected_radius - 25.0), expected_radius + 25.0,
+                num_rays=360, mode=mode
+            )
+            if p_scan is not None:
+                scx, scy, sr = p_scan
+                if 0.85 * expected_radius <= sr <= 1.15 * expected_radius and np.hypot(scx - init_cx, scy - init_cy) <= 35.0:
+                    return float(scx), float(scy), float(expected_radius)
+        max_search = min(35.0, max(12.0, expected_radius * 0.10))
         opt_cx, opt_cy = optimize_center_circular_flux(gray, init_cx, init_cy, expected_radius, mode=mode, max_search_dist=max_search)
-        if expected_center is not None:
-            if np.hypot(opt_cx - expected_center[0], opt_cy - expected_center[1]) > 25.0:
-                opt_cx, opt_cy = expected_center
         return float(opt_cx), float(opt_cy), float(expected_radius)
 
     if mode == "solar" and best_hole is None:
@@ -645,6 +671,8 @@ def refine_disk_subpixel(
     else:
         gray = image.copy()
     gray = gray.astype(np.float32)
+    if mode == "solar":
+        gray = _prestretch_limb_luminance(gray)
 
     fcx, fcy = optimize_center_circular_flux(gray, approx_cx, approx_cy, approx_radius, mode=mode)
     return float(fcx), float(fcy), float(approx_radius)
@@ -721,10 +749,12 @@ def crop_frame_roi(
 def align_eclipse_bracketing(
     images: List[np.ndarray],
     centers: List[Tuple[float, float]],
-    ref_idx: int = 0
+    ref_idx: int = 0,
+    consume_input: bool = False
 ) -> Tuple[List[np.ndarray], List[Tuple[float, float]]]:
     """
     Alinea una lista de imágenes de bracketing al centro del limbo de la toma de referencia.
+    Si consume_input=True, libera cada toma original de `images` tras alinearla para evitar duplicar RAM.
     """
     if not images or len(images) != len(centers):
         raise ValueError("El número de imágenes y centros debe coincidir.")
@@ -733,13 +763,17 @@ def align_eclipse_bracketing(
     aligned_images = []
     shifts = []
 
-    for img, c in zip(images, centers):
+    for i in range(len(images)):
+        img = images[i]
+        c = centers[i]
+        if consume_input:
+            images[i] = None
         dx = float(ref_center[0] - c[0])
         dy = float(ref_center[1] - c[1])
         shifts.append((dx, dy))
 
         if abs(dx) < 1e-4 and abs(dy) < 1e-4:
-            aligned_images.append(img.copy())
+            aligned_images.append(img if consume_input else img.copy())
         else:
             aligned = register_frame_to_center(img, c, ref_center, border_mode=cv2.BORDER_REPLICATE)
             aligned_images.append(aligned)
@@ -768,30 +802,60 @@ def apply_asinh_stretch(
     stretch_factor: float = 30.0,
     black_point: float = 0.0,
     shoulder_threshold: float = 0.70,
-    highlight_ceiling: float = 1.0
+    highlight_ceiling: float = 1.0,
+    white_point: float = 1.0,
+    color_preserve: float = 0.0
 ) -> np.ndarray:
     """
     Estirado de arco seno hiperbólico (asinh) con hombro suave de altas luces (soft highlight shoulder).
-    Preserva los ratios cromáticos exactos R:G:B y comprime el rango dinámico
-    extremo de la corona solar: levanta la corona externa tenue sin empastar
-    ni saturar protuberancias a blanco puro.
+    Soporta punto blanco extendido (white_point > 1.0) y preservación cromática Lupton (color_preserve en [0, 1])
+    para mantener el detalle y el color H-alfa de protuberancias solares incluso con estirados altos.
     """
     img = np.ascontiguousarray(image, dtype=np.float32)
-    if HAS_RUST and hasattr(astroloom_rs, "apply_asinh_stretch_rs"):
-        return np.asarray(astroloom_rs.apply_asinh_stretch_rs(
-            img,
-            float(stretch_factor),
-            float(black_point),
-            float(shoulder_threshold),
-            float(highlight_ceiling)
-        ), dtype=np.float32)
+    wp = max(float(white_point), 1.0)
+    cp = float(np.clip(color_preserve, 0.0, 1.0))
 
-    if stretch_factor <= 1.0:
-        return np.clip(img - black_point, 0.0, 1.0).astype(np.float32)
+    if HAS_RUST and hasattr(astroloom_rs, "apply_asinh_stretch_rs"):
+        try:
+            return np.asarray(astroloom_rs.apply_asinh_stretch_rs(
+                img,
+                float(stretch_factor),
+                float(black_point),
+                float(shoulder_threshold),
+                float(highlight_ceiling),
+                wp,
+                cp
+            ), dtype=np.float32)
+        except TypeError:
+            if wp <= 1.0 + 1e-6 and cp <= 1e-4:
+                return np.asarray(astroloom_rs.apply_asinh_stretch_rs(
+                    img,
+                    float(stretch_factor),
+                    float(black_point),
+                    float(shoulder_threshold),
+                    float(highlight_ceiling)
+                ), dtype=np.float32)
 
     img_sub = np.maximum(img - black_point, 0.0).astype(np.float32)
-    denom = np.arcsinh(float(stretch_factor))
-    u = np.arcsinh(float(stretch_factor) * img_sub) / denom
+
+    if stretch_factor <= 1.0:
+        if wp <= 1.0 + 1e-6:
+            return np.clip(img_sub, 0.0, 1.0).astype(np.float32)
+        u = img_sub / wp
+    else:
+        denom = np.arcsinh(float(stretch_factor) * wp)
+        if img.ndim == 3 and img.shape[2] == 3 and cp > 1e-4:
+            lum = 0.2126 * img_sub[..., 0] + 0.7152 * img_sub[..., 1] + 0.0722 * img_sub[..., 2]
+            s_lum = np.arcsinh(float(stretch_factor) * lum) / denom
+            gain = np.divide(s_lum, lum, out=np.zeros_like(lum), where=lum > 1e-6)
+            u_lup = img_sub * gain[..., None]
+            if cp >= 0.999:
+                u = u_lup
+            else:
+                u_ch = np.arcsinh(float(stretch_factor) * img_sub) / denom
+                u = cp * u_lup + (1.0 - cp) * u_ch
+        else:
+            u = np.arcsinh(float(stretch_factor) * img_sub) / denom
 
     if img.ndim == 3:
         peak = np.max(u, axis=-1)
@@ -809,7 +873,8 @@ def balance_coronal_white_balance(
     center_x: float,
     center_y: float,
     radius: float,
-    ring_range: Tuple[float, float] = (1.2, 1.8)
+    ring_range: Tuple[float, float] = (1.2, 1.8),
+    clip_upper: bool = True
 ) -> Tuple[np.ndarray, Tuple[float, float, float]]:
     """
     Neutraliza el balance de blancos de la corona solar estimando la mediana de color
@@ -818,15 +883,27 @@ def balance_coronal_white_balance(
     """
     img = np.ascontiguousarray(image, dtype=np.float32)
     if HAS_RUST and hasattr(astroloom_rs, "balance_coronal_white_balance_rs"):
-        bal, gains = astroloom_rs.balance_coronal_white_balance_rs(
-            img,
-            float(center_x),
-            float(center_y),
-            float(radius),
-            float(ring_range[0]),
-            float(ring_range[1])
-        )
-        return np.asarray(bal, dtype=np.float32), (float(gains[0]), float(gains[1]), float(gains[2]))
+        try:
+            bal, gains = astroloom_rs.balance_coronal_white_balance_rs(
+                img,
+                float(center_x),
+                float(center_y),
+                float(radius),
+                float(ring_range[0]),
+                float(ring_range[1]),
+                bool(clip_upper)
+            )
+            return np.asarray(bal, dtype=np.float32), (float(gains[0]), float(gains[1]), float(gains[2]))
+        except TypeError:
+            bal, gains = astroloom_rs.balance_coronal_white_balance_rs(
+                img,
+                float(center_x),
+                float(center_y),
+                float(radius),
+                float(ring_range[0]),
+                float(ring_range[1])
+            )
+            return np.asarray(bal, dtype=np.float32), (float(gains[0]), float(gains[1]), float(gains[2]))
 
     if img.ndim != 3:
         return img.copy(), (1.0, 1.0, 1.0)
@@ -846,7 +923,8 @@ def balance_coronal_white_balance(
     f = g_val / np.maximum(med, 1e-6)
     f = np.clip(f, 0.4, 2.5)
 
-    balanced = np.clip(img * f[None, None, :], 0.0, 1.0).astype(np.float32)
+    scaled = img * f[None, None, :]
+    balanced = (np.clip(scaled, 0.0, 1.0) if clip_upper else np.maximum(scaled, 0.0)).astype(np.float32)
     return balanced, (float(f[0]), float(f[1]), float(f[2]))
 
 
@@ -857,7 +935,8 @@ def balance_coronal_thermal_dual(
     radius: float,
     corona_warmth: float = 0.0,
     sky_temp: float = 0.0,
-    transition_range: Tuple[float, float] = (1.5, 4.0)
+    transition_range: Tuple[float, float] = (1.5, 4.0),
+    clip_upper: bool = True
 ) -> np.ndarray:
     """
     Ajuste térmico lineal dual para la corona y el fondo de cielo exterior.
@@ -892,9 +971,9 @@ def balance_coronal_thermal_dual(
     g_b = 1.0 - 0.30 * k
 
     result = np.empty_like(img)
-    result[..., 0] = np.clip(img[..., 0] * g_r, 0.0, 1.0)
-    result[..., 1] = np.clip(img[..., 1] * g_g, 0.0, 1.0)
-    result[..., 2] = np.clip(img[..., 2] * g_b, 0.0, 1.0)
+    for c_idx, g_val in enumerate((g_r, g_g, g_b)):
+        ch = img[..., c_idx] * g_val
+        result[..., c_idx] = np.clip(ch, 0.0, 1.0) if clip_upper else np.maximum(ch, 0.0)
 
     return result.astype(np.float32)
 
@@ -906,7 +985,8 @@ def subtract_twilight_gradient(
     radius: float,
     r_min_factor: float = 6.0,
     degree: int = 1,
-    robust: bool = True
+    robust: bool = True,
+    clip_upper: bool = True
 ) -> np.ndarray:
     """
     Modela y sustrae el plano o gradiente crepuscular 2D en el cielo exterior
@@ -993,10 +1073,12 @@ def subtract_twilight_gradient(
             mean_bg = float(np.median(surf_full[valid_sky]))
             tilt = surf_full - mean_bg
 
+            sub_ch = ch - tilt
+            clipped = (np.clip(sub_ch, 0.0, 1.0) if clip_upper else np.maximum(sub_ch, 0.0)).astype(np.float32)
             if img.ndim == 2:
-                result = np.clip(ch - tilt, 0.0, 1.0).astype(np.float32)
+                result = clipped
             else:
-                result[..., c_idx] = np.clip(ch - tilt, 0.0, 1.0).astype(np.float32)
+                result[..., c_idx] = clipped
         except Exception:
             pass
 
@@ -1016,7 +1098,8 @@ def fuse_hdr_bracketing(
     gradual_handover: bool = True,
     corona_warmth: float = 0.0,
     sky_temp: float = 0.0,
-    equalize_sky_gradient: bool = False
+    equalize_sky_gradient: bool = False,
+    clip_highlights: bool = True
 ) -> np.ndarray:
     """
     Fusión de alto rango dinámico (HDR) para tomas de bracketing de eclipses.
@@ -1070,30 +1153,46 @@ def fuse_hdr_bracketing(
 
     if HAS_RUST and hasattr(astroloom_rs, "fuse_hdr_bracketing_solar_rs"):
         try:
-            hdr_norm = astroloom_rs.fuse_hdr_bracketing_solar_rs(
-                sorted_images,
-                sorted_exp,
-                float(saturation_threshold),
-                float(noise_floor),
-                lunar_mask_params,
-                bool(gradual_handover),
-                bg_pedestals if subtract_sky else None
-            )
+            try:
+                hdr_norm = astroloom_rs.fuse_hdr_bracketing_solar_rs(
+                    sorted_images,
+                    sorted_exp,
+                    float(saturation_threshold),
+                    float(noise_floor),
+                    lunar_mask_params,
+                    bool(gradual_handover),
+                    bg_pedestals if subtract_sky else None,
+                    bool(clip_highlights)
+                )
+            except TypeError:
+                hdr_norm = astroloom_rs.fuse_hdr_bracketing_solar_rs(
+                    sorted_images,
+                    sorted_exp,
+                    float(saturation_threshold),
+                    float(noise_floor),
+                    lunar_mask_params,
+                    bool(gradual_handover),
+                    bg_pedestals if subtract_sky else None
+                )
             # Balance de blancos coronal automático (anillo 1.2 - 1.8 R) para eliminar dominantes de cielo
             if auto_wb_corona and lunar_mask_params is not None and hdr_norm.ndim == 3:
                 mcx, mcy, mr = lunar_mask_params
-                hdr_norm, _ = balance_coronal_white_balance(hdr_norm, mcx, mcy, mr, ring_range=(1.2, 1.8))
+                hdr_norm, _ = balance_coronal_white_balance(
+                    hdr_norm, mcx, mcy, mr, ring_range=(1.2, 1.8), clip_upper=clip_highlights
+                )
 
             if (abs(corona_warmth) > 1e-4 or abs(sky_temp) > 1e-4) and lunar_mask_params is not None and hdr_norm.ndim == 3:
                 mcx, mcy, mr = lunar_mask_params
                 hdr_norm = balance_coronal_thermal_dual(
-                    hdr_norm, mcx, mcy, mr, corona_warmth=corona_warmth, sky_temp=sky_temp
+                    hdr_norm, mcx, mcy, mr, corona_warmth=corona_warmth, sky_temp=sky_temp, clip_upper=clip_highlights
                 )
 
             # Ecualización opcional de gradiente crepuscular 2D en espacio lineal antes del estirado
             if equalize_sky_gradient and lunar_mask_params is not None:
                 mcx, mcy, mr = lunar_mask_params
-                hdr_norm = subtract_twilight_gradient(hdr_norm, mcx, mcy, mr, r_min_factor=6.0, degree=1)
+                hdr_norm = subtract_twilight_gradient(
+                    hdr_norm, mcx, mcy, mr, r_min_factor=6.0, degree=1, clip_upper=clip_highlights
+                )
 
             if asinh_stretch > 1.0:
                 hdr_norm = apply_asinh_stretch(hdr_norm, stretch_factor=asinh_stretch)
@@ -1115,7 +1214,7 @@ def fuse_hdr_bracketing(
         mcx, mcy, mr = lunar_mask_params
         y_idx, x_idx = np.indices(shape[:2], dtype=np.float32)
         dist = np.hypot(x_idx - mcx, y_idx - mcy)
-        moon_weight = _smoothstep(dist, mr - 1.5, mr + 1.0)
+        moon_weight = _smoothstep(dist, mr - 2.0, mr)
 
     for i, (img, t) in enumerate(zip(sorted_images, sorted_exp)):
         t = max(t, 1e-6)
@@ -1193,32 +1292,38 @@ def fuse_hdr_bracketing(
             merged_flux = merged_flux * moon_weight
 
     # Normalización sobre píxeles válidos fuera del disco lunar
+    hi_pct = 99.999 if clip_highlights else 99.98
     if moon_weight is not None:
         valid_px = moon_weight > 0.5
-        p_high = float(np.percentile(merged_flux[valid_px], 99.999))
+        p_high = float(np.percentile(merged_flux[valid_px], hi_pct))
         p_low = float(np.percentile(merged_flux[valid_px], 0.05))
     else:
-        p_high = float(np.percentile(merged_flux, 99.999))
+        p_high = float(np.percentile(merged_flux, hi_pct))
         p_low = float(np.percentile(merged_flux, 0.05))
 
     denom = max(p_high - p_low, 1e-8)
-    hdr_norm = np.clip((merged_flux - p_low) / denom, 0.0, 1.0).astype(np.float32)
+    scaled = (merged_flux - p_low) / denom
+    hdr_norm = (np.clip(scaled, 0.0, 1.0) if clip_highlights else np.maximum(scaled, 0.0)).astype(np.float32)
 
     # Balance de blancos coronal automático (anillo 1.2 - 1.8 R) para eliminar dominantes de cielo
     if auto_wb_corona and lunar_mask_params is not None and hdr_norm.ndim == 3:
         mcx, mcy, mr = lunar_mask_params
-        hdr_norm, _ = balance_coronal_white_balance(hdr_norm, mcx, mcy, mr, ring_range=(1.2, 1.8))
+        hdr_norm, _ = balance_coronal_white_balance(
+            hdr_norm, mcx, mcy, mr, ring_range=(1.2, 1.8), clip_upper=clip_highlights
+        )
 
     if (abs(corona_warmth) > 1e-4 or abs(sky_temp) > 1e-4) and lunar_mask_params is not None and hdr_norm.ndim == 3:
         mcx, mcy, mr = lunar_mask_params
         hdr_norm = balance_coronal_thermal_dual(
-            hdr_norm, mcx, mcy, mr, corona_warmth=corona_warmth, sky_temp=sky_temp
+            hdr_norm, mcx, mcy, mr, corona_warmth=corona_warmth, sky_temp=sky_temp, clip_upper=clip_highlights
         )
 
     # Ecualización opcional de gradiente crepuscular 2D en espacio lineal antes del estirado
     if equalize_sky_gradient and lunar_mask_params is not None:
         mcx, mcy, mr = lunar_mask_params
-        hdr_norm = subtract_twilight_gradient(hdr_norm, mcx, mcy, mr, r_min_factor=6.0, degree=1)
+        hdr_norm = subtract_twilight_gradient(
+            hdr_norm, mcx, mcy, mr, r_min_factor=6.0, degree=1, clip_upper=clip_highlights
+        )
 
     if asinh_stretch > 1.0:
         hdr_norm = apply_asinh_stretch(hdr_norm, stretch_factor=asinh_stretch)

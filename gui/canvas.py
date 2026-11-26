@@ -1425,6 +1425,7 @@ class MaskCanvas(QWidget):
                         inv_aspect = 1.0 / max(1e-5, aspect)
                         dx = norm_pt.x() - cx
                         dy = norm_pt.y() - cy
+                        ctrl_pressed = bool(event.modifiers() & Qt.ControlModifier)
                         if h_type == "rotate":
                             ang_rad = np.arctan2(dy * ih, dx * iw)
                             layer.radial_angle = float(np.rad2deg(ang_rad))
@@ -1432,12 +1433,23 @@ class MaskCanvas(QWidget):
                             rad = np.deg2rad(layer.radial_angle)
                             cos_t, sin_t = np.cos(rad), np.sin(rad)
                             lx = abs(dx * cos_t + (dy * inv_aspect) * sin_t)
-                            layer.radial_radius_x = float(np.clip(lx, 0.02, 1.5))
+                            if ctrl_pressed:
+                                # Mantener círculo perfecto en píxeles de imagen (rx * iw == ry * ih)
+                                rx_val = float(np.clip(lx, max(0.02, 0.02 * inv_aspect), min(1.5, 1.5 * inv_aspect)))
+                                layer.radial_radius_x = rx_val
+                                layer.radial_radius_y = float(rx_val * aspect)
+                            else:
+                                layer.radial_radius_x = float(np.clip(lx, 0.02, 1.5))
                         elif h_type == "ry":
                             rad = np.deg2rad(layer.radial_angle)
                             cos_t, sin_t = np.cos(rad), np.sin(rad)
                             ly = abs(-(dx * aspect) * sin_t + dy * cos_t)
-                            layer.radial_radius_y = float(np.clip(ly, 0.02, 1.5))
+                            if ctrl_pressed:
+                                ry_val = float(np.clip(ly, max(0.02, 0.02 * aspect), min(1.5, 1.5 * aspect)))
+                                layer.radial_radius_y = ry_val
+                                layer.radial_radius_x = float(ry_val * inv_aspect)
+                            else:
+                                layer.radial_radius_y = float(np.clip(ly, 0.02, 1.5))
 
                 self.gradient_changed.emit()
                 self.update()

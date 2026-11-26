@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate, QStyleOptionViewItem, QStyle
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QSize, QPointF, QRectF, QRect, QModelIndex
-from PySide6.QtGui import QImage, QPixmap, QKeyEvent, QColor, QPainter, QWheelEvent, QMouseEvent, QFont, QPalette, QBrush
+from PySide6.QtGui import QImage, QPixmap, QKeyEvent, QColor, QPainter, QPen, QWheelEvent, QMouseEvent, QFont, QPalette, QBrush
 
 from gui.theme import apply_theme, BG_CARD, BORDER_BASE, TEXT_MUTED, BG_CANVAS, BG_PANEL
 from gui.icons import get_icon
@@ -158,6 +158,16 @@ class BlinkCanvas(QWidget):
         self._pan_offset: QPointF = QPointF(0.0, 0.0)
         self._is_panning: bool = False
         self._last_mouse_pos: QPointF = QPointF(0.0, 0.0)
+        self._limb_guide: Optional[Tuple[float, float, float, float]] = None
+        self._show_limb_guide: bool = True
+
+    def set_limb_guide(self, guide: Optional[Tuple[float, float, float, float]]):
+        self._limb_guide = guide
+        self.update()
+
+    def set_show_limb_guide(self, visible: bool):
+        self._show_limb_guide = bool(visible)
+        self.update()
 
     def set_image(self, img_u8: Optional[np.ndarray]):
         if img_u8 is None:
@@ -288,6 +298,7 @@ class BlinkCanvas(QWidget):
                 x = (self.width() - scaled.width()) // 2
                 y = (self.height() - scaled.height()) // 2
                 painter.drawPixmap(x, y, scaled)
+                target_rect = QRectF(float(x), float(y), float(scaled.width()), float(scaled.height()))
             else:
                 painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
                 draw_w = pw * self._zoom_scale
@@ -307,6 +318,21 @@ class BlinkCanvas(QWidget):
                 painter.drawRoundedRect(badge_rect, 4, 4)
                 painter.setPen(QColor("#38bdf8"))
                 painter.drawText(badge_rect, Qt.AlignCenter, tag_str)
+
+            if self._show_limb_guide and self._limb_guide is not None:
+                gx_n, gy_n, rx_n, ry_n = self._limb_guide
+                gcx = target_rect.left() + gx_n * target_rect.width()
+                gcy = target_rect.top() + gy_n * target_rect.height()
+                grx = rx_n * target_rect.width()
+                gry = ry_n * target_rect.height()
+                painter.setRenderHint(QPainter.Antialiasing, True)
+                pen = QPen(QColor("#38bdf8"), 1.5, Qt.DashLine)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawEllipse(QPointF(gcx, gcy), grx, gry)
+                painter.setPen(QPen(QColor("#38bdf8"), 1.2))
+                painter.drawLine(QPointF(gcx - 8, gcy), QPointF(gcx + 8, gcy))
+                painter.drawLine(QPointF(gcx, gcy - 8), QPointF(gcx, gcy + 8))
         else:
             painter.setPen(QColor(TEXT_MUTED))
             painter.drawText(self.rect(), Qt.AlignCenter, "Cargando fotograma...")
@@ -499,6 +525,7 @@ class BlinkDialog(QDialog):
         metadata_cache: Optional[Dict[str, Dict[str, Any]]] = None,
         mode: str = "general",
         contacts: Optional[Dict[str, float]] = None,
+        limb_guides: Optional[Dict[str, Tuple[float, float, float, float]]] = None,
         parent: Optional[QWidget] = None
     ):
         super().__init__(parent, Qt.Window)
@@ -519,6 +546,7 @@ class BlinkDialog(QDialog):
         self._sort_asc: bool = True
         self._metadata_cache: Dict[str, Dict[str, Any]] = metadata_cache if metadata_cache is not None else {}
         self._eclipse_contacts: Dict[str, float] = dict(contacts) if contacts else {}
+        self._limb_guides: Dict[str, Tuple[float, float, float, float]] = dict(limb_guides) if limb_guides else {}
         self._is_shutting_down: bool = False
 
         self._meta_scanned.connect(self._on_meta_scanned)
@@ -591,6 +619,13 @@ class BlinkDialog(QDialog):
         self.chk_auto_stretch.setToolTip("Aplica un estirado temporal para ver tomas lineales oscuras con brillo óptimo")
         self.chk_auto_stretch.toggled.connect(self._on_stretch_toggled)
         h_layout.addWidget(self.chk_auto_stretch)
+
+        if self._limb_guides:
+            self.chk_show_limb_guide = QCheckBox("Guía Limbo")
+            self.chk_show_limb_guide.setChecked(True)
+            self.chk_show_limb_guide.setToolTip("Muestra el círculo y centro del limbo detectado en cada toma")
+            self.chk_show_limb_guide.toggled.connect(lambda c: self.canvas.set_show_limb_guide(c))
+            h_layout.addWidget(self.chk_show_limb_guide)
 
         root_layout.addWidget(header)
 
@@ -1458,6 +1493,7 @@ class BlinkDialog(QDialog):
             self.table_blink.viewport().update()
 
         # Obtener imagen de caché o cargar
+        self.canvas.set_limb_guide(self._limb_guides.get(path))
         if path in self._cache:
             self.canvas.set_image(self._cache[path])
         else:

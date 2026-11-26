@@ -48,7 +48,7 @@ DEFAULT_CORONAL_FILTERS = [
         "desc": "Diferenciación angular rotacional para chorros polares y streamers.",
         "blend_mode": BLEND_MODE_SOFT_LIGHT,
         "opacity": 20,
-        "checked": False,
+        "checked": True,
     },
     {
         "id": "steerable_g2",
@@ -72,7 +72,7 @@ DEFAULT_CORONAL_FILTERS = [
         "desc": "Realce selectivo de cavidades coronales y canales inter-streamers.",
         "blend_mode": BLEND_MODE_MULTIPLY,
         "opacity": 30,
-        "checked": False,
+        "checked": True,
     },
     {
         "id": "wow",

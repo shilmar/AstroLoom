@@ -2911,7 +2911,7 @@ fn soft_shoulder_val(peak: f32, threshold: f32, ceiling: f32) -> f32 {
 /// Estirado de arco seno hiperbólico (asinh) con hombro suave de altas luces.
 /// Preserva ratios cromáticos exactos R:G:B en 3D (H, W, 3) y soporta imágenes monocromas 2D (H, W).
 #[pyfunction]
-#[pyo3(signature = (image, stretch_factor=30.0, black_point=0.0, shoulder_threshold=0.70, highlight_ceiling=1.0))]
+#[pyo3(signature = (image, stretch_factor=30.0, black_point=0.0, shoulder_threshold=0.70, highlight_ceiling=1.0, white_point=1.0, color_preserve=0.0))]
 pub fn apply_asinh_stretch_rs<'py>(
     py: Python<'py>,
     image: &Bound<'py, PyAny>,
@@ -2919,7 +2919,12 @@ pub fn apply_asinh_stretch_rs<'py>(
     black_point: f32,
     shoulder_threshold: f32,
     highlight_ceiling: f32,
+    white_point: f32,
+    color_preserve: f32,
 ) -> PyResult<Bound<'py, PyAny>> {
+    let wp = white_point.max(1.0);
+    let cp = color_preserve.clamp(0.0, 1.0);
+
     if let Ok(arr3) = image.extract::<PyReadonlyArray3<f32>>() {
         let (h, w, c) = arr3.as_array().dim();
         let img_slice = arr3.as_slice().unwrap();
@@ -2929,14 +2934,42 @@ pub fn apply_asinh_stretch_rs<'py>(
             let mut out = vec![0.0f32; total];
 
             if stretch_factor <= 1.0 {
-                out.par_iter_mut()
-                    .zip(img_slice.par_iter())
-                    .for_each(|(o, &v)| {
-                        *o = (v - black_point).clamp(0.0, 1.0);
-                    });
+                if wp <= 1.0 + 1e-6 {
+                    out.par_iter_mut()
+                        .zip(img_slice.par_iter())
+                        .for_each(|(o, &v)| {
+                            *o = (v - black_point).clamp(0.0, 1.0);
+                        });
+                } else {
+                    let row_stride = w * c;
+                    let inv_wp = 1.0 / wp;
+                    out.par_chunks_exact_mut(row_stride)
+                        .zip(img_slice.par_chunks_exact(row_stride))
+                        .for_each(|(out_row, in_row)| {
+                            for x in 0..w {
+                                let base = x * c;
+                                let mut peak = 0.0f32;
+                                for ch in 0..c {
+                                    let u = (in_row[base + ch] - black_point).max(0.0) * inv_wp;
+                                    out_row[base + ch] = u;
+                                    if u > peak {
+                                        peak = u;
+                                    }
+                                }
+                                let factor = if peak > 1e-6 {
+                                    soft_shoulder_val(peak, shoulder_threshold, highlight_ceiling) / peak
+                                } else {
+                                    1.0
+                                };
+                                for ch in 0..c {
+                                    out_row[base + ch] = (out_row[base + ch] * factor).clamp(0.0, 1.0);
+                                }
+                            }
+                        });
+                }
             } else {
                 let beta = stretch_factor;
-                let inv_denom = 1.0 / beta.asinh();
+                let inv_denom = 1.0 / (beta * wp).asinh();
 
                 if c == 3 {
                     let row_stride = w * 3;
@@ -2949,9 +2982,35 @@ pub fn apply_asinh_stretch_rs<'py>(
                                 let g = (in_row[idx + 1] - black_point).max(0.0);
                                 let b = (in_row[idx + 2] - black_point).max(0.0);
 
-                                let ur = (beta * r).asinh() * inv_denom;
-                                let ug = (beta * g).asinh() * inv_denom;
-                                let ub = (beta * b).asinh() * inv_denom;
+                                let (ur, ug, ub) = if cp > 1e-4 {
+                                    let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                                    let gain = if lum > 1e-6 {
+                                        ((beta * lum).asinh() * inv_denom) / lum
+                                    } else {
+                                        0.0
+                                    };
+                                    let lr = r * gain;
+                                    let lg = g * gain;
+                                    let lb = b * gain;
+                                    if cp >= 0.999 {
+                                        (lr, lg, lb)
+                                    } else {
+                                        let cr = (beta * r).asinh() * inv_denom;
+                                        let cg = (beta * g).asinh() * inv_denom;
+                                        let cb = (beta * b).asinh() * inv_denom;
+                                        (
+                                            cp * lr + (1.0 - cp) * cr,
+                                            cp * lg + (1.0 - cp) * cg,
+                                            cp * lb + (1.0 - cp) * cb,
+                                        )
+                                    }
+                                } else {
+                                    (
+                                        (beta * r).asinh() * inv_denom,
+                                        (beta * g).asinh() * inv_denom,
+                                        (beta * b).asinh() * inv_denom,
+                                    )
+                                };
 
                                 let peak = ur.max(ug).max(ub);
                                 let factor = if peak > 1e-6 {
@@ -3009,14 +3068,24 @@ pub fn apply_asinh_stretch_rs<'py>(
             let mut out = vec![0.0f32; total];
 
             if stretch_factor <= 1.0 {
-                out.par_iter_mut()
-                    .zip(img_slice.par_iter())
-                    .for_each(|(o, &v)| {
-                        *o = (v - black_point).clamp(0.0, 1.0);
-                    });
+                if wp <= 1.0 + 1e-6 {
+                    out.par_iter_mut()
+                        .zip(img_slice.par_iter())
+                        .for_each(|(o, &v)| {
+                            *o = (v - black_point).clamp(0.0, 1.0);
+                        });
+                } else {
+                    let inv_wp = 1.0 / wp;
+                    out.par_iter_mut()
+                        .zip(img_slice.par_iter())
+                        .for_each(|(o, &v)| {
+                            let u = (v - black_point).max(0.0) * inv_wp;
+                            *o = soft_shoulder_val(u, shoulder_threshold, highlight_ceiling).clamp(0.0, 1.0);
+                        });
+                }
             } else {
                 let beta = stretch_factor;
-                let inv_denom = 1.0 / beta.asinh();
+                let inv_denom = 1.0 / (beta * wp).asinh();
 
                 out.par_chunks_exact_mut(w)
                     .zip(img_slice.par_chunks_exact(w))
@@ -3047,7 +3116,7 @@ pub fn apply_asinh_stretch_rs<'py>(
 /// Balance de blancos coronal neutro sobre el anillo coronal medio [ring_lo * R, ring_hi * R].
 /// Devuelve (imagen_balanceada, (ganancia_r, ganancia_g, ganancia_b)).
 #[pyfunction]
-#[pyo3(signature = (image, center_x, center_y, radius, ring_lo=1.2, ring_hi=1.8))]
+#[pyo3(signature = (image, center_x, center_y, radius, ring_lo=1.2, ring_hi=1.8, clip_upper=true))]
 pub fn balance_coronal_white_balance_rs<'py>(
     py: Python<'py>,
     image: &Bound<'py, PyAny>,
@@ -3056,6 +3125,7 @@ pub fn balance_coronal_white_balance_rs<'py>(
     radius: f32,
     ring_lo: f32,
     ring_hi: f32,
+    clip_upper: bool,
 ) -> PyResult<(Bound<'py, PyAny>, (f32, f32, f32))> {
     if let Ok(arr3) = image.extract::<PyReadonlyArray3<f32>>() {
         let (h, w, c) = arr3.as_array().dim();
@@ -3118,9 +3188,15 @@ pub fn balance_coronal_white_balance_rs<'py>(
                 .for_each(|(out_row, in_row)| {
                     for x in 0..w {
                         let idx = x * 3;
-                        out_row[idx] = (in_row[idx] * f_r).clamp(0.0, 1.0);
-                        out_row[idx + 1] = (in_row[idx + 1] * f_g).clamp(0.0, 1.0);
-                        out_row[idx + 2] = (in_row[idx + 2] * f_b).clamp(0.0, 1.0);
+                        if clip_upper {
+                            out_row[idx] = (in_row[idx] * f_r).clamp(0.0, 1.0);
+                            out_row[idx + 1] = (in_row[idx + 1] * f_g).clamp(0.0, 1.0);
+                            out_row[idx + 2] = (in_row[idx + 2] * f_b).clamp(0.0, 1.0);
+                        } else {
+                            out_row[idx] = (in_row[idx] * f_r).max(0.0);
+                            out_row[idx + 1] = (in_row[idx + 1] * f_g).max(0.0);
+                            out_row[idx + 2] = (in_row[idx + 2] * f_b).max(0.0);
+                        }
                     }
                 });
 
@@ -3441,7 +3517,8 @@ fn percentile_exact_f32(data: &mut [f32], q: f32) -> f32 {
     noise_floor=0.015,
     lunar_mask_params=None,
     gradual_handover=true,
-    bg_pedestals=None
+    bg_pedestals=None,
+    clip_highlights=true
 ))]
 pub fn fuse_hdr_bracketing_solar_rs<'py>(
     py: Python<'py>,
@@ -3452,6 +3529,7 @@ pub fn fuse_hdr_bracketing_solar_rs<'py>(
     lunar_mask_params: Option<(f32, f32, f32)>,
     gradual_handover: bool,
     bg_pedestals: Option<Vec<Vec<f32>>>,
+    clip_highlights: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     let py_list = images.downcast::<pyo3::types::PyList>()
         .map_err(|_| pyo3::exceptions::PyTypeError::new_err("images debe ser una lista de ndarrays"))?;
@@ -3522,7 +3600,7 @@ pub fn fuse_hdr_bracketing_solar_rs<'py>(
                         let x_f = x as f32;
                         let moon_w = if let Some((mcx, mcy, mr)) = lunar_mask_params {
                             let dist = (x_f - mcx).hypot(y_f - mcy);
-                            smoothstep_f32(dist, mr - 1.5, mr + 1.0) as f64
+                            smoothstep_f32(dist, mr - 2.0, mr) as f64
                         } else {
                             1.0f64
                         };
@@ -3629,7 +3707,7 @@ pub fn fuse_hdr_bracketing_solar_rs<'py>(
                     for x in 0..w {
                         let x_f = x as f32;
                         let dist = (x_f - mcx).hypot(y_f - mcy);
-                        let mw = smoothstep_f32(dist, mr - 1.5, mr + 1.0);
+                        let mw = smoothstep_f32(dist, mr - 2.0, mr);
                         if mw > 0.5 {
                             let idx = (y * w + x) * 3;
                             v.push(out_vec[idx]);
@@ -3643,12 +3721,14 @@ pub fn fuse_hdr_bracketing_solar_rs<'py>(
                 out_vec.clone()
             };
 
-            let p_high = percentile_exact_f32(&mut valid_vals, 99.999);
+            let hi_pct = if clip_highlights { 99.999 } else { 99.98 };
+            let p_high = percentile_exact_f32(&mut valid_vals, hi_pct);
             let p_low = percentile_exact_f32(&mut valid_vals, 0.05);
             let denom = (p_high - p_low).max(1e-8);
 
             out_vec.par_iter_mut().for_each(|v| {
-                *v = ((*v - p_low) / denom).clamp(0.0, 1.0);
+                let norm = (*v - p_low) / denom;
+                *v = if clip_highlights { norm.clamp(0.0, 1.0) } else { norm.max(0.0) };
             });
         });
 
@@ -3699,7 +3779,7 @@ pub fn fuse_hdr_bracketing_solar_rs<'py>(
                         let x_f = x as f32;
                         let moon_w = if let Some((mcx, mcy, mr)) = lunar_mask_params {
                             let dist = (x_f - mcx).hypot(y_f - mcy);
-                            smoothstep_f32(dist, mr - 1.5, mr + 1.0) as f64
+                            smoothstep_f32(dist, mr - 2.0, mr) as f64
                         } else {
                             1.0f64
                         };
@@ -3771,7 +3851,7 @@ pub fn fuse_hdr_bracketing_solar_rs<'py>(
                     for x in 0..w {
                         let x_f = x as f32;
                         let dist = (x_f - mcx).hypot(y_f - mcy);
-                        let mw = smoothstep_f32(dist, mr - 1.5, mr + 1.0);
+                        let mw = smoothstep_f32(dist, mr - 2.0, mr);
                         if mw > 0.5 {
                             v.push(out_vec[y * w + x]);
                         }
@@ -3782,12 +3862,14 @@ pub fn fuse_hdr_bracketing_solar_rs<'py>(
                 out_vec.clone()
             };
 
-            let p_high = percentile_exact_f32(&mut valid_vals, 99.999);
+            let hi_pct = if clip_highlights { 99.999 } else { 99.98 };
+            let p_high = percentile_exact_f32(&mut valid_vals, hi_pct);
             let p_low = percentile_exact_f32(&mut valid_vals, 0.05);
             let denom = (p_high - p_low).max(1e-8);
 
             out_vec.par_iter_mut().for_each(|v| {
-                *v = ((*v - p_low) / denom).clamp(0.0, 1.0);
+                let norm = (*v - p_low) / denom;
+                *v = if clip_highlights { norm.clamp(0.0, 1.0) } else { norm.max(0.0) };
             });
         });
 

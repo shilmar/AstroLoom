@@ -535,13 +535,14 @@ class EclipseWorker(QThread):
 
                 self.progress.emit(5, "Iniciando detección subpíxel de limbo (1:1 nativo)...")
 
-                # 1. Detectar primero la toma de referencia para anclar el radio físico esperado
+                # 1. Detectar primero la toma de referencia para anclar el radio y centro físicos esperados
                 ref_img = load_image_as_float32(files[ref_idx])
                 ref_cx, ref_cy, ref_r = detect_eclipse_disk(ref_img, mode=mode, expected_radius=None)
                 detections[ref_idx] = (ref_cx, ref_cy, ref_r)
                 expected_r = ref_r if ref_r > 10 else None
+                expected_c = (ref_cx, ref_cy) if expected_r is not None else None
 
-                # 2. Detectar el resto de tomas usando expected_r en paralelo a resolución 1:1 nativa
+                # 2. Detectar el resto de tomas usando expected_r y expected_c en paralelo a resolución 1:1 nativa
                 items_to_detect = [(idx, path) for idx, path in enumerate(files) if idx != ref_idx]
 
                 if items_to_detect:
@@ -549,12 +550,14 @@ class EclipseWorker(QThread):
                         cpu_workers = int(get_config_val("cpu_workers", max(2, (os.cpu_count() or 4) - 2)))
                     except Exception:
                         cpu_workers = max(2, (os.cpu_count() or 4) - 2)
-                    eff_workers = max(1, min(cpu_workers, os.cpu_count() or 16, len(items_to_detect)))
+                    eff_workers = max(1, min(cpu_workers, 4, len(items_to_detect)))
 
                     def _detect_task(item):
                         idx, path = item
                         img = load_image_as_float32(path)
-                        cx, cy, r = detect_eclipse_disk(img, mode=mode, expected_radius=expected_r)
+                        cx, cy, r = detect_eclipse_disk(
+                            img, mode=mode, expected_radius=expected_r, expected_center=expected_c
+                        )
                         return idx, (cx, cy, r), os.path.basename(path)
 
                     completed = 1  # La referencia ya está procesada
@@ -616,16 +619,19 @@ class EclipseWorker(QThread):
                     self.progress.emit(5, "Iniciando carga paralela de tomas de bracketing (1:1 nativo)...")
 
                     expected_r = None
+                    expected_c = None
                     if centers is not None:
                         valid_rs = [c[2] for c in centers if c is not None and len(c) > 2 and c[2] > 10]
                         if valid_rs:
                             expected_r = float(np.median(valid_rs))
+                        if ref_idx < len(centers) and centers[ref_idx] is not None and len(centers[ref_idx]) > 2:
+                            expected_c = (float(centers[ref_idx][0]), float(centers[ref_idx][1]))
 
                     try:
                         cpu_workers = int(get_config_val("cpu_workers", max(2, (os.cpu_count() or 4) - 2)))
                     except Exception:
                         cpu_workers = max(2, (os.cpu_count() or 4) - 2)
-                    eff_workers = max(1, min(cpu_workers, os.cpu_count() or 16, total))
+                    eff_workers = max(1, min(cpu_workers, 4, total))
 
                     crop_roi = self.params.get("crop_roi", False)
                     crop_size = int(self.params.get("crop_size", 3000))
@@ -636,7 +642,9 @@ class EclipseWorker(QThread):
                         if centers is not None and idx < len(centers) and centers[idx] is not None and centers[idx][2] > 5:
                             raw_c = centers[idx]
                         else:
-                            cx, cy, r = detect_eclipse_disk(img, mode=mode, expected_radius=expected_r)
+                            cx, cy, r = detect_eclipse_disk(
+                                img, mode=mode, expected_radius=expected_r, expected_center=expected_c
+                            )
                             raw_c = (cx, cy, r)
 
                         if crop_roi and raw_c is not None and len(raw_c) > 2 and raw_c[2] > 5:
@@ -690,7 +698,8 @@ class EclipseWorker(QThread):
                         aligned_images, shifts = align_eclipse_bracketing(
                             loaded_images,
                             center_pts,
-                            ref_idx=ref_idx
+                            ref_idx=ref_idx,
+                            consume_input=True
                         )
                     else:
                         aligned_images = [img for img in loaded_images if img is not None]
@@ -722,10 +731,20 @@ class EclipseWorker(QThread):
                     gradual_handover=gradual_handover,
                     corona_warmth=corona_warmth,
                     sky_temp=sky_temp,
-                    equalize_sky_gradient=equalize_sky
+                    equalize_sky_gradient=equalize_sky,
+                    clip_highlights=False
                 )
 
-                hdr_stretched = apply_asinh_stretch(hdr_raw, stretch_factor=asinh_factor) if asinh_factor > 1.0 else hdr_raw.copy()
+                prom_protect = float(self.params.get("prom_protect", 0.45))
+                white_pt = 1.0 + prom_protect * 5.0
+                color_pres = 0.90 if prom_protect > 0.001 else 0.0
+                hdr_stretched = apply_asinh_stretch(
+                    hdr_raw,
+                    stretch_factor=asinh_factor,
+                    shoulder_threshold=0.78,
+                    white_point=white_pt,
+                    color_preserve=color_pres
+                )
 
                 self.progress.emit(100, "Fusión HDR de 32 bits completada.")
                 self.finished.emit({
@@ -971,38 +990,89 @@ class EclipseWorker(QThread):
 
                     filtered = None
                     mask_r = self.params.get("mask_radius", r)
+                    fp = self.params.get("filter_params", {})
+                    use_detail_rings = fp.get("use_detail_rings", True)
+
                     if flt_id == "mgn":
                         lunar_mask = (cx, cy, mask_r) if mask_r > 5 else None
                         filtered = apply_mgn(
                             base_rgb,
                             sigmas=(1.5, 3.0, 6.0, 12.0, 24.0, 48.0),
-                            k=0.70,
-                            gamma=2.8,
-                            blend_ratio=0.50,
-                            chroma_denoise_sigma=16.0,
+                            k=fp.get("mgn_k", 0.70),
+                            gamma=fp.get("mgn_gamma", 2.8),
+                            blend_ratio=fp.get("mgn_blend", 0.50),
+                            noise_floor=fp.get("mgn_noise_floor", 0.003),
+                            chroma_denoise_sigma=fp.get("mgn_chroma_denoise", 16.0),
                             lunar_mask_params=lunar_mask
                         )
                     elif flt_id == "wow":
-                        filtered = apply_wow_edge_aware(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.50)
+                        filtered = apply_wow_edge_aware(
+                            base_rgb, cx, cy, radius_min=mask_r,
+                            n_scales=fp.get("wow_scales", 7),
+                            guided=fp.get("wow_guided", True),
+                            blend_ratio=fp.get("wow_blend", 0.50),
+                            use_detail_rings=use_detail_rings
+                        )
                     elif flt_id == "nafe":
-                        filtered = apply_nafe(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.79)
+                        filtered = apply_nafe(
+                            base_rgb, cx, cy, radius_min=mask_r,
+                            sigma=fp.get("nafe_sigma", 0.035),
+                            blend_ratio=fp.get("nafe_blend", 0.79),
+                            use_overlay=fp.get("nafe_use_overlay", True)
+                        )
                     elif flt_id == "nrgf":
-                        filtered = apply_nrgf(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.55)
+                        filtered = apply_nrgf(
+                            base_rgb, cx, cy, radius_min=mask_r,
+                            bin_px=fp.get("bin_px", 2.0),
+                            robust=fp.get("robust", True),
+                            blend_ratio=fp.get("nrgf_blend", 0.55),
+                            radius_max_factor=fp.get("nrgf_reach", 3.5),
+                            use_detail_rings=use_detail_rings,
+                            partial_annuli=fp.get("nrgf_partial_annuli", "observed")
+                        )
                     elif flt_id == "fnrgf":
-                        filtered = apply_fnrgf(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.55)
+                        filtered = apply_fnrgf(
+                            base_rgb, cx, cy, radius_min=mask_r,
+                            fourier_order=fp.get("fnrgf_order", 4),
+                            bin_px=fp.get("bin_px", 2.0),
+                            blend_ratio=fp.get("fnrgf_blend", 0.55),
+                            radius_max_factor=fp.get("fnrgf_reach", 3.5),
+                            use_detail_rings=use_detail_rings
+                        )
                     elif flt_id == "steerable_g2":
-                        filtered = apply_steerable_g2(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.50)
+                        filtered = apply_steerable_g2(
+                            base_rgb, cx, cy, radius_min=mask_r,
+                            blend_ratio=fp.get("g2_blend", 0.50),
+                            radius_max_factor=fp.get("g2_reach", 3.5),
+                            use_detail_rings=use_detail_rings
+                        )
                     elif flt_id == "larson_sekanina":
-                        filtered = apply_larson_sekanina(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=0.20)
+                        filtered = apply_larson_sekanina(
+                            base_rgb, cx, cy, radius_min=mask_r,
+                            delta_theta_deg=fp.get("ls_delta_theta", 1.0),
+                            blend_ratio=fp.get("ls_blend", 0.20),
+                            protect_prominences=fp.get("ls_protect_prominences", True),
+                            radius_max_factor=fp.get("ls_reach", 3.5),
+                            use_detail_rings=use_detail_rings
+                        )
                     elif flt_id == "swap":
-                        filtered = apply_swap_filter(base_rgb, cx, cy, radius_min=mask_r, blend_ratio=1.0)
+                        filtered = apply_swap_filter(
+                            base_rgb, cx, cy, radius_min=mask_r,
+                            window_deg=fp.get("swap_window_deg", 15.0),
+                            c0=fp.get("swap_c0", 0.75),
+                            blend_ratio=fp.get("swap_blend", 1.0)
+                        )
                     elif flt_id == "dark_structure":
+                        prom_m = None
+                        if fp.get("dark_protect_prominences", True) and base_rgb.ndim == 3:
+                            prom_m = compute_red_excess_mask(base_rgb, cx, cy, radius_min=mask_r)
                         filtered = apply_dark_structure_enhancement(
                             base_rgb,
                             center_x=cx,
                             center_y=cy,
                             radius_mask=mask_r,
-                            amount=0.40
+                            amount=fp.get("dark_amount", 0.40),
+                            prominence_mask=prom_m
                         )
 
                     if filtered is not None:
@@ -1012,6 +1082,18 @@ class EclipseWorker(QThread):
                             "blend_mode": cfg["blend_mode"],
                             "opacity": cfg["opacity"]
                         })
+
+                h_b, w_b = base_rgb.shape[:2]
+                if w_b > 0 and h_b > 0 and r > 5:
+                    computed_layers.append({
+                        "layer_type": "gradient_radial",
+                        "name": "Fondo Exterior (2R)",
+                        "radial_center": (float(cx / w_b), float(cy / h_b)),
+                        "radial_radius_x": float((2.0 * r) / w_b),
+                        "radial_radius_y": float((2.0 * r) / h_b),
+                        "radial_feather": 0.50,
+                        "inverted": True,
+                    })
 
                 self.progress.emit(100, f"Multicapa coronal calculada ({len(computed_layers)} capas).")
                 self.finished.emit((out_base_path, computed_layers), "compute_coronal_stack")
@@ -1135,6 +1217,14 @@ class EclipseTab(QWidget):
         btn_align_row.addWidget(self.btn_detect_all)
         btn_align_row.addWidget(self.btn_set_ref)
         brack_layout.addLayout(btn_align_row)
+
+        self.chk_limb_autostretch = QCheckBox("Auto-estirado vista limbo (solo visual)")
+        self.chk_limb_autostretch.setChecked(False)
+        self.chk_limb_autostretch.setToolTip(
+            "Aplica un estirado temporal en el visor para inspeccionar el limbo en tomas muy oscuras (< 1/250s) sin alterar los datos lineales."
+        )
+        self.chk_limb_autostretch.toggled.connect(self._on_limb_autostretch_toggled)
+        brack_layout.addWidget(self.chk_limb_autostretch)
 
         left_layout.addWidget(self.sec_brack)
 
@@ -1327,6 +1417,21 @@ class EclipseTab(QWidget):
         self.lbl_asinh_val = self.slider_asinh.spin  # compatibilidad
         self.slider_asinh.valueChanged.connect(self._on_asinh_slider_changed)
         hdr_layout.addWidget(self.slider_asinh)
+
+        self.slider_highlight_shoulder = PrecisionSliderRow(
+            title="Protección Llamaradas",
+            min_val=0,
+            max_val=100,
+            default_val=45,
+            unit="%",
+            decimals=0,
+            label_width=135
+        )
+        self.slider_highlight_shoulder.setToolTip(
+            "Comprime suavemente los picos extremos (> 1.0) de protuberancias y llamaradas sin empastar los filamentos coronales."
+        )
+        self.slider_highlight_shoulder.valueChanged.connect(self._on_asinh_slider_changed)
+        hdr_layout.addWidget(self.slider_highlight_shoulder)
 
         self.chk_gradual_handover = QCheckBox("Traspaso gradual de exposición (anti-anillos HDR)")
         self.chk_gradual_handover.setChecked(True)
@@ -2446,10 +2551,24 @@ class EclipseTab(QWidget):
         elif 0 <= self.ref_file_idx < len(self.bracketing_files):
             curr_idx = self.ref_file_idx
 
+        limb_guides = {}
+        if self.current_preview_img is not None:
+            full_h, full_w = self.current_preview_img.shape[:2]
+            if full_w > 0 and full_h > 0:
+                for f in self.bracketing_files:
+                    if f.get("cx") is not None and f.get("radius", 0) > 5:
+                        limb_guides[f["filepath"]] = (
+                            float(f["cx"]) / full_w,
+                            float(f["cy"]) / full_h,
+                            float(f["radius"]) / full_w,
+                            float(f["radius"]) / full_h,
+                        )
+
         dlg = BlinkDialog(
             file_list=file_list,
             excluded_files=excluded,
             current_index=curr_idx,
+            limb_guides=limb_guides or None,
             parent=self
         )
         dlg.exclusion_changed.connect(self._on_blink_exclusion_changed)
@@ -2513,6 +2632,21 @@ class EclipseTab(QWidget):
             self.table_brack.selectRow(idx)
             self.log(f"Toma de referencia establecida: {self.bracketing_files[idx]['filename']}")
 
+    def _display_single_preview(self, img: Optional[np.ndarray]):
+        if img is None:
+            return
+        if hasattr(self, "chk_limb_autostretch") and self.chk_limb_autostretch.isChecked():
+            p_lo, p_hi = np.percentile(img, [75.0, 99.8])
+            norm = np.clip((img - float(p_lo)) / max(float(p_hi - p_lo), 1e-6), 0.0, 1.0).astype(np.float32)
+            vis = apply_asinh_stretch(norm, stretch_factor=60.0, shoulder_threshold=0.80)
+            self.canvas.set_image(vis)
+        else:
+            self.canvas.set_image(img)
+
+    def _on_limb_autostretch_toggled(self, _checked: bool):
+        if not getattr(self, "_viewing_fused", False) and self.current_preview_img is not None:
+            self._display_single_preview(self.current_preview_img)
+
     def _on_table_selection_changed(self):
         rows = self.table_brack.selectionModel().selectedRows()
         if not rows:
@@ -2525,7 +2659,7 @@ class EclipseTab(QWidget):
             try:
                 img = load_image_as_float32(filepath)
                 self.current_preview_img = img
-                self.canvas.set_image(img)
+                self._display_single_preview(img)
 
                 if item.get("cx") is not None:
                     cx, cy, r = item["cx"], item["cy"], item["radius"]
@@ -2689,13 +2823,27 @@ class EclipseTab(QWidget):
 
         self._update_canvas_guide()
 
-    def _on_asinh_slider_changed(self, val: int):
-        factor = float(val)
+    def _get_prom_protect(self) -> float:
+        if hasattr(self, "slider_highlight_shoulder"):
+            return float(self.slider_highlight_shoulder.value()) / 100.0
+        return 0.45
+
+    def _on_asinh_slider_changed(self, _val: int = 0):
+        factor = float(self.slider_asinh.value())
         self.lbl_asinh_val.setText(f"{int(factor)}x" if factor > 0 else "Lineal (1x)")
 
         if self.raw_fused_hdr is not None:
             self._viewing_fused = True
-            self.fused_hdr_img = apply_asinh_stretch(self.raw_fused_hdr, stretch_factor=factor) if factor > 1.0 else self.raw_fused_hdr.copy()
+            prom_protect = self._get_prom_protect()
+            white_pt = 1.0 + prom_protect * 5.0
+            color_pres = 0.90 if prom_protect > 0.001 else 0.0
+            self.fused_hdr_img = apply_asinh_stretch(
+                self.raw_fused_hdr,
+                stretch_factor=factor,
+                shoulder_threshold=0.78,
+                white_point=white_pt,
+                color_preserve=color_pres
+            )
             if self.fused_hdr_img.shape[0] >= 500 and self.fused_hdr_img.shape[1] >= 500:
                 self.proxy_hdr_img = cv2.resize(self.fused_hdr_img, (0, 0), fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
             else:
@@ -2777,6 +2925,7 @@ class EclipseTab(QWidget):
             "sky_temp": float(self.slider_sky_temp.value() / 100.0) if hasattr(self, 'slider_sky_temp') else 0.0,
             "sat_thresh": sat_thresh,
             "asinh_factor": asinh_factor,
+            "prom_protect": self._get_prom_protect(),
             "mode": mode
         }
 
@@ -2786,6 +2935,10 @@ class EclipseTab(QWidget):
             params["cached_final_centers"] = self.cached_aligned_data["final_centers"]
             params["cached_raw_centers"] = self.cached_aligned_data.get("raw_centers", self.cached_aligned_data["final_centers"])
             params["cached_shifts"] = self.cached_aligned_data["shifts"]
+        elif self.cached_aligned_data is not None:
+            self.cached_aligned_data = None
+            import gc
+            gc.collect()
 
         self.worker = EclipseWorker("hdr_fusion", params)
         self.worker.progress.connect(self._on_worker_progress)
@@ -3041,11 +3194,23 @@ class EclipseTab(QWidget):
         if task_type == "batch_detect":
             self.cached_aligned_data = None
             self._current_hdr_cache_key = None
+            ref_det = result[self.ref_file_idx] if (0 <= self.ref_file_idx < len(result)) else None
+            ref_cx = ref_det[0] if ref_det is not None else None
+            ref_cy = ref_det[1] if ref_det is not None else None
+            ref_r = ref_det[2] if (ref_det is not None and ref_det[2] > 10) else None
+            outliers = []
+
             for i, (cx, cy, r) in enumerate(result):
                 if i < len(self.bracketing_files):
                     self.bracketing_files[i]["cx"] = cx
                     self.bracketing_files[i]["cy"] = cy
                     self.bracketing_files[i]["radius"] = r
+                    if i != self.ref_file_idx and ref_r is not None:
+                        r_err = abs(r - ref_r) / ref_r
+                        shift_d = np.hypot(cx - ref_cx, cy - ref_cy)
+                        if r_err > 0.025 or shift_d > max(0.35 * ref_r, 80.0):
+                            self.bracketing_files[i]["is_included"] = False
+                            outliers.append(self.bracketing_files[i]["filename"])
             self._recalculate_shifts()
 
             rows = self.table_brack.selectionModel().selectedRows()
@@ -3062,11 +3227,13 @@ class EclipseTab(QWidget):
                 try:
                     img = load_image_as_float32(f_data["filepath"])
                     self.current_preview_img = img
-                    self.canvas.set_image(img)
+                    self._display_single_preview(img)
                 except Exception:
                     pass
                 self._update_canvas_guide()
 
+            if outliers:
+                self.log(f"Aviso: {len(outliers)} toma(s) desmarcadas (USAR=False) por desviación respecto a REF: {', '.join(outliers)}")
             self.log("Detección de limbo en lote completada. Desplazamientos calculados.")
 
         elif task_type == "hdr_fusion":
@@ -3109,29 +3276,36 @@ class EclipseTab(QWidget):
                     self._set_geom_spin_values(ref_f["cx"], ref_f["cy"], ref_f["radius"])
 
             if "aligned_images" in result:
-                cache_raw_key = tuple(
-                    (round(float(c[0]), 2), round(float(c[1]), 2), round(float(c[2]), 2))
-                    if c is not None and len(c) >= 3 else None
-                    for c in raw_centers
-                )
-                worker_params = getattr(self.worker, "params", {}) if self.worker else {}
-                saved_cache_key = (
-                    tuple(worker_params.get("files", [])),
-                    cache_raw_key,
-                    worker_params.get("ref_idx", 0),
-                    worker_params.get("auto_align", True),
-                    worker_params.get("crop_roi", False),
-                    int(worker_params.get("crop_size", 3000))
-                )
-                self.cached_aligned_data = {
-                    "key": saved_cache_key,
-                    "aligned_images": result["aligned_images"],
-                    "final_centers": final_centers,
-                    "raw_centers": raw_centers,
-                    "fused_geom": self.fused_hdr_geom,
-                    "shifts": shifts
-                }
-                self._current_hdr_cache_key = saved_cache_key
+                aligned_list = result["aligned_images"]
+                total_bytes = sum(getattr(im, "nbytes", 0) for im in aligned_list if im is not None)
+                if total_bytes <= 3 * 1024 ** 3:
+                    cache_raw_key = tuple(
+                        (round(float(c[0]), 2), round(float(c[1]), 2), round(float(c[2]), 2))
+                        if c is not None and len(c) >= 3 else None
+                        for c in raw_centers
+                    )
+                    worker_params = getattr(self.worker, "params", {}) if self.worker else {}
+                    saved_cache_key = (
+                        tuple(worker_params.get("files", [])),
+                        cache_raw_key,
+                        worker_params.get("ref_idx", 0),
+                        worker_params.get("auto_align", True),
+                        worker_params.get("crop_roi", False),
+                        int(worker_params.get("crop_size", 3000))
+                    )
+                    self.cached_aligned_data = {
+                        "key": saved_cache_key,
+                        "aligned_images": aligned_list,
+                        "final_centers": final_centers,
+                        "raw_centers": raw_centers,
+                        "fused_geom": self.fused_hdr_geom,
+                        "shifts": shifts
+                    }
+                    self._current_hdr_cache_key = saved_cache_key
+                else:
+                    self.cached_aligned_data = None
+                    self._current_hdr_cache_key = None
+                    self.log(f"Caché de alineación omitida ({total_bytes / (1024**3):.1f} GB > 3.0 GB) para liberar RAM. Activa 'Recorte ROI' si deseas cachear tomas alineadas.")
 
             if result.get("was_cached", False):
                 self.log("Fusión HDR finalizada instantáneamente (utilizando tomas alineadas en memoria caché).")
@@ -3428,6 +3602,40 @@ class EclipseTab(QWidget):
         offset = self.spin_mask_offset.value() if hasattr(self, 'spin_mask_offset') else -2.5
         mask_radius = max(1.0, r + offset)
 
+        filter_params = {
+            "use_detail_rings": self.chk_detail_rings.isChecked(),
+            "bin_px": self.spin_bin_px.value(),
+            "robust": self.rb_robust.isChecked(),
+            "mgn_k": self.slider_mgn_k.value() / 100.0,
+            "mgn_gamma": self.slider_mgn_gamma.value() / 10.0,
+            "mgn_noise_floor": self.slider_mgn_noise_floor.value() / 1000.0,
+            "mgn_chroma_denoise": float(self.slider_mgn_chroma_denoise.value()),
+            "mgn_blend": self.slider_blend.value() / 100.0,
+            "g2_blend": self.slider_blend_g2.value() / 100.0,
+            "g2_reach": self.slider_reach_g2.value() / 10.0,
+            "ls_blend": self.slider_blend_ls.value() / 100.0,
+            "ls_reach": self.slider_reach_ls.value() / 10.0,
+            "ls_delta_theta": self.spin_ls_dtheta.value(),
+            "ls_protect_prominences": self.chk_ls_prominences.isChecked(),
+            "swap_blend": self.slider_blend_swap.value() / 100.0,
+            "swap_window_deg": self.spin_swap_window.value(),
+            "swap_c0": self.spin_swap_c0.value(),
+            "nrgf_blend": self.slider_blend_nrgf.value() / 100.0,
+            "nrgf_reach": self.slider_reach.value() / 10.0,
+            "nrgf_partial_annuli": "chain" if self.chk_nrgf_chain.isChecked() else "observed",
+            "fnrgf_blend": self.slider_blend_fnrgf.value() / 100.0,
+            "fnrgf_reach": self.slider_reach_fnrgf.value() / 10.0,
+            "fnrgf_order": self.spin_fnrgf_order.value() if hasattr(self, 'spin_fnrgf_order') else 4,
+            "nafe_blend": self.slider_blend_nafe.value() / 100.0,
+            "nafe_sigma": self.spin_nafe_sigma.value(),
+            "nafe_use_overlay": self.chk_nafe_overlay.isChecked(),
+            "wow_blend": self.slider_blend_wow.value() / 100.0,
+            "wow_scales": self.spin_wow_scales.value(),
+            "wow_guided": self.chk_wow_guided.isChecked(),
+            "dark_amount": self.slider_dark_amount.value() / 100.0 if hasattr(self, 'slider_dark_amount') else 0.40,
+            "dark_protect_prominences": self.chk_dark_protect_prom.isChecked() if hasattr(self, 'chk_dark_protect_prom') else True,
+        }
+
         params = {
             "base_image": base_img,
             "cx": cx,
@@ -3437,6 +3645,7 @@ class EclipseTab(QWidget):
             "mask_offset": offset,
             "selected_configs": selected_configs,
             "out_base_path": out_base_path,
+            "filter_params": filter_params,
         }
 
         self.worker = EclipseWorker("compute_coronal_stack", params)

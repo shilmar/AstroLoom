@@ -1,5 +1,10 @@
 import os
 import json
+import tempfile
+import threading
+
+_CONFIG_LOCK = threading.RLock()
+_CACHED_CONFIG: dict | None = None
 
 APP_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 

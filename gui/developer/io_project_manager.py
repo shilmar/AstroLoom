@@ -20,6 +20,7 @@ from core.config_manager import load_config, get_config_val
 from core.icc_manager import save_tiff_with_icc, normalize_colorspace_name, get_icc_profile_bytes
 from core.stretch import apply_ghs_stretch, manual_stretch
 from core.star_diffusion import apply_star_diffusion
+from core.mask_layers import MaskLayer, MASK_TYPE_GRADIENT_RADIAL, LIMIT_MASK_NONE
 
 
 class ProjectIOMixin:
@@ -164,6 +165,22 @@ class ProjectIOMixin:
             # Al insertarlas secuencialmente en position=0, la última (MGN) quedará en el TOP absoluto
             for layer_dict in raster_layers:
                 name = layer_dict.get("name", "Filtro Coronal")
+                if layer_dict.get("layer_type") == "gradient_radial":
+                    rad_layer = MaskLayer(
+                        name=name,
+                        mask_type=MASK_TYPE_GRADIENT_RADIAL,
+                        limit_mask=LIMIT_MASK_NONE,
+                        radial_center=tuple(layer_dict.get("radial_center", (0.5, 0.5))),
+                        radial_radius_x=float(layer_dict.get("radial_radius_x", 0.25)),
+                        radial_radius_y=float(layer_dict.get("radial_radius_y", 0.35)),
+                        radial_feather=float(layer_dict.get("radial_feather", 0.50)),
+                        inverted=bool(layer_dict.get("inverted", True)),
+                    )
+                    self.mask_layers_widget.layers.insert(0, rad_layer)
+                    self.mask_layers_widget._rebuild_list_items(select_layer_id=rad_layer.id)
+                    self.mask_layers_widget.layers_changed.emit()
+                    continue
+
                 img_data = layer_dict.get("image_data")
                 blend_mode = layer_dict.get("blend_mode", "normal")
                 opacity = float(layer_dict.get("opacity", 1.0))
