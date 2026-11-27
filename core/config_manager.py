@@ -33,7 +33,6 @@ DEFAULT_CONFIG = {
     "cpu_workers": def_workers,
     "lp_method": "standard",
     "lp_strength": 0.5,
-    "starnet_exe": "",
     "icc_profile": "srgb",
     "preview_max_dim": 1500,
     "export_format_default": "TIFF 16-bit (*.tif *.tiff)",

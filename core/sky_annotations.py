@@ -353,17 +353,6 @@ def generate_sky_annotation_layer_data(
             break
 
     if sol is None:
-        cat = get_best_available_catalog("lite")
-        if cat and cat not in tried:
-            sol = solve_frame(
-                work_img,
-                sky_mask=work_mask,
-                focal_px_hint=focal_px_hint,
-                catalog_path=cat,
-                scale_to_full=scale_to_full,
-            )
-
-    if sol is None:
         return None
 
     polylines, labels = build_rectilinear_annotations(sol, full_w, full_h, sky_mask=sky_mask, **kwargs)

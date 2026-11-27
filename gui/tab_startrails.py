@@ -998,12 +998,6 @@ class StartrailsTab(QWidget):
         else:
             self.lbl_files_summary.setText(f"{total} tomas cargadas")
 
-    def _get_shot_metadata(self, path: str, meta_batch_item: Optional[dict] = None) -> Dict[str, Any]:
-        """Obtiene y cachea metadatos EXIF (Hora, Exp, ISO, Apertura) de la toma."""
-        if path not in self._metadata_cache:
-            self._metadata_cache[path] = extract_shot_exif(path, meta_batch_item)
-        return self._metadata_cache[path]
-
     def _on_lights_files_changed(self, files: List[str]) -> None:
         self._update_files_summary()
 
@@ -1019,22 +1013,6 @@ class StartrailsTab(QWidget):
         count = len(files)
         self.lbl_flats_count.setText(f"{count} flats cargados")
         self.lbl_flats_count.setStyleSheet("color: #a5d6a7; font-weight: bold; font-size: 11px;" if count > 0 else f"color: {TEXT_SECONDARY}; font-size: 11px;")
-
-    def _refresh_table(self) -> None:
-        """Actualiza la tabla con los archivos cargados y sus metadatos fotográficos."""
-        self.table_widget_lights._refresh_all_rows()
-        self._update_files_summary()
-
-    def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
-        if item.column() == 0:
-            row = item.row()
-            if 0 <= row < len(self.files_list):
-                path = self.files_list[row]
-                if item.checkState() == Qt.Checked:
-                    self.excluded_files.discard(path)
-                else:
-                    self.excluded_files.add(path)
-                self._update_files_summary()
 
     def open_blink_viewer(self) -> None:
         """Abre el visor interactivo Blink para revisar la serie de startrails y cribar tomas."""
@@ -1234,15 +1212,6 @@ class StartrailsTab(QWidget):
             self._refresh_darks_table()
         else:
             self._refresh_flats_table()
-
-    def _on_delete_calibration_file(self, tab_name: str, filepath: str) -> None:
-        """Elimina una toma individual de calibración."""
-        if tab_name == "Darks":
-            self.table_widget_darks.remove_file(filepath)
-            self.log(f"Eliminado dark: {os.path.basename(filepath)}")
-        elif tab_name == "Flats":
-            self.table_widget_flats.remove_file(filepath)
-            self.log(f"Eliminado flat: {os.path.basename(filepath)}")
 
     def _on_tabs_height_adjusted(self, delta_y: int) -> None:
         """Ajuste continuo de la altura de las tablas mediante el tirador de arrastre."""
@@ -1746,23 +1715,6 @@ class StartrailsTab(QWidget):
             self._do_save_tiff(path, img, bit_depth=32)
         else:
             self._do_save_tiff(path, img, bit_depth=16)
-
-    def _on_save_direct(self, bit_depth: int = 16, force_format: str = "tiff") -> None:
-        """Alias para compatibilidad."""
-        if force_format in ("jpeg", "jpg"):
-            self._on_save_master_clicked(force_format="jpg")
-        elif force_format == "png":
-            self._on_save_master_clicked(force_format="png")
-        elif force_format == "psd":
-            self._on_save_master_clicked(force_format="psd")
-        elif bit_depth == 32:
-            self._on_save_master_clicked(force_format="tiff32")
-        else:
-            self._on_save_master_clicked(force_format="tiff16")
-
-    def _on_save_tiff_clicked(self, bit_depth: int = 16) -> None:
-        """Alias de compatibilidad hacia atrás."""
-        self._on_save_master_clicked(force_format="tiff32" if bit_depth == 32 else "tiff16")
 
     def _do_save_png(self, path: str, img: np.ndarray) -> None:
         try:

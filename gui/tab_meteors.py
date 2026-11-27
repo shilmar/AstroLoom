@@ -863,12 +863,6 @@ class MeteorTab(QWidget):
             self._preview_frame(self.ref_idx)
             self.log(f"Toma de referencia maestra establecida: {os.path.basename(self.files_list[self.ref_idx])}")
 
-    def _refresh_files_table(self) -> None:
-        self.table_widget_files._refresh_all_rows()
-
-    def _on_table_files_item_changed(self, item: QTableWidgetItem) -> None:
-        pass
-
     def open_blink_viewer(self) -> None:
         """Abre el visor interactivo Blink para revisar la serie de meteoros y cribar tomas."""
         if not self.files_list:
@@ -920,12 +914,6 @@ class MeteorTab(QWidget):
     def _on_blink_selection_applied(self, excluded_set: set) -> None:
         self.excluded_files = set(excluded_set)
         self.table_widget_files.set_excluded_files(self.excluded_files)
-
-    def _on_table_selection_changed(self) -> None:
-        rows = self.table_files.selectionModel().selectedRows()
-        if rows and rows[0].row() < len(self.files_list):
-            idx = rows[0].row()
-            self._preview_frame(idx)
 
     def _on_view_mode_changed(self) -> None:
         if self.current_preview_img is not None:
@@ -1600,10 +1588,6 @@ class MeteorTab(QWidget):
         else:
             self._do_save_tiff(path, bit_depth=16)
 
-    def _on_save_tiff_clicked(self, bit_depth: int = 32) -> None:
-        """Abre el diálogo directo para guardar TIFF."""
-        self._on_save_master_clicked(force_format="tiff32" if bit_depth == 32 else "tiff16")
-
     def _do_save_tiff(self, path: str, bit_depth: int = 32) -> None:
         img = self.composite_result if self.composite_result is not None else self.base_reference_img
         if img is None:
@@ -1646,10 +1630,6 @@ class MeteorTab(QWidget):
             QMessageBox.information(self, "Guardado Exitoso", f"Archivo JPEG guardado con éxito:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo guardar JPEG: {e}")
-
-    def _on_save_psd_clicked(self) -> None:
-        """Abre el diálogo directo para exportar PSD en capas."""
-        self._on_save_master_clicked(force_format="psd")
 
     def _do_save_psd(self, path: str) -> None:
         base = self.custom_stacked_sky if self.custom_stacked_sky is not None else self.base_reference_img

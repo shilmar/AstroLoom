@@ -87,7 +87,7 @@ class SettingsTab(QWidget):
         self.cfg = load_config()
         self._setup_ui()
         self._apply_styles()
-        self._update_starnet_status()
+        self._verify_all_ai_models(show_dialog=False)
 
     def _setup_ui(self) -> None:
         root_layout = QHBoxLayout(self)
@@ -222,46 +222,10 @@ class SettingsTab(QWidget):
         # -------------------------------------------------------------
         # 2. Grupo: Herramientas Externas (AI)
         # -------------------------------------------------------------
-        self.sec_tools = CollapsibleSection("2. Herramientas Externas e Inteligencia Artificial", icon="cpu")
+        self.sec_tools = CollapsibleSection("2. Inteligencia Artificial (ONNX)", icon="cpu")
         tools_layout = QVBoxLayout()
         tools_layout.setContentsMargins(4, 6, 4, 6)
         tools_layout.setSpacing(8)
-
-        lbl_sn = QLabel("Ruta al ejecutable de StarNet++ (starnet2.exe / starnet++.exe):")
-        lbl_sn.setStyleSheet("color: #cbd5e1; font-size: 11px; font-weight: 500;")
-        tools_layout.addWidget(lbl_sn)
-
-        row_sn = QHBoxLayout()
-        row_sn.setSpacing(6)
-        self.txt_starnet = QLineEdit(self.cfg.get("starnet_exe", ""))
-        self.txt_starnet.setPlaceholderText("C:\\Program Files\\StarNetv2CLI_Win\\starnet++.exe")
-        self.txt_starnet.setStyleSheet(
-            "background: #141722; border: 1px solid #232738; color: #e2e8f0; "
-            "border-radius: 4px; padding: 4px 8px; font-size: 11px;"
-        )
-        self.txt_starnet.textChanged.connect(self._update_starnet_status)
-        row_sn.addWidget(self.txt_starnet)
-
-        btn_browse_sn = QPushButton("Examinar...")
-        btn_browse_sn.setIcon(get_icon("folder", color="#cbd5e1"))
-        btn_browse_sn.setStyleSheet("""
-            QPushButton {
-                background: #1c202e;
-                border: 1px solid #2e354a;
-                color: #cbd5e1;
-                border-radius: 4px;
-                padding: 4px 10px;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background: #252b3d;
-                border-color: #38bdf8;
-                color: #ffffff;
-            }
-        """)
-        btn_browse_sn.clicked.connect(self._browse_starnet)
-        row_sn.addWidget(btn_browse_sn)
-        tools_layout.addLayout(row_sn)
 
         # Panel de diagnóstico de Modelos de Inteligencia Artificial (ONNX)
         card_ai = QFrame()
@@ -689,10 +653,6 @@ class SettingsTab(QWidget):
         os.makedirs(models_dir, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(models_dir))
 
-    def _update_starnet_status(self) -> None:
-        """Actualiza el estado de StarNet y todos los modelos de IA."""
-        self._verify_all_ai_models(show_dialog=False)
-
     def _verify_all_ai_models(self, show_dialog: bool = False) -> None:
         """Verifica la presencia e integridad de los modelos neuronales ONNX (StarNet, NAFNet, SkySeg)."""
         from core.starnet_onnx import is_starnet_onnx_available, get_starnet_model_path
@@ -702,21 +662,12 @@ class SettingsTab(QWidget):
         report = []
 
         # 1. StarNet v2
-        cli_path = self.txt_starnet.text().strip()
         if is_starnet_onnx_available():
             sn_path = get_starnet_model_path()
             sz_mb = (os.path.getsize(sn_path) / (1024 * 1024)) if sn_path and os.path.exists(sn_path) else 0.0
             self.lbl_sn_status.setText(f"● StarNet v2 ONNX: Listo ({sz_mb:.1f} MB, GPU DirectML)")
             self.lbl_sn_status.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: 600;")
             report.append(f"✓ StarNet v2 ONNX: {os.path.basename(sn_path)} ({sz_mb:.1f} MB) - Listo")
-        elif cli_path and os.path.isfile(cli_path):
-            self.lbl_sn_status.setText(f"● StarNet++ CLI: Listo ({os.path.basename(cli_path)})")
-            self.lbl_sn_status.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: 600;")
-            report.append(f"✓ StarNet++ CLI: {cli_path} - Listo")
-        elif cli_path:
-            self.lbl_sn_status.setText("● StarNet++ CLI: Ruta no accesible o archivo no encontrado")
-            self.lbl_sn_status.setStyleSheet("color: #fbbf24; font-size: 11px; font-weight: 600;")
-            report.append("⚠ StarNet++ CLI: Ruta inválida o inaccesible")
         else:
             self.lbl_sn_status.setText("○ StarNet v2: No instalado (descarga automática bajo demanda)")
             self.lbl_sn_status.setStyleSheet("color: #94a3b8; font-size: 11px;")
@@ -763,20 +714,6 @@ class SettingsTab(QWidget):
         if chosen:
             target_line_edit.setText(os.path.normpath(chosen))
 
-    def _browse_starnet(self) -> None:
-        """Abre el explorador de archivos para localizar el ejecutable de StarNet."""
-        current_val = self.txt_starnet.text().strip()
-        fallback_dir = "C:\\Program Files" if sys.platform == "win32" else os.path.expanduser("~")
-        start_dir = os.path.dirname(current_val) if current_val and os.path.exists(os.path.dirname(current_val)) else fallback_dir
-        filter_str = "Ejecutables (*.exe);;Todos (*.*)" if sys.platform == "win32" else "Todos los archivos (*);;Ejecutables (*.exe *)"
-
-        f, _ = QFileDialog.getOpenFileName(
-            self, "Seleccionar ejecutable de StarNet++", 
-            start_dir, filter_str
-        )
-        if f:
-            self.txt_starnet.setText(os.path.normpath(f))
-
     def _open_showcase_in_viewer(self) -> None:
         """Abre la fotografía de demostración en el visor de imágenes del sistema operativo."""
         if os.path.exists(SHOWCASE_IMG_PATH):
@@ -792,7 +729,6 @@ class SettingsTab(QWidget):
         self.cfg["presets_dir"] = self.txt_presets.text().strip()
         self.cfg["masks_dir"] = os.path.join(self.cfg["sessions_dir"], "mascaras")
 
-        self.cfg["starnet_exe"] = self.txt_starnet.text().strip()
         self.cfg["default_kappa"] = float(self.spin_kappa.value()) if hasattr(self.spin_kappa, "value") else 2.2
         self.cfg["preview_max_dim"] = int(self.spin_proxy.value())
         self.cfg["cpu_workers"] = int(self.spin_cpu_workers.value())

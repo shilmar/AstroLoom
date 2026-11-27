@@ -54,8 +54,7 @@ class AIWorkersMixin:
                 return
 
         from core.starnet_onnx import is_starnet_onnx_available
-        from core.starnet_bridge import find_starnet_executable
-        if not is_starnet_onnx_available() and not find_starnet_executable():
+        if not is_starnet_onnx_available():
             msg = QMessageBox(self)
             msg.setWindowTitle("Modelo de IA StarNet v2 no encontrado")
             msg.setText(

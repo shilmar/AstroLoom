@@ -23,11 +23,9 @@ try:
 except ImportError:
     HAS_ONNX = False
 
-try:
-    import astroloom_rs
-    HAS_RUST_AI = hasattr(astroloom_rs, 'prepare_starnet_tiles_rs') and hasattr(astroloom_rs, 'assemble_starnet_tiles_rs')
-except ImportError:
-    HAS_RUST_AI = False
+import astroloom_rs
+
+HAS_RUST_AI = True
 
 from core.config_manager import get_config_val
 
@@ -61,7 +59,6 @@ def get_starnet_model_path() -> Optional[str]:
         os.path.join(root, "models", DEFAULT_STARNET_FILENAME),
         os.path.join(root, "models", "StarNet2_weights.onnx"),
         r"C:\Program Files\StarNet2\lib\starnet2\StarNet2_weights.onnx",
-        r"D:\software\StarNet2\lib\starnet2\StarNet2_weights.onnx",
         os.path.join(root, "StarNet2_weights.onnx"),
     ]
     if getattr(sys, "frozen", False):
@@ -216,8 +213,6 @@ def _create_inference_session(model_path: str, force_cpu: bool = False) -> "ort.
         providers = []
         if "CUDAExecutionProvider" in available_providers:
             providers.append("CUDAExecutionProvider")
-        if "CoreMLExecutionProvider" in available_providers:
-            providers.append("CoreMLExecutionProvider")
         if "DmlExecutionProvider" in available_providers:
             providers.append("DmlExecutionProvider")
         providers.append("CPUExecutionProvider")
@@ -254,31 +249,6 @@ def _create_inference_session(model_path: str, force_cpu: bool = False) -> "ort.
         # Fallback sin ruta de serialización si hubo fallo de I/O
         opts.optimized_model_filepath = ""
         return ort.InferenceSession(model_path, sess_options=opts, providers=providers)
-
-
-def _mtf_curve(x: np.ndarray, m: float) -> np.ndarray:
-    """Función analítica MTF: s(x) = (m - 1) * x / ((2m - 1) * x - m)."""
-    num = (m - 1.0) * x
-    den = (2.0 * m - 1.0) * x - m
-    return np.where(np.abs(den) > 1e-7, num / den, 0.0)
-
-
-def _calc_channel_mtf(
-    channel: np.ndarray,
-    target_bg: float = 0.25,
-    shadows_factor: float = -2.80
-) -> Tuple[float, float]:
-    """Calcula el punto negro (bp) y el valor de medios tonos (m) para una curva MTF analítica."""
-    sample = channel[::4, ::4]
-    med = float(np.median(sample))
-    mad = float(np.median(np.abs(sample - med)))
-    bp = float(np.clip(med + shadows_factor * 1.4826 * mad, 0.0, 0.95))
-
-    norm_med = max(1e-6, (med - bp) / max(1e-6, 1.0 - bp))
-    denom = norm_med * (2.0 * target_bg - 1.0) - target_bg
-    m = (norm_med * (target_bg - 1.0)) / denom if abs(denom) > 1e-7 else 0.5
-    m = float(np.clip(m, 0.0050, 0.9999))
-    return bp, m
 
 
 def run_starnet_onnx(
@@ -371,50 +341,49 @@ def run_starnet_onnx(
     tile_size = DEFAULT_TILE_SIZE
     stride = max(32, min(tile_size - 16, stride))
 
-    if HAS_RUST_AI and hasattr(astroloom_rs, 'prepare_starnet_tiles_rs') and hasattr(astroloom_rs, 'assemble_starnet_tiles_rs'):
-        # Ruta acelerada en Rust (Fase 16)
-        log("Preparando baldosas y estirado analítico MTF con motor acelerado en Rust...")
-        tiles_4d, coords, bps, ms = astroloom_rs.prepare_starnet_tiles_rs(
-            input_data, tile_size=tile_size, stride=stride, is_linear=is_linear
-        )
-        total_tiles = len(coords)
-        border = (tile_size - stride) // 2
-        log(f"Dividiendo imagen en {total_tiles} bloques ({tile_size}x{tile_size}, paso={stride}, margen={border}px)...")
+    # Ruta acelerada en Rust (Fase 16)
+    log("Preparando baldosas y estirado analítico MTF con motor acelerado en Rust...")
+    tiles_4d, coords, bps, ms = astroloom_rs.prepare_starnet_tiles_rs(
+        input_data, tile_size=tile_size, stride=stride, is_linear=is_linear
+    )
+    total_tiles = len(coords)
+    border = (tile_size - stride) // 2
+    log(f"Dividiendo imagen en {total_tiles} bloques ({tile_size}x{tile_size}, paso={stride}, margen={border}px)...")
 
-        sess = _create_inference_session(path)
-        # Reutilizar tiles_4d in-place para evitar duplicar el pico de RAM del tensor 4D
-        for tile_idx in range(total_tiles):
-            if cancel_check and cancel_check():
-                log("Separación cancelada por el usuario.")
-                raise InterruptedError("Operación cancelada por el usuario.")
+    sess = _create_inference_session(path)
+    # Reutilizar tiles_4d in-place para evitar duplicar el pico de RAM del tensor 4D
+    for tile_idx in range(total_tiles):
+        if cancel_check and cancel_check():
+            log("Separación cancelada por el usuario.")
+            raise InterruptedError("Operación cancelada por el usuario.")
 
-            in_batch = tiles_4d[tile_idx : tile_idx + 1]
-            try:
+        in_batch = tiles_4d[tile_idx : tile_idx + 1]
+        try:
+            out_batch = sess.run(None, {'x:0': in_batch})[0]
+        except Exception as run_err:
+            active_providers = sess.get_providers()
+            if active_providers and active_providers[0] != "CPUExecutionProvider":
+                logger.warning(f"Error GPU en StarNet ({run_err}). Degradando a CPU...")
+                log("⚠️ VRAM insuficiente. Continuando separación en CPU...", tile_idx + 1, total_tiles)
+                notify_gpu_fallback(f"StarNet v2 AI: {run_err}")
+                try:
+                    del sess
+                except Exception:
+                    pass
+                sess = _create_inference_session(path, force_cpu=True)
                 out_batch = sess.run(None, {'x:0': in_batch})[0]
-            except Exception as run_err:
-                active_providers = sess.get_providers()
-                if active_providers and active_providers[0] != "CPUExecutionProvider":
-                    logger.warning(f"Error GPU en StarNet ({run_err}). Degradando a CPU...")
-                    log("⚠️ VRAM insuficiente. Continuando separación en CPU...", tile_idx + 1, total_tiles)
-                    notify_gpu_fallback(f"StarNet v2 AI: {run_err}")
-                    try:
-                        del sess
-                    except Exception:
-                        pass
-                    sess = _create_inference_session(path, force_cpu=True)
-                    out_batch = sess.run(None, {'x:0': in_batch})[0]
-                else:
-                    raise run_err
-            tiles_4d[tile_idx] = np.clip(out_batch[0], 0.0, 1.0)
+            else:
+                raise run_err
+        tiles_4d[tile_idx] = np.clip(out_batch[0], 0.0, 1.0)
 
-            pct = int(((tile_idx + 1) / total_tiles) * 100)
-            log(f"Separando estrellas con StarNet v2 AI...\nBloque {tile_idx + 1} de {total_tiles} ({pct}%)", tile_idx + 1, total_tiles)
+        pct = int(((tile_idx + 1) / total_tiles) * 100)
+        log(f"Separando estrellas con StarNet v2 AI...\nBloque {tile_idx + 1} de {total_tiles} ({pct}%)", tile_idx + 1, total_tiles)
 
-        log("Recomponiendo imagen y revirtiendo estirado MTF en Rust...")
-        final_starless = astroloom_rs.assemble_starnet_tiles_rs(
-            tiles_4d, coords, orig_h=h, orig_w=w, stride=stride, tile_size=tile_size,
-            is_linear=is_linear, bps=bps, ms=ms, orig_img=input_data, use_hann=False
-        )
+    log("Recomponiendo imagen y revirtiendo estirado MTF en Rust...")
+    final_starless = astroloom_rs.assemble_starnet_tiles_rs(
+        tiles_4d, coords, orig_h=h, orig_w=w, stride=stride, tile_size=tile_size,
+        is_linear=is_linear, bps=bps, ms=ms, orig_img=input_data, use_hann=False
+    )
 
     # 7. Restaurar suelo real intacto si se suministró sky_mask
     if mask_3d is not None:

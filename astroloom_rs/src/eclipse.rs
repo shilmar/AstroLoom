@@ -1710,55 +1710,6 @@ pub(crate) fn paired_b3_step_raw(
         });
 }
 
-/// 15. paired_b3_step_rs:
-/// Paso à-trous B3 con soporte bilateral de pares simétricos (AEL 1.3.4 / 1.3.5 / Issue #4).
-/// Garantiza que los taps opuestos estén presentes para evitar sesgo en los bordes de datos
-/// y aplica pesos bilaterales a partir de la guía en paralelo con Rayon.
-#[pyfunction]
-#[pyo3(signature = (c, m, step, bilateral=false, guide=None))]
-pub fn paired_b3_step_rs<'py>(
-    py: Python<'py>,
-    c: PyReadonlyArray2<'py, f32>,
-    m: PyReadonlyArray2<'py, bool>,
-    step: usize,
-    bilateral: bool,
-    guide: Option<PyReadonlyArray2<'py, f32>>,
-) -> PyResult<(
-    Bound<'py, PyArray2<f32>>,
-    Bound<'py, PyArray2<f32>>,
-    Bound<'py, PyArray2<bool>>,
-)> {
-    let (h, w) = c.as_array().dim();
-    let c_slice = c.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
-    let m_slice = m.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
-    let guide_slice = guide.as_ref().map(|g| g.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))).transpose()?;
-
-    let (out_vec, compl_vec, pair_vec) = py.allow_threads(|| {
-        let mut out = vec![0.0f32; h * w];
-        let mut compl = vec![0.0f32; h * w];
-        let mut pair = vec![false; h * w];
-        paired_b3_step_raw(
-            c_slice,
-            m_slice,
-            h,
-            w,
-            step,
-            bilateral,
-            guide_slice,
-            &mut out,
-            &mut compl,
-            &mut pair,
-        );
-        (out, compl, pair)
-    });
-
-    Ok((
-        Array2::from_shape_vec((h, w), out_vec).unwrap().into_pyarray(py),
-        Array2::from_shape_vec((h, w), compl_vec).unwrap().into_pyarray(py),
-        Array2::from_shape_vec((h, w), pair_vec).unwrap().into_pyarray(py),
-    ))
-}
-
 pub(crate) fn b3_normalized_raw(
     a_slice: &[f32],
     m_slice: &[bool],

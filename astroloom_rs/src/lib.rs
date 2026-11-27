@@ -79,7 +79,6 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(eclipse::compute_larson_sekanina_rs, m)?)?;
     m.add_function(wrap_pyfunction!(eclipse::polar_circular_median_filter_rs, m)?)?;
     m.add_function(wrap_pyfunction!(eclipse::compute_red_excess_mask_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(eclipse::paired_b3_step_rs, m)?)?;
     m.add_function(wrap_pyfunction!(eclipse::b3_normalized_rs, m)?)?;
     m.add_function(wrap_pyfunction!(eclipse::apply_wow_edge_aware_rs, m)?)?;
     m.add_function(wrap_pyfunction!(eclipse::apply_nafe_rs, m)?)?;

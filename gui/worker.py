@@ -35,7 +35,7 @@ from core.stacking import (
     StorageModeDecision,
     compose_sky_ground_with_anti_ghosting
 )
-from core.starnet_bridge import run_starnet
+from core.starnet_onnx import run_starnet_onnx
 from core.icc_manager import (
     extract_icc_profile, 
     get_icc_profile_bytes, 
@@ -679,12 +679,11 @@ class StarNetWorker(QThread):
     error_occurred = Signal(str)
     cancelled = Signal()
 
-    def __init__(self, img_rgb: np.ndarray, sky_mask: np.ndarray = None, stride: int = 384, custom_exe: str = None, upsample: bool = False, parent=None):
+    def __init__(self, img_rgb: np.ndarray, sky_mask: np.ndarray = None, stride: int = 384, upsample: bool = False, parent=None):
         super().__init__(parent)
         self.img_rgb = img_rgb
         self.sky_mask = sky_mask
         self.stride = stride
-        self.custom_exe = custom_exe
         self.upsample = upsample
         self._is_cancelled = False
 
@@ -701,13 +700,12 @@ class StarNetWorker(QThread):
                 self.status_changed.emit(msg)
                 self.progress_changed.emit(curr, total, msg)
 
-            starless, stars = run_starnet(
+            starless, stars = run_starnet_onnx(
                 self.img_rgb,
                 sky_mask=self.sky_mask,
                 stride=self.stride,
-                starnet_exe=self.custom_exe,
                 upsample=self.upsample,
-                log_callback=on_progress,
+                progress_callback=on_progress,
                 cancel_check=lambda: self._is_cancelled
             )
             if self._is_cancelled:

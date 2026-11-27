@@ -26,13 +26,9 @@ import numpy as np
 import datetime
 from typing import Tuple, List, Dict, Optional, Any, Union
 from PIL import Image, ExifTags
-from scipy.optimize import minimize
+import astroloom_rs
 
-try:
-    import astroloom_rs
-    HAS_RUST = True
-except ImportError:
-    HAS_RUST = False
+HAS_RUST = True
 
 from core.stacking import load_image_as_float32
 
@@ -247,74 +243,15 @@ def optimize_center_circular_flux(
       - Inmune a destellos potentes (anillo de diamante y perlas de Baily) que distorsionan medianas globales.
       - Acotado rígidamente dentro de los límites de la imagen y ventana de búsqueda máxima.
     """
-    if HAS_RUST and hasattr(astroloom_rs, "optimize_center_circular_flux_rs"):
-        try:
-            gray_f32 = np.ascontiguousarray(gray, dtype=np.float32)
-            return astroloom_rs.optimize_center_circular_flux_rs(
-                gray_f32,
-                float(init_cx),
-                float(init_cy),
-                float(radius),
-                mode,
-                float(max_search_dist) if max_search_dist is not None else None
-            )
-        except Exception:
-            pass
-
-    h, w = gray.shape[:2]
-    angles = np.linspace(0, 2 * np.pi, 180, endpoint=False)
-    cos_a = np.cos(angles)
-    sin_a = np.sin(angles)
-    r_in = max(1.0, radius - 2.5)
-    r_out = radius + 2.5
-    r_int = radius * 0.50
-
-    max_dev = float(max_search_dist) if (max_search_dist and max_search_dist > 0) else min(35.0, max(12.0, radius * 0.12))
-
-    def loss(p):
-        cx, cy = p[0], p[1]
-        dist_dev = np.hypot(cx - init_cx, cy - init_cy)
-        if dist_dev > max_dev or cx < 0 or cx >= w or cy < 0 or cy >= h:
-            return 1e6 + dist_dev * 1000.0
-
-        xs_in = cx + r_in * cos_a
-        ys_in = cy + r_in * sin_a
-        xs_out = cx + r_out * cos_a
-        ys_out = cy + r_out * sin_a
-        v_in = cv2.remap(gray, xs_in.astype(np.float32)[:, None], ys_in.astype(np.float32)[:, None], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT).ravel()
-        v_out = cv2.remap(gray, xs_out.astype(np.float32)[:, None], ys_out.astype(np.float32)[:, None], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT).ravel()
-        
-        if mode == "solar":
-            diff = v_out - v_in
-            # En anillo de diamante o creciente, el gradiente relevante está en el 25% superior de ángulos
-            grad = float(np.percentile(diff, 75))
-            xs_int = cx + r_int * cos_a
-            ys_int = cy + r_int * sin_a
-            v_int = cv2.remap(gray, xs_int.astype(np.float32)[:, None], ys_int.astype(np.float32)[:, None], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT).ravel()
-            pen_in = float(np.mean(v_int))
-            eff_pen = min(pen_in * 0.5, max(0.0, grad * 0.4))
-            return -(grad - eff_pen)
-        else:
-            diff = v_in - v_out
-            return -float(np.percentile(diff, 60))
-
-    best_c = (init_cx, init_cy)
-    best_loss = loss(best_c)
-    search_range = int(min(max_dev, 24.0))
-    step = 2 if search_range <= 16 else 3
-    for dx in range(-search_range, search_range + 1, step):
-        for dy in range(-search_range, search_range + 1, step):
-            c = (init_cx + dx, init_cy + dy)
-            l = loss(c)
-            if l < best_loss:
-                best_loss = l
-                best_c = c
-
-    res = minimize(loss, list(best_c), method="Nelder-Mead", options={"xatol": 0.05, "fatol": 1e-4, "maxiter": 50})
-    final_cx, final_cy = float(res.x[0]), float(res.x[1])
-    if np.hypot(final_cx - init_cx, final_cy - init_cy) > max_dev or final_cx < 0 or final_cx >= w or final_cy < 0 or final_cy >= h or loss((final_cx, final_cy)) > best_loss:
-        return float(best_c[0]), float(best_c[1])
-    return final_cx, final_cy
+    gray_f32 = np.ascontiguousarray(gray, dtype=np.float32)
+    return astroloom_rs.optimize_center_circular_flux_rs(
+        gray_f32,
+        float(init_cx),
+        float(init_cy),
+        float(radius),
+        mode,
+        float(max_search_dist) if max_search_dist is not None else None
+    )
 
 
 def fit_circular_arc_convex_hull(
@@ -787,16 +724,6 @@ def _smoothstep(x: np.ndarray, edge0: float, edge1: float) -> np.ndarray:
     return t * t * (3.0 - 2.0 * t)
 
 
-def soft_shoulder(peak: np.ndarray, threshold: float = 0.70, ceiling: float = 1.0) -> np.ndarray:
-    """Atenuación suave exponencial en altas luces (evita corte duro o meseta a blanco)."""
-    res = np.copy(peak)
-    mask = peak > threshold
-    p = peak[mask] - threshold
-    span = max(ceiling - threshold, 1e-4)
-    res[mask] = threshold + span * (1.0 - np.exp(-p / span))
-    return res
-
-
 def apply_asinh_stretch(
     image: np.ndarray,
     stretch_factor: float = 30.0,
@@ -814,58 +741,15 @@ def apply_asinh_stretch(
     img = np.ascontiguousarray(image, dtype=np.float32)
     wp = max(float(white_point), 1.0)
     cp = float(np.clip(color_preserve, 0.0, 1.0))
-
-    if HAS_RUST and hasattr(astroloom_rs, "apply_asinh_stretch_rs"):
-        try:
-            return np.asarray(astroloom_rs.apply_asinh_stretch_rs(
-                img,
-                float(stretch_factor),
-                float(black_point),
-                float(shoulder_threshold),
-                float(highlight_ceiling),
-                wp,
-                cp
-            ), dtype=np.float32)
-        except TypeError:
-            if wp <= 1.0 + 1e-6 and cp <= 1e-4:
-                return np.asarray(astroloom_rs.apply_asinh_stretch_rs(
-                    img,
-                    float(stretch_factor),
-                    float(black_point),
-                    float(shoulder_threshold),
-                    float(highlight_ceiling)
-                ), dtype=np.float32)
-
-    img_sub = np.maximum(img - black_point, 0.0).astype(np.float32)
-
-    if stretch_factor <= 1.0:
-        if wp <= 1.0 + 1e-6:
-            return np.clip(img_sub, 0.0, 1.0).astype(np.float32)
-        u = img_sub / wp
-    else:
-        denom = np.arcsinh(float(stretch_factor) * wp)
-        if img.ndim == 3 and img.shape[2] == 3 and cp > 1e-4:
-            lum = 0.2126 * img_sub[..., 0] + 0.7152 * img_sub[..., 1] + 0.0722 * img_sub[..., 2]
-            s_lum = np.arcsinh(float(stretch_factor) * lum) / denom
-            gain = np.divide(s_lum, lum, out=np.zeros_like(lum), where=lum > 1e-6)
-            u_lup = img_sub * gain[..., None]
-            if cp >= 0.999:
-                u = u_lup
-            else:
-                u_ch = np.arcsinh(float(stretch_factor) * img_sub) / denom
-                u = cp * u_lup + (1.0 - cp) * u_ch
-        else:
-            u = np.arcsinh(float(stretch_factor) * img_sub) / denom
-
-    if img.ndim == 3:
-        peak = np.max(u, axis=-1)
-        sh = soft_shoulder(peak, threshold=shoulder_threshold, ceiling=highlight_ceiling)
-        factor = np.divide(sh, peak, out=np.ones_like(peak), where=peak > 1e-6)
-        stretched = u * factor[..., None]
-    else:
-        stretched = soft_shoulder(u, threshold=shoulder_threshold, ceiling=highlight_ceiling)
-
-    return np.clip(stretched, 0.0, 1.0).astype(np.float32)
+    return np.asarray(astroloom_rs.apply_asinh_stretch_rs(
+        img,
+        float(stretch_factor),
+        float(black_point),
+        float(shoulder_threshold),
+        float(highlight_ceiling),
+        wp,
+        cp
+    ), dtype=np.float32)
 
 
 def balance_coronal_white_balance(
@@ -882,50 +766,16 @@ def balance_coronal_white_balance(
     cielo crepuscular según las directrices de AEL (white_balance_on_corona).
     """
     img = np.ascontiguousarray(image, dtype=np.float32)
-    if HAS_RUST and hasattr(astroloom_rs, "balance_coronal_white_balance_rs"):
-        try:
-            bal, gains = astroloom_rs.balance_coronal_white_balance_rs(
-                img,
-                float(center_x),
-                float(center_y),
-                float(radius),
-                float(ring_range[0]),
-                float(ring_range[1]),
-                bool(clip_upper)
-            )
-            return np.asarray(bal, dtype=np.float32), (float(gains[0]), float(gains[1]), float(gains[2]))
-        except TypeError:
-            bal, gains = astroloom_rs.balance_coronal_white_balance_rs(
-                img,
-                float(center_x),
-                float(center_y),
-                float(radius),
-                float(ring_range[0]),
-                float(ring_range[1])
-            )
-            return np.asarray(bal, dtype=np.float32), (float(gains[0]), float(gains[1]), float(gains[2]))
-
-    if img.ndim != 3:
-        return img.copy(), (1.0, 1.0, 1.0)
-
-    h, w = img.shape[:2]
-    y, x = np.ogrid[:h, :w]
-    dist = np.hypot(x - center_x, y - center_y)
-    r_lo = radius * float(ring_range[0])
-    r_hi = radius * float(ring_range[1])
-    ring = (dist >= r_lo) & (dist <= r_hi)
-
-    if np.sum(ring) < 100:
-        return img.copy(), (1.0, 1.0, 1.0)
-
-    med = np.median(img[ring], axis=0)
-    g_val = float(med[1]) if med[1] > 1e-6 else float(np.mean(med))
-    f = g_val / np.maximum(med, 1e-6)
-    f = np.clip(f, 0.4, 2.5)
-
-    scaled = img * f[None, None, :]
-    balanced = (np.clip(scaled, 0.0, 1.0) if clip_upper else np.maximum(scaled, 0.0)).astype(np.float32)
-    return balanced, (float(f[0]), float(f[1]), float(f[2]))
+    bal, gains = astroloom_rs.balance_coronal_white_balance_rs(
+        img,
+        float(center_x),
+        float(center_y),
+        float(radius),
+        float(ring_range[0]),
+        float(ring_range[1]),
+        bool(clip_upper)
+    )
+    return np.asarray(bal, dtype=np.float32), (float(gains[0]), float(gains[1]), float(gains[2]))
 
 
 def balance_coronal_thermal_dual(
@@ -1151,160 +1001,16 @@ def fuse_hdr_bracketing(
             else:
                 bg_pedestals.append([float(np.percentile(img, 0.5))])
 
-    if HAS_RUST and hasattr(astroloom_rs, "fuse_hdr_bracketing_solar_rs"):
-        try:
-            try:
-                hdr_norm = astroloom_rs.fuse_hdr_bracketing_solar_rs(
-                    sorted_images,
-                    sorted_exp,
-                    float(saturation_threshold),
-                    float(noise_floor),
-                    lunar_mask_params,
-                    bool(gradual_handover),
-                    bg_pedestals if subtract_sky else None,
-                    bool(clip_highlights)
-                )
-            except TypeError:
-                hdr_norm = astroloom_rs.fuse_hdr_bracketing_solar_rs(
-                    sorted_images,
-                    sorted_exp,
-                    float(saturation_threshold),
-                    float(noise_floor),
-                    lunar_mask_params,
-                    bool(gradual_handover),
-                    bg_pedestals if subtract_sky else None
-                )
-            # Balance de blancos coronal automático (anillo 1.2 - 1.8 R) para eliminar dominantes de cielo
-            if auto_wb_corona and lunar_mask_params is not None and hdr_norm.ndim == 3:
-                mcx, mcy, mr = lunar_mask_params
-                hdr_norm, _ = balance_coronal_white_balance(
-                    hdr_norm, mcx, mcy, mr, ring_range=(1.2, 1.8), clip_upper=clip_highlights
-                )
-
-            if (abs(corona_warmth) > 1e-4 or abs(sky_temp) > 1e-4) and lunar_mask_params is not None and hdr_norm.ndim == 3:
-                mcx, mcy, mr = lunar_mask_params
-                hdr_norm = balance_coronal_thermal_dual(
-                    hdr_norm, mcx, mcy, mr, corona_warmth=corona_warmth, sky_temp=sky_temp, clip_upper=clip_highlights
-                )
-
-            # Ecualización opcional de gradiente crepuscular 2D en espacio lineal antes del estirado
-            if equalize_sky_gradient and lunar_mask_params is not None:
-                mcx, mcy, mr = lunar_mask_params
-                hdr_norm = subtract_twilight_gradient(
-                    hdr_norm, mcx, mcy, mr, r_min_factor=6.0, degree=1, clip_upper=clip_highlights
-                )
-
-            if asinh_stretch > 1.0:
-                hdr_norm = apply_asinh_stretch(hdr_norm, stretch_factor=asinh_stretch)
-
-            return hdr_norm
-        except Exception:
-            pass
-
-    shape = sorted_images[0].shape
-    weighted_flux = np.zeros(shape, dtype=np.float64)
-    sum_weights = np.zeros(shape, dtype=np.float64)
-
-    sat_lo = max(0.40, saturation_threshold - 0.20)
-    sat_hi = saturation_threshold
-
-    # Máscara lunar para evitar que flare óptico de tomas largas invada el disco
-    moon_weight = None
-    if lunar_mask_params is not None:
-        mcx, mcy, mr = lunar_mask_params
-        y_idx, x_idx = np.indices(shape[:2], dtype=np.float32)
-        dist = np.hypot(x_idx - mcx, y_idx - mcy)
-        moon_weight = _smoothstep(dist, mr - 2.0, mr)
-
-    for i, (img, t) in enumerate(zip(sorted_images, sorted_exp)):
-        t = max(t, 1e-6)
-        shorter_t = sorted_exp[i - 1] if i > 0 else None
-
-        # 1. Sustracción de pedestal/fondo por fotograma para anivelar el cielo
-        if subtract_sky:
-            if img.ndim == 3:
-                bg = np.percentile(img, 0.5, axis=(0, 1), keepdims=True)
-            else:
-                bg = np.percentile(img, 0.5)
-            clean_img = np.maximum(img - bg, 0.0)
-        else:
-            clean_img = img
-
-        flux = clean_img.astype(np.float64) / t
-
-        # 2. Pesos unificados sobre luminancia y canal máximo (evita franjas de color)
-        if img.ndim == 3:
-            lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
-            max_c = np.max(img, axis=-1)
-        else:
-            lum = img
-            max_c = img
-
-        w_low = _smoothstep(lum, 0.0, noise_floor * 2.0)
-        w_high = 1.0 - _smoothstep(max_c, sat_lo, sat_hi)
-        w = (w_low * w_high).astype(np.float64)
-
-        # Modulación gradual del peso de la toma más larga (AEL 1.4.0 / handover)
-        # Atenúa la caída abrupta de varianza distribuyendo el peso con la exposición más corta,
-        # erradicando falsos anillos y contornos en isófotas de saturación en filtros posteriores.
-        if gradual_handover and shorter_t is not None and shorter_t > 0:
-            taper = w_high
-            weight_factor = taper + (1.0 - taper) * (t / shorter_t)
-            w = w / np.maximum(weight_factor, 1e-4)
-
-        if moon_weight is not None:
-            w = w * moon_weight
-
-        if img.ndim == 3:
-            w_3d = w[..., None]
-            weighted_flux += flux * w_3d
-            sum_weights += w_3d
-        else:
-            weighted_flux += flux * w
-            sum_weights += w
-
-    zero_mask = sum_weights < 1e-6
-    if np.any(zero_mask):
-        shortest_img = sorted_images[0]
-        shortest_t = sorted_exp[0]
-        longest_img = sorted_images[-1]
-        longest_t = sorted_exp[-1]
-
-        if sorted_images[0].ndim == 3:
-            shortest_max = np.max(shortest_img, axis=-1, keepdims=True)
-        else:
-            shortest_max = shortest_img
-
-        fallback_flux = np.where(
-            shortest_max >= sat_lo,
-            shortest_img.astype(np.float64) / shortest_t,
-            longest_img.astype(np.float64) / longest_t
-        )
-        weighted_flux = np.where(zero_mask, fallback_flux, weighted_flux)
-        sum_weights = np.where(zero_mask, 1.0, sum_weights)
-
-    merged_flux = weighted_flux / sum_weights
-
-    if moon_weight is not None:
-        if merged_flux.ndim == 3:
-            merged_flux = merged_flux * moon_weight[..., None]
-        else:
-            merged_flux = merged_flux * moon_weight
-
-    # Normalización sobre píxeles válidos fuera del disco lunar
-    hi_pct = 99.999 if clip_highlights else 99.98
-    if moon_weight is not None:
-        valid_px = moon_weight > 0.5
-        p_high = float(np.percentile(merged_flux[valid_px], hi_pct))
-        p_low = float(np.percentile(merged_flux[valid_px], 0.05))
-    else:
-        p_high = float(np.percentile(merged_flux, hi_pct))
-        p_low = float(np.percentile(merged_flux, 0.05))
-
-    denom = max(p_high - p_low, 1e-8)
-    scaled = (merged_flux - p_low) / denom
-    hdr_norm = (np.clip(scaled, 0.0, 1.0) if clip_highlights else np.maximum(scaled, 0.0)).astype(np.float32)
-
+    hdr_norm = astroloom_rs.fuse_hdr_bracketing_solar_rs(
+        sorted_images,
+        sorted_exp,
+        float(saturation_threshold),
+        float(noise_floor),
+        lunar_mask_params,
+        bool(gradual_handover),
+        bg_pedestals if subtract_sky else None,
+        bool(clip_highlights)
+    )
     # Balance de blancos coronal automático (anillo 1.2 - 1.8 R) para eliminar dominantes de cielo
     if auto_wb_corona and lunar_mask_params is not None and hdr_norm.ndim == 3:
         mcx, mcy, mr = lunar_mask_params
@@ -1372,88 +1078,21 @@ def display_detail_rings(
             return out, {"display": "level and spread per ring (3D)", "ring_width_px": width_px}
         return out
 
-    if HAS_RUST and hasattr(astroloom_rs, "display_detail_rings_rs"):
-        det_c = np.ascontiguousarray(det, dtype=np.float32)
-        mask_c = np.ascontiguousarray(valid_mask.astype(bool)) if valid_mask is not None else None
-        res = np.asarray(astroloom_rs.display_detail_rings_rs(
-            det_c,
-            mask_c,
-            float(center_x),
-            float(center_y),
-            float(width_px),
-            int(min_count),
-            int(smooth_bins),
-            float(noise_floor)
-        ), dtype=np.float32)
-        if return_info:
-            return res, {"display": "level and spread per ring (Rust)", "ring_width_px": width_px}
-        return res
-
-    # Fallback NumPy
-    h, w = det.shape[:2]
-    good = np.isfinite(det)
-    if valid_mask is not None:
-        good = good & (valid_mask > 0)
-
-    if not np.any(good):
-        out = np.zeros_like(det)
-        return (out, {"display": "empty"}) if return_info else out
-
-    y_idx, x_idx = np.indices((h, w), dtype=np.float32)
-    dx = x_idx - center_x
-    dy = y_idx - center_y
-    r = np.sqrt(dx * dx + dy * dy)
-
-    r_good = r[good]
-    det_good = det[good].astype(np.float64)
-    w_px = max(float(width_px), 0.1)
-    k = np.floor(r_good / w_px).astype(np.int32)
-    max_k = int(np.max(k)) + 1 if k.size > 0 else 1
-
-    cnt = np.bincount(k, minlength=max_k)
-    rsum = np.bincount(k, weights=r_good, minlength=max_k)
-
-    sort_idx = np.argsort(k, kind="stable")
-    ds = det_good[sort_idx]
-    start = np.concatenate([[0], np.cumsum(cnt)[:-1]])
-    sel = np.flatnonzero(cnt >= min_count)
-
-    if len(sel) < 3:
-        med_val = float(np.median(det_good))
-        mad_val = max(float(1.4826 * np.median(np.abs(det_good - med_val))), float(noise_floor))
-        out = np.where(good, 0.5 + 0.5 * np.tanh((det - med_val) / (2.5 * mad_val)), 0.0).astype(np.float32)
-        info = {"display": "one spread for whole image", "scale": mad_val}
-        return (out, info) if return_info else out
-
-    med = []
-    mad = []
-    for i in sel:
-        seg = ds[start[i]: start[i] + cnt[i]]
-        m_val = float(np.median(seg))
-        med.append(m_val)
-        mad.append(float(1.4826 * np.median(np.abs(seg - m_val))))
-
-    med = np.array(med, dtype=np.float64)
-    mad = np.array(mad, dtype=np.float64)
-    rm = rsum[sel] / cnt[sel]
-
-    if smooth_bins > 1:
-        ker = np.ones(smooth_bins, dtype=np.float64)
-        norm = np.convolve(np.ones(len(med), dtype=np.float64), ker, mode="same")
-        med = np.convolve(med, ker, mode="same") / norm
-        mad = np.convolve(mad, ker, mode="same") / norm
-
-    level = np.interp(r, rm, med).astype(np.float32)
-    spread = np.maximum(np.interp(r, rm, mad), float(noise_floor)).astype(np.float32)
-
-    out = np.where(good, 0.5 + 0.5 * np.tanh((det - level) / (2.5 * spread)), 0.0).astype(np.float32)
-    info = {
-        "display": "level and spread per ring (NumPy)",
-        "ring_width_px": width_px,
-        "ring_min_count": min_count,
-        "display_annuli": int(len(sel))
-    }
-    return (out, info) if return_info else out
+    det_c = np.ascontiguousarray(det, dtype=np.float32)
+    mask_c = np.ascontiguousarray(valid_mask.astype(bool)) if valid_mask is not None else None
+    res = np.asarray(astroloom_rs.display_detail_rings_rs(
+        det_c,
+        mask_c,
+        float(center_x),
+        float(center_y),
+        float(width_px),
+        int(min_count),
+        int(smooth_bins),
+        float(noise_floor)
+    ), dtype=np.float32)
+    if return_info:
+        return res, {"display": "level and spread per ring (Rust)", "ring_width_px": width_px}
+    return res
 
 
 def apply_nrgf(
@@ -1488,7 +1127,7 @@ def apply_nrgf(
     if partial_annuli not in ("observed", "chain"):
         raise ValueError("partial_annuli debe ser 'observed' o 'chain'")
 
-    if partial_annuli == "observed" and HAS_RUST and hasattr(astroloom_rs, "apply_nrgf_continuous_rs") and hasattr(astroloom_rs, "compute_nrgf_profiles_and_detail_rs"):
+    if partial_annuli == "observed":
         img_c = np.ascontiguousarray(image, dtype=np.float32)
         if img_c.ndim == 3:
             lum = 0.2126 * img_c[..., 0] + 0.7152 * img_c[..., 1] + 0.0722 * img_c[..., 2]
@@ -1862,105 +1501,28 @@ def apply_mgn(
     haciendo visibles filamentos radiales finos, bucles magnéticos cerrados y la corona exterior tenue,
     eliminando el grano de ruido coloreado del fondo sin deslavar detalles de emisión H-alfa.
     """
-    if HAS_RUST and hasattr(astroloom_rs, "combine_mgn_scales_rs") and hasattr(astroloom_rs, "compute_mgn_diff_sq_rs"):
-        img = np.asarray(image, dtype=np.float32)
-        img_c = np.ascontiguousarray(img, dtype=np.float32)
-        if img.ndim == 3:
-            lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
-        else:
-            lum = img.copy()
-        lum_c = np.ascontiguousarray(lum, dtype=np.float32)
-        h, w = lum_c.shape[:2]
-
-        if lunar_mask_params is not None:
-            mcx, mcy, mr = lunar_mask_params
-            m_bool = astroloom_rs.create_lunar_mask_rs(h, w, float(mcx), float(mcy), float(mr - 2.5))
-        else:
-            m_bool = np.ones((h, w), dtype=bool)
-
-        m_f32 = m_bool.astype(np.float32)
-        masked_lum = np.where(m_bool, lum_c, 0.0).astype(np.float32)
-        acc = np.zeros((h, w), dtype=np.float32)
-        total_w = 0.0
-
-        # Invarianza de escala (AEL 1.3.6 / PR #8): calcula data_scale y normaliza lum para gamma
-        valid_lum = lum_c[m_bool] if np.any(m_bool) else lum_c
-        if valid_lum.size > 0:
-            min_v = float(np.min(valid_lum))
-            max_v = float(np.max(valid_lum))
-            data_scale = (max_v - min_v) if (max_v - min_v) > 1e-12 else 1.0
-        else:
-            min_v = 0.0
-            data_scale = 1.0
-
-        norm_lum = np.clip((lum_c - min_v) / data_scale, 0.0, 1.0).astype(np.float32)
-
-        for s in sigmas:
-            s_val = float(s)
-            num = cv2.GaussianBlur(masked_lum, (0, 0), s_val)
-            den = cv2.GaussianBlur(m_f32, (0, 0), s_val)
-            d_sq = astroloom_rs.compute_mgn_diff_sq_rs(lum_c, m_bool, num, den)
-            num_v = cv2.GaussianBlur(d_sq, (0, 0), s_val)
-            astroloom_rs.combine_mgn_scales_rs(
-                acc, lum_c, num, den, num_v, m_bool, float(k), float(noise_floor), float(data_scale)
-            )
-            total_w += 1.0
-
-        mgn_lum = np.asarray(astroloom_rs.finalize_mgn_lum_rs(
-            acc, float(total_w), norm_lum, float(gamma), float(blend_ratio),
-            m_bool if lunar_mask_params is not None else None
-        ), dtype=np.float32)
-
-        if img.ndim == 3:
-            scaled_rgb, chroma = astroloom_rs.compute_mgn_scaled_and_chroma_rs(
-                img_c, mgn_lum, lum_c, float(noise_floor)
-            )
-            if chroma_denoise_sigma > 0.5:
-                chroma_smooth = cv2.GaussianBlur(chroma, (0, 0), float(chroma_denoise_sigma))
-                denoised_rgb = np.clip(chroma_smooth * mgn_lum[..., None], 0.0, 1.0)
-                if lunar_mask_params is not None:
-                    mcx, mcy, mr = lunar_mask_params
-                    prom_mask = astroloom_rs.compute_mgn_prominence_mask_rs(
-                        scaled_rgb, float(mcx), float(mcy), float(mr * 1.35)
-                    )
-                    prom_w = cv2.GaussianBlur(prom_mask, (0, 0), 2.0)
-                    result = astroloom_rs.blend_mgn_prominences_and_mask_rs(
-                        scaled_rgb, denoised_rgb, prom_w, m_bool
-                    )
-                else:
-                    result = denoised_rgb
-            else:
-                result = scaled_rgb
-                if lunar_mask_params is not None:
-                    result = np.where(m_bool[..., None], result, 0.0)
-        else:
-            result = mgn_lum
-
-        return np.asarray(result, dtype=np.float32)
-
     img = np.asarray(image, dtype=np.float32)
+    img_c = np.ascontiguousarray(img, dtype=np.float32)
     if img.ndim == 3:
         lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
     else:
         lum = img.copy()
+    lum_c = np.ascontiguousarray(lum, dtype=np.float32)
+    h, w = lum_c.shape[:2]
 
-    h, w = lum.shape[:2]
-
-    # Excluir interior del disco lunar protegiendo el margen cromosférico y protuberancias (mr - 2.5px)
     if lunar_mask_params is not None:
         mcx, mcy, mr = lunar_mask_params
-        y_idx, x_idx = np.indices((h, w), dtype=np.float32)
-        dist = np.hypot(x_idx - mcx, y_idx - mcy)
-        m_bool = dist >= (mr - 2.5)
+        m_bool = astroloom_rs.create_lunar_mask_rs(h, w, float(mcx), float(mcy), float(mr - 2.5))
     else:
         m_bool = np.ones((h, w), dtype=bool)
 
-    m = m_bool.astype(np.float32)
+    m_f32 = m_bool.astype(np.float32)
+    masked_lum = np.where(m_bool, lum_c, 0.0).astype(np.float32)
     acc = np.zeros((h, w), dtype=np.float32)
     total_w = 0.0
 
-    # Invarianza de escala (AEL 1.3.6 / PR #8)
-    valid_lum = lum[m_bool] if np.any(m_bool) else lum
+    # Invarianza de escala (AEL 1.3.6 / PR #8): calcula data_scale y normaliza lum para gamma
+    valid_lum = lum_c[m_bool] if np.any(m_bool) else lum_c
     if valid_lum.size > 0:
         min_v = float(np.min(valid_lum))
         max_v = float(np.max(valid_lum))
@@ -1969,80 +1531,50 @@ def apply_mgn(
         min_v = 0.0
         data_scale = 1.0
 
-    eff_nf = float(noise_floor) * data_scale
-    nf_sq = eff_nf * eff_nf
-    min_sd = 1e-7 * data_scale
+    norm_lum = np.clip((lum_c - min_v) / data_scale, 0.0, 1.0).astype(np.float32)
 
     for s in sigmas:
         s_val = float(s)
-        # Convolución normalizada: (G * (I * m)) / (G * m)
-        num = cv2.GaussianBlur(np.where(m_bool, lum, 0.0).astype(np.float32), (0, 0), s_val)
-        den = cv2.GaussianBlur(m, (0, 0), s_val)
-        mu = np.where(m_bool & (den >= 0.15), num / np.maximum(den, 1e-12), np.nan)
-
-        d = np.where(np.isfinite(mu), lum - mu, 0.0).astype(np.float32)
-        num_v = cv2.GaussianBlur(np.where(m_bool, d * d, 0.0).astype(np.float32), (0, 0), s_val)
-        var = np.where(m_bool & (den >= 0.15), num_v / np.maximum(den, 1e-12), 0.0)
-        # Piso de ruido relativo invariante a la escala
-        sd = np.sqrt(np.maximum(var, 0.0) + nf_sq)
-
-        c = np.where(np.isfinite(mu) & (sd > min_sd), (lum - mu) / sd, 0.0)
-        acc += np.arctan(k * c).astype(np.float32)
+        num = cv2.GaussianBlur(masked_lum, (0, 0), s_val)
+        den = cv2.GaussianBlur(m_f32, (0, 0), s_val)
+        d_sq = astroloom_rs.compute_mgn_diff_sq_rs(lum_c, m_bool, num, den)
+        num_v = cv2.GaussianBlur(d_sq, (0, 0), s_val)
+        astroloom_rs.combine_mgn_scales_rs(
+            acc, lum_c, num, den, num_v, m_bool, float(k), float(noise_floor), float(data_scale)
+        )
         total_w += 1.0
 
-    acc /= max(total_w, 1.0)
+    mgn_lum = np.asarray(astroloom_rs.finalize_mgn_lum_rs(
+        acc, float(total_w), norm_lum, float(gamma), float(blend_ratio),
+        m_bool if lunar_mask_params is not None else None
+    ), dtype=np.float32)
 
-    # Escalar arctan[-pi/2, pi/2] a [0, 1]
-    acc_norm = np.clip((acc + (np.pi / 2.0)) / np.pi, 0.0, 1.0)
-
-    # Contexto global por compresión gamma normalizado
-    norm_lum = np.clip((lum - min_v) / data_scale, 0.0, 1.0).astype(np.float32)
-    g = norm_lum ** (1.0 / max(gamma, 0.1))
-
-    # Mezcla armónica entre detalle multiescala normalizado y contexto global
-    h_weight = float(np.clip(1.0 - blend_ratio, 0.0, 1.0))
-    mgn_lum = np.clip(h_weight * g + (1.0 - h_weight) * acc_norm, 0.0, 1.0)
-
-    if lunar_mask_params is not None:
-        mgn_lum = np.where(m_bool, mgn_lum, 0.0)
-
-    # Recomposición cromática lineal con margen adaptativo y denoise de croma local (AEL)
     if img.ndim == 3:
-        ratio = np.divide(mgn_lum, np.maximum(lum, 1e-4), out=np.zeros_like(lum), where=lum > 1e-6)
-        snr = np.clip(lum / max(float(noise_floor) * 3.0, 1e-3), 0.0, 1.0)
-        max_ratio = 4.0 + 20.0 * snr
-        ratio = np.minimum(ratio, max_ratio)
-        scaled_rgb = np.clip(img * ratio[..., None], 0.0, 1.0)
-
+        scaled_rgb, chroma = astroloom_rs.compute_mgn_scaled_and_chroma_rs(
+            img_c, mgn_lum, lum_c, float(noise_floor)
+        )
         if chroma_denoise_sigma > 0.5:
-            # Extracción y filtrado espacial de croma (elimina el grano de color del fondo)
-            chroma = np.divide(
-                scaled_rgb,
-                np.maximum(mgn_lum[..., None], 1e-4),
-                out=np.zeros_like(scaled_rgb),
-                where=mgn_lum[..., None] > 1e-5
-            )
             chroma_smooth = cv2.GaussianBlur(chroma, (0, 0), float(chroma_denoise_sigma))
             denoised_rgb = np.clip(chroma_smooth * mgn_lum[..., None], 0.0, 1.0)
-
-            # Protección estricta de protuberancias y limbo interior (H-alfa nativa sin desenfocar)
             if lunar_mask_params is not None:
                 mcx, mcy, mr = lunar_mask_params
-                prom_mask = (dist < mr * 1.35) & (scaled_rgb[..., 0] / np.maximum(scaled_rgb[..., 1], 1e-4) > 1.15)
-                prom_w = cv2.GaussianBlur(prom_mask.astype(np.float32), (0, 0), 2.0)[..., None]
-                result = prom_w * scaled_rgb + (1.0 - prom_w) * denoised_rgb
+                prom_mask = astroloom_rs.compute_mgn_prominence_mask_rs(
+                    scaled_rgb, float(mcx), float(mcy), float(mr * 1.35)
+                )
+                prom_w = cv2.GaussianBlur(prom_mask, (0, 0), 2.0)
+                result = astroloom_rs.blend_mgn_prominences_and_mask_rs(
+                    scaled_rgb, denoised_rgb, prom_w, m_bool
+                )
             else:
                 result = denoised_rgb
         else:
             result = scaled_rgb
-
-        result = np.clip(result, 0.0, 1.0)
-        if lunar_mask_params is not None:
-            result = np.where(m_bool[..., None], result, 0.0)
+            if lunar_mask_params is not None:
+                result = np.where(m_bool[..., None], result, 0.0)
     else:
         result = mgn_lum
 
-    return result.astype(np.float32)
+    return np.asarray(result, dtype=np.float32)
 
 
 def apply_coronal_highpass(
@@ -2113,42 +1645,10 @@ def compute_red_excess_mask(
     r_max = float(radius_max) if radius_max is not None else (r_min * 1.4)
     r_max = max(r_max, r_min + 1.0)
 
-    if HAS_RUST and hasattr(astroloom_rs, "compute_red_excess_mask_rs"):
-        rgb_c = np.ascontiguousarray(img[..., :3], dtype=np.float32)
-        raw_mask = np.asarray(astroloom_rs.compute_red_excess_mask_rs(
-            rgb_c, float(center_x), float(center_y), r_min, r_max, float(threshold_ratio)
-        ), dtype=bool)
-    else:
-        y_idx, x_idx = np.indices((h, w), dtype=np.float32)
-        dist = np.hypot(x_idx - center_x, y_idx - center_y)
-        in_zone = (dist >= r_min) & (dist <= r_max)
-
-        r_ch = img[..., 0]
-        g_ch = img[..., 1]
-        ratio = np.divide(r_ch, np.maximum(g_ch, 1e-4), out=np.zeros_like(r_ch), where=in_zone)
-
-        raw_mask = np.zeros((h, w), dtype=bool)
-        if np.any(in_zone):
-            width_px = 2.0
-            k = np.floor((dist[in_zone] - r_min) / width_px).astype(np.int32)
-            max_k = int(np.max(k)) + 1 if k.size > 0 else 1
-            rat_good = ratio[in_zone]
-
-            cnt = np.bincount(k, minlength=max_k)
-            sort_idx = np.argsort(k, kind="stable")
-            rs = rat_good[sort_idx]
-            start = np.concatenate([[0], np.cumsum(cnt)[:-1]])
-            sel = np.flatnonzero(cnt >= 10)
-
-            bin_medians = np.ones(max_k, dtype=np.float32)
-            for i in sel:
-                seg = rs[start[i]: start[i] + cnt[i]]
-                bin_medians[i] = float(np.median(seg))
-
-            all_bins = np.floor((dist - r_min) / width_px).astype(np.int32)
-            all_bins = np.clip(all_bins, 0, max_k - 1)
-            med_map = bin_medians[all_bins]
-            raw_mask = in_zone & (ratio > threshold_ratio * med_map)
+    rgb_c = np.ascontiguousarray(img[..., :3], dtype=np.float32)
+    raw_mask = np.asarray(astroloom_rs.compute_red_excess_mask_rs(
+        rgb_c, float(center_x), float(center_y), r_min, r_max, float(threshold_ratio)
+    ), dtype=bool)
 
     if dilation_px > 0 and np.any(raw_mask):
         ksize = 2 * int(dilation_px) + 1
@@ -2210,28 +1710,16 @@ def apply_steerable_g2(
 
         scale_weight = s_val
 
-        if HAS_RUST and hasattr(astroloom_rs, "accumulate_steerable_g2_rs"):
-            astroloom_rs.accumulate_steerable_g2_rs(
-                acc,
-                np.ascontiguousarray(hxx, dtype=np.float32),
-                np.ascontiguousarray(hyy, dtype=np.float32),
-                np.ascontiguousarray(hxy, dtype=np.float32),
-                np.ascontiguousarray(j11, dtype=np.float32),
-                np.ascontiguousarray(j22, dtype=np.float32),
-                np.ascontiguousarray(j12, dtype=np.float32),
-                float(scale_weight)
-            )
-        else:
-            big_x = j11 - j22
-            big_y = 2.0 * j12
-            r_sq = big_x * big_x + big_y * big_y
-            r_geom = np.sqrt(np.maximum(r_sq, 1e-12))
-            g2 = 0.5 * (hxx + hyy) + np.where(
-                r_sq > 1e-12,
-                0.5 * (big_x * (hxx - hyy) + 2.0 * big_y * hxy) / r_geom,
-                0.0
-            )
-            acc += (-g2) * scale_weight
+        astroloom_rs.accumulate_steerable_g2_rs(
+            acc,
+            np.ascontiguousarray(hxx, dtype=np.float32),
+            np.ascontiguousarray(hyy, dtype=np.float32),
+            np.ascontiguousarray(hxy, dtype=np.float32),
+            np.ascontiguousarray(j11, dtype=np.float32),
+            np.ascontiguousarray(j22, dtype=np.float32),
+            np.ascontiguousarray(j12, dtype=np.float32),
+            float(scale_weight)
+        )
 
     total_w = sum(sigmas) if sigmas else 1.0
     acc /= max(total_w, 1e-6)
@@ -2312,75 +1800,16 @@ def apply_larson_sekanina(
     lum_eval = (g1 * (1.0 - w_g) + g2 * w_g).astype(np.float32)
 
     lum_c = np.ascontiguousarray(lum_eval, dtype=np.float32)
-    if HAS_RUST and hasattr(astroloom_rs, "compute_larson_sekanina_rs"):
-        mask_c = np.ascontiguousarray(prom_mask) if prom_mask is not None else None
-        ls = np.asarray(astroloom_rs.compute_larson_sekanina_rs(
-            lum_c,
-            float(center_x),
-            float(center_y),
-            float(delta_theta_deg),
-            float(radius_min),
-            mask_c,
-            1e-4
-        ), dtype=np.float32)
-    else:
-        rad = np.radians(float(delta_theta_deg))
-        cos_a = np.cos(rad)
-        sin_a = np.sin(rad)
-        dx = x_coords - center_x
-        dy = y_coords - center_y
-
-        xp = center_x + dx * cos_a - dy * sin_a
-        yp = center_y + dx * sin_a + dy * cos_a
-        xm = center_x + dx * cos_a + dy * sin_a
-        ym = center_y - dx * sin_a + dy * cos_a
-
-        def _keys_w_np(t):
-            at = np.abs(t)
-            w_arr = np.zeros_like(at)
-            m1 = at <= 1.0
-            m2 = (at > 1.0) & (at < 2.0)
-            w_arr[m1] = 1.5 * at[m1]**3 - 2.5 * at[m1]**2 + 1.0
-            w_arr[m2] = -0.5 * at[m2]**3 + 2.5 * at[m2]**2 - 4.0 * at[m2] + 2.0
-            return w_arr
-
-        def _reflect101_np(idx, length):
-            i = idx.copy()
-            i = np.where(i < 0, -i, i)
-            i = np.where(i >= length, 2 * length - 2 - i, i)
-            return np.clip(i, 0, length - 1)
-
-        def _sample_keys_np(src, xq, yq):
-            ix = np.floor(xq).astype(np.int32)
-            iy = np.floor(yq).astype(np.int32)
-            fx = xq - ix
-            fy = yq - iy
-            wx = [_keys_w_np(1.0 + fx), _keys_w_np(fx), _keys_w_np(1.0 - fx), _keys_w_np(2.0 - fx)]
-            wy = [_keys_w_np(1.0 + fy), _keys_w_np(fy), _keys_w_np(1.0 - fy), _keys_w_np(2.0 - fy)]
-            sampled = np.zeros_like(xq, dtype=np.float32)
-            for m in range(4):
-                py = _reflect101_np(iy - 1 + m, h)
-                row_sum = np.zeros_like(xq, dtype=np.float32)
-                for n in range(4):
-                    px = _reflect101_np(ix - 1 + n, w)
-                    row_sum += src[py, px] * wx[n]
-                sampled += row_sum * wy[m]
-            return sampled
-
-        val_p = np.maximum(_sample_keys_np(lum_eval, xp, yp), 1e-4)
-        val_m = np.maximum(_sample_keys_np(lum_eval, xm, ym), 1e-4)
-        val_c = np.maximum(lum_eval, 1e-4)
-
-        ls = 2.0 * np.log(val_c) - np.log(val_p) - np.log(val_m)
-        r_min_eff = max(float(radius_min), 0.0)
-        excl = (r_map < r_min_eff)
-        if prom_mask is not None:
-            ix_p = np.clip(np.round(xp).astype(np.int32), 0, w - 1)
-            iy_p = np.clip(np.round(yp).astype(np.int32), 0, h - 1)
-            ix_m = np.clip(np.round(xm).astype(np.int32), 0, w - 1)
-            iy_m = np.clip(np.round(ym).astype(np.int32), 0, h - 1)
-            excl = excl | prom_mask | prom_mask[iy_p, ix_p] | prom_mask[iy_m, ix_m]
-        ls = np.where(excl, 0.0, ls).astype(np.float32)
+    mask_c = np.ascontiguousarray(prom_mask) if prom_mask is not None else None
+    ls = np.asarray(astroloom_rs.compute_larson_sekanina_rs(
+        lum_c,
+        float(center_x),
+        float(center_y),
+        float(delta_theta_deg),
+        float(radius_min),
+        mask_c,
+        1e-4
+    ), dtype=np.float32)
 
     r_max = radius_min * max(1.2, float(radius_max_factor))
     radial_gate = (1.0 - _smoothstep(r_map, r_max * 0.8, r_max)) * _smoothstep(r_map, radius_min * 0.95, radius_min * 1.05)
@@ -2465,12 +1894,8 @@ def apply_swap_filter(
         win += 1
     win = max(win, 3)
 
-    if HAS_RUST and hasattr(astroloom_rs, "polar_circular_median_filter_rs"):
-        polar_c = np.ascontiguousarray(polar, dtype=np.float32)
-        f_polar = np.asarray(astroloom_rs.polar_circular_median_filter_rs(polar_c, win), dtype=np.float32)
-    else:
-        from scipy.ndimage import median_filter
-        f_polar = median_filter(polar, size=(1, win), mode="wrap")
+    polar_c = np.ascontiguousarray(polar, dtype=np.float32)
+    f_polar = np.asarray(astroloom_rs.polar_circular_median_filter_rs(polar_c, win), dtype=np.float32)
 
     # 3. Remapeo inverso a coordenadas cartesianas y suavizado cartesiano (sigma = 4.0 px)
     # f_polar.T tiene shape (n_theta, max_r) como espera WARP_INVERSE_MAP
@@ -2531,121 +1956,14 @@ def apply_swap_filter(
 # FILTROS Y EXPORTACIÓN AVANZADA DE FASE 3 (AEL v1.3.4 - v1.4.2)
 # ============================================================================
 
-_B3K = np.array([1, 4, 6, 4, 1], dtype=np.float32) / 16.0
-
-
-def _paired_b3_step(
-    c: np.ndarray,
-    m: np.ndarray,
-    step: int,
-    bilateral: bool = False,
-    guide: Optional[np.ndarray] = None
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Paso à-trous B3 con soporte bilateral de pares simétricos (AEL 1.3.4 / 1.3.5 / Issue #4).
-    Acelerado por Rust (Rayon) con fallback numérico exacto en NumPy.
-    Garantiza que ningún tap opuesto falte para anular sesgo en bordes de datos y el limbo lunar.
-    """
-    if HAS_RUST and hasattr(astroloom_rs, "paired_b3_step_rs"):
-        c_c = np.ascontiguousarray(c, dtype=np.float32)
-        m_c = np.ascontiguousarray(m, dtype=bool)
-        g_c = np.ascontiguousarray(guide, dtype=np.float32) if guide is not None else None
-        o, compl, p = astroloom_rs.paired_b3_step_rs(c_c, m_c, int(step), bool(bilateral), g_c)
-        return np.asarray(o, dtype=np.float32), np.asarray(compl, dtype=np.float32), np.asarray(p, dtype=bool)
-
-    # Fallback NumPy
-    h, w = c.shape
-    out = np.zeros_like(c)
-    compl = np.zeros_like(c)
-    pair = np.zeros_like(m)
-    ctg_arr = c if guide is None else guide
-
-    for y in range(h):
-        for x in range(w):
-            if not m[y, x]:
-                continue
-            ctr = float(c[y, x])
-            ctg = float(ctg_arr[y, x])
-            mo, mo2, ma = 0.0, 0.0, 0.0
-            taps_g = []
-            for dy in range(-2, 3):
-                y1 = y + dy * step
-                y2 = y - dy * step
-                for dx in range(-2, 3):
-                    x1 = x + dx * step
-                    x2 = x - dx * step
-                    k = float(_B3K[dy + 2] * _B3K[dx + 2])
-                    if dy == 0 and dx == 0:
-                        g = 1.0
-                    else:
-                        ok1 = (0 <= y1 < h) and (0 <= x1 < w) and m[y1, x1]
-                        ok2 = (0 <= y2 < h) and (0 <= x2 < w) and m[y2, x2]
-                        g = 1.0 if (ok1 and ok2) else 0.0
-                    taps_g.append((dy, dx, k, g, y1, x1))
-                    if bilateral and g > 0:
-                        vg = float(ctg_arr[y1, x1])
-                        dl = vg - ctg
-                        mo += k * g * dl
-                        mo2 += k * g * dl * dl
-                        ma += k * g
-            if bilateral:
-                ma_safe = max(ma, 1e-20)
-                mean = mo / ma_safe
-                vv = max(mo2 / ma_safe - mean * mean, 1e-20)
-
-            num, den, ks, kn = 0.0, 0.0, 0.0, 0.0
-            for dy, dx, k, g, y1, x1 in taps_g:
-                if g <= 0:
-                    continue
-                v = float(c[y1, x1])
-                vg = float(ctg_arr[y1, x1])
-                if dy != 0 or dx != 0:
-                    kn += k * g
-                if bilateral:
-                    diff = ctg - vg
-                    wt = k * np.exp(-0.5 * diff * diff / vv)
-                else:
-                    wt = k
-                num += wt * (v - ctr)
-                den += wt
-                ks += k * g
-            out[y, x] = ctr + num / max(den, 1e-20)
-            compl[y, x] = ks
-            pair[y, x] = kn > 0
-
-    return out, compl, pair
-
-
 def _b3_normalized(a: np.ndarray, m: np.ndarray, step: int) -> np.ndarray:
     """
     Convolución separable B3 à-trous 2D normalizada por soporte observado:
     conv(a * m, step) / max(conv(m, step), 1e-20).
-    Acelerada por Rust con fallback separable en NumPy.
     """
-    if HAS_RUST and hasattr(astroloom_rs, "b3_normalized_rs"):
-        a_c = np.ascontiguousarray(a, dtype=np.float32)
-        m_c = np.ascontiguousarray(m, dtype=bool)
-        return np.asarray(astroloom_rs.b3_normalized_rs(a_c, m_c, int(step)), dtype=np.float32)
-
-    h, w = a.shape
-    step_i = int(step)
-
-    def conv_b3(src):
-        tmp = np.zeros_like(src)
-        for dy, ky in zip(range(-2, 3), _B3K):
-            yy = np.clip(np.arange(h) + dy * step_i, 0, h - 1)
-            valid_y = (np.arange(h) + dy * step_i >= 0) & (np.arange(h) + dy * step_i < h)
-            tmp[valid_y] += ky * src[yy[valid_y]]
-        out = np.zeros_like(src)
-        for dx, kx in zip(range(-2, 3), _B3K):
-            xx = np.clip(np.arange(w) + dx * step_i, 0, w - 1)
-            valid_x = (np.arange(w) + dx * step_i >= 0) & (np.arange(w) + dx * step_i < w)
-            out[:, valid_x] += kx * tmp[:, xx[valid_x]]
-        return out
-
-    ca = conv_b3(np.where(m, a, 0.0).astype(np.float32))
-    cm = conv_b3(m.astype(np.float32))
-    return ca / np.maximum(cm, 1e-20)
+    a_c = np.ascontiguousarray(a, dtype=np.float32)
+    m_c = np.ascontiguousarray(m, dtype=bool)
+    return np.asarray(astroloom_rs.b3_normalized_rs(a_c, m_c, int(step)), dtype=np.float32)
 
 
 def apply_wow_edge_aware(
@@ -2665,106 +1983,21 @@ def apply_wow_edge_aware(
     para mantener el limbo lunar limpio sin generar halos ni invertir estructuras sutiles.
     Acelerado 100% de forma nativa en Rust con Rayon.
     """
-    if HAS_RUST and hasattr(astroloom_rs, "apply_wow_edge_aware_rs"):
-        img_c = np.ascontiguousarray(image, dtype=np.float32)
-        lo, hi = completeness
-        res = astroloom_rs.apply_wow_edge_aware_rs(
-            img_c,
-            float(center_x),
-            float(center_y),
-            float(radius_min),
-            int(n_scales),
-            bool(guided),
-            float(lo),
-            float(hi),
-            float(blend_ratio),
-            bool(use_detail_rings)
-        )
-        return np.asarray(res, dtype=np.float32)
-
-    img = np.clip(np.asarray(image, dtype=np.float32), 0.0, 1.0)
-    if img.ndim == 3:
-        lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
-    else:
-        lum = img.copy()
-
-    h, w = lum.shape[:2]
-    y_coords, x_coords = np.indices((h, w), dtype=np.float32)
-    dist = np.hypot(x_coords - center_x, y_coords - center_y)
-    valid_mask = dist >= max(radius_min - 2.5, 0.0)
-
-    c = np.where(valid_mask, lum, 0.0).astype(np.float32)
-    out = np.zeros_like(c)
+    img_c = np.ascontiguousarray(image, dtype=np.float32)
     lo, hi = completeness
-
-    for s in range(n_scales):
-        step = 2 ** s
-        guide = _paired_b3_step(c, valid_mask, step)[0] if guided else None
-        nxt, compl, pair = _paired_b3_step(c, valid_mask, step, bilateral=True, guide=guide)
-        nxt = np.where(valid_mask, nxt, 0.0).astype(np.float32)
-
-        wave = np.where(valid_mask, c - nxt, 0.0).astype(np.float32)
-        eps_thresh = 8.0 * np.finfo(np.float32).eps * np.maximum(np.abs(c), np.abs(nxt))
-        wave[np.abs(wave) <= eps_thresh] = 0.0
-
-        local_power = _b3_normalized(wave * wave, valid_mask, step)
-        denom = np.sqrt(np.maximum(local_power, 1e-20))
-        g = np.where(valid_mask & (compl > 0), wave / denom, 0.0).astype(np.float32)
-
-        if s >= 3:
-            q = np.clip((compl - lo) / (hi - lo), 0.0, 1.0)
-            weight = (q * q * (3.0 - 2.0 * q) * valid_mask).astype(np.float32)
-        else:
-            weight = (valid_mask & (compl > 0)).astype(np.float32)
-
-        whole = valid_mask & (compl >= 0.999)
-        if whole.any():
-            g -= float(np.mean(g[whole], dtype=np.float64))
-
-        sigma_bg = float(min(150.0, max(32.0, 4.0 * step)))
-        bg_num = cv2.GaussianBlur(g * weight * pair, (0, 0), sigma_bg)
-        bg_den = cv2.GaussianBlur((weight * pair).astype(np.float32), (0, 0), sigma_bg)
-        local_bg = bg_num / np.maximum(bg_den, 1e-6)
-
-        g -= pair * local_bg
-        out += weight * g
-        c = nxt
-
-    raw_detail = np.where(valid_mask, out, 0.0).astype(np.float32)
-
-    # Normalización del detalle
-    if use_detail_rings:
-        rings_norm = display_detail_rings(
-            raw_detail,
-            valid_mask=valid_mask,
-            center_x=center_x,
-            center_y=center_y
-        )
-        norm_detail = rings_norm
-    else:
-        mad = float(1.4826 * np.median(np.abs(raw_detail[valid_mask] - np.median(raw_detail[valid_mask]))))
-        norm_detail = 0.5 + 0.5 * np.tanh(raw_detail / max(2.5 * mad, 1e-5))
-
-    blend = float(np.clip(blend_ratio, 0.0, 1.0))
-    if img.ndim == 3:
-        detail_3ch = np.repeat(norm_detail[..., None], 3, axis=2)
-        overlay_res = np.where(
-            img < 0.5,
-            2.0 * img * detail_3ch,
-            1.0 - 2.0 * (1.0 - img) * (1.0 - detail_3ch)
-        )
-        final = (1.0 - blend) * img + blend * overlay_res
-        final = np.where(valid_mask[..., None], final, 0.0)
-    else:
-        overlay_res = np.where(
-            lum < 0.5,
-            2.0 * lum * norm_detail,
-            1.0 - 2.0 * (1.0 - lum) * (1.0 - norm_detail)
-        )
-        final = (1.0 - blend) * lum + blend * overlay_res
-        final = np.where(valid_mask, final, 0.0)
-
-    return np.clip(final, 0.0, 1.0).astype(np.float32)
+    res = astroloom_rs.apply_wow_edge_aware_rs(
+        img_c,
+        float(center_x),
+        float(center_y),
+        float(radius_min),
+        int(n_scales),
+        bool(guided),
+        float(lo),
+        float(hi),
+        float(blend_ratio),
+        bool(use_detail_rings)
+    )
+    return np.asarray(res, dtype=np.float32)
 
 
 def compute_dark_structure_mask(
@@ -2913,20 +2146,6 @@ def apply_dark_structure_enhancement(
     return enhanced.astype(np.float32)
 
 
-def nafe_neighbourhood(n: int = 129) -> np.ndarray:
-    """
-    Vecindario difuso de NAFE (Druckmüller 2013, ApJS 207, 25, eq. 12-14).
-    Compuesto por 12 componentes gaussianas sigma_m = 2^(m/2) px (1.4 a 64 px).
-    """
-    if n % 2 != 1:
-        raise ValueError("n debe ser impar")
-    k = np.arange(n) - n // 2
-    r2 = (k[:, None] ** 2 + k[None, :] ** 2).astype(np.float64)
-    sig = 2.0 ** (np.arange(1, 13) / 2.0)
-    g = sum(np.exp(-0.5 * r2 / (s ** 2)) / (2.0 * np.pi * np.sqrt(s)) for s in sig)
-    return (g * (2.0 * np.pi / np.sum(sig ** -0.5))).astype(np.float32)
-
-
 def apply_nafe(
     image: np.ndarray,
     center_x: float,
@@ -2944,124 +2163,19 @@ def apply_nafe(
     calculada de forma acelerada mediante niveles de intensidad y convoluciones FFT 2D.
     Acelerado nativamente en Rust con Rayon y realfft.
     """
-    if HAS_RUST and hasattr(astroloom_rs, "apply_nafe_rs"):
-        img_c = np.ascontiguousarray(image, dtype=np.float32)
-        res = astroloom_rs.apply_nafe_rs(
-            img_c,
-            float(center_x),
-            float(center_y),
-            float(radius_min),
-            float(sigma) if sigma is not None and sigma > 0 else None,
-            int(n),
-            float(level_step),
-            float(blend_ratio),
-            bool(use_overlay)
-        )
-        return np.asarray(res, dtype=np.float32)
-
-    from scipy import fft as sfft
-    from scipy.special import ndtr
-
-    img = np.clip(np.asarray(image, dtype=np.float32), 0.0, 1.0)
-    if img.ndim == 3:
-        lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
-    else:
-        lum = img.copy()
-
-    h, w = lum.shape[:2]
-    y_coords, x_coords = np.indices((h, w), dtype=np.float32)
-    dist = np.hypot(x_coords - center_x, y_coords - center_y)
-    m = dist >= max(radius_min - 2.5, 0.0)
-
-    if not m.any():
-        return img.copy()
-
-    # Si sigma no se proporciona, estimar a partir del piso de ruido en la corona lejana
-    if sigma is None or sigma <= 0:
-        far_r = np.percentile(dist[m], 85.0)
-        sky_samples = lum[dist >= far_r]
-        if sky_samples.size > 50:
-            med_sky = float(np.median(sky_samples))
-            mad_sky = float(1.4826 * np.median(np.abs(sky_samples - med_sky)))
-            sigma = max(12.0 * mad_sky, 0.02)
-        else:
-            sigma = 0.035
-
-    half = n // 2
-    a0 = np.where(m, lum, 0.0).astype(np.float32)
-    mf = m.astype(np.float32)
-    ph = sfft.next_fast_len(h + n - 1, real=True)
-    pw = sfft.next_fast_len(w + n - 1, real=True)
-    kf = sfft.rfft2(nafe_neighbourhood(n), s=(ph, pw), workers=-1)
-
-    def conv(x):
-        y = sfft.irfft2(sfft.rfft2(x, s=(ph, pw), workers=-1) * kf, s=(ph, pw), workers=-1)
-        return y[half:half + h, half:half + w]
-
-    norm = np.maximum(conv(mf), 1e-12)
-    v = a0[m].astype(np.float64)
-    lo, hi = float(v.min()), float(v.max())
-    t = [lo - sigma]
-    while t[-1] < hi or len(t) < 2:
-        t.append(t[-1] + max(sigma / 2.0, level_step * (t[-1] - lo)))
-    t = np.asarray(t)
-
-    idx = np.flatnonzero(m.ravel())
-    k = np.clip(np.searchsorted(t, v, side="right") - 1, 0, len(t) - 2)
-    order = np.argsort(k, kind="stable")
-    idx, v_ord, k_ord = idx[order], v[order], k[order]
-    cuts = np.searchsorted(k_ord, np.arange(len(t)))
-    out = np.full(h * w, np.nan, dtype=np.float32)
-
-    def level(tj):
-        return (conv(mf * ndtr((tj - a0) / sigma).astype(np.float32)) / norm).ravel()
-
-    prev = None
-    for j in range(1, len(t)):
-        lo_j, hi_j = cuts[j - 1], cuts[j]
-        nxt = cuts[j + 1] if j + 1 < len(t) else hi_j
-        if hi_j == lo_j and nxt == hi_j:
-            prev = None
-            continue
-        if prev is None:
-            prev = level(t[j - 1])
-        cur = level(t[j])
-        if hi_j > lo_j:
-            p = idx[lo_j:hi_j]
-            f = (v_ord[lo_j:hi_j] - t[j - 1]) / (t[j] - t[j - 1])
-            out[p] = prev[p] + f * (cur[p] - prev[p])
-        prev = cur
-
-    equalized = np.clip(np.nan_to_num(out.reshape(h, w), nan=0.5), 0.0, 1.0).astype(np.float32)
-
-    blend = float(np.clip(blend_ratio, 0.0, 1.0))
-    if use_overlay:
-        if img.ndim == 3:
-            eq_3ch = np.repeat(equalized[..., None], 3, axis=2)
-            overlay_res = np.where(
-                img < 0.5,
-                2.0 * img * eq_3ch,
-                1.0 - 2.0 * (1.0 - img) * (1.0 - eq_3ch)
-            )
-            final = (1.0 - blend) * img + blend * overlay_res
-            final = np.where(m[..., None], final, 0.0)
-        else:
-            overlay_res = np.where(
-                lum < 0.5,
-                2.0 * lum * equalized,
-                1.0 - 2.0 * (1.0 - lum) * (1.0 - equalized)
-            )
-            final = (1.0 - blend) * lum + blend * overlay_res
-            final = np.where(m, final, 0.0)
-    else:
-        if img.ndim == 3:
-            final = (1.0 - blend) * img + blend * np.repeat(equalized[..., None], 3, axis=2)
-            final = np.where(m[..., None], final, 0.0)
-        else:
-            final = (1.0 - blend) * lum + blend * equalized
-            final = np.where(m, final, 0.0)
-
-    return np.clip(final, 0.0, 1.0).astype(np.float32)
+    img_c = np.ascontiguousarray(image, dtype=np.float32)
+    res = astroloom_rs.apply_nafe_rs(
+        img_c,
+        float(center_x),
+        float(center_y),
+        float(radius_min),
+        float(sigma) if sigma is not None and sigma > 0 else None,
+        int(n),
+        float(level_step),
+        float(blend_ratio),
+        bool(use_overlay)
+    )
+    return np.asarray(res, dtype=np.float32)
 
 
 def export_coronal_layers_psd(
@@ -3277,21 +2391,16 @@ def export_coronal_layers_psd(
     _log(f"[PSD CORONAL] Guardando {len(layer_records)} capas en disco...")
     os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
 
-    if HAS_RUST and hasattr(astroloom_rs, "write_psd_file"):
-        comp_contiguous = _prep_rgb(comp_img)
-        astroloom_rs.write_psd_file(
-            filepath,
-            w,
-            h,
-            depth,
-            comp_contiguous,
-            layer_records,
-            None
-        )
-    else:
-        # Fallback a core.psd_export si está disponible
-        from core.psd_export import export_developer_psd
-        export_developer_psd(filepath, comp_img, base_rgb)
+    comp_contiguous = _prep_rgb(comp_img)
+    astroloom_rs.write_psd_file(
+        filepath,
+        w,
+        h,
+        depth,
+        comp_contiguous,
+        layer_records,
+        None
+    )
 
     file_size_mb = os.path.getsize(filepath) / (1024.0 * 1024.0)
     desc = f"PSD Multicapa ({len(layer_records)} capas coronales, {depth}-bit, {file_size_mb:.1f} MB)"

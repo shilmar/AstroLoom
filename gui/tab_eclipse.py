@@ -3512,10 +3512,6 @@ class EclipseTab(QWidget):
             self.log(f"ERROR al guardar imagen: {e}")
             QMessageBox.critical(self, "Error de Exportación", f"No se pudo guardar la imagen:\n{e}")
 
-    def _on_save_tiff_clicked(self, bit_depth: int = 16):
-        """Compatibilidad hacia atrás con llamadas directas."""
-        self._on_save_image_clicked()
-
     def _on_export_web_clicked(self):
         """Abre el diálogo modal de exportación optimizada para Web y Redes Sociales."""
         img = self._get_best_current_image()

@@ -1402,14 +1402,6 @@ class EclipseCollageTab(QWidget):
         else:
             self._do_export_flat(filepath, selected, ext, is_32bit=is_32bit)
 
-    def _export_psd_clicked(self):
-        """Alias de compatibilidad para exportación a PSD."""
-        self._on_save_collage_clicked()
-
-    def _export_flat_clicked(self):
-        """Alias de compatibilidad para exportación plana (TIFF/JPG)."""
-        self._on_save_collage_clicked()
-
     def _on_export_web_clicked(self):
         """Abre inmediatamente el diálogo modal de exportación web mientras el collage se genera en segundo plano."""
         selected = self._get_selected_frames()
