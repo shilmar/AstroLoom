@@ -1,7 +1,11 @@
+use num_complex::Complex;
 use numpy::ndarray::{Array2, Array3};
 use numpy::{IntoPyArray, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3};
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use realfft::RealFftPlanner;
+use rustfft::FftPlanner;
+use std::sync::Arc;
 
 // ============================================================================
 // DECONVOLUCIÓN ÓPTICA REGULARIZADA Y MODELADO PSF (core/deconvolution.py)
@@ -112,6 +116,218 @@ fn convolve2d_reflect(
                 }
             }
         });
+}
+
+fn next_fast_len_235(target: usize, require_even: bool) -> usize {
+    let mut n = target.max(2);
+    if require_even && !n.is_multiple_of(2) {
+        n += 1;
+    }
+    loop {
+        let mut x = n;
+        for &p in &[2usize, 3, 5] {
+            while x.is_multiple_of(p) {
+                x /= p;
+            }
+        }
+        if x == 1 {
+            return n;
+        }
+        n += if require_even { 2 } else { 1 };
+    }
+}
+
+fn transpose_complex_blocked(
+    src: &[Complex<f32>],
+    dst: &mut [Complex<f32>],
+    rows: usize,
+    cols: usize,
+) {
+    const BLK: usize = 32;
+    dst.par_chunks_mut(rows)
+        .enumerate()
+        .for_each(|(c, dst_col)| {
+            let mut r = 0;
+            while r < rows {
+                let r_end = (r + BLK).min(rows);
+                for rr in r..r_end {
+                    dst_col[rr] = src[rr * cols + c];
+                }
+                r = r_end;
+            }
+        });
+}
+
+struct Fft2dConvolver {
+    h: usize,
+    w: usize,
+    pad: usize,
+    ph: usize,
+    pw: usize,
+    pw_c: usize,
+    r2c: Arc<dyn realfft::RealToComplex<f32>>,
+    c2r: Arc<dyn realfft::ComplexToReal<f32>>,
+    fft_col: Arc<dyn rustfft::Fft<f32>>,
+    ifft_col: Arc<dyn rustfft::Fft<f32>>,
+    psf_spec: Vec<Complex<f32>>,
+    real_buf: Vec<f32>,
+    freq_row: Vec<Complex<f32>>,
+    freq_col: Vec<Complex<f32>>,
+}
+
+impl Fft2dConvolver {
+    fn new(h: usize, w: usize, psf: &[f32], ksize: usize) -> Self {
+        let pad = ksize / 2;
+        let ph = next_fast_len_235(h + 2 * pad, false);
+        let pw = next_fast_len_235(w + 2 * pad, true);
+        let pw_c = pw / 2 + 1;
+
+        let mut r_planner = RealFftPlanner::<f32>::new();
+        let r2c = r_planner.plan_fft_forward(pw);
+        let c2r = r_planner.plan_fft_inverse(pw);
+
+        let mut c_planner = FftPlanner::<f32>::new();
+        let fft_col = c_planner.plan_fft_forward(ph);
+        let ifft_col = c_planner.plan_fft_inverse(ph);
+
+        // Construir PSF en formato wrap-around centrada en (0, 0) y pre-escalar por 1/(ph*pw)
+        let mut psf_pad = vec![0.0f32; ph * pw];
+        let rad_i = pad as isize;
+        let inv_norm = 1.0f32 / ((ph * pw) as f32);
+        for ky in 0..ksize {
+            let dy = (ky as isize - rad_i).rem_euclid(ph as isize) as usize;
+            for kx in 0..ksize {
+                let dx = (kx as isize - rad_i).rem_euclid(pw as isize) as usize;
+                psf_pad[dy * pw + dx] = psf[ky * ksize + kx] * inv_norm;
+            }
+        }
+
+        let mut freq_row = vec![Complex::new(0.0f32, 0.0f32); ph * pw_c];
+        let mut psf_spec = vec![Complex::new(0.0f32, 0.0f32); pw_c * ph];
+
+        // R2C por filas
+        freq_row
+            .par_chunks_mut(pw_c)
+            .zip(psf_pad.par_chunks_mut(pw))
+            .for_each(|(out_r, in_r)| {
+                let mut scratch = r2c.make_scratch_vec();
+                let _ = r2c.process_with_scratch(in_r, out_r, &mut scratch);
+            });
+        // Transponer (ph, pw_c) -> (pw_c, ph) y FFT por columnas
+        transpose_complex_blocked(&freq_row, &mut psf_spec, ph, pw_c);
+        psf_spec.par_chunks_mut(ph).for_each(|col| {
+            let mut scratch = vec![Complex::new(0.0f32, 0.0f32); fft_col.get_inplace_scratch_len()];
+            fft_col.process_with_scratch(col, &mut scratch);
+        });
+
+        Self {
+            h,
+            w,
+            pad,
+            ph,
+            pw,
+            pw_c,
+            r2c,
+            c2r,
+            fft_col,
+            ifft_col,
+            psf_spec,
+            real_buf: vec![0.0f32; ph * pw],
+            freq_row,
+            freq_col: vec![Complex::new(0.0f32, 0.0f32); pw_c * ph],
+        }
+    }
+
+    fn convolve(&mut self, src: &[f32], dst: &mut [f32], conjugate_psf: bool) {
+        let h = self.h;
+        let w = self.w;
+        let pad = self.pad;
+        let pad_i = pad as isize;
+        let ph = self.ph;
+        let pw = self.pw;
+        let pw_c = self.pw_c;
+
+        // 1. Rellenar buffer real con frontera reflectiva (idéntica a convolve2d_reflect)
+        self.real_buf
+            .par_chunks_mut(pw)
+            .enumerate()
+            .for_each(|(py, row_out)| {
+                if py < h + 2 * pad {
+                    let sy = reflect_index(py as isize - pad_i, h);
+                    let src_row = &src[sy * w..(sy + 1) * w];
+                    for px in 0..pad {
+                        row_out[px] = src_row[reflect_index(px as isize - pad_i, w)];
+                    }
+                    row_out[pad..pad + w].copy_from_slice(src_row);
+                    let x_end = (w + 2 * pad).min(pw);
+                    for px in (pad + w)..x_end {
+                        row_out[px] = src_row[reflect_index(px as isize - pad_i, w)];
+                    }
+                    if x_end < pw {
+                        row_out[x_end..pw].fill(0.0);
+                    }
+                } else {
+                    row_out.fill(0.0);
+                }
+            });
+
+        // 2. R2C por filas
+        let r2c = &self.r2c;
+        self.freq_row
+            .par_chunks_mut(pw_c)
+            .zip(self.real_buf.par_chunks_mut(pw))
+            .for_each(|(out_r, in_r)| {
+                let mut scratch = r2c.make_scratch_vec();
+                let _ = r2c.process_with_scratch(in_r, out_r, &mut scratch);
+            });
+
+        // 3. Transponer (ph, pw_c) -> (pw_c, ph), FFT columnas, producto espectral, IFFT columnas
+        transpose_complex_blocked(&self.freq_row, &mut self.freq_col, ph, pw_c);
+        let fft_col = &self.fft_col;
+        let ifft_col = &self.ifft_col;
+        self.freq_col
+            .par_chunks_mut(ph)
+            .zip(self.psf_spec.par_chunks(ph))
+            .for_each(|(col, k_col)| {
+                let scratch_len = fft_col
+                    .get_inplace_scratch_len()
+                    .max(ifft_col.get_inplace_scratch_len());
+                let mut scratch = vec![Complex::new(0.0f32, 0.0f32); scratch_len];
+                fft_col.process_with_scratch(col, &mut scratch);
+                if conjugate_psf {
+                    for (v, &kv) in col.iter_mut().zip(k_col.iter()) {
+                        *v *= kv.conj();
+                    }
+                } else {
+                    for (v, &kv) in col.iter_mut().zip(k_col.iter()) {
+                        *v *= kv;
+                    }
+                }
+                ifft_col.process_with_scratch(col, &mut scratch);
+            });
+
+        // 4. Transponer (pw_c, ph) -> (ph, pw_c) y C2R por filas (forzando parte imaginaria 0 en DC/Nyquist)
+        transpose_complex_blocked(&self.freq_col, &mut self.freq_row, pw_c, ph);
+        let c2r = &self.c2r;
+        self.freq_row
+            .par_chunks_mut(pw_c)
+            .zip(self.real_buf.par_chunks_mut(pw))
+            .for_each(|(in_r, out_r)| {
+                in_r[0].im = 0.0;
+                in_r[pw_c - 1].im = 0.0;
+                let mut scratch = c2r.make_scratch_vec();
+                let _ = c2r.process_with_scratch(in_r, out_r, &mut scratch);
+            });
+
+        // 5. Extraer región válida [pad..pad+h, pad..pad+w]
+        let real_buf = &self.real_buf;
+        dst.par_chunks_mut(w)
+            .enumerate()
+            .for_each(|(y, row_dst)| {
+                let src_start = (y + pad) * pw + pad;
+                row_dst.copy_from_slice(&real_buf[src_start..src_start + w]);
+            });
+    }
 }
 
 #[pyfunction]
@@ -342,10 +558,19 @@ pub fn richardson_lucy_deconv_rs<'py>(
         let has_deringing = star_mask_flat.is_some() && floor_flat.is_some();
         let sm_slice = star_mask_flat.as_deref();
         let df_slice = floor_flat.as_deref();
+        let mut fft_conv = if ksize >= 11 && h >= 16 && w >= 16 {
+            Some(Fft2dConvolver::new(h, w, &psf_flat, ksize))
+        } else {
+            None
+        };
 
         for _it in 0..iterations {
             // 1. Convolución de est_buf con la PSF -> conv_buf
-            convolve2d_reflect(&est_buf, &mut conv_buf, h, w, &psf_flat, ksize);
+            if let Some(ref mut fc) = fft_conv {
+                fc.convolve(&est_buf, &mut conv_buf, false);
+            } else {
+                convolve2d_reflect(&est_buf, &mut conv_buf, h, w, &psf_flat, ksize);
+            }
 
             // 2. Fusión de ratio: conv_buf = work / (conv + 1e-6)
             conv_buf
@@ -361,7 +586,11 @@ pub fn richardson_lucy_deconv_rs<'py>(
                 });
 
             // 3. Convolución del ratio con la PSF invertida -> b_proj_buf
-            convolve2d_reflect(&conv_buf, &mut b_proj_buf, h, w, &psf_flipped, ksize);
+            if let Some(ref mut fc) = fft_conv {
+                fc.convolve(&conv_buf, &mut b_proj_buf, true);
+            } else {
+                convolve2d_reflect(&conv_buf, &mut b_proj_buf, h, w, &psf_flipped, ksize);
+            }
 
             // 4. Actualización fusionada: amortiguación bayesiana + clamping + deringing
             est_buf

@@ -456,7 +456,13 @@ def render_single_tile(
         return None
 
     starless = _crop_aligned_slice(ctx.image_starless, padded_rect, ctx.full_shape)
-    stars = None if pre_stars is not None else _crop_aligned_slice(ctx.image_stars, padded_rect, ctx.full_shape)
+    need_stars_for_deconv = (
+        pre_spatial is None
+        and ctx.image_stars is not None
+        and ctx.state.deconv_iterations > 0
+        and ctx.state.deconv_scope_idx in (1, 2)
+    )
+    stars = None if (pre_stars is not None and not need_stars_for_deconv) else _crop_aligned_slice(ctx.image_stars, padded_rect, ctx.full_shape)
 
     # Skip heavy starless preproc completely when spatial milestone hits
     if pre_spatial is not None:
