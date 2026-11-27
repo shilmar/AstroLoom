@@ -16,6 +16,7 @@ Implementa:
 """
 
 import cv2
+import threading
 import time
 import numpy as np
 from typing import Optional, List, Dict, Any, Tuple, Callable
@@ -26,6 +27,8 @@ try:
     HAS_RUST = True
 except ImportError:
     HAS_RUST = False
+
+_OPENCL_LOCK = threading.Lock()
 
 
 def generate_moffat_psf(
@@ -281,7 +284,8 @@ def richardson_lucy_deconvolve(
     target_scope: str = "all",
     progress_callback: Optional[Callable[[int, str], None]] = None,
     abort_flag: Optional[Callable[[], bool]] = None,
-    use_gpu: bool = True
+    use_gpu: bool = True,
+    global_sigma_noise: Optional[float] = None,
 ) -> np.ndarray:
     """
     Aplica deconvolución de Richardson-Lucy (R-L) con regularización bayesiana y protección antianillos.
@@ -304,7 +308,14 @@ def richardson_lucy_deconvolve(
     psf_flipped = cv2.flip(psf_kernel, -1)
 
     # 0. Configuración de aceleración GPU (OpenCL Transparent API / UMat)
+    # OpenCV UMat no es thread-safe entre hilos concurrentes: si otro hilo ya ocupa OpenCL
+    # y disponemos del solver nativo Rust (Rayon), caemos sin bloqueo al solver Rust.
+    opencl_lock_acquired = False
     use_opencl = use_gpu and is_gpu_enabled() and is_opencl_available()
+    if use_opencl:
+        opencl_lock_acquired = _OPENCL_LOCK.acquire(blocking=not HAS_RUST)
+        if not opencl_lock_acquired:
+            use_opencl = False
     psf_umat = None
     psf_flip_umat = None
 
@@ -321,10 +332,13 @@ def richardson_lucy_deconvolve(
     # 2. Estimación del nivel de ruido del sensor mediante MAD (Median Absolute Deviation)
     # en altas frecuencias para la amortiguación bayesiana
     if damping > 0.0:
-        med_smooth = cv2.medianBlur((work_channel * 255.0).astype(np.uint8), 3).astype(np.float32) / 255.0
-        high_freq = np.abs(work_channel - med_smooth)
-        hf_sample = high_freq[::4, ::4] if high_freq.size >= 16384 else high_freq
-        sigma_noise = float(1.4826 * np.median(hf_sample))
+        if global_sigma_noise is not None:
+            sigma_noise = float(global_sigma_noise)
+        else:
+            med_smooth = cv2.medianBlur((work_channel * 255.0).astype(np.uint8), 3).astype(np.float32) / 255.0
+            high_freq = np.abs(work_channel - med_smooth)
+            hf_sample = high_freq[::4, ::4] if high_freq.size >= 16384 else high_freq
+            sigma_noise = float(1.4826 * np.median(hf_sample))
         noise_threshold_sq = float((damping * max(0.002, sigma_noise)) ** 2)
     else:
         noise_threshold_sq = 0.0
@@ -400,54 +414,60 @@ def richardson_lucy_deconvolve(
             use_rust_engine = False
 
     if not use_rust_engine:
-        for it in range(iterations):
-            if abort_flag and abort_flag():
-                raise InterruptedError("Deconvolución cancelada por el usuario.")
+        try:
+            for it in range(iterations):
+                if abort_flag and abort_flag():
+                    raise InterruptedError("Deconvolución cancelada por el usuario.")
 
-            if progress_callback and (it % 2 == 0 or it == iterations - 1):
-                pct = int(((it + 1) / float(iterations)) * 100.0)
-                progress_callback(pct, f"Deconvolución Richardson-Lucy: iteración {it + 1}/{iterations}")
+                if progress_callback and (it % 2 == 0 or it == iterations - 1):
+                    pct = int(((it + 1) / float(iterations)) * 100.0)
+                    progress_callback(pct, f"Deconvolución Richardson-Lucy: iteración {it + 1}/{iterations}")
 
-            # Convolución y corrección persistente en VRAM (OpenCL UMat con escalares directos)
-            if use_opencl:
-                try:
-                    u_conv = cv2.filter2D(u_est, -1, psf_umat, borderType=cv2.BORDER_REFLECT)
-                    u_ratio = cv2.divide(u_work, cv2.add(u_conv, 1e-6))
-                    u_bproj = cv2.filter2D(u_ratio, -1, psf_flip_umat, borderType=cv2.BORDER_REFLECT)
+                # Convolución y corrección persistente en VRAM (OpenCL UMat con escalares directos)
+                if use_opencl:
+                    try:
+                        u_conv = cv2.filter2D(u_est, -1, psf_umat, borderType=cv2.BORDER_REFLECT)
+                        u_ratio = cv2.divide(u_work, cv2.add(u_conv, 1e-6))
+                        u_bproj = cv2.filter2D(u_ratio, -1, psf_flip_umat, borderType=cv2.BORDER_REFLECT)
+                        if noise_threshold_sq > 0.0:
+                            u_delta = cv2.subtract(u_bproj, 1.0)
+                            u_delta_sq = cv2.multiply(u_delta, u_delta)
+                            u_denom = cv2.add(u_delta_sq, float(noise_threshold_sq + 1e-7))
+                            u_damp_w = cv2.divide(u_delta_sq, u_denom)
+                            u_update = cv2.add(cv2.multiply(u_delta, u_damp_w), 1.0)
+                        else:
+                            u_update = u_bproj
+                        u_est = cv2.multiply(u_est, u_update)
+                        u_est = cv2.min(cv2.max(u_est, 0.0), 1.0)
+                        if u_star_mask is not None and u_deringing_floor is not None:
+                            u_clamped = cv2.max(u_est, u_deringing_floor)
+                            u_est = cv2.add(cv2.multiply(u_clamped, u_star_mask), cv2.multiply(u_est, u_inv_star_mask))
+                    except Exception:
+                        use_opencl = False
+                        est = u_est.get() if u_est is not None else work_channel.copy()
+
+                if not use_opencl:
+                    conv = cv2.filter2D(est, -1, psf_kernel, borderType=cv2.BORDER_REFLECT)
+                    ratio = work_channel / (conv + 1e-6)
+                    b_proj = cv2.filter2D(ratio, -1, psf_flipped, borderType=cv2.BORDER_REFLECT)
+                    delta = b_proj - 1.0
                     if noise_threshold_sq > 0.0:
-                        u_delta = cv2.subtract(u_bproj, 1.0)
-                        u_delta_sq = cv2.multiply(u_delta, u_delta)
-                        u_denom = cv2.add(u_delta_sq, float(noise_threshold_sq + 1e-7))
-                        u_damp_w = cv2.divide(u_delta_sq, u_denom)
-                        u_update = cv2.add(cv2.multiply(u_delta, u_damp_w), 1.0)
+                        delta_sq = delta ** 2
+                        damp_weight = delta_sq / (delta_sq + noise_threshold_sq + 1e-7)
+                        update_factor = 1.0 + delta * damp_weight
                     else:
-                        u_update = u_bproj
-                    u_est = cv2.multiply(u_est, u_update)
-                    u_est = cv2.min(cv2.max(u_est, 0.0), 1.0)
-                    if u_star_mask is not None and u_deringing_floor is not None:
-                        u_clamped = cv2.max(u_est, u_deringing_floor)
-                        u_est = cv2.add(cv2.multiply(u_clamped, u_star_mask), cv2.multiply(u_est, u_inv_star_mask))
-                except Exception:
-                    use_opencl = False
-                    est = u_est.get() if u_est is not None else work_channel.copy()
+                        update_factor = b_proj
+                    est = np.clip(est * update_factor, 0.0, 1.0)
+                    if bright_star_mask is not None and deringing_floor is not None:
+                        est = np.where(bright_star_mask > 0.1, np.maximum(est, deringing_floor), est)
 
-            if not use_opencl:
-                conv = cv2.filter2D(est, -1, psf_kernel, borderType=cv2.BORDER_REFLECT)
-                ratio = work_channel / (conv + 1e-6)
-                b_proj = cv2.filter2D(ratio, -1, psf_flipped, borderType=cv2.BORDER_REFLECT)
-                delta = b_proj - 1.0
-                if noise_threshold_sq > 0.0:
-                    delta_sq = delta ** 2
-                    damp_weight = delta_sq / (delta_sq + noise_threshold_sq + 1e-7)
-                    update_factor = 1.0 + delta * damp_weight
-                else:
-                    update_factor = b_proj
-                est = np.clip(est * update_factor, 0.0, 1.0)
-                if bright_star_mask is not None and deringing_floor is not None:
-                    est = np.where(bright_star_mask > 0.1, np.maximum(est, deringing_floor), est)
-
-        if use_opencl:
-            est = u_est.get()
+            if use_opencl:
+                est = u_est.get()
+        finally:
+            if opencl_lock_acquired:
+                _OPENCL_LOCK.release()
+    elif opencl_lock_acquired:
+        _OPENCL_LOCK.release()
 
     # 5. Filtrado por ámbito (Solo estrellas / Solo nebulosa) si corresponde
     if target_scope in ["stars_only", "background_only"] and star_mask is not None:

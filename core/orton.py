@@ -41,7 +41,8 @@ def apply_astronomical_orton(
     tint_strength: float = 0.40,
     blend_mode: str = "soft_light",
     sky_mask: Optional[np.ndarray] = None,
-    is_starless: bool = False
+    is_starless: bool = False,
+    ref_min_dim: Optional[int] = None,
 ) -> np.ndarray:
     """
     Aplica el Efecto Orton Astronómico y Glow de Polvo Galáctico sobre una imagen RGB en float32 [0.0, 1.0].
@@ -76,7 +77,8 @@ def apply_astronomical_orton(
     else:
         # Supresión de picos puntuales estelares mediante filtro morfológico de apertura
         # Kernel elíptico adaptativo según resolución (mínimo 3, máximo 21)
-        k_size = max(3, int(round(min(h, w) * 0.005)) | 1)
+        base_dim = int(ref_min_dim) if ref_min_dim is not None else min(h, w)
+        k_size = max(3, int(round(base_dim * 0.005)) | 1)
         k_size = min(k_size, 21)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
         diffuse_luma = cv2.morphologyEx(luma, cv2.MORPH_OPEN, kernel)

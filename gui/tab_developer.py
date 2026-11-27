@@ -122,6 +122,7 @@ from gui.developer.panels.panel_sharpening import SharpeningPanel
 from gui.developer.developer_state import DeveloperState
 from gui.developer.pipeline import ResolutionPyramid, apply_developer_pipeline
 from gui.developer.async_worker import AsyncPipelineManager
+from gui.developer.tile_engine import AsyncTileManager
 from core.buffer_cache import PipelineBufferCache
 from core.display_transfer import (
     compute_combined_stf_lut,
@@ -286,7 +287,7 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
 
         self._pan_refine_timer = QTimer(self)
         self._pan_refine_timer.setSingleShot(True)
-        self._pan_refine_timer.setInterval(180)
+        self._pan_refine_timer.setInterval(50)
         self._pan_refine_timer.timeout.connect(self._refine_pan_crop)
 
         self._hist_throttle_timer = QTimer(self)
@@ -350,6 +351,10 @@ class DeveloperTab(RenderMixin, HistoryPresetsMixin, ProjectIOMixin, CanvasTools
         self.async_pipeline = AsyncPipelineManager(self)
         self.async_pipeline.preview_ready.connect(self._on_async_preview_ready)
         self.async_pipeline.pipeline_failed.connect(self._on_async_pipeline_failed)
+
+        # Motor asíncrono de teselas fijas (512x512) con caché LRU y prefetch para Zoom 1:1
+        self.tile_manager = AsyncTileManager(self)
+        self.tile_manager.mosaic_ready.connect(self._on_tile_mosaic_ready)
 
         # Memoria de tamaños para paneles ocultables 
         self._last_left_panel_width = 380

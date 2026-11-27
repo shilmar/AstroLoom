@@ -9,6 +9,7 @@ import copy
 import base64
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any, Tuple, Union, Callable
+import threading
 import cv2
 import numpy as np
 from core.masking import (
@@ -826,7 +827,8 @@ def compute_layer_mask(
             round(float(layer.refine_strength), 4),
             getattr(layer, "refine_radius", None),
         )
-        cached_ref = _REFINED_MASK_CACHE.get(ref_key)
+        with _MASK_CACHE_LOCK:
+            cached_ref = _REFINED_MASK_CACHE.get(ref_key)
         if cached_ref is not None:
             m = cached_ref
         else:
@@ -835,9 +837,10 @@ def compute_layer_mask(
                 strength=layer.refine_strength,
                 radius=getattr(layer, "refine_radius", None)
             )
-            if len(_REFINED_MASK_CACHE) >= _MAX_REFINED_MASK_CACHE:
-                _REFINED_MASK_CACHE.pop(next(iter(_REFINED_MASK_CACHE)))
-            _REFINED_MASK_CACHE[ref_key] = m
+            with _MASK_CACHE_LOCK:
+                if len(_REFINED_MASK_CACHE) >= _MAX_REFINED_MASK_CACHE:
+                    _REFINED_MASK_CACHE.pop(next(iter(_REFINED_MASK_CACHE)), None)
+                _REFINED_MASK_CACHE[ref_key] = m
 
     return np.clip(m, 0.0, 1.0).astype(np.float32)
 
@@ -1411,6 +1414,7 @@ def apply_blend_mode(
 
 
 # --- Caché de Composición Incremental (Sub-composite Cache) y Máscaras Refinadas ---
+_MASK_CACHE_LOCK = threading.Lock()
 _SUBCOMPOSITE_CACHE: Dict[Tuple, np.ndarray] = {}
 _MAX_SUBCOMPOSITE_CACHE = 64
 _REFINED_MASK_CACHE: Dict[Tuple, np.ndarray] = {}
@@ -1434,8 +1438,9 @@ def _compute_mask_roi(mask_2d: np.ndarray, pad: int) -> Optional[Tuple[int, int,
 
 def clear_subcomposite_cache() -> None:
     """Vacía la caché de composiciones parciales de capas y máscaras refinadas."""
-    _SUBCOMPOSITE_CACHE.clear()
-    _REFINED_MASK_CACHE.clear()
+    with _MASK_CACHE_LOCK:
+        _SUBCOMPOSITE_CACHE.clear()
+        _REFINED_MASK_CACHE.clear()
 
 def _compute_subcomposite_key(
     composite_image: np.ndarray,
@@ -1571,8 +1576,10 @@ def apply_all_mask_layers(
             ck = _compute_subcomposite_key(
                 composite_image, mask_layers[cut:], master_sky_mask, starless_image, stars_image, crop_rect, fast_draft
             )
-            if ck in _SUBCOMPOSITE_CACHE:
-                canvas = _SUBCOMPOSITE_CACHE[ck].copy()
+            with _MASK_CACHE_LOCK:
+                cached_sub = _SUBCOMPOSITE_CACHE.get(ck)
+            if cached_sub is not None:
+                canvas = cached_sub.copy()
                 start_cut = cut
                 break
     if canvas is None:
@@ -1614,10 +1621,11 @@ def apply_all_mask_layers(
             ck = _compute_subcomposite_key(
                 composite_image, mask_layers[i + 1:], master_sky_mask, starless_image, stars_image, crop_rect, fast_draft
             )
-            if ck not in _SUBCOMPOSITE_CACHE:
-                if len(_SUBCOMPOSITE_CACHE) >= _MAX_SUBCOMPOSITE_CACHE:
-                    _SUBCOMPOSITE_CACHE.pop(next(iter(_SUBCOMPOSITE_CACHE)))
-                _SUBCOMPOSITE_CACHE[ck] = canvas.copy()
+            with _MASK_CACHE_LOCK:
+                if ck not in _SUBCOMPOSITE_CACHE:
+                    if len(_SUBCOMPOSITE_CACHE) >= _MAX_SUBCOMPOSITE_CACHE:
+                        _SUBCOMPOSITE_CACHE.pop(next(iter(_SUBCOMPOSITE_CACHE)), None)
+                    _SUBCOMPOSITE_CACHE[ck] = canvas.copy()
 
         layer = mask_layers[i]
         if not layer.enabled:
@@ -1923,7 +1931,8 @@ def get_canvas_below_layer(
     ck = _compute_subcomposite_key(
         composite_image, layers_below, master_sky_mask, starless_image, stars_image, crop_rect
     )
-    cached = _SUBCOMPOSITE_CACHE.get(ck)
+    with _MASK_CACHE_LOCK:
+        cached = _SUBCOMPOSITE_CACHE.get(ck)
     if cached is not None:
         return cached
 
@@ -1936,9 +1945,10 @@ def get_canvas_below_layer(
         crop_rect=crop_rect,
         full_image_shape=full_image_shape
     )
-    if len(_SUBCOMPOSITE_CACHE) >= _MAX_SUBCOMPOSITE_CACHE:
-        _SUBCOMPOSITE_CACHE.pop(next(iter(_SUBCOMPOSITE_CACHE)))
-    _SUBCOMPOSITE_CACHE[ck] = res
+    with _MASK_CACHE_LOCK:
+        if len(_SUBCOMPOSITE_CACHE) >= _MAX_SUBCOMPOSITE_CACHE:
+            _SUBCOMPOSITE_CACHE.pop(next(iter(_SUBCOMPOSITE_CACHE)), None)
+        _SUBCOMPOSITE_CACHE[ck] = res
     return res
 
 

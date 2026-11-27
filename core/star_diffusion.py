@@ -33,7 +33,8 @@ def apply_star_diffusion(
     color_boost: float = 0.50,
     halo_mode: str = "screen",
     sky_mask: Optional[np.ndarray] = None,
-    stars_layer: Optional[np.ndarray] = None
+    stars_layer: Optional[np.ndarray] = None,
+    ref_min_dim: Optional[int] = None,
 ) -> np.ndarray:
     """
     Aplica el Filtro Difusor Digital y Realce Espectral de Estrellas sobre una imagen RGB en float32 [0.0, 1.0].
@@ -71,7 +72,8 @@ def apply_star_diffusion(
         # Modo imagen única: filtro morfológico Top-Hat (Luma - Apertura) para aislar estrellas puntuales
         # ignorando por completo el gas de la Vía Láctea y nebulosas extendidas
         luma = 0.2126 * img_rgb[..., 0] + 0.7152 * img_rgb[..., 1] + 0.0722 * img_rgb[..., 2]
-        k_size = max(5, int(round(min(h, w) * 0.007)) | 1)
+        base_dim = int(ref_min_dim) if ref_min_dim is not None else min(h, w)
+        k_size = max(5, int(round(base_dim * 0.007)) | 1)
         k_size = min(k_size, 19)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
         diffuse = cv2.morphologyEx(luma, cv2.MORPH_OPEN, kernel)

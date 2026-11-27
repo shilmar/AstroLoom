@@ -506,7 +506,7 @@ def extract_background_polynomial(
         
     return np.clip(corrected, 0.0, 1.0).astype(np.float32)
     
-def apply_clarity(img_rgb: np.ndarray, strength: float = 0.0) -> np.ndarray:
+def apply_clarity(img_rgb: np.ndarray, strength: float = 0.0, ref_min_dim: int | None = None) -> np.ndarray:
     """
     Contraste local (Claridad) en frecuencias medias.
     strength: -2.0 a +2.0 (0.0 neutro).
@@ -518,7 +518,8 @@ def apply_clarity(img_rgb: np.ndarray, strength: float = 0.0) -> np.ndarray:
     lum = 0.2126 * img_rgb[..., 0] + 0.7152 * img_rgb[..., 1] + 0.0722 * img_rgb[..., 2]
     
     h, w = img_rgb.shape[:2]
-    r = int(max(9, (min(h, w) // 35) | 1))
+    base_dim = int(ref_min_dim) if ref_min_dim is not None else min(h, w)
+    r = int(max(9, (base_dim // 35) | 1))
     if r % 2 == 0:
         r += 1
 
@@ -533,7 +534,12 @@ def apply_clarity(img_rgb: np.ndarray, strength: float = 0.0) -> np.ndarray:
     return np.clip(img_rgb * ratio, 0.0, 1.0).astype(np.float32)
 
 
-def apply_dehaze(img_rgb: np.ndarray, strength: float = 0.0) -> np.ndarray:
+def apply_dehaze(
+    img_rgb: np.ndarray,
+    strength: float = 0.0,
+    ref_min_dim: int | None = None,
+    global_airlight_p95: float | None = None,
+) -> np.ndarray:
     """
     Borrar Neblina (Dehaze) con compensación de velo atmosférico y saturación.
     strength: -2.0 a +2.0 (0.0 neutro).
@@ -543,7 +549,8 @@ def apply_dehaze(img_rgb: np.ndarray, strength: float = 0.0) -> np.ndarray:
 
     dark_ch = np.min(img_rgb, axis=2)
     h, w = img_rgb.shape[:2]
-    r = int(max(15, (min(h, w) // 25) | 1))
+    base_dim = int(ref_min_dim) if ref_min_dim is not None else min(h, w)
+    r = int(max(15, (base_dim // 25) | 1))
     if r % 2 == 0:
         r += 1
         
@@ -552,7 +559,8 @@ def apply_dehaze(img_rgb: np.ndarray, strength: float = 0.0) -> np.ndarray:
     if strength > 0:
         # Transmisión escalada para tolerar valores de hasta 2.0 sin colapsar a 0
         t = np.clip(1.0 - (strength * 0.45) * haze_map, 0.12, 1.0)[..., np.newaxis]
-        airlight = float(np.percentile(haze_map, 95)) * min(0.65, 0.35 * strength)
+        p95 = float(global_airlight_p95) if global_airlight_p95 is not None else float(np.percentile(haze_map, 95))
+        airlight = p95 * min(0.65, 0.35 * strength)
         out = (img_rgb - airlight * (1.0 - t)) / t
         
         # Realce dinámico de saturación en zonas rescatadas de la bruma
@@ -596,7 +604,8 @@ def realce_multiescala_ondiculas(
     imagen_rgb: np.ndarray,
     fuerza_estructura: float = 0.0,
     reduccion_fondo: float = 0.0,
-    sky_mask: np.ndarray = None
+    sky_mask: np.ndarray = None,
+    global_pedestal: float | None = None,
 ) -> np.ndarray:
     """
     Aplica realce de estructuras de gas/polvo y atenuación de cúpula residual.
@@ -633,7 +642,7 @@ def realce_multiescala_ondiculas(
 
     # 2. Atenuación del plano residual (cúpula fija de fondo) con submuestreo de percentil rápido
     if reduccion_fondo > 1e-4:
-        pedestal = float(np.percentile(residual[::4, ::4], 5))
+        pedestal = float(global_pedestal) if global_pedestal is not None else float(np.percentile(residual[::4, ::4], 5))
         delta -= (residual - pedestal) * (reduccion_fondo * 0.5)
 
     # Si hay máscara de cielo, aplicamos selectivamente

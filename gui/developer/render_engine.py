@@ -56,11 +56,16 @@ from core.mask_layers import (
     MASK_TYPE_IMAGE_GROUND, MASK_TYPE_BRUSH, MASK_TYPE_LUMA, MASK_TYPE_COLOR,
     MASK_TYPE_GROUND, MASK_TYPE_SKY, MASK_TYPE_IMAGE_RASTER,
     apply_pre_curve_adjustments, get_canvas_below_layer, compute_effective_layer_mask,
-    apply_local_adjustments_to_image, clear_subcomposite_cache
+    apply_local_adjustments_to_image, clear_subcomposite_cache, _compute_subcomposite_key
 )
 from gui.developer.developer_state import DeveloperState
 from gui.developer.pipeline import ResolutionPyramid, apply_developer_pipeline
 from gui.developer.async_worker import AsyncPipelineManager
+from gui.developer.tile_engine import (
+    TileContext,
+    compute_global_pipeline_stats,
+    compute_tile_pad_margin,
+)
 from core.buffer_cache import PipelineBufferCache
 from core.display_transfer import (
     compute_combined_stf_lut,
@@ -79,6 +84,10 @@ class RenderMixin:
         clear_subcomposite_cache()
         if hasattr(self, 'buffer_cache'):
             self.buffer_cache.clear()
+        if hasattr(self, 'tile_manager'):
+            self.tile_manager.clear_cache()
+        self._cached_global_stats_key = None
+        self._cached_global_stats = None
         self._cache_starless_key = None
         self._cache_starless_linear = None
         self._cache_starless_pre_key = None
@@ -487,15 +496,22 @@ class RenderMixin:
 
                 if self.current_mask is not None:
                     m_clean = self.current_mask[..., 0] if self.current_mask.ndim == 3 else self.current_mask
-                    if m_clean.dtype != np.float32:
-                        m_clean = (m_clean / 255.0).astype(np.float32) if m_clean.dtype == np.uint8 else m_clean.astype(np.float32)
-                    elif m_clean.max() > 1.05:
-                        m_clean = m_clean / 255.0
-                    if m_clean.shape[:2] != (h_f, w_f):
-                        m_f = cv2.resize(m_clean, (w_f, h_f), interpolation=cv2.INTER_LINEAR)
+                    if m_clean.shape[:2] == (h_f, w_f):
+                        m_sub = m_clean[y1:y2, x1:x2]
                     else:
-                        m_f = m_clean
-                    m_sub = np.ascontiguousarray(m_f[y1:y2, x1:x2], dtype=np.float32)
+                        h_m, w_m = m_clean.shape[:2]
+                        sx = w_m / float(w_f)
+                        sy = h_m / float(h_f)
+                        sx1 = max(0, min(w_m - 1, int(np.floor(x1 * sx))))
+                        sy1 = max(0, min(h_m - 1, int(np.floor(y1 * sy))))
+                        sx2 = max(sx1 + 1, min(w_m, int(np.ceil(x2 * sx))))
+                        sy2 = max(sy1 + 1, min(h_m, int(np.ceil(y2 * sy))))
+                        m_sub = cv2.resize(m_clean[sy1:sy2, sx1:sx2], (cw, ch), interpolation=cv2.INTER_LINEAR)
+                    if m_sub.dtype != np.float32:
+                        m_sub = (m_sub / 255.0).astype(np.float32) if m_sub.dtype == np.uint8 else m_sub.astype(np.float32)
+                    elif float(m_sub.max()) > 1.05:
+                        m_sub = m_sub / 255.0
+                    m_sub = np.ascontiguousarray(m_sub, dtype=np.float32)
                     mask_3d = np.ascontiguousarray(np.repeat(m_sub[..., np.newaxis], 3, axis=2), dtype=np.float32)
                 else:
                     mask_3d = None
@@ -936,6 +952,9 @@ class RenderMixin:
         meta = getattr(self, '_last_async_meta', None)
         if meta is not None:
             key_pre_lp, key_linear, key_stretch, key_graded, key_spatial, key_stars, is_zoomed, is_scrubbing, st_img, precomputed_mask = meta
+            if bool(is_zoomed) != bool(self.is_zoomed_100):
+                # Descartar resultado Fit tardío si ya entramos en Zoom 1:1 (o viceversa)
+                return
             if is_scrubbing and not getattr(self, '_is_slider_pressed', False) and not getattr(self, '_is_scrubbing_heavy_slider', False) and not getattr(self, '_is_scrubbing_layer_slider', False):
                 # Descartar solicitud de borrador tardía si el usuario ya soltó el deslizador
                 return
@@ -1043,7 +1062,10 @@ class RenderMixin:
         if getattr(self, '_is_scrubbing_heavy_slider', False) or getattr(self, '_is_scrubbing_layer_slider', False):
             self._is_scrubbing_heavy_slider = False
             self._is_scrubbing_layer_slider = False
-            self.update_stretch_preview(immediate=True)
+            if self.is_zoomed_100 and hasattr(self, 'tile_manager'):
+                self._request_zoom_100_tiles()
+            else:
+                self.update_stretch_preview(immediate=True)
 
     def _refresh_histograms_now(self):
         if getattr(self, '_hist_throttle_timer', None) is not None:
@@ -1090,6 +1112,11 @@ class RenderMixin:
             return
         self._is_rendering_preview = True
         try:
+            # === RUTA ASÍNCRONA POR TESELAS FIJAS 512x512 EN ZOOM 1:1 ===
+            if self.is_zoomed_100 and not synchronous and hasattr(self, 'tile_manager') and self.image_32bit is not None:
+                self._request_zoom_100_tiles()
+                return
+
             # === RUTA ULTRARRÁPIDA DE VISUALIZACIÓN POR LUT (Display Transfer / STF >500 FPS) ===
             # Activada estrictamente durante el arrastre continuo de deslizadores de estirado/contraste
             if self._is_lut_preview_applicable():
@@ -1210,12 +1237,207 @@ class RenderMixin:
         finally:
             self._is_rendering_preview = False
 
+    @staticmethod
+    def _freeze_for_key(val: Any) -> Any:
+        if isinstance(val, dict):
+            return tuple((k, RenderMixin._freeze_for_key(v)) for k, v in sorted(val.items()))
+        if isinstance(val, (list, tuple)):
+            return tuple(RenderMixin._freeze_for_key(v) for v in val)
+        return val
+
+    def _build_tile_context(self) -> Optional[TileContext]:
+        """Construye una instantánea inmutable y thread-safe para evaluar teselas 512x512 en segundo plano."""
+        if self.image_32bit is None:
+            return None
+
+        h_f, w_f = self.image_32bit.shape[:2]
+        state_dict = self._capture_state(include_mask_layers=False)
+        state = DeveloperState.from_dict(state_dict)
+
+        curve_luts: Dict[str, np.ndarray] = {}
+        curve_state = ()
+        if hasattr(self, 'curve_widget'):
+            curve_state = tuple((m, tuple(pts)) for m, pts in sorted(self.curve_widget.get_state().items()))
+            if not self.curve_widget.is_identity("rgb"):
+                curve_luts["rgb"] = self.curve_widget.get_lut("rgb")
+            if not self.curve_widget.is_identity("hue_sat"):
+                curve_luts["hue_sat"] = self.curve_widget.get_lut("hue_sat")
+            if not self.curve_widget.is_identity("luma_sat"):
+                curve_luts["luma_sat"] = self.curve_widget.get_lut("luma_sat")
+
+        has_image_layers = bool(hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.has_image_layers())
+        raw_layers = (
+            self.mask_layers_widget.layers
+            if (hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers)
+            else None
+        )
+        mask_layers = [l.shallow_snapshot() for l in raw_layers] if raw_layers else None
+
+        layers_key = _compute_subcomposite_key(self.image_32bit, mask_layers)[-1] if mask_layers else ()
+
+        starless_params = {
+            "denoise_strength": round(float(getattr(self, 'denoise_strength', 0.0)), 4),
+            "denoise_color_strength": round(float(getattr(self, 'denoise_color_strength', 0.5)), 4),
+            "denoise_masking": round(float(getattr(self, 'denoise_masking', 0.5)), 4),
+            "clarity_starless_val": round(float(getattr(self, 'clarity_starless_val', 0.0)), 4),
+            "texture_clarity_starless_val": round(float(getattr(self, 'texture_clarity_starless_val', 0.0)), 4),
+            "dehaze_starless_val": round(float(getattr(self, 'dehaze_starless_val', 0.0)), 4),
+            "multiescala_estructura": round(float(getattr(self, 'multiescala_estructura', 0.0)), 4),
+            "multiescala_fondo": round(float(getattr(self, 'multiescala_fondo', 0.0)), 4),
+            "orton_strength": round(float(getattr(self, 'orton_strength', 0.0)), 4),
+            "orton_radius": round(float(getattr(self, 'orton_radius', 40.0)), 2),
+            "orton_threshold": round(float(getattr(self, 'orton_threshold', 0.05)), 4),
+            "orton_tint_type": getattr(self, 'orton_tint_type', 'warm_gold'),
+            "orton_custom_tint": tuple(getattr(self, 'orton_custom_tint', (1.0, 0.85, 0.55))),
+            "orton_tint_strength": round(float(getattr(self, 'orton_tint_strength', 0.5)), 4),
+            "orton_mode": getattr(self, 'orton_mode', 'screen'),
+        }
+
+        starless_ai_enabled = bool(getattr(self, 'starless_ai_denoise_enabled', False))
+        cached_sl_ai = getattr(self, '_cache_starless_ai', None) if starless_ai_enabled else None
+        cached_gnd_ai = self._cache_ground_ai if getattr(self, 'gnd_ai_denoise_enabled', False) else None
+
+        state_key = (
+            id(self.image_32bit),
+            id(self.image_starless),
+            id(self.image_stars),
+            id(self.current_mask),
+            id(cached_sl_ai),
+            id(cached_gnd_ai),
+            int(getattr(self, 'view_layer_mode', 0)),
+            has_image_layers,
+            self._freeze_for_key(state_dict),
+            curve_state,
+            layers_key,
+            self._freeze_for_key(starless_params),
+        )
+
+        # Estadísticas globales cacheadas sobre el proxy Fit (<2 ms una sola vez; 0 ms al hacer pan)
+        stats_key = (
+            id(getattr(self, 'preview_proxy', None)),
+            id(getattr(self, 'proxy_mask', None)),
+            id(getattr(self, '_cached_base_stretched', None)),
+            state.contrast_starless_val,
+            state.deconv_iterations,
+            state.deconv_damping,
+            getattr(state, 'sharp_amount', 0),
+            getattr(state, 'sharp_masking', 0),
+            starless_params["dehaze_starless_val"],
+            starless_params["multiescala_fondo"],
+            getattr(state, 'ond_bg_val', 0),
+        )
+        if getattr(self, '_cached_global_stats_key', None) == stats_key and getattr(self, '_cached_global_stats', None) is not None:
+            global_stats = self._cached_global_stats
+        else:
+            global_stats = compute_global_pipeline_stats(
+                preview_img=getattr(self, 'proxy_starless', None) if getattr(self, 'proxy_starless', None) is not None else getattr(self, 'preview_proxy', None),
+                preview_mask=getattr(self, 'proxy_mask', None),
+                preview_stretched=getattr(self, '_cached_base_stretched', None),
+                full_shape=(h_f, w_f),
+                state=state,
+                starless_params=starless_params,
+            )
+            self._cached_global_stats_key = stats_key
+            self._cached_global_stats = global_stats
+
+        psf_kernel = self._get_current_deconv_psf() if hasattr(self, '_get_current_deconv_psf') else None
+        pad_margin = compute_tile_pad_margin(state, starless_params)
+
+        fallback_u8 = getattr(self, '_fit_view_display_u8', None)
+        if fallback_u8 is None and getattr(self, '_cached_rendered_image', None) is not None:
+            fallback_u8 = cv2.convertScaleAbs(np.clip(self._cached_rendered_image, 0.0, 1.0), alpha=255.0)
+
+        return TileContext(
+            full_shape=(h_f, w_f),
+            image_32bit=self.image_32bit,
+            image_starless=self.image_starless,
+            image_stars=self.image_stars,
+            current_mask=self.current_mask,
+            state=state,
+            state_key=state_key,
+            view_layer_mode=int(getattr(self, 'view_layer_mode', 0)),
+            has_image_layers=has_image_layers,
+            mask_layers=mask_layers,
+            curve_luts=curve_luts,
+            psf_kernel=psf_kernel,
+            cached_starless_ai=cached_sl_ai,
+            cached_ground_ai=cached_gnd_ai,
+            starless_ai_enabled=starless_ai_enabled,
+            starless_params=starless_params,
+            global_stats=global_stats,
+            pad_margin=pad_margin,
+            fallback_preview_u8=fallback_u8,
+        )
+
+    def _request_zoom_100_tiles(self) -> None:
+        """Solicita el renderizado asíncrono progresivo por teselas fijas 512x512 sin bloquear la UI."""
+        if not self.is_zoomed_100 or self.image_32bit is None or not hasattr(self, 'tile_manager'):
+            return
+        ctx = self._build_tile_context()
+        if ctx is None:
+            return
+        h_f, w_f = self.image_32bit.shape[:2]
+        rx, ry = self.zoom_rel_coords
+        cx = rx * w_f
+        cy = ry * h_f
+        vw = max(100, self.canvas.width())
+        vh = max(100, self.canvas.height())
+        self.tile_manager.request_viewport(ctx, cx, cy, vw, vh)
+
+    def _on_tile_mosaic_ready(
+        self,
+        gen_id: int,
+        mosaic_u8: np.ndarray,
+        mosaic_rect: Tuple[int, int, int, int],
+        sensor_center: Tuple[float, float],
+        is_complete: bool,
+        is_new_rect: bool,
+    ) -> None:
+        """Recibe actualizaciones progresivas del mosaico de teselas 1:1 en el hilo de UI (<1 ms)."""
+        if not self.is_zoomed_100 or self.image_32bit is None:
+            return
+        if not hasattr(self, 'tile_manager') or gen_id != self.tile_manager.current_gen_id:
+            return
+
+        h_f, w_f = self.image_32bit.shape[:2]
+        x1, y1, x2, y2 = mosaic_rect
+        self._zoom_crop_rect = mosaic_rect
+        self._last_rendered_preview = mosaic_u8
+
+        rect_changed = (self.canvas.external_crop_rect != mosaic_rect)
+        if rect_changed:
+            self.canvas.set_external_crop(mosaic_rect, (h_f, w_f), sensor_center=sensor_center)
+            raw_slice = self.image_32bit[y1:y2, x1:x2]
+            self.canvas.load_image(raw_slice, display_stretched=mosaic_u8)
+            if self.canvas.split_view_enabled:
+                stretched_before = self._compute_before_image()
+                if stretched_before is not None:
+                    self.canvas.set_before_image(stretched_before)
+        else:
+            if is_new_rect:
+                self.canvas.set_external_crop(mosaic_rect, (h_f, w_f), sensor_center=sensor_center)
+            # Ruta rápida (<1 ms): actualiza solo los píxeles del mosaico sin recopiar orig_rgb
+            self.canvas.update_display_u8(mosaic_u8)
+
+        self._update_canvas_info_label()
+
+        if is_complete:
+            if (
+                not self._is_undoing_or_redoing
+                and not getattr(self, '_is_applying_preset', False)
+                and not getattr(self, '_is_previewing_preset', False)
+                and hasattr(self, '_undo_debounce_timer')
+            ):
+                self._undo_debounce_timer.start(500)
+
     def on_canvas_pan_started(self):
         """Inicia el desplazamiento panorámico en Zoom 1:1 deteniendo refinados pendientes."""
         if not self.is_zoomed_100:
             return
         if hasattr(self, '_pan_refine_timer'):
             self._pan_refine_timer.stop()
+        if hasattr(self, 'tile_manager'):
+            self.tile_manager.cancel_all()
 
     def on_canvas_pan_moved(self, dx: int, dy: int):
         """Desplaza el lienzo a 60-144 FPS mediante traslación de pixmap pura sin ningún bloqueo de CPU."""
@@ -1249,31 +1471,35 @@ class RenderMixin:
             self._pan_refine_timer.stop()
 
     def on_canvas_pan_finished(self):
-        """Finaliza el arrastre. Si el desplazamiento es amplio (>=120 px), programa refinado diferido (500 ms)."""
+        """Finaliza el arrastre y lanza el ensamblado/refinado asíncrono de teselas 1:1 (50 ms)."""
         if hasattr(self, '_pan_refine_timer'):
             self._pan_refine_timer.stop()
 
         vox = abs(self.canvas._pan_visual_offset.x()) if hasattr(self.canvas, '_pan_visual_offset') else 0
         voy = abs(self.canvas._pan_visual_offset.y()) if hasattr(self.canvas, '_pan_visual_offset') else 0
 
-        # Si el desplazamiento es leve (<120 px), no recalcular: la vista es 90% nítida y evitamos congelar la UI
-        if vox >= 120 or voy >= 120:
+        if vox >= 40 or voy >= 40:
             if hasattr(self, '_pan_refine_timer'):
-                self._pan_refine_timer.start(500)
+                self._pan_refine_timer.start(50)
 
     def _refine_pan_crop(self):
-        """Genera el nuevo búfer extendido 1:1 centrado en la nueva posición y refresca histogramas."""
+        """Actualiza el mosaico 1:1 de forma 100% asíncrona usando caché de teselas fijas."""
         if not self.is_zoomed_100:
             return
         if hasattr(self, '_pan_refine_timer'):
             self._pan_refine_timer.stop()
-        self.update_stretch_preview(immediate=True)
-        self._refresh_histograms_now()
+        if hasattr(self, 'tile_manager'):
+            self._request_zoom_100_tiles()
+        else:
+            self.update_stretch_preview(immediate=True)
+            self._refresh_histograms_now()
 
     def on_canvas_zoom_toggled(self, is_zoomed: bool, rel_x: float, rel_y: float):
         if not is_zoomed:
             if hasattr(self, '_pan_refine_timer'):
                 self._pan_refine_timer.stop()
+            if hasattr(self, 'tile_manager'):
+                self.tile_manager.cancel_all()
             self.is_zoomed_100 = False
             self.canvas.is_zoomed = False
             self.canvas.zoom_center_img = None
@@ -1293,6 +1519,7 @@ class RenderMixin:
                 self._fit_view_pixmap = None
                 self._fit_view_orig_rgb = None
                 self._fit_view_mask_overlay = None
+                self._fit_view_display_u8 = None
                 self._update_canvas_info_label()
                 return
 
@@ -1305,16 +1532,24 @@ class RenderMixin:
             self._fit_view_pixmap = None
             self._fit_view_orig_rgb = None
             self._fit_view_mask_overlay = None
+            self._fit_view_display_u8 = None
             self._generate_before_reference()
             self.update_stretch_preview(immediate=True)
             self._update_canvas_info_label()
             return
 
         # Entrada en Zoom 1:1
+        if getattr(self, 'async_pipeline', None) is not None:
+            self.async_pipeline.cancel_pending()
         if self.canvas.base_pixmap and not self.canvas.base_pixmap.isNull():
             self._fit_view_pixmap = self.canvas.base_pixmap.copy()
             self._fit_view_orig_rgb = self.canvas.orig_rgb
             self._fit_view_mask_overlay = self.canvas.refined_overlay.copy() if (self.canvas.refined_overlay and not self.canvas.refined_overlay.isNull()) else None
+            self._fit_view_display_u8 = (
+                self.canvas._cached_display_u8.copy()
+                if getattr(self.canvas, '_cached_display_u8', None) is not None
+                else None
+            )
             if getattr(self.canvas, '_zoom_background_pixmap', None) is None:
                 self.canvas._zoom_background_pixmap = self.canvas.base_pixmap.copy()
         self._slider_changed_during_zoom = False
@@ -1328,5 +1563,8 @@ class RenderMixin:
             self.btn_toggle_zoom.blockSignals(True)
             self.btn_toggle_zoom.setChecked(True)
             self.btn_toggle_zoom.blockSignals(False)
-        self.update_stretch_preview(immediate=True)
+        if hasattr(self, 'tile_manager') and self.image_32bit is not None:
+            self._request_zoom_100_tiles()
+        else:
+            self.update_stretch_preview(immediate=True)
         self._update_canvas_info_label()

@@ -1,6 +1,7 @@
 """Headless rendering pipeline and multi-resolution pyramid engine for AstroLoom Developer."""
 from __future__ import annotations
 
+import threading
 from typing import Optional, Dict, Tuple, List, Any, Union, Callable
 import numpy as np
 import cv2
@@ -47,6 +48,7 @@ try:
 except ImportError:
     HAS_RUST = False
 
+_MASK_3D_LOCK = threading.Lock()
 _MASK_3D_CACHE: Dict[Tuple[int, int, int], np.ndarray] = {}
 
 
@@ -154,6 +156,7 @@ def apply_developer_pipeline(
     is_dragging_antihalo: bool = False,
     cached_ground_ai: Optional[np.ndarray] = None,
     abort_flag: Optional[Callable[[], bool]] = None,
+    global_stats: Optional[Dict[str, float]] = None,
 ) -> Union[np.ndarray, Tuple[Any, ...]]:
     """Pure Python headless non-destructive photo development pipeline.
 
@@ -170,13 +173,16 @@ def apply_developer_pipeline(
         if target_img.ndim == 3:
             if precomputed_mask.ndim == 2:
                 mk = (id(precomputed_mask), th, tw)
-                if mk in _MASK_3D_CACHE:
-                    precomputed_mask = _MASK_3D_CACHE[mk]
+                with _MASK_3D_LOCK:
+                    cached_m3 = _MASK_3D_CACHE.get(mk)
+                if cached_m3 is not None:
+                    precomputed_mask = cached_m3
                 else:
                     precomputed_mask = np.ascontiguousarray(np.repeat(precomputed_mask[..., np.newaxis], 3, axis=2))
-                    if len(_MASK_3D_CACHE) >= 16:
-                        _MASK_3D_CACHE.clear()
-                    _MASK_3D_CACHE[mk] = precomputed_mask
+                    with _MASK_3D_LOCK:
+                        if len(_MASK_3D_CACHE) >= 16:
+                            _MASK_3D_CACHE.clear()
+                        _MASK_3D_CACHE[mk] = precomputed_mask
             elif precomputed_mask.ndim == 3 and precomputed_mask.shape[2] == 1:
                 precomputed_mask = np.repeat(precomputed_mask, 3, axis=2)
     edge_shift = getattr(state, "gnd_edge_shift_val", 0)
@@ -494,14 +500,17 @@ def apply_developer_pipeline(
         # 8. Contraste específico del Fondo (Starless)
         contrast_starless = state.contrast_starless_val / 100.0
         if abs(contrast_starless) > 1e-4:
-            stride = 8 if is_scrubbing else 4
-            sample_s = stretched[::stride, ::stride]
-            if precomputed_mask is not None:
-                sample_m = precomputed_mask[::stride, ::stride]
-                mask_m_2d = sample_m[..., 0] if sample_m.ndim == 3 else sample_m
-                sky_median = float(np.median(sample_s[mask_m_2d > 0.5])) if np.any(mask_m_2d > 0.5) else float(np.median(sample_s))
+            if global_stats is not None and "sky_median" in global_stats:
+                sky_median = float(global_stats["sky_median"])
             else:
-                sky_median = float(np.median(sample_s))
+                stride = 8 if is_scrubbing else 4
+                sample_s = stretched[::stride, ::stride]
+                if precomputed_mask is not None:
+                    sample_m = precomputed_mask[::stride, ::stride]
+                    mask_m_2d = sample_m[..., 0] if sample_m.ndim == 3 else sample_m
+                    sky_median = float(np.median(sample_s[mask_m_2d > 0.5])) if np.any(mask_m_2d > 0.5) else float(np.median(sample_s))
+                else:
+                    sky_median = float(np.median(sample_s))
             sn_contrasted = adjust_contrast(stretched, contrast_starless, pivot=sky_median, fast_draft=is_scrubbing)
             if precomputed_mask is not None:
                 m2 = precomputed_mask[..., 0] if precomputed_mask.ndim == 3 else precomputed_mask
@@ -637,6 +646,7 @@ def apply_developer_pipeline(
                 star_mask=star_mask,
                 abort_flag=abort_flag,
                 target_scope=deconv_scope,
+                global_sigma_noise=(float(global_stats["sigma_noise"]) if (global_stats and "sigma_noise" in global_stats) else None),
             )
             except InterruptedError:
                 return None
@@ -706,6 +716,7 @@ def apply_developer_pipeline(
                 blend_mode=orton_mode,
                 sky_mask=mask_2d,
                 is_starless=False,
+                ref_min_dim=(int(global_stats["ref_min_dim"]) if (global_stats and "ref_min_dim" in global_stats) else None),
             )
             if is_draft_ort and in_ort.shape[:2] != (orig_h_ort, orig_w_ort):
                 res_ort_full = cv2.resize(res_ort, (orig_w_ort, orig_h_ort), interpolation=cv2.INTER_LINEAR)
@@ -755,6 +766,7 @@ def apply_developer_pipeline(
                 halo_mode=sd_mode,
                 sky_mask=mask_2d,
                 stars_layer=None,
+                ref_min_dim=(int(global_stats["ref_min_dim"]) if (global_stats and "ref_min_dim" in global_stats) else None),
             )
             if is_draft_sd and in_sd.shape[:2] != (orig_h_sd, orig_w_sd):
                 res_sd_full = cv2.resize(res_sd, (orig_w_sd, orig_h_sd), interpolation=cv2.INTER_LINEAR)
@@ -912,6 +924,7 @@ def apply_developer_pipeline(
             sky_mask=precomputed_mask,
             stars_mask=star_mask_ref,
             scope=scope,
+            global_p99=(float(global_stats["edge_p99"]) if (global_stats and "edge_p99" in global_stats) else None),
         )
 
         if sharp_preview:
@@ -949,7 +962,8 @@ def apply_developer_pipeline(
             stretched,
             fuerza_estructura=ond_est,
             reduccion_fondo=ond_bg,
-            sky_mask=sm_ref
+            sky_mask=sm_ref,
+            global_pedestal=(float(global_stats["ond_pedestal"]) if (global_stats and "ond_pedestal" in global_stats) else None),
         )
 
     # 15. Supresión de Halos en Frontera de Horizonte (Anti-Halo Clamping)
