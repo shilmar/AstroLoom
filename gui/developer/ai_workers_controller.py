@@ -574,6 +574,7 @@ class AIWorkersMixin:
 
             self._invalidate_pipeline_caches()
             self._generate_preview_proxy()
+            self.update_stretch_preview()
 
         def on_error(err):
             progress.close()

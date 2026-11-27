@@ -744,6 +744,7 @@ class QualityCullingWorker(QThread):
     progress_changed = Signal(int, int, str)  # (actual, total, nombre_archivo)
     all_finished = Signal(list)              # List[FrameQualityResult]
     error_occurred = Signal(str)
+    cancelled = Signal()
 
     def __init__(self, file_paths: list, sky_mask=None, profile_mode: str = "wide_angle", parent=None):
         super().__init__(parent)

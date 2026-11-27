@@ -325,8 +325,8 @@ class MainWindow(QMainWindow):
                 return
 
         # 2. Detener temporizadores activos
-        if hasattr(self, 'stats_timer') and self.stats_timer.isActive():
-            self.stats_timer.stop()
+        if hasattr(self, '_timer_ram') and self._timer_ram.isActive():
+            self._timer_ram.stop()
 
         # 3. Limpiar archivos y directorios temporales residuales
         self._cleanup_temp_files()
@@ -391,9 +391,12 @@ class MainWindow(QMainWindow):
         elif current_tab_idx == 1:  # Revelador
             if hasattr(self, 'tab_developer'):
                 self.tab_developer._on_canvas_files_dropped([first_file])
-        elif current_tab_idx in (2, 3):  # Eclipses
+        elif current_tab_idx == 2:  # Eclipses HDR
             if hasattr(self, 'tab_eclipse'):
                 self.tab_eclipse.add_bracketing_paths(paths)
+        elif current_tab_idx == 3:  # Eclipses Collage
+            if hasattr(self, 'tab_eclipse_collage'):
+                self.tab_eclipse_collage.load_filepaths(paths)
         elif current_tab_idx == 4:  # Startrails
             if hasattr(self, 'tab_startrails'):
                 self.tab_startrails.add_series_files(paths)

@@ -103,7 +103,7 @@ pub fn compute_nrgf_profiles_and_detail_rs<'py>(
 ) -> PyResult<(Bound<'py, PyArray2<f32>>, Bound<'py, PyArray1<f32>>, f32)> {
     let lum_view = lum.as_array();
     let (h, w) = lum_view.dim();
-    let lum_slice = lum.as_slice().unwrap();
+    let lum_slice = lum.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
 
     let r_max = radius_min * (1.2f32).max(radius_max_factor);
 
@@ -321,9 +321,9 @@ pub fn apply_nrgf_continuous_rs<'py>(
     radius_max_factor: f32,
     blend_ratio: f32,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let clean_slice = clean_detail.as_slice().unwrap();
+    let clean_slice = clean_detail.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
     let (h, w) = clean_detail.as_array().dim();
-    let sig_slice = sigma_prof.as_slice().unwrap();
+    let sig_slice = sigma_prof.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
     let sig_len = sig_slice.len();
 
     let r_max = radius_min * (1.2f32).max(radius_max_factor);
@@ -355,7 +355,7 @@ pub fn apply_nrgf_continuous_rs<'py>(
 
     if is_3d {
         let img_arr = image.extract::<PyReadonlyArray3<f32>>()?;
-        let img_slice = img_arr.as_slice().unwrap();
+        let img_slice = img_arr.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
 
         let out_vec = py.allow_threads(|| {
             let row_stride = w * 3;
@@ -430,7 +430,7 @@ pub fn apply_nrgf_continuous_rs<'py>(
         Ok(out_arr.into_pyarray(py).as_any().clone())
     } else {
         let img_arr = image.extract::<PyReadonlyArray2<f32>>()?;
-        let img_slice = img_arr.as_slice().unwrap();
+        let img_slice = img_arr.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
 
         let out_vec = py.allow_threads(|| {
             let mut buf = vec![0.0f32; h * w];
@@ -530,12 +530,12 @@ pub fn compute_mgn_diff_sq_rs<'py>(
     m_bool: PyReadonlyArray2<'py, bool>,
     num: PyReadonlyArray2<'py, f32>,
     den: PyReadonlyArray2<'py, f32>,
-) -> Bound<'py, PyArray2<f32>> {
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
     let (h, w) = lum.as_array().dim();
-    let lum_slice = lum.as_slice().unwrap();
-    let m_slice = m_bool.as_slice().unwrap();
-    let num_slice = num.as_slice().unwrap();
-    let den_slice = den.as_slice().unwrap();
+    let lum_slice = lum.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let m_slice = m_bool.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let num_slice = num.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let den_slice = den.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
 
     let out_vec = py.allow_threads(|| {
         let mut buf = vec![0.0f32; h * w];
@@ -563,7 +563,7 @@ pub fn compute_mgn_diff_sq_rs<'py>(
         buf
     });
 
-    Array2::from_shape_vec((h, w), out_vec).unwrap().into_pyarray(py)
+    Ok(Array2::from_shape_vec((h, w), out_vec).unwrap().into_pyarray(py))
 }
 
 /// 5. combine_mgn_scales_rs:
@@ -586,11 +586,11 @@ pub fn combine_mgn_scales_rs<'py>(
     data_scale: Option<f32>,
 ) -> PyResult<()> {
     let (_h, w) = lum.as_array().dim();
-    let lum_slice = lum.as_slice().unwrap();
-    let num_slice = num.as_slice().unwrap();
-    let den_slice = den.as_slice().unwrap();
-    let num_v_slice = num_v.as_slice().unwrap();
-    let m_slice = m_bool.as_slice().unwrap();
+    let lum_slice = lum.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let num_slice = num.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let den_slice = den.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let num_v_slice = num_v.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let m_slice = m_bool.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
 
     let scale = match data_scale {
         Some(s) if s > 0.0 => s,
@@ -669,11 +669,14 @@ pub fn finalize_mgn_lum_rs<'py>(
     gamma: f32,
     blend_ratio: f32,
     m_bool: Option<PyReadonlyArray2<'py, bool>>,
-) -> Bound<'py, PyArray2<f32>> {
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
     let (h, w) = acc.as_array().dim();
-    let acc_slice = acc.as_slice().unwrap();
-    let lum_slice = lum.as_slice().unwrap();
-    let m_slice = m_bool.as_ref().map(|m| m.as_slice().unwrap());
+    let acc_slice = acc.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let lum_slice = lum.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let m_slice = m_bool
+        .as_ref()
+        .map(|m| m.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous")))
+        .transpose()?;
 
     let inv_total_w = 1.0 / total_w.max(1.0);
     let inv_gamma = 1.0 / gamma.max(0.1);
@@ -712,7 +715,7 @@ pub fn finalize_mgn_lum_rs<'py>(
         buf
     });
 
-    Array2::from_shape_vec((h, w), out_vec).unwrap().into_pyarray(py)
+    Ok(Array2::from_shape_vec((h, w), out_vec).unwrap().into_pyarray(py))
 }
 
 /// 7. compute_mgn_scaled_and_chroma_rs:
@@ -725,11 +728,11 @@ pub fn compute_mgn_scaled_and_chroma_rs<'py>(
     mgn_lum: PyReadonlyArray2<'py, f32>,
     lum: PyReadonlyArray2<'py, f32>,
     noise_floor: f32,
-) -> (Bound<'py, PyArray3<f32>>, Bound<'py, PyArray3<f32>>) {
+) -> PyResult<(Bound<'py, PyArray3<f32>>, Bound<'py, PyArray3<f32>>)> {
     let (h, w, _) = img.as_array().dim();
-    let img_slice = img.as_slice().unwrap();
-    let mgn_slice = mgn_lum.as_slice().unwrap();
-    let lum_slice = lum.as_slice().unwrap();
+    let img_slice = img.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let mgn_slice = mgn_lum.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let lum_slice = lum.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
 
     let snr_floor = (noise_floor * 3.0).max(1e-3);
 
@@ -773,7 +776,7 @@ pub fn compute_mgn_scaled_and_chroma_rs<'py>(
     let s_arr = Array3::from_shape_vec((h, w, 3), scaled_vec).unwrap();
     let c_arr = Array3::from_shape_vec((h, w, 3), chroma_vec).unwrap();
 
-    (s_arr.into_pyarray(py), c_arr.into_pyarray(py))
+    Ok((s_arr.into_pyarray(py), c_arr.into_pyarray(py)))
 }
 
 /// 8. compute_mgn_prominence_mask_rs:
@@ -786,9 +789,9 @@ pub fn compute_mgn_prominence_mask_rs<'py>(
     mcx: f32,
     mcy: f32,
     max_r: f32,
-) -> Bound<'py, PyArray2<f32>> {
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
     let (h, w, _) = scaled_rgb.as_array().dim();
-    let s_slice = scaled_rgb.as_slice().unwrap();
+    let s_slice = scaled_rgb.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
     let max_r2 = max_r * max_r;
 
     let out_vec = py.allow_threads(|| {
@@ -818,7 +821,7 @@ pub fn compute_mgn_prominence_mask_rs<'py>(
         buf
     });
 
-    Array2::from_shape_vec((h, w), out_vec).unwrap().into_pyarray(py)
+    Ok(Array2::from_shape_vec((h, w), out_vec).unwrap().into_pyarray(py))
 }
 
 /// 9. blend_mgn_prominences_and_mask_rs:
@@ -832,12 +835,18 @@ pub fn blend_mgn_prominences_and_mask_rs<'py>(
     denoised_rgb: PyReadonlyArray3<'py, f32>,
     prom_w: Option<PyReadonlyArray2<'py, f32>>,
     m_bool: Option<PyReadonlyArray2<'py, bool>>,
-) -> Bound<'py, PyArray3<f32>> {
+) -> PyResult<Bound<'py, PyArray3<f32>>> {
     let (h, w, _) = scaled_rgb.as_array().dim();
-    let scaled_slice = scaled_rgb.as_slice().unwrap();
-    let denoised_slice = denoised_rgb.as_slice().unwrap();
-    let prom_slice = prom_w.as_ref().map(|p| p.as_slice().unwrap());
-    let m_slice = m_bool.as_ref().map(|m| m.as_slice().unwrap());
+    let scaled_slice = scaled_rgb.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let denoised_slice = denoised_rgb.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let prom_slice = prom_w
+        .as_ref()
+        .map(|p| p.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous")))
+        .transpose()?;
+    let m_slice = m_bool
+        .as_ref()
+        .map(|m| m.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous")))
+        .transpose()?;
 
     let out_vec = py.allow_threads(|| {
         let row_stride = w * 3;
@@ -883,7 +892,7 @@ pub fn blend_mgn_prominences_and_mask_rs<'py>(
         buf
     });
 
-    Array3::from_shape_vec((h, w, 3), out_vec).unwrap().into_pyarray(py)
+    Ok(Array3::from_shape_vec((h, w, 3), out_vec).unwrap().into_pyarray(py))
 }
 
 /// 10. display_detail_rings_rs:
@@ -1178,8 +1187,8 @@ pub fn display_detail_rings_rs<'py>(
     noise_floor: f32,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
     let (h, w) = detail.as_array().dim();
-    let detail_slice = detail.as_slice().unwrap();
-    let mask_slice = valid_mask.as_ref().map(|m| m.as_slice().unwrap());
+    let detail_slice = detail.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let mask_slice = valid_mask.as_ref().map(|m| m.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))).transpose()?;
 
     let out_vec = py.allow_threads(|| {
         display_detail_rings_raw(
@@ -1218,12 +1227,12 @@ pub fn accumulate_steerable_g2_rs<'py>(
     scale_weight: f32,
 ) -> PyResult<()> {
     let (_h, w) = hxx.as_array().dim();
-    let hxx_slice = hxx.as_slice().unwrap();
-    let hyy_slice = hyy.as_slice().unwrap();
-    let hxy_slice = hxy.as_slice().unwrap();
-    let j11_slice = j11.as_slice().unwrap();
-    let j22_slice = j22.as_slice().unwrap();
-    let j12_slice = j12.as_slice().unwrap();
+    let hxx_slice = hxx.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let hyy_slice = hyy.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let hxy_slice = hxy.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let j11_slice = j11.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let j22_slice = j22.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let j12_slice = j12.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
 
     let acc_slice = unsafe {
         acc.as_slice_mut().map_err(|e| {
@@ -1338,8 +1347,8 @@ pub fn compute_larson_sekanina_rs<'py>(
     epsilon: f32,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
     let (h, w) = lum.as_array().dim();
-    let lum_slice = lum.as_slice().unwrap();
-    let mask_slice = exclusion_mask.as_ref().map(|m| m.as_slice().unwrap());
+    let lum_slice = lum.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let mask_slice = exclusion_mask.as_ref().map(|m| m.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))).transpose()?;
 
     let rad = delta_theta_deg.to_radians();
     let cos_a = rad.cos();
@@ -1422,7 +1431,7 @@ pub fn polar_circular_median_filter_rs<'py>(
     window_size: usize,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
     let (h_r, w_theta) = polar.as_array().dim();
-    let polar_slice = polar.as_slice().unwrap();
+    let polar_slice = polar.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
 
     let win = if window_size % 2 == 0 { window_size + 1 } else { window_size };
     let half = (win / 2) as isize;
@@ -1471,7 +1480,7 @@ pub fn compute_red_excess_mask_rs<'py>(
     if c < 3 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Requiere imagen RGB"));
     }
-    let rgb_slice = rgb.as_slice().unwrap();
+    let rgb_slice = rgb.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
 
     let width_px = 2.0f32;
     let inv_w = 1.0 / width_px;
@@ -1485,13 +1494,13 @@ pub fn compute_red_excess_mask_rs<'py>(
         for y in 0..h {
             let dy = y as f32 - center_y;
             let dy2 = dy * dy;
-            let row_offset = y * w * 3;
+            let row_offset = y * w * c;
             for x in 0..w {
                 let dx = x as f32 - center_x;
                 let r = (dx * dx + dy2).sqrt();
                 if r >= r_min && r <= r_max {
                     let b = (((r - r_min) * inv_w) as usize).min(n_bins - 1);
-                    let p_idx = row_offset + x * 3;
+                    let p_idx = row_offset + x * c;
                     let red = rgb_slice[p_idx];
                     let green = rgb_slice[p_idx + 1];
                     let ratio = red / green.max(1e-4);
@@ -1517,13 +1526,13 @@ pub fn compute_red_excess_mask_rs<'py>(
             .for_each(|(y, row_mask)| {
                 let dy = y as f32 - center_y;
                 let dy2 = dy * dy;
-                let row_offset = y * w * 3;
+                let row_offset = y * w * c;
                 for x in 0..w {
                     let dx = x as f32 - center_x;
                     let r = (dx * dx + dy2).sqrt();
                     if r >= r_min && r <= r_max {
                         let b = (((r - r_min) * inv_w) as usize).min(n_bins - 1);
-                        let p_idx = row_offset + x * 3;
+                        let p_idx = row_offset + x * c;
                         let red = rgb_slice[p_idx];
                         let green = rgb_slice[p_idx + 1];
                         let ratio = red / green.max(1e-4);
@@ -1720,9 +1729,9 @@ pub fn paired_b3_step_rs<'py>(
     Bound<'py, PyArray2<bool>>,
 )> {
     let (h, w) = c.as_array().dim();
-    let c_slice = c.as_slice().unwrap();
-    let m_slice = m.as_slice().unwrap();
-    let guide_slice = guide.as_ref().map(|g| g.as_slice().unwrap());
+    let c_slice = c.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let m_slice = m.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let guide_slice = guide.as_ref().map(|g| g.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))).transpose()?;
 
     let (out_vec, compl_vec, pair_vec) = py.allow_threads(|| {
         let mut out = vec![0.0f32; h * w];
@@ -1835,8 +1844,8 @@ pub fn b3_normalized_rs<'py>(
     step: usize,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
     let (h, w) = a.as_array().dim();
-    let a_slice = a.as_slice().unwrap();
-    let m_slice = m.as_slice().unwrap();
+    let a_slice = a.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
+    let m_slice = m.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
 
     let out_vec = py.allow_threads(|| {
         let mut out = vec![0.0f32; h * w];
@@ -1990,7 +1999,7 @@ pub fn apply_wow_edge_aware_rs<'py>(
         ));
     };
 
-    let img_slice = image.as_slice().unwrap();
+    let img_slice = image.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
 
     let out_vec = py.allow_threads(|| {
         let n_pixels = h * w;
@@ -2589,7 +2598,7 @@ pub fn apply_nafe_rs<'py>(
         ));
     };
 
-    let img_slice = image.as_slice().unwrap();
+    let img_slice = image.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
 
     let out_vec = py.allow_threads(|| {
         let n_pixels = h * w;
@@ -2927,7 +2936,7 @@ pub fn apply_asinh_stretch_rs<'py>(
 
     if let Ok(arr3) = image.extract::<PyReadonlyArray3<f32>>() {
         let (h, w, c) = arr3.as_array().dim();
-        let img_slice = arr3.as_slice().unwrap();
+        let img_slice = arr3.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
 
         let out_vec = py.allow_threads(|| {
             let total = h * w * c;
@@ -3061,7 +3070,7 @@ pub fn apply_asinh_stretch_rs<'py>(
         Ok(py_arr.into_pyarray(py).into_any())
     } else if let Ok(arr2) = image.extract::<PyReadonlyArray2<f32>>() {
         let (h, w) = arr2.as_array().dim();
-        let img_slice = arr2.as_slice().unwrap();
+        let img_slice = arr2.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
 
         let out_vec = py.allow_threads(|| {
             let total = h * w;
@@ -3129,7 +3138,7 @@ pub fn balance_coronal_white_balance_rs<'py>(
 ) -> PyResult<(Bound<'py, PyAny>, (f32, f32, f32))> {
     if let Ok(arr3) = image.extract::<PyReadonlyArray3<f32>>() {
         let (h, w, c) = arr3.as_array().dim();
-        let img_slice = arr3.as_slice().unwrap();
+        let img_slice = arr3.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
 
         if c != 3 {
             let out_arr = Array3::from_shape_vec((h, w, c), img_slice.to_vec())
@@ -3208,7 +3217,7 @@ pub fn balance_coronal_white_balance_rs<'py>(
         Ok((out_arr.into_pyarray(py).into_any(), gains))
     } else if let Ok(arr2) = image.extract::<PyReadonlyArray2<f32>>() {
         let (h, w) = arr2.as_array().dim();
-        let img_slice = arr2.as_slice().unwrap();
+        let img_slice = arr2.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous"))?;
         let out_arr = Array2::from_shape_vec((h, w), img_slice.to_vec())
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Shape inválido: {}", e)))?;
         Ok((out_arr.into_pyarray(py).into_any(), (1.0, 1.0, 1.0)))
@@ -3569,8 +3578,8 @@ pub fn fuse_hdr_bracketing_solar_rs<'py>(
         }
         let img_slices: Vec<&[f32]> = arrs
             .iter()
-            .map(|a| a.as_slice().unwrap())
-            .collect();
+            .map(|a| a.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous")))
+            .collect::<Result<Vec<_>, _>>()?;
 
         let bg: Vec<[f32; 3]> = match bg_pedestals {
             Some(ref peds) if peds.len() == n => peds
@@ -3756,8 +3765,8 @@ pub fn fuse_hdr_bracketing_solar_rs<'py>(
         }
         let img_slices: Vec<&[f32]> = arrs
             .iter()
-            .map(|a| a.as_slice().unwrap())
-            .collect();
+            .map(|a| a.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("Array must be C-contiguous")))
+            .collect::<Result<Vec<_>, _>>()?;
 
         let bg: Vec<f32> = match bg_pedestals {
             Some(ref peds) if peds.len() == n => peds

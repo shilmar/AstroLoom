@@ -250,6 +250,11 @@ def _is_cache_valid(cache_path: str, original_path: str) -> bool:
 _SESSION_CACHE: dict[str, "ort.InferenceSession"] = {}
 
 
+def clear_session_cache() -> None:
+    """Libera las sesiones ONNX cacheadas para devolver VRAM/RAM al sistema."""
+    _SESSION_CACHE.clear()
+
+
 def _create_inference_session(model_path: str, use_cache: bool = True, force_cpu: bool = False) -> "ort.InferenceSession":
     """
     Inicializa o recupera de caché la sesión ONNX con el proveedor de hardware más rápido disponible.
@@ -413,9 +418,12 @@ def _run_single_scale_tiled(
                     logger.warning(f"Error GPU en NAFNet ({run_err}). Degradando a CPU...")
                     notify_gpu_fallback(f"NAFNet AI Denoise: {run_err}")
                     import gc
+                    _SESSION_CACHE.pop(os.path.abspath(model_path), None)
                     gc.collect()
                     try:
                         session = _create_inference_session(model_path, use_cache=True, force_cpu=True)
+                        # Actualizar caché principal para que pasadas posteriores usen CPU directamente
+                        _SESSION_CACHE[os.path.abspath(model_path)] = session
                         input_name = session.get_inputs()[0].name
                         output_name = session.get_outputs()[0].name
                         outputs = session.run([output_name], {input_name: tensor_in})
@@ -574,6 +582,10 @@ def run_nafnet_tiled_inference(
 
     # Pasada 2: Escala media (0.5x) para croma desacoplado
     if use_multiscale:
+        # Recuperar sesión actualizada por si Pasada 1 degradó de GPU a CPU
+        session = _SESSION_CACHE.get(os.path.abspath(path), session)
+        input_name = session.get_inputs()[0].name
+        output_name = session.get_outputs()[0].name
         small_in = cv2.resize(base_stretched, (w_half, h_half), interpolation=cv2.INTER_AREA)
         out_05x_small = _run_single_scale_tiled(
             small_in, session, input_name, output_name,

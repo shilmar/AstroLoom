@@ -114,7 +114,7 @@ pub fn apply_layer_adjustments_fused<'py>(
     };
 
     let effective_lut: Option<Vec<f32>> = if let Some(lut) = curve_lut {
-        Some(lut.as_slice().unwrap().to_vec())
+        Some(lut.as_array().iter().copied().collect())
     } else if contrast.abs() > 1e-3 {
         let mut v = Vec::with_capacity(256);
         for i in 0..256 {
@@ -790,9 +790,9 @@ pub fn blend_orton_and_diffusion_rs<'py>(
     let (h, w, c) = img_view.dim();
 
     let t_factors: [f32; 3] = if let Some(ref t) = tint {
-        let ts = t.as_slice().unwrap();
-        if ts.len() >= 3 {
-            [ts[0], ts[1], ts[2]]
+        let tv = t.as_array();
+        if tv.len() >= 3 {
+            [tv[0], tv[1], tv[2]]
         } else {
             [1.0, 1.0, 1.0]
         }

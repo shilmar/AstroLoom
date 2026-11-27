@@ -48,9 +48,6 @@ try:
 except ImportError:
     HAS_RUST = False
 
-_MASK_3D_LOCK = threading.Lock()
-_MASK_3D_CACHE: Dict[Tuple[int, int, int], np.ndarray] = {}
-
 
 class ResolutionPyramid:
     """Multi-resolution image pyramid for high-performance interactive preview rendering.
@@ -172,17 +169,7 @@ def apply_developer_pipeline(
             precomputed_mask = cv2.resize(precomputed_mask, (tw, th), interpolation=cv2.INTER_LINEAR)
         if target_img.ndim == 3:
             if precomputed_mask.ndim == 2:
-                mk = (id(precomputed_mask), th, tw)
-                with _MASK_3D_LOCK:
-                    cached_m3 = _MASK_3D_CACHE.get(mk)
-                if cached_m3 is not None:
-                    precomputed_mask = cached_m3
-                else:
-                    precomputed_mask = np.ascontiguousarray(np.repeat(precomputed_mask[..., np.newaxis], 3, axis=2))
-                    with _MASK_3D_LOCK:
-                        if len(_MASK_3D_CACHE) >= 16:
-                            _MASK_3D_CACHE.clear()
-                        _MASK_3D_CACHE[mk] = precomputed_mask
+                precomputed_mask = np.ascontiguousarray(np.repeat(precomputed_mask[..., np.newaxis], 3, axis=2))
             elif precomputed_mask.ndim == 3 and precomputed_mask.shape[2] == 1:
                 precomputed_mask = np.repeat(precomputed_mask, 3, axis=2)
     edge_shift = getattr(state, "gnd_edge_shift_val", 0)
@@ -257,7 +244,11 @@ def apply_developer_pipeline(
 
                 unclip_amt = getattr(state, 'unclip_stars_val', 0) / 100.0
                 if unclip_amt > 1e-4:
-                    img = unclip_stars(img)
+                    unclipped = unclip_stars(img)
+                    if unclip_amt >= 0.999:
+                        img = unclipped
+                    else:
+                        img = np.clip(img * (1.0 - unclip_amt) + unclipped * unclip_amt, 0.0, 1.0)
 
                 unpurple_amt = getattr(state, 'unpurple_val', 0) / 100.0
                 scnr_amt = getattr(state, 'scnr_green_val', 0) / 100.0

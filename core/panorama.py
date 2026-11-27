@@ -1680,11 +1680,6 @@ def stitch_nightscape_panorama(
             best_idx[y1:y2, x1:x2][better] = i
             del c_m, w_mask, dist
 
-        # Rellenar cualquier píxel no asignado en fronteras con el vecino más cercano
-        unassigned = (best_idx < 0) & (best_dist > 0)
-        if np.any(unassigned):
-            _, nearest_lbl = cv2.distanceTransformWithLabels((best_idx >= 0).astype(np.uint8), cv2.DIST_L2, 3, labelType=cv2.DIST_LABEL_PIXEL)
-
         # Fusión Multibanda con Desacoplamiento Cielo / Suelo (Anti-Ghosting de horizonte)
         num_bands = max(1, min(6, settings.blend_bands if settings.blend_bands > 0 else 5))
         blender_sky = cv2.detail_MultiBandBlender(0, num_bands)

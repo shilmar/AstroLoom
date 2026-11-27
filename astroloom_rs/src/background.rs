@@ -154,11 +154,15 @@ pub fn apply_bg_model_fused<'py>(
 ) -> Bound<'py, PyArray3<f32>> {
     let img = img_rgb.as_array();
     let bg = bg_full.as_array();
-    let ped = pedestal.as_slice().unwrap();
+    let ped = pedestal.as_array();
     let mask_opt = sky_mask.as_ref().map(|m| m.as_array());
 
     let (h, w, c) = img.dim();
-    let ped_rgb = [ped[0], ped[1], ped[2]];
+    let ped_rgb = if ped.len() >= 3 {
+        [ped[0], ped[1], ped[2]]
+    } else {
+        [0.0, 0.0, 0.0]
+    };
 
     let out_vec = py.allow_threads(|| {
         let row_stride = w * c;

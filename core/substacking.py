@@ -81,7 +81,12 @@ def _detect_single_frame_features(
     Tarea multihilo: carga y calibra la toma, detecta estrellas en el cielo y devuelve keypoints/descriptores.
     """
     try:
-        raw_f32 = load_image_as_float32(path)
+        raw_f32 = load_image_as_float32(
+            path,
+            master_dark=master_dark,
+            master_flat=master_flat,
+            master_bias=master_bias,
+        )
         calibrated = calibrate_light(raw_f32, master_dark=master_dark, master_flat=master_flat, master_bias=master_bias)
         del raw_f32
 
@@ -124,79 +129,90 @@ def compute_adjacent_homographies(
     if progress_callback:
         progress_callback(5, f"Analizando estrellas en {n_files} tomas ({workers} hilos concurrentes)...")
 
-    # Fase 1.1: Extracción de características multihilo
-    completed_features = 0
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        future_map = {
-            executor.submit(
-                _detect_single_frame_features,
-                i, files[i], sky_mask, master_dark, master_flat, master_bias
-            ): i for i in range(n_files)
-        }
-
-        for fut in as_completed(future_map):
-            if abort_flag and abort_flag():
-                executor.shutdown(wait=False, cancel_futures=True)
-                raise InterruptedError("Operación cancelada por el usuario.")
-
-            idx, kps, desc, gray = fut.result()
-            if kps is not None and desc is not None and gray is not None:
-                frame_features[idx] = (kps, desc, gray)
-
-            completed_features += 1
-            if progress_callback and completed_features % max(1, n_files // 20) == 0:
-                pct = 5 + int((completed_features / float(n_files)) * 25.0)
-                progress_callback(pct, f"Analizando estrellas: {completed_features}/{n_files} tomas listas")
-
-    if abort_flag and abort_flag():
-        raise InterruptedError("Operación cancelada por el usuario.")
-
-    if progress_callback:
-        progress_callback(30, "Calculando cadena de homografías adyacentes...")
-
-    # Fase 1.2: Emparejamiento lineal entre tomas consecutivas adyacentes (ultrarrápido, ~2ms por par)
-    adjacent_H: List[np.ndarray] = []
+    # Fase 1: Extracción de características y emparejamiento en ventana deslizante O(workers) RAM
+    adjacent_H: List[np.ndarray] = [np.eye(3, dtype=np.float64) for _ in range(n_files - 1)]
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+    completed_features = 0
+    next_pair_idx = 1
+    max_in_flight = max(workers * 2, 4)
 
-    for i in range(1, n_files):
-        if abort_flag and abort_flag():
-            raise InterruptedError("Operación cancelada por el usuario.")
+    def _resolve_ready_pairs():
+        nonlocal next_pair_idx
+        while next_pair_idx < n_files and (next_pair_idx - 1) in frame_features and next_pair_idx in frame_features:
+            if abort_flag and abort_flag():
+                raise InterruptedError("Operación cancelada por el usuario.")
+            prev_feat = frame_features.pop(next_pair_idx - 1)
+            curr_feat = frame_features[next_pair_idx]
+            if prev_feat is not None and curr_feat is not None:
+                prev_kps, prev_desc, prev_gray = prev_feat
+                curr_kps, curr_desc, curr_gray = curr_feat
+                try:
+                    if len(prev_kps) >= 10 and len(curr_kps) >= 10:
+                        matches = bf.knnMatch(prev_desc, curr_desc, k=2)
+                        good = [m for m, n in matches if len((m, n)) == 2 and m.distance < 0.82 * n.distance]
+                        if len(good) >= 8:
+                            ref_pts = np.float32([prev_kps[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+                            curr_pts = np.float32([curr_kps[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+                            curr_pts_refined, status, _ = cv2.calcOpticalFlowPyrLK(
+                                prev_gray, curr_gray, ref_pts, curr_pts,
+                                winSize=(21, 21), maxLevel=3,
+                                criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01),
+                                flags=cv2.OPTFLOW_USE_INITIAL_FLOW
+                            )
+                            valid = (status.flatten() == 1)
+                            if np.sum(valid) >= 6:
+                                p_src = ref_pts[valid]
+                                p_dst = curr_pts_refined[valid]
+                                H_est, inliers = cv2.findHomography(p_src, p_dst, cv2.RANSAC, 2.5)
+                                if H_est is not None and inliers is not None and np.sum(inliers) >= 6:
+                                    adjacent_H[next_pair_idx - 1] = H_est.astype(np.float64)
+                except Exception as e:
+                    print(f"[Substacking] Advertencia homografía {next_pair_idx-1}->{next_pair_idx}: {e}")
+            next_pair_idx += 1
 
-        H_prev_to_curr = np.eye(3, dtype=np.float64)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        in_flight = {}
+        next_submit = 0
 
-        if (i - 1) in frame_features and i in frame_features:
-            prev_kps, prev_desc, prev_gray = frame_features[i - 1]
-            curr_kps, curr_desc, curr_gray = frame_features[i]
+        while next_submit < n_files and len(in_flight) < max_in_flight:
+            fut = executor.submit(
+                _detect_single_frame_features,
+                next_submit, files[next_submit], sky_mask, master_dark, master_flat, master_bias
+            )
+            in_flight[fut] = next_submit
+            next_submit += 1
 
-            try:
-                if len(prev_kps) >= 10 and len(curr_kps) >= 10:
-                    matches = bf.knnMatch(prev_desc, curr_desc, k=2)
-                    good = [m for m, n in matches if len((m, n)) == 2 and m.distance < 0.82 * n.distance]
+        while in_flight:
+            for fut in as_completed(list(in_flight.keys())):
+                in_flight.pop(fut, None)
+                if abort_flag and abort_flag():
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    raise InterruptedError("Operación cancelada por el usuario.")
 
-                    if len(good) >= 8:
-                        ref_pts = np.float32([prev_kps[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-                        curr_pts = np.float32([curr_kps[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+                idx, kps, desc, gray = fut.result()
+                if kps is not None and desc is not None and gray is not None:
+                    frame_features[idx] = (kps, desc, gray)
+                else:
+                    frame_features[idx] = None
 
-                        curr_pts_refined, status, _ = cv2.calcOpticalFlowPyrLK(
-                            prev_gray, curr_gray, ref_pts, curr_pts,
-                            winSize=(21, 21), maxLevel=3,
-                            criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01),
-                            flags=cv2.OPTFLOW_USE_INITIAL_FLOW
-                        )
+                _resolve_ready_pairs()
 
-                        valid = (status.flatten() == 1)
-                        if np.sum(valid) >= 6:
-                            p_src = ref_pts[valid]
-                            p_dst = curr_pts_refined[valid]
-                            H_est, inliers = cv2.findHomography(p_src, p_dst, cv2.RANSAC, 2.5)
-                            if H_est is not None and inliers is not None and np.sum(inliers) >= 6:
-                                H_prev_to_curr = H_est.astype(np.float64)
-            except Exception as e:
-                print(f"[Substacking] Advertencia homografía {i-1}->{i}: {e}")
+                completed_features += 1
+                if progress_callback and completed_features % max(1, n_files // 20) == 0:
+                    pct = 5 + int((completed_features / float(n_files)) * 25.0)
+                    progress_callback(pct, f"Analizando estrellas: {completed_features}/{n_files} tomas listas")
 
-        adjacent_H.append(H_prev_to_curr)
+                if next_submit < n_files:
+                    nfut = executor.submit(
+                        _detect_single_frame_features,
+                        next_submit, files[next_submit], sky_mask, master_dark, master_flat, master_bias
+                    )
+                    in_flight[nfut] = next_submit
+                    next_submit += 1
+                break
 
-    del frame_features
+    _resolve_ready_pairs()
+    frame_features.clear()
     gc.collect()
     return adjacent_H
 
@@ -400,7 +416,12 @@ def run_rolling_substack(
             # Carga, calibración y redimensionado de tomas faltantes directamente a (tw, th)
             for idx in curr_window_indices:
                 if idx not in frame_cache:
-                    f_raw = load_image_as_float32(files[idx])
+                    f_raw = load_image_as_float32(
+                        files[idx],
+                        master_dark=master_dark,
+                        master_flat=master_flat,
+                        master_bias=master_bias,
+                    )
                     f_cal = calibrate_light(f_raw, master_dark=master_dark, master_flat=master_flat, master_bias=master_bias)
                     del f_raw
                     if is_scaled:

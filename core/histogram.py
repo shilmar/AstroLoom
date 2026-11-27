@@ -71,8 +71,8 @@ def compute_live_histogram(
 
     hist_raw = _compute_histogram_cv(img, step)
 
-    has_shadow_clip = bool(hist_raw[3, 0] > 0 or hist_raw[0, 0] > 0)
-    has_highlight_clip = bool(hist_raw[3, 255] > 0 or hist_raw[0, 255] > 0)
+    has_shadow_clip = bool(np.any(hist_raw[:, 0] > 0))
+    has_highlight_clip = bool(np.any(hist_raw[:, 255] > 0))
 
     # Compresión logarítmica astronómica
     r_log = np.log1p(hist_raw[0].astype(np.float32))

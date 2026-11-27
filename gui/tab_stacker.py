@@ -1122,16 +1122,18 @@ class StackerTab(QWidget):
                 self.log_message(f"✓ [INGESTA] {len(paths)} tomas verificadas en {elapsed:.3f}s{cam_info}")
 
         if tab_name == "Lights":
-            first_add = len(self.lights_list) == 0
+            first_add = (len(self.lights_list) == 0) or (not getattr(self, "current_ref_path", None))
             new_paths = [p for p in paths if p not in self.lights_list]
-            self.table_widget_lights.add_files(new_paths, meta_batch=meta_batch)
+            if new_paths:
+                self.table_widget_lights.add_files(new_paths, meta_batch=meta_batch)
             if first_add and self.lights_list:
                 self.current_ref_path = self.lights_list[0]
                 self.table_widget_lights.set_reference_index(0)
                 self.load_frame_to_canvas(self.lights_list[0])
             self.tabs_files.setCurrentIndex(0)
             self._update_culling_summary_label()
-            self.log_message(f"Añadidos {len(new_paths)} Lights (Total: {len(self.lights_list)})")
+            added_cnt = len(new_paths) if new_paths else len(paths)
+            self.log_message(f"Añadidos {added_cnt} Lights (Total: {len(self.lights_list)})")
 
         elif tab_name == "Darks":
             new_paths = [p for p in paths if p not in self.darks_list]

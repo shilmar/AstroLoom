@@ -34,9 +34,52 @@ pub fn calibrate_raw_cfa_inplace_rs(
         pyo3::exceptions::PyValueError::new_err(format!("raw_cfa_u16 must be C-contiguous: {:?}", e))
     })?;
 
-    let dark_slice = master_dark.as_ref().and_then(|d| d.as_slice().ok());
-    let flat_slice = master_flat.as_ref().and_then(|f| f.as_slice().ok());
-    let bias_slice = master_bias.as_ref().and_then(|b| b.as_slice().ok());
+    let expected_len = cfa_slice.len();
+    let dark_slice = match master_dark.as_ref() {
+        Some(d) => {
+            let s = d.as_slice().map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("master_dark must be C-contiguous: {:?}", e))
+            })?;
+            if s.len() != expected_len {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "master_dark length ({}) != raw_cfa_u16 length ({})",
+                    s.len(), expected_len
+                )));
+            }
+            Some(s)
+        }
+        None => None,
+    };
+    let flat_slice = match master_flat.as_ref() {
+        Some(f) => {
+            let s = f.as_slice().map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("master_flat must be C-contiguous: {:?}", e))
+            })?;
+            if s.len() != expected_len {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "master_flat length ({}) != raw_cfa_u16 length ({})",
+                    s.len(), expected_len
+                )));
+            }
+            Some(s)
+        }
+        None => None,
+    };
+    let bias_slice = match master_bias.as_ref() {
+        Some(b) => {
+            let s = b.as_slice().map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("master_bias must be C-contiguous: {:?}", e))
+            })?;
+            if s.len() != expected_len {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "master_bias length ({}) != raw_cfa_u16 length ({})",
+                    s.len(), expected_len
+                )));
+            }
+            Some(s)
+        }
+        None => None,
+    };
 
     py.allow_threads(|| {
         cfa_slice
@@ -246,7 +289,12 @@ pub fn recover_star_trail_colors_rs<'py>(
 ) -> PyResult<Bound<'py, PyArray3<f32>>> {
     let img = img_rgb.as_array();
     let shape = img.shape();
-    let (h, w, _) = (shape[0], shape[1], shape[2]);
+    let (h, w, ch) = (shape[0], shape[1], shape[2]);
+    if ch < 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "img_rgb must have at least 3 channels",
+        ));
+    }
 
     if saturation_boost <= 1.0 && core_recovery <= 0.0 {
         let mut out = Array3::<f32>::zeros((h, w, 3));
@@ -255,220 +303,275 @@ pub fn recover_star_trail_colors_rs<'py>(
     }
 
     let mask_view = sky_mask.as_ref().map(|m| m.as_array());
-
-    // 1. Luminancia y cálculo de fondo estelar
-    let mut lum = vec![0.0f32; h * w];
-    for r in 0..h {
-        let row_offset = r * w;
-        for c in 0..w {
-            let r_val = img[[r, c, 0]];
-            let g_val = img[[r, c, 1]];
-            let b_val = img[[r, c, 2]];
-            lum[row_offset + c] = 0.299 * r_val + 0.587 * g_val + 0.114 * b_val;
+    if let Some(ref m) = mask_view {
+        if m.dim() != (h, w) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "sky_mask shape {:?} != ({}, {})",
+                m.dim(),
+                h,
+                w
+            )));
         }
     }
 
-    // Muestreo subpixel (cada 8 píxeles) para estimar mediana y MAD
-    let mut sample = Vec::with_capacity((h / 8 + 1) * (w / 8 + 1));
-    for r in (0..h).step_by(8) {
-        let row_offset = r * w;
-        for c in (0..w).step_by(8) {
-            sample.push(lum[row_offset + c]);
-        }
-    }
-
-    let med_bg = median_f32_slice(&mut sample);
-    let mut dev: Vec<f32> = sample.iter().map(|&v| (v - med_bg).abs()).collect();
-    let mad_bg = 1.4826 * median_f32_slice(&mut dev);
-
-    let star_thresh = med_bg + (mad_bg * 2.5).max(0.025);
-
-    // 2. Máscara de peso estelar suave y conversión HSV
-    let mut star_weight = vec![0.0f32; h * w];
-    let mut h_chan = vec![0.0f32; h * w];
-    let mut s_chan = vec![0.0f32; h * w];
-    let mut v_chan = vec![0.0f32; h * w];
-
-    let mut has_core = false;
-    let mut has_valid_star = false;
-
-    for r in 0..h {
-        let row_offset = r * w;
-        for c in 0..w {
-            let idx = row_offset + c;
-            let l = lum[idx];
-
-            let mut sw = if bg_protect {
-                let w_norm = ((l - star_thresh) / star_thresh.max(0.04)).clamp(0.0, 1.0);
-                w_norm * w_norm * (3.0 - 2.0 * w_norm)
-            } else {
-                1.0
-            };
-
-            if let Some(ref m) = mask_view {
-                let mut sm_val = m[[r, c]];
-                if sm_val > 1.05 {
-                    sm_val /= 255.0;
+    let out = py.allow_threads(|| {
+        // 1. Luminancia y cálculo de fondo estelar (paralelo)
+        let mut lum = vec![0.0f32; h * w];
+        lum.par_chunks_exact_mut(w)
+            .enumerate()
+            .for_each(|(r, row)| {
+                for c in 0..w {
+                    let r_val = img[[r, c, 0]];
+                    let g_val = img[[r, c, 1]];
+                    let b_val = img[[r, c, 2]];
+                    row[c] = 0.299 * r_val + 0.587 * g_val + 0.114 * b_val;
                 }
-                sw *= sm_val.clamp(0.0, 1.0);
-            }
-            star_weight[idx] = sw;
+            });
 
-            // RGB to HSV
-            let red = img[[r, c, 0]].clamp(0.0, 1.0);
-            let grn = img[[r, c, 1]].clamp(0.0, 1.0);
-            let blu = img[[r, c, 2]].clamp(0.0, 1.0);
-
-            let max_val = red.max(grn).max(blu);
-            let min_val = red.min(grn).min(blu);
-            let delta = max_val - min_val;
-
-            let v = max_val;
-            let s = if max_val > 1e-6 { delta / max_val } else { 0.0 };
-            let mut h_deg = if delta < 1e-6 {
-                0.0
-            } else if (max_val - red).abs() < 1e-6 {
-                60.0 * ((grn - blu) / delta)
-            } else if (max_val - grn).abs() < 1e-6 {
-                60.0 * ((blu - red) / delta + 2.0)
-            } else {
-                60.0 * ((red - grn) / delta + 4.0)
-            };
-            if h_deg < 0.0 {
-                h_deg += 360.0;
-            }
-
-            h_chan[idx] = h_deg;
-            s_chan[idx] = s;
-            v_chan[idx] = v;
-
-            if core_recovery > 0.0 {
-                if v > 0.75 && s < 0.35 && sw > 0.15 {
-                    has_core = true;
-                }
-                if sw > 0.20 && s > 0.15 && v > star_thresh {
-                    has_valid_star = true;
-                }
-            }
-        }
-    }
-
-    // 3. Recuperación de color en núcleos quemados (Core Recovery)
-    if core_recovery > 0.0 && has_core && has_valid_star {
-        let mut u_src = vec![0.0f32; h * w];
-        let mut v_src = vec![0.0f32; h * w];
-        let mut norm_src = vec![0.0f32; h * w];
-
-        for i in 0..(h * w) {
-            let sw = star_weight[i];
-            let s = s_chan[i];
-            let v = v_chan[i];
-            if sw > 0.20 && s > 0.15 && v > star_thresh {
-                let rad = h_chan[i].to_radians();
-                u_src[i] = s * rad.cos();
-                v_src[i] = s * rad.sin();
-                norm_src[i] = 1.0;
+        // Muestreo subpixel (cada 8 píxeles) para estimar mediana y MAD
+        let mut sample = Vec::with_capacity((h / 8 + 1) * (w / 8 + 1));
+        for r in (0..h).step_by(8) {
+            let row_offset = r * w;
+            for c in (0..w).step_by(8) {
+                sample.push(lum[row_offset + c]);
             }
         }
 
-        let mut k_size = (h.min(w) / 100).max(11);
-        if k_size % 2 == 0 {
-            k_size += 1;
-        }
-        let sigma = k_size as f32 / 2.5;
+        let med_bg = median_f32_slice(&mut sample);
+        let mut dev: Vec<f32> = sample.iter().map(|&v| (v - med_bg).abs()).collect();
+        let mad_bg = 1.4826 * median_f32_slice(&mut dev);
 
-        let u_diffused = gaussian_blur_separable_2d(&u_src, w, h, k_size, sigma);
-        let v_diffused = gaussian_blur_separable_2d(&v_src, w, h, k_size, sigma);
-        let norm_diffused = gaussian_blur_separable_2d(&norm_src, w, h, k_size, sigma);
+        let star_thresh = med_bg + (mad_bg * 2.5).max(0.025);
 
-        for i in 0..(h * w) {
-            let v = v_chan[i];
-            let s = s_chan[i];
-            let sw = star_weight[i];
-            let is_core = v > 0.75 && s < 0.35 && sw > 0.15;
+        // 2. Máscara de peso estelar suave y conversión HSV (paralelo)
+        let mut star_weight = vec![0.0f32; h * w];
+        let mut h_chan = vec![0.0f32; h * w];
+        let mut s_chan = vec![0.0f32; h * w];
+        let mut v_chan = vec![0.0f32; h * w];
 
-            if is_core {
-                let nd = norm_diffused[i].max(1e-5);
-                let u_rec = u_diffused[i] / nd;
-                let v_rec = v_diffused[i] / nd;
-                let rec_s = (u_rec * u_rec + v_rec * v_rec).sqrt().clamp(0.0, 1.0);
-                let mut rec_h = v_rec.atan2(u_rec).to_degrees();
-                if rec_h < 0.0 {
-                    rec_h += 360.0;
+        let has_core_flag = std::sync::atomic::AtomicBool::new(false);
+        let has_valid_flag = std::sync::atomic::AtomicBool::new(false);
+
+        star_weight
+            .par_chunks_exact_mut(w)
+            .zip(h_chan.par_chunks_exact_mut(w))
+            .zip(s_chan.par_chunks_exact_mut(w))
+            .zip(v_chan.par_chunks_exact_mut(w))
+            .enumerate()
+            .for_each(|(r, (((sw_row, h_row), s_row), v_row))| {
+                let row_offset = r * w;
+                let mut local_core = false;
+                let mut local_valid = false;
+                for c in 0..w {
+                    let l = lum[row_offset + c];
+
+                    let mut sw = if bg_protect {
+                        let w_norm = ((l - star_thresh) / star_thresh.max(0.04)).clamp(0.0, 1.0);
+                        w_norm * w_norm * (3.0 - 2.0 * w_norm)
+                    } else {
+                        1.0
+                    };
+
+                    if let Some(ref m) = mask_view {
+                        let mut sm_val = m[[r, c]];
+                        if sm_val > 1.05 {
+                            sm_val /= 255.0;
+                        }
+                        sw *= sm_val.clamp(0.0, 1.0);
+                    }
+                    sw_row[c] = sw;
+
+                    let red = img[[r, c, 0]].clamp(0.0, 1.0);
+                    let grn = img[[r, c, 1]].clamp(0.0, 1.0);
+                    let blu = img[[r, c, 2]].clamp(0.0, 1.0);
+
+                    let max_val = red.max(grn).max(blu);
+                    let min_val = red.min(grn).min(blu);
+                    let delta = max_val - min_val;
+
+                    let v = max_val;
+                    let s = if max_val > 1e-6 { delta / max_val } else { 0.0 };
+                    let mut h_deg = if delta < 1e-6 {
+                        0.0
+                    } else if (max_val - red).abs() < 1e-6 {
+                        60.0 * ((grn - blu) / delta)
+                    } else if (max_val - grn).abs() < 1e-6 {
+                        60.0 * ((blu - red) / delta + 2.0)
+                    } else {
+                        60.0 * ((red - grn) / delta + 4.0)
+                    };
+                    if h_deg < 0.0 {
+                        h_deg += 360.0;
+                    }
+
+                    h_row[c] = h_deg;
+                    s_row[c] = s;
+                    v_row[c] = v;
+
+                    if core_recovery > 0.0 {
+                        if v > 0.75 && s < 0.35 && sw > 0.15 {
+                            local_core = true;
+                        }
+                        if sw > 0.20 && s > 0.15 && v > star_thresh {
+                            local_valid = true;
+                        }
+                    }
                 }
-
-                let confidence = (nd * 2.0).clamp(0.0, 1.0);
-                let infuse = (core_recovery * confidence).clamp(0.0, 1.0);
-
-                if infuse > 0.0 {
-                    h_chan[i] = (1.0 - infuse) * h_chan[i] + infuse * rec_h;
-                    let target_core_s = (rec_s * 1.25).clamp(0.15, 0.75);
-                    s_chan[i] = s_chan[i].max(target_core_s * infuse);
+                if local_core {
+                    has_core_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
-            }
-        }
-    }
-
-    // 4. Amplificación de Saturación y Reconstrucción RGB
-    let mut out = Array3::<f32>::zeros((h, w, 3));
-    let boost_factor = saturation_boost - 1.0;
-
-    for r in 0..h {
-        let row_offset = r * w;
-        for c in 0..w {
-            let idx = row_offset + c;
-            let mut s = s_chan[idx];
-            if saturation_boost > 1.0 {
-                let boost_mult = 1.0 + boost_factor * star_weight[idx];
-                s = (s * boost_mult).clamp(0.0, 1.0);
-            }
-
-            let v = v_chan[idx];
-            let h_deg = h_chan[idx];
-
-            // HSV to RGB
-            let chroma = v * s;
-            let h_prime = h_deg / 60.0;
-            let x = chroma * (1.0 - ((h_prime % 2.0) - 1.0).abs());
-            let m = v - chroma;
-
-            let (r1, g1, b1) = if h_prime < 1.0 {
-                (chroma, x, 0.0)
-            } else if h_prime < 2.0 {
-                (x, chroma, 0.0)
-            } else if h_prime < 3.0 {
-                (0.0, chroma, x)
-            } else if h_prime < 4.0 {
-                (0.0, x, chroma)
-            } else if h_prime < 5.0 {
-                (x, 0.0, chroma)
-            } else {
-                (chroma, 0.0, x)
-            };
-
-            let mut final_r = (r1 + m).clamp(0.0, 1.0);
-            let mut final_g = (g1 + m).clamp(0.0, 1.0);
-            let mut final_b = (b1 + m).clamp(0.0, 1.0);
-
-            if let Some(ref mask) = mask_view {
-                let mut sm_val = mask[[r, c]];
-                if sm_val > 1.05 {
-                    sm_val /= 255.0;
+                if local_valid {
+                    has_valid_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
-                sm_val = sm_val.clamp(0.0, 1.0);
-                let orig_r = img[[r, c, 0]];
-                let orig_g = img[[r, c, 1]];
-                let orig_b = img[[r, c, 2]];
-                final_r = final_r * sm_val + orig_r * (1.0 - sm_val);
-                final_g = final_g * sm_val + orig_g * (1.0 - sm_val);
-                final_b = final_b * sm_val + orig_b * (1.0 - sm_val);
-            }
+            });
 
-            out[[r, c, 0]] = final_r;
-            out[[r, c, 1]] = final_g;
-            out[[r, c, 2]] = final_b;
+        drop(lum);
+
+        let has_core = has_core_flag.load(std::sync::atomic::Ordering::Relaxed);
+        let has_valid_star = has_valid_flag.load(std::sync::atomic::Ordering::Relaxed);
+
+        // 3. Recuperación de color en núcleos quemados (Core Recovery)
+        if core_recovery > 0.0 && has_core && has_valid_star {
+            let mut u_src = vec![0.0f32; h * w];
+            let mut v_src = vec![0.0f32; h * w];
+            let mut norm_src = vec![0.0f32; h * w];
+
+            u_src
+                .par_iter_mut()
+                .zip(v_src.par_iter_mut())
+                .zip(norm_src.par_iter_mut())
+                .enumerate()
+                .for_each(|(i, ((u_o, v_o), n_o))| {
+                    let sw = star_weight[i];
+                    let s = s_chan[i];
+                    let v = v_chan[i];
+                    if sw > 0.20 && s > 0.15 && v > star_thresh {
+                        let rad = h_chan[i].to_radians();
+                        *u_o = s * rad.cos();
+                        *v_o = s * rad.sin();
+                        *n_o = 1.0;
+                    }
+                });
+
+            let mut k_size = (h.min(w) / 100).max(11);
+            if k_size % 2 == 0 {
+                k_size += 1;
+            }
+            let sigma = k_size as f32 / 2.5;
+
+            let u_diffused = gaussian_blur_separable_2d(&u_src, w, h, k_size, sigma);
+            let v_diffused = gaussian_blur_separable_2d(&v_src, w, h, k_size, sigma);
+            let norm_diffused = gaussian_blur_separable_2d(&norm_src, w, h, k_size, sigma);
+
+            h_chan
+                .par_iter_mut()
+                .zip(s_chan.par_iter_mut())
+                .enumerate()
+                .for_each(|(i, (h_out, s_out))| {
+                    let v = v_chan[i];
+                    let s = *s_out;
+                    let sw = star_weight[i];
+                    if v > 0.75 && s < 0.35 && sw > 0.15 {
+                        let nd = norm_diffused[i].max(1e-5);
+                        let u_rec = u_diffused[i] / nd;
+                        let v_rec = v_diffused[i] / nd;
+                        let rec_s = (u_rec * u_rec + v_rec * v_rec).sqrt().clamp(0.0, 1.0);
+                        let mut rec_h = v_rec.atan2(u_rec).to_degrees();
+                        if rec_h < 0.0 {
+                            rec_h += 360.0;
+                        }
+
+                        let confidence = (nd * 2.0).clamp(0.0, 1.0);
+                        let infuse = (core_recovery * confidence).clamp(0.0, 1.0);
+
+                        if infuse > 0.0 {
+                            // Interpolación angular circular para evitar artefactos cian en 355° <-> 5°
+                            let mut dh = rec_h - *h_out;
+                            if dh > 180.0 {
+                                dh -= 360.0;
+                            } else if dh < -180.0 {
+                                dh += 360.0;
+                            }
+                            let mut nh = *h_out + infuse * dh;
+                            if nh < 0.0 {
+                                nh += 360.0;
+                            } else if nh >= 360.0 {
+                                nh -= 360.0;
+                            }
+                            *h_out = nh;
+                            let target_core_s = (rec_s * 1.25).clamp(0.15, 0.75);
+                            *s_out = s.max(target_core_s * infuse);
+                        }
+                    }
+                });
         }
-    }
+
+        // 4. Amplificación de Saturación y Reconstrucción RGB (paralelo)
+        let mut out_vec = vec![0.0f32; h * w * 3];
+        let boost_factor = saturation_boost - 1.0;
+
+        out_vec
+            .par_chunks_exact_mut(w * 3)
+            .enumerate()
+            .for_each(|(r, out_row)| {
+                let row_offset = r * w;
+                for c in 0..w {
+                    let idx = row_offset + c;
+                    let mut s = s_chan[idx];
+                    if saturation_boost > 1.0 {
+                        let boost_mult = 1.0 + boost_factor * star_weight[idx];
+                        s = (s * boost_mult).clamp(0.0, 1.0);
+                    }
+
+                    let v = v_chan[idx];
+                    let h_deg = h_chan[idx];
+
+                    let chroma = v * s;
+                    let h_prime = h_deg / 60.0;
+                    let x = chroma * (1.0 - ((h_prime % 2.0) - 1.0).abs());
+                    let m = v - chroma;
+
+                    let (r1, g1, b1) = if h_prime < 1.0 {
+                        (chroma, x, 0.0)
+                    } else if h_prime < 2.0 {
+                        (x, chroma, 0.0)
+                    } else if h_prime < 3.0 {
+                        (0.0, chroma, x)
+                    } else if h_prime < 4.0 {
+                        (0.0, x, chroma)
+                    } else if h_prime < 5.0 {
+                        (x, 0.0, chroma)
+                    } else {
+                        (chroma, 0.0, x)
+                    };
+
+                    let mut final_r = (r1 + m).clamp(0.0, 1.0);
+                    let mut final_g = (g1 + m).clamp(0.0, 1.0);
+                    let mut final_b = (b1 + m).clamp(0.0, 1.0);
+
+                    if let Some(ref mask) = mask_view {
+                        let mut sm_val = mask[[r, c]];
+                        if sm_val > 1.05 {
+                            sm_val /= 255.0;
+                        }
+                        sm_val = sm_val.clamp(0.0, 1.0);
+                        let orig_r = img[[r, c, 0]];
+                        let orig_g = img[[r, c, 1]];
+                        let orig_b = img[[r, c, 2]];
+                        final_r = final_r * sm_val + orig_r * (1.0 - sm_val);
+                        final_g = final_g * sm_val + orig_g * (1.0 - sm_val);
+                        final_b = final_b * sm_val + orig_b * (1.0 - sm_val);
+                    }
+
+                    let base = c * 3;
+                    out_row[base] = final_r;
+                    out_row[base + 1] = final_g;
+                    out_row[base + 2] = final_b;
+                }
+            });
+
+        Array3::from_shape_vec((h, w, 3), out_vec).unwrap()
+    });
 
     Ok(out.into_pyarray(py))
 }

@@ -1359,7 +1359,7 @@ def export_layered_psd(
         })
 
     # 3. Capa de marcas horarias EXIF (opcional)
-    if include_captions:
+    if include_captions and placements:
         cap_rgb = np.zeros((canvas_h, canvas_w, 3), dtype=np.float32)
         text_mask = np.zeros((canvas_h, canvas_w), dtype=np.uint8)
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -1404,12 +1404,29 @@ def export_layered_psd(
             "alpha": cap_alpha
         })
 
+    merged_rgb = bg_rgb.copy()
+    for lyr in layers[1:]:
+        t, b, l, r = lyr["top"], lyr["bottom"], lyr["left"], lyr["right"]
+        src_rgb = lyr["rgb"]
+        src_a = lyr.get("alpha")
+        if src_a is None:
+            merged_rgb[t:b, l:r] = src_rgb
+        elif lyr.get("blend_mode") == "scrn":
+            dst = merged_rgb[t:b, l:r]
+            a3 = src_a[..., np.newaxis]
+            scrn = 1.0 - (1.0 - dst) * (1.0 - src_rgb)
+            merged_rgb[t:b, l:r] = np.clip(dst * (1.0 - a3) + scrn * a3, 0.0, 1.0)
+        else:
+            dst = merged_rgb[t:b, l:r]
+            a3 = src_a[..., np.newaxis]
+            merged_rgb[t:b, l:r] = np.clip(dst * (1.0 - a3) + src_rgb, 0.0, 1.0)
+
     astroloom_rs.write_psd_file(
         filepath,
         canvas_w,
         canvas_h,
         depth,
-        bg_rgb,
+        np.ascontiguousarray(merged_rgb, dtype=np.float32),
         layers
     )
 

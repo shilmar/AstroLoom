@@ -36,10 +36,19 @@ pub fn kappa_sigma_kernel<'py>(
     data: PyReadonlyArray2<'py, f32>,
     kappa: f32,
     weights: PyReadonlyArray1<'py, f32>,
-) -> Bound<'py, PyArray1<f32>> {
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
     let data_view: ArrayView2<f32> = data.as_array();
-    let weights_slice = weights.as_slice().unwrap();
+    let weights_slice = weights.as_slice().map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err("weights must be C-contiguous")
+    })?;
     let (n_frames, total_items) = data_view.dim();
+    if weights_slice.len() < n_frames {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "weights length ({}) < n_frames ({})",
+            weights_slice.len(),
+            n_frames
+        )));
+    }
 
     let out_vec: Vec<f32> = py.allow_threads(|| {
         let mut result = vec![0.0f32; total_items];
@@ -105,7 +114,7 @@ pub fn kappa_sigma_kernel<'py>(
         result
     });
 
-    Array1::from_vec(out_vec).into_pyarray(py)
+    Ok(Array1::from_vec(out_vec).into_pyarray(py))
 }
 
 #[pyfunction]

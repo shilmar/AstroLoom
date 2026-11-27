@@ -412,13 +412,7 @@ def run_starnet_onnx(
         log(f"Dividiendo imagen en {total_tiles} bloques ({tile_size}x{tile_size}, paso={stride}, margen={border}px)...")
 
         sess = _create_inference_session(path)
-        try:
-            out_tiles = np.zeros_like(tiles_4d)
-        except MemoryError:
-            import gc
-            gc.collect()
-            raise MemoryError("Memoria RAM insuficiente para asignar los bloques de StarNet. Aumenta el Stride para generar menos bloques.")
-
+        # Reutilizar tiles_4d in-place para evitar duplicar el pico de RAM del tensor 4D
         for tile_idx in range(total_tiles):
             if cancel_check and cancel_check():
                 log("Separación cancelada por el usuario.")
@@ -441,14 +435,14 @@ def run_starnet_onnx(
                     out_batch = sess.run(None, {'x:0': in_batch})[0]
                 else:
                     raise run_err
-            out_tiles[tile_idx] = np.clip(out_batch[0], 0.0, 1.0)
+            tiles_4d[tile_idx] = np.clip(out_batch[0], 0.0, 1.0)
 
             pct = int(((tile_idx + 1) / total_tiles) * 100)
             log(f"Separando estrellas con StarNet v2 AI...\nBloque {tile_idx + 1} de {total_tiles} ({pct}%)", tile_idx + 1, total_tiles)
 
         log("Recomponiendo imagen y revirtiendo estirado MTF en Rust...")
         final_starless = astroloom_rs.assemble_starnet_tiles_rs(
-            out_tiles, coords, orig_h=h, orig_w=w, stride=stride, tile_size=tile_size,
+            tiles_4d, coords, orig_h=h, orig_w=w, stride=stride, tile_size=tile_size,
             is_linear=is_linear, bps=bps, ms=ms, orig_img=input_data, use_hann=False
         )
     else:

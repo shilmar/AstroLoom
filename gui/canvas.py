@@ -449,10 +449,12 @@ class MaskCanvas(QWidget):
 
             if before_u8 is not None and self.split_view_enabled:
                 b_u8 = np.ascontiguousarray(before_u8, dtype=np.uint8)
-                if self._before_render_buf is None or len(self._before_render_buf) != total_bytes:
-                    self._before_render_buf = bytearray(total_bytes)
+                bh, bw = b_u8.shape[:2]
+                b_total = bw * bh * 4
+                if self._before_render_buf is None or len(self._before_render_buf) != b_total:
+                    self._before_render_buf = bytearray(b_total)
                 buf_b = astroloom_rs.render_canvas_frame_rs(b_u8, show_clipping=False, out=self._before_render_buf)
-                qimg_b = QImage(buf_b, w, h, 4 * w, QImage.Format_RGB32)
+                qimg_b = QImage(buf_b, bw, bh, 4 * bw, QImage.Format_RGB32)
                 self.before_pixmap = QPixmap.fromImage(qimg_b)
         else:
             qimg = QImage(self._cached_display_u8.data, w, h, 3 * w, QImage.Format_RGB888)
@@ -460,7 +462,8 @@ class MaskCanvas(QWidget):
 
             if before_u8 is not None and self.split_view_enabled:
                 b_u8 = np.ascontiguousarray(before_u8, dtype=np.uint8)
-                qimg_b = QImage(b_u8.data, w, h, 3 * w, QImage.Format_RGB888)
+                bh, bw = b_u8.shape[:2]
+                qimg_b = QImage(b_u8.data, bw, bh, 3 * bw, QImage.Format_RGB888)
                 self.before_pixmap = QPixmap.fromImage(qimg_b)
 
             if self.show_clipping_shadows or self.show_clipping_highlights:

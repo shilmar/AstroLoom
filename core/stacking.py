@@ -808,14 +808,12 @@ def compute_tps_remap_grid(
 
     # Motor nativo fusionado en Rust sin asignación de matrices temporales ni scipy
     if HAS_RUST and hasattr(astroloom_rs, "compute_tps_remap_grid_rs"):
-        res = astroloom_rs.compute_tps_remap_grid_rs(
+        return astroloom_rs.compute_tps_remap_grid_rs(
             np.ascontiguousarray(src_pts, dtype=np.float32),
             np.ascontiguousarray(dst_pts, dtype=np.float32),
             np.ascontiguousarray(H_matrix, dtype=np.float64),
             int(w), int(h), int(grid_size), int(min_inliers)
         )
-        if res is not None:
-            return res
 
     try:
         H_inv = np.linalg.inv(H_matrix)

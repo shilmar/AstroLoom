@@ -309,9 +309,9 @@ pub fn blend_meteor_capsule_lighten_rs<'py>(
     let out_shape = unsafe { out_img.as_array().dim() };
     let (h_out, w_out, c_out) = out_shape;
 
-    if c_p != c_out {
+    if c_p != 3 || c_out != 3 {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "Channel mismatch: patch {} vs out_img {}",
+            "blend_meteor_capsule_lighten_rs requires 3-channel RGB (got patch={}, out={})",
             c_p, c_out
         )));
     }

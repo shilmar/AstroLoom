@@ -123,9 +123,13 @@ impl PlateCatalog {
         let min_len = hash_offsets_offset
             .checked_add((n_buckets + 1) * 4)
             .ok_or_else(|| "Overflow en tamaño de catálogo".to_string())?;
-        if data.len() < min_len {
+        if data.len() < min_len
+            || stars_offset.checked_add(star_count.saturating_mul(24)).map_or(true, |end| end > data.len())
+            || grid_offsets_offset.checked_add((n_cells + 1).saturating_mul(4)).map_or(true, |end| end > data.len())
+            || quads_offset.checked_add(quad_count.saturating_mul(28)).map_or(true, |end| end > data.len())
+        {
             return Err(format!(
-                "Catálogo truncado: {} bytes, esperados al menos {}",
+                "Catálogo truncado o offsets inválidos: {} bytes, esperados al menos {}",
                 data.len(),
                 min_len
             ));
@@ -229,13 +233,13 @@ impl PlateCatalog {
 fn get_or_load_catalog(path: &str) -> Result<Arc<PlateCatalog>, String> {
     let cache = CATALOG_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     {
-        let guard = cache.lock().unwrap();
+        let guard = cache.lock().map_err(|_| "Catalog cache lock poisoned".to_string())?;
         if let Some(cat) = guard.get(path) {
             return Ok(Arc::clone(cat));
         }
     }
     let loaded = Arc::new(PlateCatalog::load(path)?);
-    let mut guard = cache.lock().unwrap();
+    let mut guard = cache.lock().map_err(|_| "Catalog cache lock poisoned".to_string())?;
     guard.insert(path.to_string(), Arc::clone(&loaded));
     Ok(loaded)
 }
@@ -553,8 +557,9 @@ fn kabsch_so3(cam_vecs: &[[f64; 3]], cat_vecs: &[[f64; 3]]) -> Matrix3<f64> {
         h += vu * vc.transpose();
     }
     let svd = h.svd(true, true);
-    let u_mat = svd.u.unwrap();
-    let v_t = svd.v_t.unwrap();
+    let (Some(u_mat), Some(v_t)) = (svd.u, svd.v_t) else {
+        return Matrix3::identity();
+    };
     let mut r = u_mat * v_t;
     if r.determinant() < 0.0 {
         let mut u_fix = u_mat;

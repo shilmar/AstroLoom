@@ -607,14 +607,21 @@ class RenderMixin:
 
         curve_state = tuple((m, tuple(pts)) for m, pts in sorted(self.curve_widget.get_state().items())) if hasattr(self, 'curve_widget') else ()
 
-        # Hito 0a: Parámetros Pre-Polución (Dual-Band, Corrección Estelar, PCC, Balance de blancos, Saturación, Vibrance)
+        # Hito 0a: Parámetros Pre-Polución (Polvo, Dual-Band, Corrección Estelar, PCC, Balance de blancos, Saturación, Vibrance)
         col_st = self.panel_color_wb.get_state() if hasattr(self, 'panel_color_wb') else {}
+        dust_spots_key = tuple(
+            (round(float(s.get("x", 0.0)), 5), round(float(s.get("y", 0.0)), 5), round(float(s.get("radius", 0.015)), 5))
+            for s in (getattr(self, "dust_spots", None) or ())
+        )
         key_pre_lp = (
             id(target_img),
             id(precomputed_mask),
             is_full_res,
             is_zoomed,
             crop_rect,
+            dust_spots_key,
+            getattr(self, "dust_mode", "heal"),
+            int(getattr(self, "gnd_edge_shift_val", 0)),
             col_st.get("dualband_mode", "none"),
             int(col_st.get("dualband_oiii_boost", 100)),
             int(col_st.get("unclip_stars_val", 0)),

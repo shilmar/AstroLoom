@@ -1030,8 +1030,16 @@ pub fn analyze_frame_quality_3x3_rs<'py>(
 ) -> PyResult<(Bound<'py, PyArray2<f32>>, Bound<'py, PyDict>)> {
     let gray_view = gray.as_array();
     let cent_view = centroids.as_array();
+    let (gh, gw) = gray_view.dim();
     let n = cent_view.nrows();
+    if cent_view.ncols() < 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "centroids must have at least 2 columns",
+        ));
+    }
     let r = patch_radius as isize;
+    let bound_h = h.min(gh) as isize;
+    let bound_w = w.min(gw) as isize;
 
     let valid_profiles: Vec<[f32; 4]> = py.allow_threads(|| {
         (0..n)
@@ -1042,7 +1050,7 @@ pub fn analyze_frame_quality_3x3_rs<'py>(
                 let ix = cx.round() as isize;
                 let iy = cy.round() as isize;
 
-                if iy < r || iy + r >= (h as isize) || ix < r || ix + r >= (w as isize) {
+                if iy < r || iy + r >= bound_h || ix < r || ix + r >= bound_w {
                     return None;
                 }
 
