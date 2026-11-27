@@ -1462,78 +1462,27 @@ class PanoramaTab(QWidget):
             else self.current_result.image
         )
 
-        filtros = (
-            "TIFF 16-bit (*.tif *.tiff);;"
-            "TIFF 32-bit Float (*.tif *.tiff);;"
-            "Photoshop PSD (*.psd);;"
-            "PNG (*.png);;"
-            "JPEG (*.jpg *.jpeg)"
-        )
-
-        if force_format == "psd":
-            filtro_por_defecto = "Photoshop PSD (*.psd)"
-            default_name = "panoramica_nocturna.psd"
-        elif force_format == "tiff32":
-            filtro_por_defecto = "TIFF 32-bit Float (*.tif *.tiff)"
-            default_name = "panoramica_nocturna_32bit.tif"
-        elif force_format == "png":
-            filtro_por_defecto = "PNG (*.png)"
-            default_name = "panoramica_nocturna.png"
-        elif force_format in ("jpg", "jpeg"):
-            filtro_por_defecto = "JPEG (*.jpg *.jpeg)"
-            default_name = "panoramica_nocturna.jpg"
-        else:
-            filtro_por_defecto = "TIFF 16-bit (*.tif *.tiff)"
-            default_name = "panoramica_nocturna.tif"
-
-        path, selected_filter = QFileDialog.getSaveFileName(
+        from gui.export_utils import ask_export_path, save_flat_image
+        chosen = ask_export_path(
             self,
             "Guardar Panorámica",
-            default_name,
-            filtros,
-            selectedFilter=filtro_por_defecto
+            default_base="panoramica_nocturna",
+            force_format=force_format,
+            default_format="tiff16",
         )
-        if not path:
+        if not chosen:
             return
-
-        path = os.path.abspath(os.path.normpath(str(path).strip()))
-        ext = os.path.splitext(path)[1].lower()
-        if not ext:
-            if "Photoshop" in selected_filter or "*.psd" in selected_filter:
-                ext = ".psd"
-            elif "PNG" in selected_filter or "*.png" in selected_filter:
-                ext = ".png"
-            elif "JPEG" in selected_filter or "*.jpg" in selected_filter:
-                ext = ".jpg"
-            else:
-                ext = ".tif"
-            path += ext
+        path, fmt = chosen
 
         try:
-            if ext == ".psd" or ("Photoshop" in selected_filter and ext not in [".tif", ".tiff", ".jpg", ".jpeg", ".png"]):
+            if fmt == "psd":
                 from core.psd_export import export_developer_psd
                 ok, desc_err, _ = export_developer_psd(path, composite_image=img_to_save, base_image=img_to_save, depth=16)
                 if not ok:
                     raise RuntimeError(desc_err)
                 desc = "PSD 16-bit"
-            elif ext == ".png" or "PNG" in selected_filter:
-                u16 = np.ascontiguousarray(np.clip(img_to_save * 65535.0 + 0.5, 0.0, 65535.0), dtype=np.uint16)
-                bgr16 = cv2.cvtColor(u16, cv2.COLOR_RGB2BGR) if img_to_save.ndim == 3 else u16
-                cv2.imwrite(path, bgr16, [cv2.IMWRITE_PNG_COMPRESSION, 6])
-                desc = "PNG 16-bit"
-            elif ext in [".jpg", ".jpeg"] or ("JPEG" in selected_filter and ext not in [".tif", ".tiff"]):
-                u8 = (np.clip(img_to_save, 0.0, 1.0) * 255.0).astype(np.uint8)
-                bgr = cv2.cvtColor(u8, cv2.COLOR_RGB2BGR) if img_to_save.ndim == 3 else u8
-                cv2.imwrite(path, bgr, [cv2.IMWRITE_JPEG_QUALITY, 96])
-                desc = "JPEG 8-bit"
-            elif "32-bit" in selected_filter:
-                out32 = np.ascontiguousarray(np.clip(img_to_save, 0.0, 1.0), dtype=np.float32)
-                save_tiff_with_icc(path, out32, compression='zlib', photometric='rgb')
-                desc = "TIFF 32-bit float"
             else:
-                u16 = np.ascontiguousarray(np.clip(img_to_save * 65535.0 + 0.5, 0.0, 65535.0), dtype=np.uint16)
-                save_tiff_with_icc(path, u16, compression='zlib', photometric='rgb')
-                desc = "TIFF 16-bit"
+                desc = save_flat_image(path, img_to_save, fmt)
 
             h, w = img_to_save.shape[:2]
             mode_crop = "recortada" if is_cropped else "completa"

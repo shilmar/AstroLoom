@@ -1526,110 +1526,32 @@ class MeteorTab(QWidget):
             QMessageBox.warning(self, "Aviso", "No hay imagen compuesta disponible para guardar.")
             return
 
-        filtros = (
-            "TIFF 16-bit (*.tif *.tiff);;"
-            "TIFF 32-bit Float (*.tif *.tiff);;"
-            "Photoshop PSD por Capas (*.psd);;"
-            "PNG (*.png);;"
-            "JPEG (*.jpg *.jpeg)"
-        )
+        from gui.export_utils import ask_export_path, save_flat_image
         export_dir = get_config_val("export_dir", os.getcwd())
-        os.makedirs(export_dir, exist_ok=True)
-
-        if force_format == "psd":
-            filtro_por_defecto = "Photoshop PSD por Capas (*.psd)"
-            default_name = "lluvia_meteoros_capas.psd"
-        elif force_format == "tiff16":
-            filtro_por_defecto = "TIFF 16-bit (*.tif *.tiff)"
-            default_name = "lluvia_meteoros_16bit.tif"
-        elif force_format == "png":
-            filtro_por_defecto = "PNG (*.png)"
-            default_name = "lluvia_meteoros.png"
-        elif force_format in ("jpg", "jpeg"):
-            filtro_por_defecto = "JPEG (*.jpg *.jpeg)"
-            default_name = "lluvia_meteoros.jpg"
-        else:
-            filtro_por_defecto = "TIFF 32-bit Float (*.tif *.tiff)"
-            default_name = "lluvia_meteoros_32bit.tif"
-
-        default_path = os.path.join(export_dir, default_name)
-
-        path, selected_filter = QFileDialog.getSaveFileName(
+        default_base = "lluvia_meteoros_capas" if force_format == "psd" else "lluvia_meteoros"
+        chosen = ask_export_path(
             self,
             "Guardar Compuesto de Meteoros",
-            default_path,
-            filtros,
-            selectedFilter=filtro_por_defecto
+            default_base=default_base,
+            force_format=force_format,
+            psd_label="Photoshop PSD por Capas (*.psd)",
+            default_dir=export_dir,
+            default_format="tiff32",
         )
-        if not path:
+        if not chosen:
             return
+        path, fmt = chosen
 
-        path = os.path.abspath(os.path.normpath(str(path).strip()))
-        ext = os.path.splitext(path)[1].lower()
-        if not ext:
-            if "Photoshop" in selected_filter or "*.psd" in selected_filter:
-                ext = ".psd"
-            elif "PNG" in selected_filter or "*.png" in selected_filter:
-                ext = ".png"
-            elif "JPEG" in selected_filter or "*.jpg" in selected_filter:
-                ext = ".jpg"
-            else:
-                ext = ".tif"
-            path += ext
-
-        if ext == ".psd" or ("Photoshop" in selected_filter and ext not in ['.tif', '.tiff', '.jpg', '.jpeg', '.png']):
+        if fmt == "psd":
             self._do_save_psd(path)
-        elif ext == ".png" or "PNG" in selected_filter:
-            self._do_save_png(path)
-        elif ext in ['.jpg', '.jpeg'] or ("JPEG" in selected_filter and ext not in ['.tif', '.tiff']):
-            self._do_save_jpg(path)
-        elif "32-bit" in selected_filter or (ext in ['.tif', '.tiff'] and "32-bit" in path):
-            self._do_save_tiff(path, bit_depth=32)
-        else:
-            self._do_save_tiff(path, bit_depth=16)
-
-    def _do_save_tiff(self, path: str, bit_depth: int = 32) -> None:
-        img = self.composite_result if self.composite_result is not None else self.base_reference_img
-        if img is None:
             return
+
         try:
-            if bit_depth == 32:
-                save_tiff_with_icc(path, img.astype(np.float32), photometric='rgb')
-                desc = "TIFF 32-bit float"
-            else:
-                u16 = np.ascontiguousarray(np.clip(img * 65535.0 + 0.5, 0.0, 65535.0), dtype=np.uint16)
-                save_tiff_with_icc(path, u16, photometric='rgb')
-                desc = "TIFF 16-bit"
+            desc = save_flat_image(path, img, fmt)
             self.log(f"Compuesto de meteoros guardado ({desc}): {path}")
             QMessageBox.information(self, "Guardado Exitoso", f"Archivo {desc} guardado:\n{path}")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo guardar TIFF: {e}")
-
-    def _do_save_png(self, path: str) -> None:
-        img = self.composite_result if self.composite_result is not None else self.base_reference_img
-        if img is None:
-            return
-        try:
-            u16 = np.ascontiguousarray(np.clip(img * 65535.0 + 0.5, 0.0, 65535.0), dtype=np.uint16)
-            bgr16 = cv2.cvtColor(u16, cv2.COLOR_RGB2BGR) if img.ndim == 3 else u16
-            cv2.imwrite(path, bgr16, [cv2.IMWRITE_PNG_COMPRESSION, 6])
-            self.log(f"Compuesto de meteoros guardado (PNG 16-bit): {path}")
-            QMessageBox.information(self, "Guardado Exitoso", f"Archivo PNG guardado con éxito:\n{path}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo guardar PNG: {e}")
-
-    def _do_save_jpg(self, path: str) -> None:
-        img = self.composite_result if self.composite_result is not None else self.base_reference_img
-        if img is None:
-            return
-        try:
-            u8 = np.clip(img * 255.0 + 0.5, 0, 255).astype(np.uint8)
-            bgr = cv2.cvtColor(u8, cv2.COLOR_RGB2BGR) if img.ndim == 3 else u8
-            cv2.imwrite(path, bgr, [cv2.IMWRITE_JPEG_QUALITY, 96])
-            self.log(f"Compuesto de meteoros guardado (JPEG 8-bit): {path}")
-            QMessageBox.information(self, "Guardado Exitoso", f"Archivo JPEG guardado con éxito:\n{path}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo guardar JPEG: {e}")
+            QMessageBox.critical(self, "Error", f"No se pudo guardar la imagen: {e}")
 
     def _do_save_psd(self, path: str) -> None:
         base = self.custom_stacked_sky if self.custom_stacked_sky is not None else self.base_reference_img

@@ -51,33 +51,16 @@ def extract_exposure_info(filepath: str) -> Dict[str, Any]:
     }
 
     ext = os.path.splitext(filepath)[1].lower()
-    if ext in ['.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw']:
+    if ext in ('.nef', '.cr2', '.cr3', '.arw', '.dng', '.raw', '.orf', '.raf', '.rw2', '.pef'):
         try:
-            import rawpy
-            with rawpy.imread(filepath) as raw:
-                if hasattr(raw, 'other'):
-                    other = raw.other
-                    shutter = getattr(other, 'shutter_speed', None) or getattr(other, 'shutter', None)
-                    if shutter is not None and float(shutter) > 0:
-                        info["exposure_s"] = float(shutter)
-                    iso = getattr(other, 'iso_speed', None) or getattr(other, 'iso', None)
-                    if iso is not None and float(iso) > 0:
-                        info["iso"] = int(round(float(iso)))
-                    aperture = getattr(other, 'aperture', None)
-                    if aperture is not None and float(aperture) > 0:
-                        info["aperture"] = float(aperture)
-
-                    ts = getattr(other, 'timestamp', None)
-                    if ts is not None:
-                        if isinstance(ts, datetime.datetime):
-                            info["timestamp"] = float(ts.timestamp())
-                            info["time_str"] = ts.strftime("%H:%M:%S")
-                        elif isinstance(ts, (int, float)) and ts > 0:
-                            info["timestamp"] = float(ts)
-                            try:
-                                info["time_str"] = datetime.datetime.fromtimestamp(ts).strftime("%H:%M:%S")
-                            except Exception:
-                                pass
+            meta = astroloom_rs.scan_raw_metadata_rs(filepath)
+            if meta.get("is_valid"):
+                exp_t = float(meta.get("exposure_time", 0.0) or 0.0)
+                if exp_t > 0.0:
+                    info["exposure_s"] = exp_t
+                iso_val = int(meta.get("iso", 0) or 0)
+                if iso_val > 0:
+                    info["iso"] = iso_val
         except Exception:
             pass
     else:

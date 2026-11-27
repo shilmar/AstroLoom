@@ -1656,75 +1656,31 @@ class StartrailsTab(QWidget):
             QMessageBox.warning(self, "Atención", "No hay imagen disponible para guardar.")
             return
 
-        filtros = (
-            "TIFF 16-bit (*.tif *.tiff);;"
-            "TIFF 32-bit Float (*.tif *.tiff);;"
-            "Photoshop PSD (*.psd);;"
-            "PNG (*.png);;"
-            "JPEG (*.jpg *.jpeg)"
-        )
+        from gui.export_utils import ask_export_path, save_flat_image
         first_file = self.files_list[0] if getattr(self, 'files_list', None) and len(self.files_list) > 0 else None
         base_name = os.path.splitext(os.path.basename(first_file))[0] if first_file else "startrail"
 
-        if force_format == "psd":
-            filtro_por_defecto = "Photoshop PSD (*.psd)"
-            default_name = f"{base_name}.psd"
-        elif force_format == "tiff32":
-            filtro_por_defecto = "TIFF 32-bit Float (*.tif *.tiff)"
-            default_name = f"{base_name}_32bit.tif"
-        elif force_format == "png":
-            filtro_por_defecto = "PNG (*.png)"
-            default_name = f"{base_name}.png"
-        elif force_format in ("jpg", "jpeg"):
-            filtro_por_defecto = "JPEG (*.jpg *.jpeg)"
-            default_name = f"{base_name}.jpg"
-        else:
-            filtro_por_defecto = "TIFF 16-bit (*.tif *.tiff)"
-            default_name = f"{base_name}_16bit.tif"
-
-        path, selected_filter = QFileDialog.getSaveFileName(
+        chosen = ask_export_path(
             self,
             "Guardar Trazas de Estrellas",
-            default_name,
-            filtros,
-            selectedFilter=filtro_por_defecto
+            default_base=base_name,
+            force_format=force_format,
+            default_format="tiff16",
         )
-        if not path:
+        if not chosen:
+            return
+        path, fmt = chosen
+
+        if fmt == "psd":
+            self._do_save_psd(path, img)
             return
 
-        path = os.path.abspath(os.path.normpath(str(path).strip()))
-        ext = os.path.splitext(path)[1].lower()
-        if not ext:
-            if "Photoshop" in selected_filter or "*.psd" in selected_filter:
-                ext = ".psd"
-            elif "PNG" in selected_filter or "*.png" in selected_filter:
-                ext = ".png"
-            elif "JPEG" in selected_filter or "*.jpg" in selected_filter:
-                ext = ".jpg"
-            else:
-                ext = ".tif"
-            path += ext
-
-        if ext == ".psd" or ("Photoshop" in selected_filter and ext not in [".tif", ".tiff", ".jpg", ".jpeg", ".png"]):
-            self._do_save_psd(path, img)
-        elif ext == ".png" or "PNG" in selected_filter:
-            self._do_save_png(path, img)
-        elif ext in [".jpg", ".jpeg"] or ("JPEG" in selected_filter and ext not in [".tif", ".tiff"]):
-            self._do_save_jpg(path, img)
-        elif "32-bit" in selected_filter or (ext in [".tif", ".tiff"] and "32-bit" in path):
-            self._do_save_tiff(path, img, bit_depth=32)
-        else:
-            self._do_save_tiff(path, img, bit_depth=16)
-
-    def _do_save_png(self, path: str, img: np.ndarray) -> None:
         try:
-            u16 = np.ascontiguousarray(np.clip(img * 65535.0 + 0.5, 0.0, 65535.0), dtype=np.uint16)
-            bgr16 = cv2.cvtColor(u16, cv2.COLOR_RGB2BGR) if img.ndim == 3 else u16
-            cv2.imwrite(path, bgr16, [cv2.IMWRITE_PNG_COMPRESSION, 6])
-            self.log(f"Imagen guardada exitosamente (PNG 16-bit): {path}")
+            desc = save_flat_image(path, img, fmt)
+            self.log(f"Imagen guardada exitosamente ({desc}): {path}")
             QMessageBox.information(
                 self, "Exportación Completada",
-                f"Imagen de trazas guardada con éxito en:\n{path}\n\nFormato: PNG 16-bit ({u16.shape[1]}x{u16.shape[0]} px)"
+                f"Imagen de trazas guardada con éxito en:\n{path}\n\nFormato: {desc} ({img.shape[1]}x{img.shape[0]} px)"
             )
         except Exception as e:
             self.log(f"ERROR al guardar imagen: {e}")
@@ -1745,40 +1701,6 @@ class StartrailsTab(QWidget):
         except Exception as e:
             self.log(f"ERROR al guardar PSD: {e}")
             QMessageBox.critical(self, "Error de Exportación", f"No se pudo guardar la imagen PSD:\n{e}")
-
-    def _do_save_tiff(self, path: str, img: np.ndarray, bit_depth: int = 16) -> None:
-        photometric = 'minisblack' if img.ndim == 2 else 'rgb'
-        try:
-            if bit_depth == 32:
-                out_img = np.ascontiguousarray(np.clip(img, 0.0, 1.0), dtype=np.float32)
-                desc = "TIFF 32-bit float (HDR)"
-            else:
-                out_img = np.ascontiguousarray(np.clip(img * 65535.0 + 0.5, 0.0, 65535.0), dtype=np.uint16)
-                desc = "TIFF 16-bit entero"
-
-            save_tiff_with_icc(path, out_img, compression='zlib', photometric=photometric)
-            self.log(f"Imagen guardada exitosamente ({desc} con perfil ICC): {path}")
-            QMessageBox.information(
-                self, "Exportación Completada",
-                f"Imagen de trazas guardada con éxito en:\n{path}\n\nFormato: {desc} ({out_img.shape[1]}x{out_img.shape[0]} px)"
-            )
-        except Exception as e:
-            self.log(f"ERROR al guardar imagen: {e}")
-            QMessageBox.critical(self, "Error de Exportación", f"No se pudo guardar la imagen:\n{e}")
-
-    def _do_save_jpg(self, path: str, img: np.ndarray) -> None:
-        try:
-            u8 = np.clip(img * 255.0 + 0.5, 0, 255).astype(np.uint8)
-            bgr = cv2.cvtColor(u8, cv2.COLOR_RGB2BGR) if u8.ndim == 3 else u8
-            cv2.imwrite(path, bgr, [cv2.IMWRITE_JPEG_QUALITY, 96])
-            self.log(f"Imagen guardada exitosamente (JPEG 8-bit): {path}")
-            QMessageBox.information(
-                self, "Exportación Completada",
-                f"Imagen de trazas guardada con éxito en:\n{path}\n\nFormato: JPEG ({u8.shape[1]}x{u8.shape[0]} px)"
-            )
-        except Exception as e:
-            self.log(f"ERROR al guardar imagen: {e}")
-            QMessageBox.critical(self, "Error de Exportación", f"No se pudo guardar la imagen:\n{e}")
 
     def _on_export_web_clicked(self) -> None:
         """Abre el diálogo modal de exportación optimizada para Web y Redes Sociales."""
