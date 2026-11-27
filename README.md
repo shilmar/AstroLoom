@@ -175,6 +175,8 @@ AstroLoom integra ideas y algoritmos inspirados en investigaciones pioneras de l
 - **[Agentic-Eclipse-Library](https://github.com/PeterWar/Agentic-Eclipse-Library)** por Pere Guerra (PeterWar): Algoritmos de fusión coronal HDR, normalización y filtrado de eclipses solares.
 - **[StarNet++](https://www.starnetastro.com/)** por Nikita Misiura: Red neuronal pionera para el desacoplo de estrellas.
 - **Miloslav Druckmüller**: Fundamentos matemáticos de filtrado multiescala (MGN) y ecualización adaptativa difusa (NAFE).
+- **Agencia Espacial Europea (ESA) — Hipparcos, Tycho-2 y Gaia DR3**: Catálogos astrométricos y fotométricos públicos que impulsan la calibración fotométrica (PCC) y el motor de *Plate Solving* offline de AstroLoom.
+- **Unión Astronómica Internacional (IAU) y Catálogo HYG**: Datos oficiales de las 88 constelaciones, estrellas nombradas y objetos Messier/NGC para las anotaciones celestes.
 
 ---
 

@@ -928,8 +928,10 @@ El desarrollo de los módulos científicos de AstroLoom ha sido posible gracias 
   * Por el diseño del algoritmo *StarPolygonMatcher* (coincidencia de constelaciones por polígonos estelares y trigonometría esférica en OpenCV), referencia clave para el desarrollo del módulo de mosaicos y panorámicas astronómicas nocturnas.
 * **Nikita Misiura:**
   * Creador de la red neuronal **StarNet / StarNet++**, herramienta de referencia para la desestelarización de astrofotografías.
-* **Misión Espacial Gaia (Agencia Espacial Europea - ESA):**
-  * Por el acceso público al catálogo estelar astronómico de máxima precisión **Gaia DR3**, base de la calibración fotométrica estelar (PCC).
+* **Misiones Espaciales Hipparcos, Tycho-2 y Gaia (Agencia Espacial Europea - ESA):**
+  * Por el acceso público a los catálogos astrométricos y fotométricos **Hipparcos**, **Tycho-2** y **Gaia DR3**, que sirven de base tanto para la calibración fotométrica estelar (PCC) como para los índices binarios offline (*Lite*, *Standard* y *Deep*) del motor de *Plate Solving* de AstroLoom.
+* **Unión Astronómica Internacional (IAU) y Catálogo HYG (David Nash):**
+  * Por la estandarización de las 88 constelaciones oficiales, la nomenclatura estelar y las compilaciones de cielo profundo que permiten proyectar y etiquetar el cielo sobre imágenes y panorámicas resueltas.
 * **Equipo de Investigación de Megvii:**
   * Por la arquitectura abierta de restauración de imagen **NAFNet** (*Simple Baselines for Image Restoration*).
 
