@@ -13,11 +13,7 @@ from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QCursor, QPainter, QPainterPath, QPen, QLinearGradient
 from PySide6.QtWidgets import QWidget
 
-try:
-    from scipy.interpolate import PchipInterpolator
-    HAS_SCIPY = True
-except ImportError:
-    HAS_SCIPY = False
+from core.mask_layers import pchip_interpolate
 
 LUT_RESOLUTION = 256
 
@@ -321,14 +317,10 @@ class CurveWidget(QWidget):
 
         grid_x = np.linspace(0.0, 1.0, LUT_RESOLUTION, dtype=np.float32)
 
-        if len(xs) == 2 or not HAS_SCIPY:
+        if len(xs) == 2:
             lut_arr = np.interp(grid_x, xs, ys).astype(np.float32)
         else:
-            try:
-                pchip = PchipInterpolator(xs, ys)
-                lut_arr = np.clip(pchip(grid_x), 0.0, 1.0).astype(np.float32)
-            except Exception:
-                lut_arr = np.interp(grid_x, xs, ys).astype(np.float32)
+            lut_arr = np.clip(pchip_interpolate(xs, ys, grid_x), 0.0, 1.0).astype(np.float32)
 
         if self._mode == MODE_RGB:
             lut_arr = np.maximum.accumulate(lut_arr)  # Monotonía forzada para curvas tonales RGB

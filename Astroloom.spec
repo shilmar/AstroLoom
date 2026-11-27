@@ -29,6 +29,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        'scipy',
         'numba',
         'llvmlite',
         'tkinter',
@@ -56,6 +57,7 @@ a = Analysis(
         'PySide6.QtWebEngineCore',
     ],
     excludedimports=[
+        'scipy',
         'matplotlib',
         'pytest',
         'numba',

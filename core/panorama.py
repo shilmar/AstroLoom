@@ -560,8 +560,6 @@ def _refine_astro_camera_rig(
         return R_norm, float(f_init), float(k1_init), 0.0, 0.0, 0.0
 
     try:
-        from scipy.optimize import least_squares
-
         rot_indices = [idx for idx in range(n) if idx != anchor_idx]
         fit_intrinsics = len(xa) >= 18
 
@@ -579,6 +577,8 @@ def _refine_astro_camera_rig(
             hi_list.extend([np.inf, np.inf, np.inf])
 
         x0 = np.asarray(x0_list, dtype=np.float64)
+        lo_arr = np.asarray(lo_list, dtype=np.float64)
+        hi_arr = np.asarray(hi_list, dtype=np.float64)
         cx_base = full_w * 0.5
         cy_base = full_h * 0.5
         base_off = 5 if fit_intrinsics else 0
@@ -600,23 +600,66 @@ def _refine_astro_camera_rig(
             wb = np.einsum("nij,nj->ni", Rs_arr[p_j], vb)
             return ((wa - wb) * (f_v * sqrt_w[:, None])).ravel()
 
-        opt = least_squares(
-            _res_fn,
-            x0,
-            bounds=(np.asarray(lo_list, dtype=np.float64), np.asarray(hi_list, dtype=np.float64)),
-            method="trf",
-            loss="soft_l1",
-            f_scale=1.5,
-            max_nfev=80,
-        )
+        # Levenberg-Marquardt con ponderación robusta IRLS soft_l1 y proyección de cotas
+        f_scale = 1.5
+        eps_jac = 1e-6
+
+        def _soft_l1_cost(rv_vec: np.ndarray) -> float:
+            z = (rv_vec / f_scale) ** 2
+            return float((f_scale ** 2) * np.sum(np.sqrt(1.0 + z) - 1.0))
+
+        x_cur = np.clip(x0, lo_arr, hi_arr)
+        r_cur = _res_fn(x_cur)
+        cost_cur = _soft_l1_cost(r_cur)
+        lam = 1e-3
+        n_p = len(x_cur)
+
+        for _ in range(35):
+            w_irls = 1.0 / np.sqrt(1.0 + (r_cur / f_scale) ** 2)
+            J = np.empty((len(r_cur), n_p), dtype=np.float64)
+            for j_col in range(n_p):
+                step = eps_jac * max(1.0, abs(x_cur[j_col]))
+                if x_cur[j_col] + step > hi_arr[j_col]:
+                    step = -step
+                xp = x_cur.copy()
+                xp[j_col] += step
+                J[:, j_col] = (_res_fn(xp) - r_cur) / step
+
+            Jw = J * w_irls[:, None]
+            H = Jw.T @ J
+            g = Jw.T @ r_cur
+            diag = np.maximum(np.diag(H), 1e-6)
+
+            accepted = False
+            for _ in range(10):
+                A = H + lam * np.diag(diag)
+                try:
+                    dx = -np.linalg.solve(A, g)
+                except np.linalg.LinAlgError:
+                    dx = -np.linalg.lstsq(A, g, rcond=None)[0]
+                x_new = np.clip(x_cur + dx, lo_arr, hi_arr)
+                r_new = _res_fn(x_new)
+                cost_new = _soft_l1_cost(r_new)
+                if cost_new < cost_cur:
+                    improvement = cost_cur - cost_new
+                    x_cur, r_cur, cost_cur = x_new, r_new, cost_new
+                    lam = max(lam * 0.3, 1e-9)
+                    accepted = True
+                    if improvement < 1e-9 * max(1.0, cost_cur):
+                        lam = 0.0
+                    break
+                lam = min(lam * 5.0, 1e9)
+            if not accepted or lam == 0.0:
+                break
+
         if fit_intrinsics:
-            f_out, k1_out, k2_out, dcx_out, dcy_out = [float(v) for v in opt.x[:5]]
+            f_out, k1_out, k2_out, dcx_out, dcy_out = [float(v) for v in x_cur[:5]]
         else:
             f_out, k1_out, k2_out, dcx_out, dcy_out = float(f_init), float(k1_init), 0.0, 0.0, 0.0
 
         R_out = [np.eye(3, dtype=np.float64) for _ in range(n)]
         for k_idx, pan_idx in enumerate(rot_indices):
-            rv = opt.x[base_off + 3 * k_idx : base_off + 3 * (k_idx + 1)]
+            rv = x_cur[base_off + 3 * k_idx : base_off + 3 * (k_idx + 1)]
             R_out[pan_idx], _ = cv2.Rodrigues(rv)
         return R_out, f_out, k1_out, k2_out, dcx_out, dcy_out
     except Exception as e_ba:

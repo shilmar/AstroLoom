@@ -845,6 +845,55 @@ def compute_layer_mask(
     return np.clip(m, 0.0, 1.0).astype(np.float32)
 
 
+def pchip_interpolate(xs, ys, x_eval: np.ndarray) -> np.ndarray:
+    """
+    Interpolación cúbica monótona de Hermite (Fritsch-Carlson 1980 / PCHIP) en NumPy puro.
+    Equivalente a scipy.interpolate.PchipInterpolator hasta precisión de máquina (< 1e-12).
+    """
+    x = np.asarray(xs, dtype=np.float64)
+    y = np.asarray(ys, dtype=np.float64)
+    xq = np.asarray(x_eval, dtype=np.float64)
+    n = len(x)
+    if n < 2:
+        return np.full_like(xq, y[0] if n == 1 else 0.0)
+    if n == 2:
+        return np.interp(xq, x, y)
+
+    hk = np.diff(x)
+    mk = np.diff(y) / hk
+    d = np.zeros(n, dtype=np.float64)
+
+    same_sign = (mk[:-1] * mk[1:]) > 0.0
+    if np.any(same_sign):
+        w1 = 2.0 * hk[1:] + hk[:-1]
+        w2 = hk[1:] + 2.0 * hk[:-1]
+        idx = np.where(same_sign)[0]
+        d[idx + 1] = (w1[idx] + w2[idx]) / (w1[idx] / mk[idx] + w2[idx] / mk[idx + 1])
+
+    def _edge_slope(h0: float, h1: float, m0: float, m1: float) -> float:
+        slope = ((2.0 * h0 + h1) * m0 - h0 * m1) / (h0 + h1)
+        if np.sign(slope) != np.sign(m0):
+            return 0.0
+        if np.sign(m0) != np.sign(m1) and abs(slope) > abs(3.0 * m0):
+            return 3.0 * m0
+        return slope
+
+    d[0] = _edge_slope(hk[0], hk[1], mk[0], mk[1])
+    d[-1] = _edge_slope(hk[-1], hk[-2], mk[-1], mk[-2])
+
+    idx = np.clip(np.searchsorted(x, xq, side="right") - 1, 0, n - 2)
+    h = hk[idx]
+    t = (xq - x[idx]) / h
+    t2 = t * t
+    t3 = t2 * t
+    return (
+        (2.0 * t3 - 3.0 * t2 + 1.0) * y[idx]
+        + (t3 - 2.0 * t2 + t) * h * d[idx]
+        + (-2.0 * t3 + 3.0 * t2) * y[idx + 1]
+        + (t3 - t2) * h * d[idx + 1]
+    )
+
+
 def compute_curve_lut_from_points(points: Optional[List[Tuple[float, float]]], resolution: int = 256) -> np.ndarray:
     """Calcula una tabla LUT interpolada monótona PCHIP de 256 niveles a partir de puntos de control."""
     if not points:
@@ -867,12 +916,7 @@ def compute_curve_lut_from_points(points: Optional[List[Tuple[float, float]]], r
     else:
         xs[-1] = 1.0
     grid_x = np.linspace(0.0, 1.0, resolution, dtype=np.float32)
-    try:
-        from scipy.interpolate import PchipInterpolator
-        pchip = PchipInterpolator(xs, ys)
-        lut_arr = np.clip(pchip(grid_x), 0.0, 1.0).astype(np.float32)
-    except Exception:
-        lut_arr = np.clip(np.interp(grid_x, xs, ys), 0.0, 1.0).astype(np.float32)
+    lut_arr = np.clip(pchip_interpolate(xs, ys, grid_x), 0.0, 1.0).astype(np.float32)
     lut_arr = np.maximum.accumulate(lut_arr)  # Monotonía garantizada
     return lut_arr
 

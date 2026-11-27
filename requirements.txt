@@ -4,7 +4,6 @@ PySide6>=6.5.0
 # Procesamiento numérico y matricial
 numpy>=1.26.0
 opencv-python>=4.8.0
-scipy>=1.10.0
 
 # Lectura de archivos RAW y TIFF
 rawpy>=0.20.0
