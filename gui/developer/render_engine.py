@@ -1509,10 +1509,22 @@ class RenderMixin:
             ),
         )
 
-    def _request_zoom_100_tiles(self) -> None:
-        """Solicita el renderizado asíncrono progresivo por teselas fijas 512x512 sin bloquear la UI."""
+    def _request_zoom_100_tiles(self, emit_incomplete: bool = False, force: bool = False) -> None:
+        """Solicita el renderizado asíncrono por teselas fijas 512x512 con intercambio atómico."""
         if not self.is_zoomed_100 or self.image_32bit is None or not hasattr(self, 'tile_manager'):
             return
+        # Durante el arrastre continuo de un slider, no cancelar el lote de teselas en curso cada 16 ms:
+        # dejar que complete el fotograma atómico y encadenar inmediatamente el último estado.
+        is_dragging_slider = (
+            getattr(self, '_is_slider_pressed', False)
+            or getattr(self, '_is_scrubbing_layer_slider', False)
+            or getattr(self, '_is_scrubbing_heavy_slider', False)
+        )
+        if not force and is_dragging_slider and self.tile_manager.has_pending_visible:
+            self._deferred_zoom_tile_request = True
+            return
+
+        self._deferred_zoom_tile_request = False
         ctx = self._build_tile_context()
         if ctx is None:
             return
@@ -1522,7 +1534,7 @@ class RenderMixin:
         cy = ry * h_f
         vw = max(100, self.canvas.width())
         vh = max(100, self.canvas.height())
-        self.tile_manager.request_viewport(ctx, cx, cy, vw, vh)
+        self.tile_manager.request_viewport(ctx, cx, cy, vw, vh, emit_incomplete=emit_incomplete)
 
     def _on_tile_mosaic_ready(
         self,
@@ -1562,6 +1574,10 @@ class RenderMixin:
         self._update_canvas_info_label()
 
         if is_complete:
+            if getattr(self, '_deferred_zoom_tile_request', False):
+                self._deferred_zoom_tile_request = False
+                self._request_zoom_100_tiles(emit_incomplete=False, force=True)
+                return
             if (
                 not self._is_undoing_or_redoing
                 and not getattr(self, '_is_applying_preset', False)
@@ -1574,6 +1590,7 @@ class RenderMixin:
         """Inicia el desplazamiento panorámico en Zoom 1:1 deteniendo refinados pendientes."""
         if not self.is_zoomed_100:
             return
+        self._deferred_zoom_tile_request = False
         if hasattr(self, '_pan_refine_timer'):
             self._pan_refine_timer.stop()
         if hasattr(self, 'tile_manager'):
@@ -1629,7 +1646,7 @@ class RenderMixin:
         if hasattr(self, '_pan_refine_timer'):
             self._pan_refine_timer.stop()
         if hasattr(self, 'tile_manager'):
-            self._request_zoom_100_tiles()
+            self._request_zoom_100_tiles(emit_incomplete=False, force=True)
         else:
             self.update_stretch_preview(immediate=True)
             self._refresh_histograms_now()
@@ -1704,7 +1721,7 @@ class RenderMixin:
             self.btn_toggle_zoom.setChecked(True)
             self.btn_toggle_zoom.blockSignals(False)
         if hasattr(self, 'tile_manager') and self.image_32bit is not None:
-            self._request_zoom_100_tiles()
+            self._request_zoom_100_tiles(emit_incomplete=True, force=True)
         else:
             self.update_stretch_preview(immediate=True)
         self._update_canvas_info_label()

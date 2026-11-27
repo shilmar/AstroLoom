@@ -889,6 +889,7 @@ class AsyncTileManager(QObject):
         self._active_center: Tuple[float, float] = (0.0, 0.0)
         self._active_visible: List[Tuple[int, int]] = []
         self._pending_visible: Set[Tuple[int, int]] = set()
+        self._active_emitted: bool = False
         self._in_flight_prefetch: Set[Tuple[int, int]] = set()
         self._bg_queue: List[Tuple[int, int]] = []
         self._bg_in_flight: bool = False
@@ -906,6 +907,10 @@ class AsyncTileManager(QObject):
     @property
     def current_gen_id(self) -> int:
         return self._gen_id
+
+    @property
+    def has_pending_visible(self) -> bool:
+        return bool(self._pending_visible)
 
     @property
     def cache(self) -> TileCache:
@@ -947,11 +952,13 @@ class AsyncTileManager(QObject):
         cy: float,
         vw: int,
         vh: int,
+        emit_incomplete: bool = False,
     ) -> int:
         """
         Request a 1:1 viewport centered at (cx, cy).
-        Emits immediately with cached tiles (+ fallback for missing ones), then streams
-        missing tiles asynchronously center-first and schedules background prefetch.
+        Emits immediately on 100% cache hit (or when emit_incomplete=True on initial 1:1 entry);
+        otherwise swaps atomically in a single frame once all visible tiles complete, eliminating
+        tile pop-in and stale fallback flicker during slider edits and panning.
         """
         self._gen_id += 1
         gen = self._gen_id
@@ -975,7 +982,10 @@ class AsyncTileManager(QObject):
         self._pending_visible = set(missing)
 
         is_complete = len(missing) == 0
-        self.mosaic_ready.emit(gen, mosaic, mosaic_rect, (cx, cy), is_complete, True)
+        self._active_emitted = False
+        if is_complete or emit_incomplete:
+            self._active_emitted = True
+            self.mosaic_ready.emit(gen, mosaic, mosaic_rect, (cx, cy), is_complete, True)
 
         if is_complete:
             self._prefetch_timer.start()
@@ -1001,7 +1011,6 @@ class AsyncTileManager(QObject):
     def _on_tile_done(self, gen_id: int, tx: int, ty: int, tile_u8: np.ndarray, is_prefetch: bool) -> None:
         if self._active_ctx is None:
             return
-        # Store even if generation changed only when state_key still matches active state
         if gen_id != self._gen_id:
             return
 
@@ -1030,15 +1039,17 @@ class AsyncTileManager(QObject):
 
         self._pending_visible.discard((tx, ty))
         is_complete = len(self._pending_visible) == 0
-        self.mosaic_ready.emit(
-            gen_id,
-            self._active_mosaic,
-            self._active_rect,
-            self._active_center,
-            is_complete,
-            False,
-        )
         if is_complete:
+            is_new_rect = not self._active_emitted
+            self._active_emitted = True
+            self.mosaic_ready.emit(
+                gen_id,
+                self._active_mosaic,
+                self._active_rect,
+                self._active_center,
+                True,
+                is_new_rect,
+            )
             self._prefetch_timer.start()
 
     def _start_prefetch_ring(self) -> None:
