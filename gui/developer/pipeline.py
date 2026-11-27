@@ -608,6 +608,7 @@ def apply_developer_pipeline(
                     else None
                 )
             else:
+                dw_dec, dh_dec = orig_w_dec, orig_h_dec
                 in_deconv = stretched
                 in_mask_dec = precomputed_mask
 
