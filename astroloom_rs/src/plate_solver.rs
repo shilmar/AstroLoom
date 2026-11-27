@@ -34,7 +34,6 @@ struct QuadRec {
 
 struct PlateCatalog {
     profile_id: u8,
-    grid_nside: usize,
     hash_bins: usize,
     stars: Vec<StarRec>,
     grid_offsets: Vec<u32>,
@@ -186,7 +185,6 @@ impl PlateCatalog {
 
         Ok(Self {
             profile_id,
-            grid_nside,
             hash_bins,
             stars,
             grid_offsets,
@@ -911,7 +909,7 @@ fn solve_with_focal_guess(
                 for iy in iy0..=iy1 {
                     for jx in jx0..=jx1 {
                         for jy in jy0..=jy1 {
-                            let bucket = (((ix * b_axis + iy) * b_axis + jx) * b_axis + jy);
+                            let bucket = ((ix * b_axis + iy) * b_axis + jx) * b_axis + jy;
                             let q0 = cat.hash_offsets[bucket] as usize;
                             let q1 = cat.hash_offsets[bucket + 1] as usize;
                             for qi in q0..q1 {
