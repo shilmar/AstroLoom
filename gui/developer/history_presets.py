@@ -423,6 +423,8 @@ class HistoryPresetsMixin:
         """Activa el modo de proxy borrador ultra-fluido (Draft 60 FPS) durante el arrastre continuo."""
         if hasattr(self, 'async_pipeline'):
             self.async_pipeline.cancel_pending()
+        if getattr(self, 'is_zoomed_100', False) and hasattr(self, 'tile_manager'):
+            self.tile_manager.cancel_all()
         self._is_slider_pressed = True
         self._is_scrubbing_heavy_slider = True
         self._is_scrubbing_lut_slider = False
@@ -433,6 +435,8 @@ class HistoryPresetsMixin:
         """Activa el modo de interacción para capas locales, bajando a Draft si hay muchas capas/filtros encima."""
         if hasattr(self, 'async_pipeline'):
             self.async_pipeline.cancel_pending()
+        if getattr(self, 'is_zoomed_100', False) and hasattr(self, 'tile_manager'):
+            self.tile_manager.cancel_all()
         use_draft = False
         if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget is not None:
             sel = self.mask_layers_widget.get_selected_layer()

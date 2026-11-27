@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal
+from PySide6.QtCore import QObject, QRunnable, QThread, QThreadPool, QTimer, Qt, Signal
 
 from core.orton import apply_astronomical_orton
 from core.stretch import (
@@ -636,6 +636,42 @@ class TileGridEngine:
         ring.sort(key=lambda t: ((t[0] + 0.5) * ts - cx) ** 2 + ((t[1] + 0.5) * ts - cy) ** 2)
         return ring
 
+    def concentric_prefetch_order(
+        self,
+        visible_coords: List[Tuple[int, int]],
+        cx: float,
+        cy: float,
+        full_shape: Tuple[int, int],
+    ) -> List[Tuple[int, int]]:
+        """Return all remaining tiles in the image ordered by outward concentric rings from the viewport."""
+        if not visible_coords:
+            return []
+        h_f, w_f = full_shape
+        ts = self.tile_size
+        max_tx = max(0, (w_f - 1) // ts)
+        max_ty = max(0, (h_f - 1) // ts)
+        vis_set: Set[Tuple[int, int]] = set(visible_coords)
+
+        tx_min = min(t[0] for t in visible_coords)
+        tx_max = max(t[0] for t in visible_coords)
+        ty_min = min(t[1] for t in visible_coords)
+        ty_max = max(t[1] for t in visible_coords)
+
+        rest: List[Tuple[int, int]] = []
+        for ty in range(0, max_ty + 1):
+            for tx in range(0, max_tx + 1):
+                if (tx, ty) not in vis_set:
+                    rest.append((tx, ty))
+
+        def _ring_sort_key(t: Tuple[int, int]) -> Tuple[int, float]:
+            tx, ty = t
+            ring_d = max(0, tx_min - tx, tx - tx_max, ty_min - ty, ty - ty_max)
+            dist2 = ((tx + 0.5) * ts - cx) ** 2 + ((ty + 0.5) * ts - cy) ** 2
+            return (ring_d, dist2)
+
+        rest.sort(key=_ring_sort_key)
+        return rest
+
     def assemble_mosaic(
         self,
         tile_coords: List[Tuple[int, int]],
@@ -827,12 +863,19 @@ class AsyncTileManager(QObject):
         tile_size: int = DEFAULT_TILE_SIZE,
         cache_max_bytes: int = 256 * 1024 * 1024,
         max_threads: Optional[int] = None,
+        bg_idle_ms: int = 800,
     ):
         super().__init__(parent)
         self.engine = TileGridEngine(tile_size=tile_size, cache_max_bytes=cache_max_bytes)
         self.thread_pool = QThreadPool(self)
         workers = max_threads or max(2, min(4, (os.cpu_count() or 4) // 2))
         self.thread_pool.setMaxThreadCount(workers)
+
+        # Single low-priority thread for idle concentric 1:1 background pre-computation
+        self._bg_pool = QThreadPool(self)
+        self._bg_pool.setMaxThreadCount(1)
+        if hasattr(self._bg_pool, "setThreadPriority"):
+            self._bg_pool.setThreadPriority(QThread.LowPriority)
 
         # Single parented QObject signal emitter so QThreadPool autoDelete never destroys
         # the sender before Qt delivers queued cross-thread tile_done signals.
@@ -847,11 +890,18 @@ class AsyncTileManager(QObject):
         self._active_visible: List[Tuple[int, int]] = []
         self._pending_visible: Set[Tuple[int, int]] = set()
         self._in_flight_prefetch: Set[Tuple[int, int]] = set()
+        self._bg_queue: List[Tuple[int, int]] = []
+        self._bg_in_flight: bool = False
 
         self._prefetch_timer = QTimer(self)
         self._prefetch_timer.setSingleShot(True)
         self._prefetch_timer.setInterval(150)
         self._prefetch_timer.timeout.connect(self._start_prefetch_ring)
+
+        self._bg_idle_timer = QTimer(self)
+        self._bg_idle_timer.setSingleShot(True)
+        self._bg_idle_timer.setInterval(max(10, int(bg_idle_ms)))
+        self._bg_idle_timer.timeout.connect(self._start_background_concentric_prefetch)
 
     @property
     def current_gen_id(self) -> int:
@@ -864,8 +914,11 @@ class AsyncTileManager(QObject):
     def cancel_all(self) -> None:
         self._gen_id += 1
         self._prefetch_timer.stop()
+        self._bg_idle_timer.stop()
         self._pending_visible.clear()
         self._in_flight_prefetch.clear()
+        self._bg_queue.clear()
+        self._bg_in_flight = False
 
     def clear_cache(self) -> None:
         self.cancel_all()
@@ -903,8 +956,11 @@ class AsyncTileManager(QObject):
         self._gen_id += 1
         gen = self._gen_id
         self._prefetch_timer.stop()
+        self._bg_idle_timer.stop()
         self._pending_visible.clear()
         self._in_flight_prefetch.clear()
+        self._bg_queue.clear()
+        self._bg_in_flight = False
 
         coords, mosaic_rect = self.engine.visible_tiles(cx, cy, vw, vh, ctx.full_shape)
         mosaic, missing = self.engine.assemble_mosaic(
@@ -952,7 +1008,13 @@ class AsyncTileManager(QObject):
         self.engine.cache.put(tx, ty, self._active_ctx.state_key, tile_u8)
 
         if is_prefetch:
-            self._in_flight_prefetch.discard((tx, ty))
+            if (tx, ty) in self._in_flight_prefetch:
+                self._in_flight_prefetch.discard((tx, ty))
+                if not self._in_flight_prefetch and not self._pending_visible:
+                    self._bg_idle_timer.start()
+            else:
+                self._bg_in_flight = False
+                self._schedule_next_bg_tile()
             return
 
         if self._active_mosaic is None or self._active_rect is None:
@@ -1009,3 +1071,65 @@ class AsyncTileManager(QObject):
             )
             self.thread_pool.start(worker)
             scheduled += 1
+
+        # If immediate ring is already 100% cached, arm idle concentric background fill
+        if scheduled == 0 and not self._in_flight_prefetch:
+            self._bg_idle_timer.start()
+
+    def _start_background_concentric_prefetch(self) -> None:
+        """Start low-priority 1-thread concentric pre-computation after idle period in Zoom 1:1."""
+        if (
+            self._active_ctx is None
+            or not self._active_visible
+            or self._pending_visible
+            or self._in_flight_prefetch
+            or self._bg_in_flight
+        ):
+            return
+        ctx = self._active_ctx
+        cx, cy = self._active_center
+        all_rest = self.engine.concentric_prefetch_order(self._active_visible, cx, cy, ctx.full_shape)
+        self._bg_queue = [
+            t for t in all_rest if not self.engine.cache.contains(t[0], t[1], ctx.state_key)
+        ]
+        self._schedule_next_bg_tile()
+
+    def _schedule_next_bg_tile(self) -> None:
+        """Schedule at most 1 background concentric tile while staying within TileCache RAM budget."""
+        if (
+            self._active_ctx is None
+            or self._pending_visible
+            or self._in_flight_prefetch
+            or self._bg_in_flight
+            or not self._bg_queue
+        ):
+            return
+
+        ctx = self._active_ctx
+        ts = self.engine.tile_size
+        est_tile_bytes = ts * ts * 3
+        st = self.engine.cache.stats()
+        # Keep 10% headroom so background fill never evicts visible viewport tiles
+        if st["bytes"] + est_tile_bytes > int(st["max_bytes"] * 0.90):
+            self._bg_queue.clear()
+            return
+
+        while self._bg_queue:
+            tx, ty = self._bg_queue.pop(0)
+            if self.engine.cache.contains(tx, ty, ctx.state_key):
+                continue
+            gen = self._gen_id
+            self._bg_in_flight = True
+            worker = _TileWorker(
+                gen_id=gen,
+                ctx=ctx,
+                tx=tx,
+                ty=ty,
+                tile_size=ts,
+                is_prefetch=True,
+                abort_check=lambda g=gen: self._gen_id != g,
+                signals=self._worker_signals,
+                milestone_cache=None,  # Keep float32 milestone budget reserved for active viewport
+            )
+            self._bg_pool.start(worker)
+            return
