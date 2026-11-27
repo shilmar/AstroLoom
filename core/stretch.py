@@ -231,12 +231,20 @@ def manual_stretch(
     midtone: float = 0.1,
     highlight_protection: float = 0.0
 ) -> np.ndarray:
+    if HAS_RUST and hasattr(astroloom_rs, "manual_stretch_rs") and isinstance(img_float, np.ndarray):
+        return astroloom_rs.manual_stretch_rs(
+            np.ascontiguousarray(img_float, dtype=np.float32),
+            float(black_point),
+            float(midtone),
+            float(highlight_protection),
+        )
+
     # 1. Recorte y re-escalado del punto negro
     clipped = np.clip((img_float - black_point) / max(1e-6, 1.0 - black_point), 0.0, 1.0)
     # 2. Aplicación directa de curva MTF con el 'm' elegido
     stretched = mtf_curve(clipped, max(1e-5, min(0.9999, midtone)))
 
-    # 3. Compresión suave de altas luces para proteger núcleos estelares (Seti Astro)
+    # 3. Compresión suave de altas luces para proteger núcleos estelares
     if highlight_protection > 1e-4:
         hp = float(np.clip(highlight_protection, 0.0, 1.0))
         knee = 1.0 - (0.35 * hp)  # Umbral de compresión entre 0.65 y 1.0

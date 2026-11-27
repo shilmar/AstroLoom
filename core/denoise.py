@@ -86,6 +86,31 @@ def apply_astro_denoise(
     if strength <= 1e-4 and color_strength <= 1e-4:
         return img_rgb
 
+    if (
+        HAS_RUST
+        and hasattr(astroloom_rs, "astro_denoise_rs")
+        and img_rgb.ndim == 3
+        and img_rgb.shape[2] == 3
+    ):
+        h, w = img_rgb.shape[:2]
+        m_c = None
+        if sky_mask is not None:
+            sm = sky_mask
+            if sm.ndim == 3:
+                sm = sm[..., 0]
+            if sm.shape[:2] != (h, w):
+                sm = cv2.resize(sm.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
+            m_c = np.ascontiguousarray(sm, dtype=np.float32)
+        return astroloom_rs.astro_denoise_rs(
+            np.ascontiguousarray(img_rgb, dtype=np.float32),
+            float(strength),
+            float(color_strength),
+            float(masking),
+            m_c,
+            bool(is_draft),
+            bool(is_full_res),
+        )
+
     # Conversión a espacio YCrCb para desacoplar Luminancia y Croma
     safe_input = np.clip(img_rgb, 0.0, 1.0).astype(np.float32)
     ycrcb = cv2.cvtColor(safe_input, cv2.COLOR_RGB2YCrCb)

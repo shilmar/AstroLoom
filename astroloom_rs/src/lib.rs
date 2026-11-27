@@ -114,6 +114,9 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(spatial_filters::apply_dehaze_rs, m)?)?;
     m.add_function(wrap_pyfunction!(spatial_filters::adjust_contrast_masked_rs, m)?)?;
     m.add_function(wrap_pyfunction!(spatial_filters::self_guided_filter_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(spatial_filters::manual_stretch_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(spatial_filters::astro_denoise_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(spatial_filters::prepare_star_diffusion_seed_rs, m)?)?;
 
     // 11. Astrometría por Triángulos, Cribado 3x3 y Mallas TPS - Prioridad 9 (core/panorama.py, core/frame_culling.py y core/stacking.py)
     m.add_function(wrap_pyfunction!(astrometry::find_max_inscribed_rect_rs, m)?)?;

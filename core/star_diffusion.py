@@ -62,11 +62,10 @@ def apply_star_diffusion(
     # 1. Aislamiento de picos estelares puntuales
     if stars_layer is not None:
         # Modo con estrellas desacopladas: la capa ya contiene únicamente estrellas sobre fondo negro
-        st_src = stars_layer.copy()
+        st_src = stars_layer
         if st_src.shape[:2] != (h, w):
             st_src = cv2.resize(st_src, (w, h), interpolation=cv2.INTER_LINEAR)
-        star_luma = 0.2126 * st_src[..., 0] + 0.7152 * st_src[..., 1] + 0.0722 * st_src[..., 2]
-        star_peaks = star_luma
+        star_peaks = 0.2126 * st_src[..., 0] + 0.7152 * st_src[..., 1] + 0.0722 * st_src[..., 2]
         emission_base = st_src
     else:
         # Modo imagen única: filtro morfológico Top-Hat (Luma - Apertura) para aislar estrellas puntuales
@@ -75,87 +74,108 @@ def apply_star_diffusion(
         base_dim = int(ref_min_dim) if ref_min_dim is not None else min(h, w)
         k_size = max(5, int(round(base_dim * 0.007)) | 1)
         k_size = min(k_size, 19)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
-        diffuse = cv2.morphologyEx(luma, cv2.MORPH_OPEN, kernel)
+        if k_size >= 7 and min(h, w) >= 256:
+            # Apertura en 0.5x para extraer el fondo difuso ~16x más rápido
+            sw, sh = max(32, w // 2), max(32, h // 2)
+            ks = max(3, (k_size // 2) | 1)
+            luma_s = cv2.resize(luma, (sw, sh), interpolation=cv2.INTER_AREA)
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ks, ks))
+            diffuse = cv2.resize(cv2.morphologyEx(luma_s, cv2.MORPH_OPEN, kernel), (w, h), interpolation=cv2.INTER_LINEAR)
+        else:
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+            diffuse = cv2.morphologyEx(luma, cv2.MORPH_OPEN, kernel)
         star_peaks = np.clip(luma - diffuse, 0.0, 1.0)
-        emission_base = img_rgb.copy()
+        emission_base = img_rgb
 
     # 2. Protección del horizonte y paisaje terrestre mediante sky_mask
+    m = None
     if sky_mask is not None:
-        m = np.squeeze(sky_mask).astype(np.float32)
+        m = np.squeeze(sky_mask).astype(np.float32, copy=False)
         if m.shape != (h, w):
             m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
-        star_peaks = star_peaks * m
-        emission_base = emission_base * m[..., np.newaxis]
 
-    # 3. Puerta de magnitud relativa por umbral con curva suave Hermite (smoothstep)
-    # Las estrellas tenues de fondo (peaks < threshold) reciben peso 0.0 absoluto
-    thr = max(0.05, float(threshold))
-    knee = 0.12
-    t = np.clip((star_peaks - thr) / knee, 0.0, 1.0)
-    star_weight = t * t * (3.0 - 2.0 * t)
+    # 3-6a. Puerta de magnitud + recuperación cromática + dilatación 3x3 fusionadas en Rust
+    seed_source = None
+    if HAS_RUST and hasattr(astroloom_rs, "prepare_star_diffusion_seed_rs"):
+        m_c = np.ascontiguousarray(m, dtype=np.float32) if m is not None else None
+        seed_source = astroloom_rs.prepare_star_diffusion_seed_rs(
+            np.ascontiguousarray(emission_base, dtype=np.float32),
+            np.ascontiguousarray(star_peaks, dtype=np.float32),
+            float(threshold),
+            float(color_boost),
+            m_c,
+        )
+        if seed_source is None:
+            return img_rgb
 
-    # Si no hay estrellas por encima del umbral, retornamos sin modificar
-    if np.max(star_weight) < 1e-4:
-        return img_rgb
+    if seed_source is None:
+        if m is not None:
+            star_peaks = star_peaks * m
 
-    # 4. Fuente de emisión estelar
-    # 5. Recuperación cromática espectral dispersa (solo píxeles activos, evita HSV sobre fondo negro)
-    star_source = None
-    if color_boost > 1e-4:
-        act_y, act_x = np.nonzero(star_peaks > 0.12)
-        if act_y.size > 0:
-            rgb_act = np.clip(emission_base[act_y, act_x], 0.0, 1.0).reshape(-1, 1, 3)
-            hsv_act = cv2.cvtColor(rgb_act, cv2.COLOR_RGB2HSV).reshape(-1, 3)
-            H_act, S_act, _ = hsv_act[:, 0], hsv_act[:, 1], hsv_act[:, 2]
+        thr = max(0.05, float(threshold))
+        knee = 0.12
+        t = np.clip((star_peaks - thr) / knee, 0.0, 1.0)
+        star_weight = t * t * (3.0 - 2.0 * t)
+        if m is not None:
+            star_weight *= m
 
-            valid_sat = S_act > 0.06
-            if np.any(valid_sat):
-                vy = act_y[valid_sat]
-                vx = act_x[valid_sat]
-                rad_h = np.deg2rad(H_act[valid_sat])
-                s_v = S_act[valid_sat]
+        if np.max(star_weight) < 1e-4:
+            return img_rgb
 
-                # Empaquetamos (u, v, weight) en 1 array de 3 canales para 1 solo GaussianBlur
-                uvw = np.zeros((h, w, 3), dtype=np.float32)
-                uvw[vy, vx, 0] = s_v * np.cos(rad_h)
-                uvw[vy, vx, 1] = s_v * np.sin(rad_h)
-                uvw[vy, vx, 2] = 1.0
+        star_source = None
+        if color_boost > 1e-4:
+            act_y, act_x = np.nonzero(star_peaks > 0.12)
+            if act_y.size > 0:
+                rgb_act_raw = emission_base[act_y, act_x]
+                if m is not None:
+                    rgb_act_raw = rgb_act_raw * m[act_y, act_x, np.newaxis]
+                rgb_act = np.clip(rgb_act_raw, 0.0, 1.0).reshape(-1, 1, 3)
+                hsv_act = cv2.cvtColor(rgb_act, cv2.COLOR_RGB2HSV).reshape(-1, 3)
+                H_act, S_act, _ = hsv_act[:, 0], hsv_act[:, 1], hsv_act[:, 2]
 
-                uvw_b = cv2.GaussianBlur(uvw, (7, 7), sigmaX=2.0)
+                valid_sat = S_act > 0.06
+                if np.any(valid_sat):
+                    vy = act_y[valid_sat]
+                    vx = act_x[valid_sat]
+                    rad_h = np.deg2rad(H_act[valid_sat])
+                    s_v = S_act[valid_sat]
 
-                # Solo reconstruimos HSV->RGB donde star_weight > 0 (típ. <1% de píxeles)
-                ey, ex = np.nonzero(star_weight > 1e-4)
-                if ey.size > 0:
-                    rgb_em = np.clip(emission_base[ey, ex], 0.0, 1.0).reshape(-1, 1, 3)
-                    hsv_em = cv2.cvtColor(rgb_em, cv2.COLOR_RGB2HSV).reshape(-1, 3)
-                    H_em, S_em, V_em = hsv_em[:, 0], hsv_em[:, 1], hsv_em[:, 2]
+                    uvw = np.zeros((h, w, 3), dtype=np.float32)
+                    uvw[vy, vx, 0] = s_v * np.cos(rad_h)
+                    uvw[vy, vx, 1] = s_v * np.sin(rad_h)
+                    uvw[vy, vx, 2] = 1.0
 
-                    wb = uvw_b[ey, ex, 2] + 1e-4
-                    u_rec = uvw_b[ey, ex, 0] / wb
-                    v_rec = uvw_b[ey, ex, 1] / wb
-                    rec_S = np.clip(np.sqrt(u_rec * u_rec + v_rec * v_rec) * (1.0 + color_boost * 2.0), 0.0, 1.0)
-                    rec_H = np.rad2deg(np.arctan2(v_rec, u_rec)) % 360.0
+                    uvw_b = cv2.GaussianBlur(uvw, (7, 7), sigmaX=2.0)
 
-                    is_desat = (V_em > 0.50) & (star_peaks[ey, ex] > (thr * 0.8))
-                    final_H = np.where(is_desat, rec_H, H_em)
-                    final_S = np.clip(
-                        np.where(is_desat, np.maximum(S_em, rec_S), S_em * (1.0 + color_boost * 1.5)),
-                        0.0, 1.0
-                    )
-                    final_hsv = np.stack([final_H, final_S, V_em], axis=-1).astype(np.float32).reshape(-1, 1, 3)
-                    boosted_em = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2RGB).reshape(-1, 3)
+                    ey, ex = np.nonzero(star_weight > 1e-4)
+                    if ey.size > 0:
+                        rgb_em = np.clip(emission_base[ey, ex], 0.0, 1.0).reshape(-1, 1, 3)
+                        hsv_em = cv2.cvtColor(rgb_em, cv2.COLOR_RGB2HSV).reshape(-1, 3)
+                        H_em, S_em, V_em = hsv_em[:, 0], hsv_em[:, 1], hsv_em[:, 2]
 
-                    star_source = np.zeros((h, w, 3), dtype=np.float32)
-                    star_source[ey, ex] = boosted_em * star_weight[ey, ex, np.newaxis]
+                        wb = uvw_b[ey, ex, 2] + 1e-4
+                        u_rec = uvw_b[ey, ex, 0] / wb
+                        v_rec = uvw_b[ey, ex, 1] / wb
+                        rec_S = np.clip(np.sqrt(u_rec * u_rec + v_rec * v_rec) * (1.0 + color_boost * 2.0), 0.0, 1.0)
+                        rec_H = np.rad2deg(np.arctan2(v_rec, u_rec)) % 360.0
 
-    if star_source is None:
-        star_source = emission_base * star_weight[..., np.newaxis]
+                        is_desat = (V_em > 0.50) & (star_peaks[ey, ex] > (thr * 0.8))
+                        final_H = np.where(is_desat, rec_H, H_em)
+                        final_S = np.clip(
+                            np.where(is_desat, np.maximum(S_em, rec_S), S_em * (1.0 + color_boost * 1.5)),
+                            0.0, 1.0
+                        )
+                        final_hsv = np.stack([final_H, final_S, V_em], axis=-1).astype(np.float32).reshape(-1, 1, 3)
+                        boosted_em = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2RGB).reshape(-1, 3)
 
-    # 6. Difusión óptica multi-escala del halo estelar (Star Mist Halo)
-    # Semilla de micro-difracción: dilatación elíptica suave de 3x3 para expandir la dispersión
-    k_seed = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    seed_source = cv2.dilate(star_source, k_seed)
+                        star_source = np.zeros((h, w, 3), dtype=np.float32)
+                        star_source[ey, ex] = boosted_em * star_weight[ey, ex, np.newaxis]
+
+        if star_source is None:
+            star_source = emission_base * star_weight[..., np.newaxis]
+
+        k_seed = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        seed_source = cv2.dilate(star_source, k_seed)
 
     sigma1 = max(1.0, float(radius * 0.55))
     sigma2 = max(2.5, float(radius * 1.75))
@@ -199,17 +219,11 @@ def apply_star_diffusion(
         halo = (b1 * 0.60) + (b2 * 0.40)
 
     # Factor de escala energético para halo visible y proporcionado
-    halo = halo * 3.8
+    halo *= 3.8
 
     if HAS_RUST and hasattr(astroloom_rs, "blend_orton_and_diffusion_rs"):
         try:
-            m_c = None
-            if sky_mask is not None:
-                m = np.squeeze(sky_mask).astype(np.float32)
-                if m.shape != (h, w):
-                    m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
-                m_c = np.ascontiguousarray(m, dtype=np.float32)
-
+            m_c = np.ascontiguousarray(m, dtype=np.float32) if m is not None else None
             return astroloom_rs.blend_orton_and_diffusion_rs(
                 np.ascontiguousarray(img_rgb, dtype=np.float32),
                 np.ascontiguousarray(halo, dtype=np.float32),

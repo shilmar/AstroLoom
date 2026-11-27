@@ -72,7 +72,7 @@ def apply_astronomical_orton(
 
     # 2. Conciencia estelar: si la imagen tiene estrellas, aislamos la emisión difusa
     if is_starless:
-        glow_base = img_rgb.copy()
+        glow_base = img_rgb
         diffuse_luma = luma
     else:
         # Supresión de picos puntuales estelares mediante filtro morfológico de apertura
@@ -80,8 +80,16 @@ def apply_astronomical_orton(
         base_dim = int(ref_min_dim) if ref_min_dim is not None else min(h, w)
         k_size = max(3, int(round(base_dim * 0.005)) | 1)
         k_size = min(k_size, 21)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
-        diffuse_luma = cv2.morphologyEx(luma, cv2.MORPH_OPEN, kernel)
+        if k_size >= 7 and min(h, w) >= 256:
+            # Apertura en 0.5x para aislar fondo difuso ~16x más rápido
+            sw, sh = max(32, w // 2), max(32, h // 2)
+            ks = max(3, (k_size // 2) | 1)
+            luma_s = cv2.resize(luma, (sw, sh), interpolation=cv2.INTER_AREA)
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ks, ks))
+            diffuse_luma = cv2.resize(cv2.morphologyEx(luma_s, cv2.MORPH_OPEN, kernel), (w, h), interpolation=cv2.INTER_LINEAR)
+        else:
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+            diffuse_luma = cv2.morphologyEx(luma, cv2.MORPH_OPEN, kernel)
 
         # Máscara de estrellas puntuales detectadas
         star_peak = np.clip(luma - diffuse_luma, 0.0, 1.0)
