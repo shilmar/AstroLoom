@@ -185,8 +185,8 @@ fn write_pixel(
     clip_highlights: bool,
     out: &mut [u8],
 ) {
-    if clip_shadows && r == 0 && g == 0 && b == 0 {
-        // Sombras empastadas: #0070ff (B=255, G=112, R=0, A=255)
+    if clip_shadows && (r == 0 || g == 0 || b == 0) {
+        // Sombras empastadas (cualquier canal en 0): #0070ff (B=255, G=112, R=0, A=255)
         out[0] = 255;
         out[1] = 112;
         out[2] = 0;

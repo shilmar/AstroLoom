@@ -25,22 +25,13 @@ import numpy as np
 import tifffile
 from PIL import Image, ExifTags
 
-try:
-    import astroloom_rs
-    HAS_RUST = True
-except ImportError:
-    HAS_RUST = False
+import astroloom_rs
 
-
+HAS_RUST = True
+HAS_PYTOSHOP = True
 
 from core.stacking import load_image_as_float32, get_image_dimensions
 from core.panorama import extract_bright_stars, build_star_asterisms, match_star_asterisms
-
-try:
-    import astroloom_rs
-    HAS_PYTOSHOP = hasattr(astroloom_rs, "write_psd_file")
-except Exception:
-    HAS_PYTOSHOP = False
 
 
 # =============================================================================
@@ -100,16 +91,6 @@ class MeteorSessionConfig:
     include_sporadics: bool = False       # Si se incluyen o excluyen meteoros esporádicos en el compuesto
     boost_flux: float = 1.0               # Multiplicador de realce de brillo de meteoros
     feather_px: int = 12                  # Radio de desvanecimiento suave de bordes del parche
-
-
-@dataclass
-class MeteorDetectionResult:
-    candidates: List[MeteorCandidate]
-    radiant_point_ref: Optional[Tuple[float, float]] = None # (x, y) en coordenadas de referencia
-    total_frames_scanned: int = 0
-    meteors_count: int = 0
-    airplanes_count: int = 0
-    satellites_count: int = 0
 
 
 # =============================================================================

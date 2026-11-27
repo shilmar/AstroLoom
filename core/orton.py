@@ -15,12 +15,9 @@ Diseñado específicamente para astrofotografía:
 from typing import Optional, Tuple, Dict
 import numpy as np
 import cv2
+import astroloom_rs
 
-try:
-    import astroloom_rs
-    HAS_RUST = True
-except ImportError:
-    HAS_RUST = False
+HAS_RUST = True
 
 ORTON_PRESET_TINTS: Dict[str, Tuple[float, float, float]] = {
     "warm_gold": (1.0, 0.85, 0.55),   # Núcleo galáctico (Sagitario/Escorpio) y polvo molecular (Rho Ophiuchi)
@@ -98,31 +95,14 @@ def apply_astronomical_orton(
         star_attenuation = 1.0 - np.clip(star_peak * 2.0, 0.0, 0.95)
         glow_base = img_rgb * star_attenuation[..., np.newaxis]
 
-    # 3. Puerta de emisión por umbral: sólo las estructuras de polvo y nebulosas generan glow.
-    # El fondo oscuro del cielo profundo queda resguardado mediante curva suave Hermite (smoothstep).
+    # 3. Puerta de emisión por umbral en Rust
     thr = max(0.0, float(threshold))
-    knee = max(0.04, float(thr * 0.5))
-
-    if HAS_RUST and hasattr(astroloom_rs, "compute_orton_glow_source_rs"):
-        try:
-            glow_source = astroloom_rs.compute_orton_glow_source_rs(
-                np.ascontiguousarray(glow_base, dtype=np.float32),
-                np.ascontiguousarray(diffuse_luma, dtype=np.float32),
-                float(thr),
-                float(exponent)
-            )
-        except Exception:
-            t = np.clip((diffuse_luma - thr) / knee, 0.0, 1.0)
-            emission = t * t * (3.0 - 2.0 * t)
-            if abs(exponent - 1.0) > 1e-3:
-                emission = np.power(emission, max(0.2, float(exponent)))
-            glow_source = glow_base * emission[..., np.newaxis]
-    else:
-        t = np.clip((diffuse_luma - thr) / knee, 0.0, 1.0)
-        emission = t * t * (3.0 - 2.0 * t)
-        if abs(exponent - 1.0) > 1e-3:
-            emission = np.power(emission, max(0.2, float(exponent)))
-        glow_source = glow_base * emission[..., np.newaxis]
+    glow_source = astroloom_rs.compute_orton_glow_source_rs(
+        np.ascontiguousarray(glow_base, dtype=np.float32),
+        np.ascontiguousarray(diffuse_luma, dtype=np.float32),
+        float(thr),
+        float(exponent)
+    )
 
     # 4. Difusión multi-escala (Celestial Bloom)
     # Combinamos dos componentes gaussianos: uno medio (sigma=radius) y otro amplio (sigma=2.5*radius)
@@ -178,55 +158,18 @@ def apply_astronomical_orton(
     c_eff = c_eff / max(1e-4, float(np.max(c_eff)))
 
     # Fusión acelerada en Rust sin reservas intermedias
-    if HAS_RUST and hasattr(astroloom_rs, "blend_orton_and_diffusion_rs"):
-        try:
-            m_c = None
-            if sky_mask is not None:
-                m = np.squeeze(sky_mask).astype(np.float32)
-                if m.shape != (h, w):
-                    m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
-                m_c = np.ascontiguousarray(m, dtype=np.float32)
-
-            return astroloom_rs.blend_orton_and_diffusion_rs(
-                np.ascontiguousarray(img_rgb, dtype=np.float32),
-                np.ascontiguousarray(bloom, dtype=np.float32),
-                tint=np.ascontiguousarray(c_eff, dtype=np.float32),
-                sky_mask=m_c,
-                blend_mode=str(blend_mode),
-                strength=float(strength)
-            )
-        except Exception:
-            pass
-
-    bloom = bloom * c_eff[np.newaxis, np.newaxis, :]
-
-    # 6. Protección del paisaje terrestre con sky_mask
+    m_c = None
     if sky_mask is not None:
         m = np.squeeze(sky_mask).astype(np.float32)
         if m.shape != (h, w):
             m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
-        bloom = bloom * m[..., np.newaxis]
+        m_c = np.ascontiguousarray(m, dtype=np.float32)
 
-    # 7. Fusión Tonal según blend_mode
-    if blend_mode == "screen":
-        # Modo Trama (Screen):
-        # 1.0 - (1.0 - I) * (1.0 - Bloom) = I + Bloom * (1.0 - I)
-        # Velo etéreo, luminoso y difuso continuo sin saltos bruscos
-        blended = 1.0 - (1.0 - img_rgb) * (1.0 - bloom)
-    elif blend_mode == "additive":
-        # Modo Aditivo directo (Linear Dodge):
-        # Acumulación directa de fotones dispersados por el polvo interestelar
-        blended = img_rgb + bloom
-    else:
-        # Modo por defecto "soft_light": Luz Suave Astronómica (Soft Glow)
-        # Resplandor aterciopelado focalizado en medios tonos y polvo estelar:
-        # I_out = I + 2.0 * Bloom * I * (1.0 - I)
-        # Propiedad vital para astrofotografía:
-        # Si Bloom == 0, I_out == I (0% oscurecimiento de fondo o estrellas).
-        # Si I == 0 o I == 1, no hay lavado de negros profundos ni quemado de estrellas saturadas.
-        blended = img_rgb + 2.0 * bloom * img_rgb * (1.0 - img_rgb)
-
-    # 8. Interpolación ponderada por la intensidad (strength)
-    out = (1.0 - strength) * img_rgb + strength * blended
-
-    return np.clip(out, 0.0, 1.0).astype(np.float32)
+    return astroloom_rs.blend_orton_and_diffusion_rs(
+        np.ascontiguousarray(img_rgb, dtype=np.float32),
+        np.ascontiguousarray(bloom, dtype=np.float32),
+        tint=np.ascontiguousarray(c_eff, dtype=np.float32),
+        sky_mask=m_c,
+        blend_mode=str(blend_mode),
+        strength=float(strength)
+    )

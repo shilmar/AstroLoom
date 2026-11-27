@@ -163,36 +163,6 @@ def download_starnet_model(
                 pass
 
 
-def compute_hann_2d_window(height: int, width: int) -> np.ndarray:
-    """Calcula una ventana de ponderación 2D de Hann separable para mezcla suave sin costuras."""
-    if HAS_RUST_AI and hasattr(astroloom_rs, 'compute_hann_2d_window_rs'):
-        try:
-            return astroloom_rs.compute_hann_2d_window_rs(height, width)
-        except Exception:
-            pass
-    y_w = np.sin(np.pi * (np.arange(height, dtype=np.float32) + 0.5) / height) ** 2
-    x_w = np.sin(np.pi * (np.arange(width, dtype=np.float32) + 0.5) / width) ** 2
-    return np.outer(y_w, x_w).astype(np.float32)[..., np.newaxis]
-
-
-def _get_tile_coords(length: int, tile_size: int, stride: int) -> List[int]:
-    """Genera coordenadas de inicio de bloques cubriendo uniformemente la dimensión."""
-    if HAS_RUST_AI and hasattr(astroloom_rs, 'get_tile_coords_rs'):
-        try:
-            return astroloom_rs.get_tile_coords_rs(length, tile_size, stride)
-        except Exception:
-            pass
-    if length <= tile_size:
-        return [0]
-    coords = []
-    pos = 0
-    while pos + tile_size < length:
-        coords.append(pos)
-        pos += stride
-    coords.append(length - tile_size)
-    return sorted(list(set(coords)))
-
-
 _GPU_FALLBACK_LISTENERS: List[Callable[[str], None]] = []
 
 
@@ -445,98 +415,6 @@ def run_starnet_onnx(
             tiles_4d, coords, orig_h=h, orig_w=w, stride=stride, tile_size=tile_size,
             is_linear=is_linear, bps=bps, ms=ms, orig_img=input_data, use_hann=False
         )
-    else:
-        # 3. Preparación para modo lineal: ciclo MTF per-canal
-        bps: List[float] = []
-        ms: List[float] = []
-        if is_linear:
-            log("Calculando estirado analítico MTF per-canal (shadows_factor=-2.80)...")
-            stretched = np.zeros_like(input_data)
-            for c in range(3):
-                ch = input_data[..., c]
-                bp, m = _calc_channel_mtf(ch, target_bg=0.25, shadows_factor=-2.80)
-                bps.append(bp)
-                ms.append(m)
-                c_norm = np.clip((ch - bp) / max(1e-6, 1.0 - bp), 0.0, 1.0)
-                stretched[..., c] = np.clip(_mtf_curve(c_norm, m), 0.0, 1.0)
-            net_input = stretched
-        else:
-            net_input = input_data
-
-        # 4. Tiling con recorte de bordes (descarta márgenes convolucionales inestables de 512x512)
-        border = (tile_size - stride) // 2
-
-        # Margen reflectivo perimetral para que todos los píxeles (incluidos bordes) tengan contexto completo
-        padded_img = cv2.copyMakeBorder(net_input, border, border, border, border, cv2.BORDER_REFLECT)
-
-        y_steps = list(range(0, h, stride))
-        x_steps = list(range(0, w, stride))
-        total_tiles = len(y_steps) * len(x_steps)
-        log(f"Dividiendo imagen en {total_tiles} bloques ({tile_size}x{tile_size}, paso={stride}, margen={border}px)...")
-
-        # 5. Inferencia con sesión ONNX
-        sess = _create_inference_session(path)
-        raw_starless = np.zeros((h, w, 3), dtype=np.float32)
-
-        tile_idx = 0
-        for y in y_steps:
-            h_chunk = min(stride, h - y)
-            for x in x_steps:
-                if cancel_check and cancel_check():
-                    log("Separación cancelada por el usuario.")
-                    raise InterruptedError("Operación cancelada por el usuario.")
-
-                w_chunk = min(stride, w - x)
-
-                # Extraer parche de 512x512 con margen de contexto
-                patch_in = padded_img[y : y + tile_size, x : x + tile_size]
-                if patch_in.shape[:2] != (tile_size, tile_size):
-                    patch_in = cv2.copyMakeBorder(
-                        patch_in, 0, tile_size - patch_in.shape[0], 0, tile_size - patch_in.shape[1], cv2.BORDER_REFLECT
-                    )
-
-                in_batch = np.expand_dims(patch_in, axis=0)  # [1, 512, 512, 3]
-                try:
-                    out_batch = sess.run(None, {'x:0': in_batch})[0]
-                except Exception as run_err:
-                    active_providers = sess.get_providers()
-                    if active_providers and active_providers[0] != "CPUExecutionProvider":
-                        logger.warning(f"Error GPU en StarNet ({run_err}). Degradando a CPU...")
-                        log("⚠️ VRAM insuficiente. Continuando separación en CPU...", tile_idx, total_tiles)
-                        notify_gpu_fallback(f"StarNet v2 AI: {run_err}")
-                        try:
-                            del sess
-                        except Exception:
-                            pass
-                        sess = _create_inference_session(path, force_cpu=True)
-                        out_batch = sess.run(None, {'x:0': in_batch})[0]
-                    else:
-                        raise run_err
-                tile_out = np.clip(out_batch[0], 0.0, 1.0)
-
-                # Conservar exclusivamente el núcleo central estable y descartar los bordes distorsionados
-                raw_starless[y : y + h_chunk, x : x + w_chunk] = tile_out[border : border + h_chunk, border : border + w_chunk]
-
-                tile_idx += 1
-                pct = int((tile_idx / total_tiles) * 100)
-                log(f"Separando estrellas con StarNet v2 AI...\nBloque {tile_idx} de {total_tiles} ({pct}%)", tile_idx, total_tiles)
-
-        # 6. Des-estirado analítico MTF inverso para imágenes lineales
-        if is_linear:
-            log("Revirtiendo estirado analítico MTF a espacio lineal...")
-            starless_linear = np.zeros_like(raw_starless)
-            for c in range(3):
-                ch = input_data[..., c]
-                bp = bps[c]
-                m_inv = 1.0 - ms[c]
-                s_norm = _mtf_curve(raw_starless[..., c], m_inv)
-                s_unnorm = s_norm * (1.0 - bp) + bp
-                # Restaurar sombras recortadas
-                s_restored = np.where(ch <= bp, ch, s_unnorm)
-                starless_linear[..., c] = np.clip(s_restored, 0.0, 1.0)
-            final_starless = starless_linear
-        else:
-            final_starless = np.clip(raw_starless, 0.0, 1.0)
 
     # 7. Restaurar suelo real intacto si se suministró sky_mask
     if mask_3d is not None:

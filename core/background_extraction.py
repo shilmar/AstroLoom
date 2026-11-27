@@ -9,13 +9,9 @@ y excluyendo el suelo terrestre mediante máscaras de horizonte.
 from typing import Optional, List, Tuple
 import cv2
 import numpy as np
-from scipy.interpolate import RBFInterpolator
+import astroloom_rs
 
-try:
-    import astroloom_rs
-    HAS_RUST = True
-except ImportError:
-    HAS_RUST = False
+HAS_RUST = True
 
 
 def generate_sky_sample_points(
@@ -191,74 +187,29 @@ def extract_background_rbf(
     eval_h = max(24, min(180, h // max(1, eval_scale)))
     eval_w = max(24, min(240, w // max(1, eval_scale)))
 
-    # Aceleración nativa en Rust con Rayon + Zero-Copy (Drop-in Fallback)
-    if HAS_RUST:
-        try:
-            smooth_val = max(1e-3, float(smoothing))
-            eps_val = max(0.01, float(epsilon)) if kernel in ("multiquadric", "gaussian", "inverse_multiquadric") else 1.0
-            bg_proxy = astroloom_rs.fit_and_eval_rbf_proxy(
-                pts_arr, vals_arr, eval_h, eval_w, str(kernel), smooth_val, eps_val
-            )
-            bg_full = cv2.resize(bg_proxy, (w, h), interpolation=cv2.INTER_CUBIC)
-            pedestal = np.median(vals_arr, axis=0).astype(np.float32)
-
-            img_c = np.ascontiguousarray(img_rgb, dtype=np.float32)
-            bg_c = np.ascontiguousarray(bg_full, dtype=np.float32)
-            ped_c = np.ascontiguousarray(pedestal, dtype=np.float32)
-            is_div = (mode == "division")
-
-            sky_m = None
-            if sky_mask is not None:
-                sm = np.squeeze(sky_mask).astype(np.float32)
-                if sm.shape != (h, w):
-                    sm = cv2.resize(sm, (w, h), interpolation=cv2.INTER_LINEAR)
-                sky_m = np.ascontiguousarray(sm, dtype=np.float32)
-
-            corrected = astroloom_rs.apply_bg_model_fused(img_c, bg_c, ped_c, is_div, sky_m)
-            return corrected, bg_full
-        except Exception:
-            pass  # Fallback a SciPy + NumPy
-
-    # 2. Ajuste de superficie RBF multiescala regularizada (Fallback SciPy)
-    rbf_kwargs = {"smoothing": max(1e-3, float(smoothing))}
-    if kernel in ("multiquadric", "gaussian", "inverse_multiquadric"):
-        rbf_kwargs["epsilon"] = max(0.01, float(epsilon))
-
-    rbf = RBFInterpolator(pts_arr, vals_arr, kernel=kernel, **rbf_kwargs)
-
-    # 3. Evaluación rápida en rejilla espacial proxy
-    eval_h = max(24, min(180, h // max(1, eval_scale)))
-    eval_w = max(24, min(240, w // max(1, eval_scale)))
-    gy, gx = np.mgrid[0:1:complex(0, eval_h), 0:1:complex(0, eval_w)]
-    eval_coords = np.column_stack([gx.ravel(), gy.ravel()])
-
-    bg_proxy = rbf(eval_coords).reshape((eval_h, eval_w, 3)).astype(np.float32)
-
-    # Acotación segura del modelo para prevenir sobreoscilaciones (anti-ringing / anti-fosos negros)
-    max_sample_val = np.max(vals_arr, axis=0).astype(np.float32) * 1.05
-    min_sample_val = np.maximum(0.0, np.min(vals_arr, axis=0).astype(np.float32) * 0.90)
-    bg_proxy = np.clip(bg_proxy, min_sample_val, max_sample_val)
-
-    # 4. Upscaling bicúbico de alta calidad a resolución nativa
+    # Aceleración nativa en Rust con Rayon + Zero-Copy
+    smooth_val = max(1e-3, float(smoothing))
+    eps_val = max(0.01, float(epsilon)) if kernel in ("multiquadric", "gaussian", "inverse_multiquadric") else 1.0
+    bg_proxy = astroloom_rs.fit_and_eval_rbf_proxy(
+        pts_arr, vals_arr, eval_h, eval_w, str(kernel), smooth_val, eps_val
+    )
     bg_full = cv2.resize(bg_proxy, (w, h), interpolation=cv2.INTER_CUBIC)
-
-    # 5. Pedestal medio del cielo para preservar la calibración tonal global
     pedestal = np.median(vals_arr, axis=0).astype(np.float32)
 
-    # 6. Neutralización de gradiente (Sustracción o División)
-    if mode == "division":
-        corrected = (img_rgb / np.maximum(bg_full, 1e-4)) * pedestal
-    else:  # subtraction
-        corrected = img_rgb - bg_full + pedestal
+    img_c = np.ascontiguousarray(img_rgb, dtype=np.float32)
+    bg_c = np.ascontiguousarray(bg_full, dtype=np.float32)
+    ped_c = np.ascontiguousarray(pedestal, dtype=np.float32)
+    is_div = (mode == "division")
 
-    # 7. Preservación estricta del terreno terrestre con la máscara de cielo
+    sky_m = None
     if sky_mask is not None:
-        m_full = cv2.resize(np.squeeze(sky_mask).astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
-        m_3d = np.clip(m_full, 0.0, 1.0)[..., np.newaxis]
-        # El suelo (0.0) queda 100% idéntico a la entrada original; el gradiente solo actúa en el cielo
-        corrected = (corrected * m_3d) + (img_rgb * (1.0 - m_3d))
+        sm = np.squeeze(sky_mask).astype(np.float32)
+        if sm.shape != (h, w):
+            sm = cv2.resize(sm, (w, h), interpolation=cv2.INTER_LINEAR)
+        sky_m = np.ascontiguousarray(sm, dtype=np.float32)
 
-    return np.clip(corrected, 0.0, 1.0).astype(np.float32), bg_full
+    corrected = astroloom_rs.apply_bg_model_fused(img_c, bg_c, ped_c, is_div, sky_m)
+    return corrected, bg_full
 
 
 def auto_extract_background_sky(

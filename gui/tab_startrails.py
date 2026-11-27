@@ -103,36 +103,6 @@ class StartrailWorker(QThread):
                 self.error.emit(str(e))
 
 
-class CalibrationFileRow(QWidget):
-    """Fila para tomas de calibración (Darks y Flats) con nombre y botón de borrado individual."""
-    delete_requested = Signal(str, str)  # (tab_name, filepath)
-
-    def __init__(self, filepath: str, tab_name: str, parent=None):
-        super().__init__(parent)
-        self.filepath = filepath
-        self.tab_name = tab_name
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 2, 6, 2)
-        layout.setSpacing(6)
-
-        lbl_name = QLabel(os.path.basename(filepath))
-        lbl_name.setToolTip(filepath)
-        lbl_name.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 11px;")
-        lbl_name.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        layout.addWidget(lbl_name)
-
-        btn_del = QPushButton("×")
-        btn_del.setFixedSize(18, 18)
-        btn_del.setToolTip("Eliminar esta toma")
-        btn_del.setStyleSheet(
-            "QPushButton { color: #a1a1aa; background: transparent; border: 1px solid #2e2e35; border-radius: 3px; font-weight: bold; font-size: 13px; line-height: 14px; padding: 0px; } "
-            "QPushButton:hover { background: #b91c1c; color: #ffffff; border-color: #ef4444; }"
-        )
-        btn_del.clicked.connect(lambda: self.delete_requested.emit(self.tab_name, self.filepath))
-        layout.addWidget(btn_del)
-
-
 class StartrailsTab(QWidget):
     """Pestaña maestra para la creación y posprocesado de circumpolares y trazas de estrellas."""
     export_to_developer = Signal(str)

@@ -164,32 +164,9 @@ def fast_guided_filter(
     """
     r = max(1, int(radius))
     eps_f = float(eps)
-
-    if HAS_RUST_AI:
-        try:
-            g = np.ascontiguousarray(guide_gray, dtype=np.float32)
-            m = np.ascontiguousarray(src_mask, dtype=np.float32)
-            return astroloom_rs.fast_guided_filter_rs(g, m, radius=r, eps=eps_f)
-        except Exception:
-            pass
-
-    ksize = (2 * r + 1, 2 * r + 1)
-    mean_I = cv2.boxFilter(guide_gray, -1, ksize)
-    mean_p = cv2.boxFilter(src_mask, -1, ksize)
-    mean_Ip = cv2.boxFilter(guide_gray * src_mask, -1, ksize)
-    cov_Ip = mean_Ip - mean_I * mean_p
-
-    mean_II = cv2.boxFilter(guide_gray * guide_gray, -1, ksize)
-    var_I = mean_II - mean_I * mean_I
-
-    a = cov_Ip / (var_I + eps_f)
-    b = mean_p - a * mean_I
-
-    mean_a = cv2.boxFilter(a, -1, ksize)
-    mean_b = cv2.boxFilter(b, -1, ksize)
-
-    q = mean_a * guide_gray + mean_b
-    return np.clip(q, 0.0, 1.0).astype(np.float32)
+    g = np.ascontiguousarray(guide_gray, dtype=np.float32)
+    m = np.ascontiguousarray(src_mask, dtype=np.float32)
+    return astroloom_rs.fast_guided_filter_rs(g, m, radius=r, eps=eps_f)
 
 
 def detect_sky_mask_ai(

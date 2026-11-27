@@ -12,12 +12,9 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import astroloom_rs
 
-try:
-    import astroloom_rs
-    HAS_RUST = True
-except ImportError:
-    HAS_RUST = False
+HAS_RUST = True
 
 
 def detect_stars_photometry(
@@ -34,8 +31,6 @@ def detect_stars_photometry(
 
     # Use green channel for star detection (best SNR on Bayer sensors)
     green = img[..., 1]
-    blurred = cv2.GaussianBlur(green, (5, 5), 1.2)
-    lap = cv2.Laplacian(blurred, cv2.CV_32F)
 
     bg_median = float(np.median(green))
     bg_std = float(1.4826 * np.median(np.abs(green - bg_median)))
@@ -117,57 +112,8 @@ def fit_theil_sen_pcc(
     f_r = np.array([s["flux_r"] for s in stars], dtype=np.float64)
     f_g = np.array([s["flux_g"] for s in stars], dtype=np.float64)
     f_b = np.array([s["flux_b"] for s in stars], dtype=np.float64)
-
-    if HAS_RUST:
-        cat = np.ascontiguousarray(bp_rp_catalog, dtype=np.float64) if bp_rp_catalog is not None else None
-        return astroloom_rs.fit_theil_sen_pcc_rs(f_r, f_g, f_b, cat)
-
-    from scipy.stats import theilslopes
-
-    eps = 1e-7
-    log_rg = np.log10((f_r + eps) / (f_g + eps))
-    log_bg = np.log10((f_b + eps) / (f_g + eps))
-
-    # Reject non-finite values
-    finite_mask = np.isfinite(log_rg) & np.isfinite(log_bg)
-    log_rg = log_rg[finite_mask]
-    log_bg = log_bg[finite_mask]
-
-    if len(log_rg) < 6:
-        return 1.0, 1.0, 1.0
-
-    solar_bp_rp = 0.82
-
-    if bp_rp_catalog is not None and len(bp_rp_catalog) == len(stars):
-        x = np.asarray(bp_rp_catalog, dtype=np.float64)[finite_mask]
-        # Check that we have at least 2 distinct x values to fit a slope
-        if len(np.unique(np.round(x, 2))) >= 2:
-            res_r = theilslopes(log_rg, x)
-            res_b = theilslopes(log_bg, x)
-
-            slope_r = getattr(res_r, 'slope', res_r[0])
-            intercept_r = getattr(res_r, 'intercept', res_r[1])
-            slope_b = getattr(res_b, 'slope', res_b[0])
-            intercept_b = getattr(res_b, 'intercept', res_b[1])
-
-            expected_log_rg = slope_r * solar_bp_rp + intercept_r
-            expected_log_bg = slope_b * solar_bp_rp + intercept_b
-        else:
-            expected_log_rg = float(np.median(log_rg))
-            expected_log_bg = float(np.median(log_bg))
-    else:
-        # Empirical Main Sequence Locus: median star population is approx solar (BP-RP ~ 0.82)
-        expected_log_rg = float(np.median(log_rg))
-        expected_log_bg = float(np.median(log_bg))
-
-    k_r = float(10.0 ** (-expected_log_rg))
-    k_b = float(10.0 ** (-expected_log_bg))
-
-    # Clamp gains to sensible physical limits [0.25, 4.0] to prevent explosive tints
-    k_r = float(np.clip(k_r, 0.25, 4.0))
-    k_b = float(np.clip(k_b, 0.25, 4.0))
-
-    return k_r, 1.0, k_b
+    cat = np.ascontiguousarray(bp_rp_catalog, dtype=np.float64) if bp_rp_catalog is not None else None
+    return astroloom_rs.fit_theil_sen_pcc_rs(f_r, f_g, f_b, cat)
 
 
 def apply_pcc_gains(
@@ -178,29 +124,6 @@ def apply_pcc_gains(
 ) -> np.ndarray:
     """Applies PCC channel multipliers while preserving sky background neutral pedestal."""
     img = np.ascontiguousarray(img_rgb, dtype=np.float32)
-
-    if HAS_RUST:
-        return astroloom_rs.apply_pcc_gains_rs(img, float(k_r), float(k_b), bool(preserve_neutral_bg))
-
-    if preserve_neutral_bg:
-        bg_r = float(np.percentile(img[..., 0], 10))
-        bg_g = float(np.percentile(img[..., 1], 10))
-        bg_b = float(np.percentile(img[..., 2], 10))
-        bg_target = (bg_r + bg_g + bg_b) / 3.0
-
-        r_signal = img[..., 0] - bg_r
-        g_signal = img[..., 1] - bg_g
-        b_signal = img[..., 2] - bg_b
-
-        cal_r = r_signal * k_r + bg_target
-        cal_g = g_signal + bg_target
-        cal_b = b_signal * k_b + bg_target
-    else:
-        cal_r = img[..., 0] * k_r
-        cal_g = img[..., 1]
-        cal_b = img[..., 2] * k_b
-
-    out = np.stack([cal_r, cal_g, cal_b], axis=-1)
-    return np.ascontiguousarray(out, dtype=np.float32)
+    return astroloom_rs.apply_pcc_gains_rs(img, float(k_r), float(k_b), bool(preserve_neutral_bg))
 
 

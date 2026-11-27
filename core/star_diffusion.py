@@ -17,12 +17,9 @@ Emula de forma analítica y digital los prestigiosos filtros ópticos físicos d
 from typing import Optional, Tuple
 import numpy as np
 import cv2
+import astroloom_rs
 
-try:
-    import astroloom_rs
-    HAS_RUST = True
-except ImportError:
-    HAS_RUST = False
+HAS_RUST = True
 
 
 def apply_star_diffusion(
@@ -95,87 +92,16 @@ def apply_star_diffusion(
             m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
 
     # 3-6a. Puerta de magnitud + recuperación cromática + dilatación 3x3 fusionadas en Rust
-    seed_source = None
-    if HAS_RUST and hasattr(astroloom_rs, "prepare_star_diffusion_seed_rs"):
-        m_c = np.ascontiguousarray(m, dtype=np.float32) if m is not None else None
-        seed_source = astroloom_rs.prepare_star_diffusion_seed_rs(
-            np.ascontiguousarray(emission_base, dtype=np.float32),
-            np.ascontiguousarray(star_peaks, dtype=np.float32),
-            float(threshold),
-            float(color_boost),
-            m_c,
-        )
-        if seed_source is None:
-            return img_rgb
-
+    m_c = np.ascontiguousarray(m, dtype=np.float32) if m is not None else None
+    seed_source = astroloom_rs.prepare_star_diffusion_seed_rs(
+        np.ascontiguousarray(emission_base, dtype=np.float32),
+        np.ascontiguousarray(star_peaks, dtype=np.float32),
+        float(threshold),
+        float(color_boost),
+        m_c,
+    )
     if seed_source is None:
-        if m is not None:
-            star_peaks = star_peaks * m
-
-        thr = max(0.05, float(threshold))
-        knee = 0.12
-        t = np.clip((star_peaks - thr) / knee, 0.0, 1.0)
-        star_weight = t * t * (3.0 - 2.0 * t)
-        if m is not None:
-            star_weight *= m
-
-        if np.max(star_weight) < 1e-4:
-            return img_rgb
-
-        star_source = None
-        if color_boost > 1e-4:
-            act_y, act_x = np.nonzero(star_peaks > 0.12)
-            if act_y.size > 0:
-                rgb_act_raw = emission_base[act_y, act_x]
-                if m is not None:
-                    rgb_act_raw = rgb_act_raw * m[act_y, act_x, np.newaxis]
-                rgb_act = np.clip(rgb_act_raw, 0.0, 1.0).reshape(-1, 1, 3)
-                hsv_act = cv2.cvtColor(rgb_act, cv2.COLOR_RGB2HSV).reshape(-1, 3)
-                H_act, S_act, _ = hsv_act[:, 0], hsv_act[:, 1], hsv_act[:, 2]
-
-                valid_sat = S_act > 0.06
-                if np.any(valid_sat):
-                    vy = act_y[valid_sat]
-                    vx = act_x[valid_sat]
-                    rad_h = np.deg2rad(H_act[valid_sat])
-                    s_v = S_act[valid_sat]
-
-                    uvw = np.zeros((h, w, 3), dtype=np.float32)
-                    uvw[vy, vx, 0] = s_v * np.cos(rad_h)
-                    uvw[vy, vx, 1] = s_v * np.sin(rad_h)
-                    uvw[vy, vx, 2] = 1.0
-
-                    uvw_b = cv2.GaussianBlur(uvw, (7, 7), sigmaX=2.0)
-
-                    ey, ex = np.nonzero(star_weight > 1e-4)
-                    if ey.size > 0:
-                        rgb_em = np.clip(emission_base[ey, ex], 0.0, 1.0).reshape(-1, 1, 3)
-                        hsv_em = cv2.cvtColor(rgb_em, cv2.COLOR_RGB2HSV).reshape(-1, 3)
-                        H_em, S_em, V_em = hsv_em[:, 0], hsv_em[:, 1], hsv_em[:, 2]
-
-                        wb = uvw_b[ey, ex, 2] + 1e-4
-                        u_rec = uvw_b[ey, ex, 0] / wb
-                        v_rec = uvw_b[ey, ex, 1] / wb
-                        rec_S = np.clip(np.sqrt(u_rec * u_rec + v_rec * v_rec) * (1.0 + color_boost * 2.0), 0.0, 1.0)
-                        rec_H = np.rad2deg(np.arctan2(v_rec, u_rec)) % 360.0
-
-                        is_desat = (V_em > 0.50) & (star_peaks[ey, ex] > (thr * 0.8))
-                        final_H = np.where(is_desat, rec_H, H_em)
-                        final_S = np.clip(
-                            np.where(is_desat, np.maximum(S_em, rec_S), S_em * (1.0 + color_boost * 1.5)),
-                            0.0, 1.0
-                        )
-                        final_hsv = np.stack([final_H, final_S, V_em], axis=-1).astype(np.float32).reshape(-1, 1, 3)
-                        boosted_em = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2RGB).reshape(-1, 3)
-
-                        star_source = np.zeros((h, w, 3), dtype=np.float32)
-                        star_source[ey, ex] = boosted_em * star_weight[ey, ex, np.newaxis]
-
-        if star_source is None:
-            star_source = emission_base * star_weight[..., np.newaxis]
-
-        k_seed = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        seed_source = cv2.dilate(star_source, k_seed)
+        return img_rgb
 
     sigma1 = max(1.0, float(radius * 0.55))
     sigma2 = max(2.5, float(radius * 1.75))
@@ -221,38 +147,11 @@ def apply_star_diffusion(
     # Factor de escala energético para halo visible y proporcionado
     halo *= 3.8
 
-    if HAS_RUST and hasattr(astroloom_rs, "blend_orton_and_diffusion_rs"):
-        try:
-            m_c = np.ascontiguousarray(m, dtype=np.float32) if m is not None else None
-            return astroloom_rs.blend_orton_and_diffusion_rs(
-                np.ascontiguousarray(img_rgb, dtype=np.float32),
-                np.ascontiguousarray(halo, dtype=np.float32),
-                tint=None,
-                sky_mask=m_c,
-                blend_mode=str(halo_mode),
-                strength=float(strength)
-            )
-        except Exception:
-            pass
-
-    # Re-aplicar máscara de cielo al halo resultante para que no desborde hacia el suelo
-    if sky_mask is not None:
-        halo = halo * m[..., np.newaxis]
-
-    # 7. Fusión Tonal según halo_mode
-    if halo_mode == "soft_light":
-        # Modo Luz Suave: I + 2.0 * H * I * (1.0 - I)
-        # Resplandor aterciopelado con cero oscurecimiento
-        blended = img_rgb + 2.0 * halo * img_rgb * (1.0 - img_rgb)
-    elif halo_mode == "additive":
-        # Modo Aditivo directo: I + H
-        blended = img_rgb + halo
-    else:
-        # Modo por defecto "screen": Trama 1.0 - (1.0 - I) * (1.0 - H)
-        # Velo etéreo, luminoso y progresivo sin artefactos de recorte
-        blended = 1.0 - (1.0 - img_rgb) * (1.0 - np.clip(halo, 0.0, 1.0))
-
-    # 8. Interpolación ponderada por la intensidad (strength)
-    out = (1.0 - strength) * img_rgb + strength * blended
-
-    return np.clip(out, 0.0, 1.0).astype(np.float32)
+    return astroloom_rs.blend_orton_and_diffusion_rs(
+        np.ascontiguousarray(img_rgb, dtype=np.float32),
+        np.ascontiguousarray(halo, dtype=np.float32),
+        tint=None,
+        sky_mask=m_c,
+        blend_mode=str(halo_mode),
+        strength=float(strength)
+    )

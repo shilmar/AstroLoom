@@ -21,12 +21,9 @@ import time
 import numpy as np
 from typing import Optional, List, Dict, Any, Tuple, Callable
 from core.gpu_backend import is_gpu_enabled, is_opencl_available
+import astroloom_rs
 
-try:
-    import astroloom_rs
-    HAS_RUST = True
-except ImportError:
-    HAS_RUST = False
+HAS_RUST = True
 
 _OPENCL_LOCK = threading.Lock()
 
@@ -38,64 +35,11 @@ def generate_moffat_psf(
     angle_deg: float = 0.0,
     kernel_size: Optional[int] = None
 ) -> np.ndarray:
-    """
-    Genera un kernel de PSF bidimensional según el perfil astrofísico de Moffat.
-    
-    :param fwhm: Diámetro a mitad de altura en píxeles.
-    :param beta: Parámetro de pendiente de alas (en astrofotografía suele estar entre 3.5 y 5.0).
-    :param aspect_ratio: Relación mayor/menor para modelar deriva de guiado o coma (>= 1.0).
-    :param angle_deg: Ángulo de orientación de la elipse en grados.
-    :param kernel_size: Tamaño impar de la matriz (si es None, se calcula automáticamente).
-    :return: Matriz float32 normalizada a suma = 1.0.
-    """
-    if HAS_RUST and hasattr(astroloom_rs, "generate_moffat_psf_rs"):
-        try:
-            return astroloom_rs.generate_moffat_psf_rs(
-                float(fwhm), float(beta), float(aspect_ratio), float(angle_deg),
-                int(kernel_size) if kernel_size is not None else None
-            )
-        except Exception:
-            pass
-
-    fwhm = max(1.0, float(fwhm))
-    beta = max(1.1, float(beta))
-    aspect_ratio = max(1.0, min(float(aspect_ratio), 3.0))
-
-    alpha = fwhm / (2.0 * np.sqrt(2.0 ** (1.0 / beta) - 1.0))
-
-    if kernel_size is None:
-        rad = int(np.ceil(fwhm * 3.5))
-        rad = max(7, min(rad, 25))
-        ksize = 2 * rad + 1
-    else:
-        ksize = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
-        rad = ksize // 2
-
-    y, x = np.mgrid[-rad:rad + 1, -rad:rad + 1].astype(np.float64)
-
-    if angle_deg != 0.0:
-        theta = np.deg2rad(angle_deg)
-        cos_t = np.cos(theta)
-        sin_t = np.sin(theta)
-        xr = x * cos_t + y * sin_t
-        yr = -x * sin_t + y * cos_t
-    else:
-        xr, yr = x, y
-
-    ax = alpha * np.sqrt(aspect_ratio)
-    ay = alpha / np.sqrt(aspect_ratio)
-
-    r_sq = (xr / ax) ** 2 + (yr / ay) ** 2
-    psf = (1.0 + r_sq) ** (-beta)
-
-    s = np.sum(psf)
-    if s > 0:
-        psf /= s
-    else:
-        psf = np.zeros_like(psf)
-        psf[rad, rad] = 1.0
-
-    return psf.astype(np.float32)
+    """Genera un kernel de PSF bidimensional según el perfil astrofísico de Moffat (Rust)."""
+    return astroloom_rs.generate_moffat_psf_rs(
+        float(fwhm), float(beta), float(aspect_ratio), float(angle_deg),
+        int(kernel_size) if kernel_size is not None else None
+    )
 
 
 def generate_gaussian_psf(
@@ -104,53 +48,11 @@ def generate_gaussian_psf(
     angle_deg: float = 0.0,
     kernel_size: Optional[int] = None
 ) -> np.ndarray:
-    """
-    Genera un kernel de PSF bidimensional gaussiano.
-    """
-    if HAS_RUST and hasattr(astroloom_rs, "generate_gaussian_psf_rs"):
-        try:
-            return astroloom_rs.generate_gaussian_psf_rs(
-                float(fwhm), float(aspect_ratio), float(angle_deg),
-                int(kernel_size) if kernel_size is not None else None
-            )
-        except Exception:
-            pass
-
-    fwhm = max(1.0, float(fwhm))
-    sigma = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))  # ~ FWHM / 2.35482
-    aspect_ratio = max(1.0, min(float(aspect_ratio), 3.0))
-
-    if kernel_size is None:
-        rad = int(np.ceil(sigma * 3.5))
-        rad = max(7, min(rad, 25))
-        ksize = 2 * rad + 1
-    else:
-        ksize = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
-        rad = ksize // 2
-
-    y, x = np.mgrid[-rad:rad + 1, -rad:rad + 1].astype(np.float64)
-
-    if angle_deg != 0.0:
-        theta = np.deg2rad(angle_deg)
-        cos_t = np.cos(theta)
-        sin_t = np.sin(theta)
-        xr = x * cos_t + y * sin_t
-        yr = -x * sin_t + y * cos_t
-    else:
-        xr, yr = x, y
-
-    sx = sigma * np.sqrt(aspect_ratio)
-    sy = sigma / np.sqrt(aspect_ratio)
-
-    psf = np.exp(-0.5 * ((xr / sx) ** 2 + (yr / sy) ** 2))
-    s = np.sum(psf)
-    if s > 0:
-        psf /= s
-    else:
-        psf = np.zeros_like(psf)
-        psf[rad, rad] = 1.0
-
-    return psf.astype(np.float32)
+    """Genera un kernel de PSF bidimensional gaussiano (Rust)."""
+    return astroloom_rs.generate_gaussian_psf_rs(
+        float(fwhm), float(aspect_ratio), float(angle_deg),
+        int(kernel_size) if kernel_size is not None else None
+    )
 
 
 def _measure_star_fwhm_1d(profile: np.ndarray) -> float:

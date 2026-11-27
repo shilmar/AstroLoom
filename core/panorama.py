@@ -32,19 +32,9 @@ from PIL import Image, ExifTags
 
 logger = logging.getLogger("AstroLoom.Panorámicas")
 
-# Aceleración nativa en Rust vía PyO3 / Rayon (máxima prioridad)
-try:
-    import astroloom_rs
-    HAS_RUST = True
-except ImportError:
-    HAS_RUST = False
+import astroloom_rs
 
-try:
-    from scipy.spatial import cKDTree
-    HAS_SCIPY_TREE = True
-except ImportError:
-    HAS_SCIPY_TREE = False
-    cKDTree = None
+HAS_RUST = True
 
 from core.stacking import load_image_as_float32, get_image_dimensions
 
@@ -226,58 +216,8 @@ def find_maximum_inscribed_rectangle(mask: np.ndarray) -> Tuple[int, int, int, i
     Garantiza un auto-recorte perfecto eliminando al 100% los bordes negros irregulares.
     Retorna (x, y, ancho, alto).
     """
-    if HAS_RUST and hasattr(astroloom_rs, "find_max_inscribed_rect_rs"):
-        mask_u8 = np.ascontiguousarray(mask if mask.dtype == np.uint8 else (mask > 0).astype(np.uint8) * 255)
-        return astroloom_rs.find_max_inscribed_rect_rs(mask_u8)
-
-    h, w = mask.shape[:2]
-    # Reducción de escala para cálculo ultra-rápido si la máscara es gigantesca
-    scale = 1.0
-    if max(h, w) > 2000:
-        scale = 1000.0 / float(max(h, w))
-        sh = max(10, int(h * scale))
-        sw = max(10, int(w * scale))
-        bin_mask = (cv2.resize(mask, (sw, sh), interpolation=cv2.INTER_NEAREST) > 127).astype(np.uint8)
-        ch, cw = sh, sw
-    else:
-        bin_mask = (mask > 127).astype(np.uint8)
-        ch, cw = h, w
-
-    heights = np.zeros(cw, dtype=np.int32)
-    max_area = 0
-    best_rect = (0, 0, cw, ch)
-
-    for r in range(ch):
-        heights = np.where(bin_mask[r] == 1, heights + 1, 0)
-
-        stack = []
-        for c in range(cw + 1):
-            curr_h = heights[c] if c < cw else 0
-            while stack and heights[stack[-1]] >= curr_h:
-                bar_idx = stack.pop()
-                bar_h = heights[bar_idx]
-                width = c if not stack else (c - stack[-1] - 1)
-                area = bar_h * width
-                if area > max_area:
-                    max_area = area
-                    top_y = r - bar_h + 1
-                    left_x = stack[-1] + 1 if stack else 0
-                    best_rect = (left_x, top_y, width, bar_h)
-            stack.append(c)
-
-    if scale != 1.0:
-        bx, by, bw, bh = best_rect
-        rx = int(round(bx / scale))
-        ry = int(round(by / scale))
-        rw = int(round(bw / scale))
-        rh = int(round(bh / scale))
-        rx = max(0, min(w - 1, rx))
-        ry = max(0, min(h - 1, ry))
-        rw = max(1, min(w - rx, rw))
-        rh = max(1, min(h - ry, rh))
-        return rx, ry, rw, rh
-
-    return best_rect
+    mask_u8 = np.ascontiguousarray(mask if mask.dtype == np.uint8 else (mask > 0).astype(np.uint8) * 255)
+    return astroloom_rs.find_max_inscribed_rect_rs(mask_u8)
 
 
 def extract_bright_stars(
@@ -358,80 +298,9 @@ def build_star_asterisms(
     if len(pts) < 4:
         return np.empty((0, 4), dtype=np.float32), []
 
-    # 1. Motor Rust nativo sin dependencias de SciPy (máxima prioridad)
-    if HAS_RUST and hasattr(astroloom_rs, "build_star_asterisms_rs"):
-        pts_c = np.ascontiguousarray(pts, dtype=np.float32)
-        feats, quads_arr = astroloom_rs.build_star_asterisms_rs(pts_c, k_neighbors)
-        return feats, [tuple(q) for q in quads_arr]
-
-    if not HAS_SCIPY_TREE or cKDTree is None:
-        return np.empty((0, 4), dtype=np.float32), []
-
-    tree = cKDTree(pts)
-    _, idxs = tree.query(pts, k=min(k_neighbors + 1, len(pts)))
-
-    feats = []
-    quads = []
-    seen = set()
-
-    for i in range(len(pts)):
-        nbrs = idxs[i][1:]
-        for a in range(len(nbrs)):
-            for b in range(a + 1, len(nbrs)):
-                for c in range(b + 1, len(nbrs)):
-                    q_indices = tuple(sorted([i, nbrs[a], nbrs[b], nbrs[c]]))
-                    if q_indices in seen:
-                        continue
-                    seen.add(q_indices)
-
-                    q_pts = pts[list(q_indices)]
-                    max_d = -1.0
-                    best_pair = (0, 1)
-                    for p_i in range(4):
-                        for p_j in range(p_i + 1, 4):
-                            d = np.linalg.norm(q_pts[p_i] - q_pts[p_j])
-                            if d > max_d:
-                                max_d = d
-                                best_pair = (p_i, p_j)
-
-                    iA, iB = best_pair
-                    other = [idx for idx in range(4) if idx not in best_pair]
-                    iC, iD = other[0], other[1]
-
-                    vA, vB = q_pts[iA], q_pts[iB]
-                    vC, vD = q_pts[iC], q_pts[iD]
-
-                    # Orientación positiva de C respecto a la línea AB
-                    if (vB[0] - vA[0]) * (vC[1] - vA[1]) - (vB[1] - vA[1]) * (vC[0] - vA[0]) < 0:
-                        vA, vB = vB, vA
-                        iA, iB = iB, iA
-
-                    dx = vB[0] - vA[0]
-                    dy = vB[1] - vA[1]
-                    L = np.hypot(dx, dy)
-                    if L < 5.0:
-                        continue
-
-                    cos_th = dx / L
-                    sin_th = dy / L
-
-                    rxC, ryC = (vC[0] - vA[0]) / L, (vC[1] - vA[1]) / L
-                    xC = rxC * cos_th + ryC * sin_th
-                    yC = -rxC * sin_th + ryC * cos_th
-
-                    rxD, ryD = (vD[0] - vA[0]) / L, (vD[1] - vA[1]) / L
-                    xD = rxD * cos_th + ryD * sin_th
-                    yD = -rxD * sin_th + ryD * cos_th
-
-                    if xC > xD or (abs(xC - xD) < 1e-4 and yC > yD):
-                        xC, xD = xD, xC
-                        yC, yD = yD, yC
-                        iC, iD = iD, iC
-
-                    feats.append([xC, yC, xD, yD])
-                    quads.append((q_indices[iA], q_indices[iB], q_indices[iC], q_indices[iD]))
-
-    return np.array(feats, dtype=np.float32), quads
+    pts_c = np.ascontiguousarray(pts, dtype=np.float32)
+    feats, quads_arr = astroloom_rs.build_star_asterisms_rs(pts_c, k_neighbors)
+    return feats, [tuple(q) for q in quads_arr]
 
 
 def match_star_asterisms(
@@ -445,61 +314,26 @@ def match_star_asterisms(
     min_votes: int = 2
 ) -> Tuple[np.ndarray, np.ndarray, int]:
     """
-    Empareja asterismos de 4 estrellas entre dos paneles mediante árbol k-d
+    Empareja asterismos de 4 estrellas entre dos paneles mediante árbol k-d en Rust
     y verifica correspondencias con RANSAC rígido/afín.
-    Retorna (pts1_matched, pts2_matched, num_inliers).
     """
     if len(feats1) == 0 or len(feats2) == 0:
         return np.empty((0, 2), dtype=np.float32), np.empty((0, 2), dtype=np.float32), 0
 
-    # 1. Emparejamiento por árbol k-d nativo en Rust (máxima prioridad)
-    if HAS_RUST and hasattr(astroloom_rs, "match_star_asterisms_rs"):
-        quads1_arr = np.ascontiguousarray(quads1, dtype=np.int32)
-        quads2_arr = np.ascontiguousarray(quads2, dtype=np.int32)
-        feats1_c = np.ascontiguousarray(feats1, dtype=np.float32)
-        feats2_c = np.ascontiguousarray(feats2, dtype=np.float32)
-        m1, m2 = astroloom_rs.match_star_asterisms_rs(
-            feats1_c, quads1_arr, feats2_c, quads2_arr, float(tolerance), int(min_votes)
-        )
-        if len(m1) < 4:
-            return np.empty((0, 2), dtype=np.float32), np.empty((0, 2), dtype=np.float32), 0
-        pts1_m = pts1[m1]
-        pts2_m = pts2[m2]
-        M, inliers = cv2.estimateAffinePartial2D(pts2_m, pts1_m, method=cv2.RANSAC, ransacReprojThreshold=5.0)
-        if inliers is None or np.sum(inliers) < 4:
-            return np.empty((0, 2), dtype=np.float32), np.empty((0, 2), dtype=np.float32), 0
-        inl_mask = inliers.ravel() > 0
-        return pts1_m[inl_mask], pts2_m[inl_mask], int(np.sum(inl_mask))
-
-    if not HAS_SCIPY_TREE or cKDTree is None:
+    quads1_arr = np.ascontiguousarray(quads1, dtype=np.int32)
+    quads2_arr = np.ascontiguousarray(quads2, dtype=np.int32)
+    feats1_c = np.ascontiguousarray(feats1, dtype=np.float32)
+    feats2_c = np.ascontiguousarray(feats2, dtype=np.float32)
+    m1, m2 = astroloom_rs.match_star_asterisms_rs(
+        feats1_c, quads1_arr, feats2_c, quads2_arr, float(tolerance), int(min_votes)
+    )
+    if len(m1) < 4:
         return np.empty((0, 2), dtype=np.float32), np.empty((0, 2), dtype=np.float32), 0
-
-    tree2 = cKDTree(feats2)
-    votes = {}
-    for i1, feat in enumerate(feats1):
-        for i2 in tree2.query_ball_point(feat, r=tolerance):
-            for p_a, p_b in zip(quads1[i1], quads2[i2]):
-                votes[(p_a, p_b)] = votes.get((p_a, p_b), 0) + 1
-
-    best_1, best_2 = {}, {}
-    for (s1, s2), c in votes.items():
-        if c >= min_votes:
-            if s1 not in best_1 or c > best_1[s1][1]:
-                best_1[s1] = (s2, c)
-            if s2 not in best_2 or c > best_2[s2][1]:
-                best_2[s2] = (s1, c)
-
-    mutual = [(s1, s2) for s1, (s2, _) in best_1.items() if s2 in best_2 and best_2[s2][0] == s1]
-    if len(mutual) < 4:
-        return np.empty((0, 2), dtype=np.float32), np.empty((0, 2), dtype=np.float32), 0
-
-    pts1_m = pts1[[m[0] for m in mutual]]
-    pts2_m = pts2[[m[1] for m in mutual]]
-
+    pts1_m = pts1[m1]
+    pts2_m = pts2[m2]
     M, inliers = cv2.estimateAffinePartial2D(pts2_m, pts1_m, method=cv2.RANSAC, ransacReprojThreshold=5.0)
     if inliers is None or np.sum(inliers) < 4:
         return np.empty((0, 2), dtype=np.float32), np.empty((0, 2), dtype=np.float32), 0
-
     inl_mask = inliers.ravel() > 0
     return pts1_m[inl_mask], pts2_m[inl_mask], int(np.sum(inl_mask))
 

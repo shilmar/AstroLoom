@@ -176,11 +176,6 @@ class MainWindow(QMainWindow):
         except Exception:
             self.lbl_ram_monitor.setText("RAM: N/D")
 
-    def set_status(self, text: str) -> None:
-        """Actualiza el mensaje principal de estado (compatibilidad)."""
-        pass
-
-
     def _setup_ui(self, splash: Optional[object] = None) -> None:
         """Inicializa las pestañas de navegación y enlaza las señales entre módulos."""
         self.tab_widget = QTabWidget()

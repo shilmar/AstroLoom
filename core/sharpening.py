@@ -9,12 +9,9 @@ from __future__ import annotations
 from typing import Optional
 import numpy as np
 import cv2
+import astroloom_rs
 
-try:
-    import astroloom_rs
-    HAS_RUST = True
-except ImportError:
-    HAS_RUST = False
+HAS_RUST = True
 
 
 def compute_edge_mask(
@@ -189,15 +186,9 @@ def apply_texture_clarity(
     luma = np.ascontiguousarray(np.clip(luma, 0.0, 1.0), dtype=np.float32)
     h, w = luma.shape[:2]
 
-    # Filtro preservador de bordes O(1) paralelo en Rust (Self Guided Filter) con respaldo OpenCV bilateral
-    if HAS_RUST and hasattr(astroloom_rs, "self_guided_filter_rs"):
-        r_gf = max(1, int(round(radius)))
-        luma_smooth = astroloom_rs.self_guided_filter_rs(luma, radius=r_gf, eps=0.0144)
-    else:
-        d = max(3, int(round(radius * 2.0)) | 1)
-        sigma_color = 0.12
-        sigma_space = max(1.0, float(radius))
-        luma_smooth = cv2.bilateralFilter(luma, d=d, sigmaColor=sigma_color, sigmaSpace=sigma_space)
+    # Filtro preservador de bordes O(1) paralelo en Rust (Self Guided Filter)
+    r_gf = max(1, int(round(radius)))
+    luma_smooth = astroloom_rs.self_guided_filter_rs(luma, radius=r_gf, eps=0.0144)
 
     # Detalle de textura en altas/medias frecuencias
     texture = luma - luma_smooth

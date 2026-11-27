@@ -133,42 +133,11 @@ def compute_3x3_optical_diagnosis(
     star_profiles: Lista de tuplas (cx, cy, fwhm, ecc).
     h, w: Dimensiones de la imagen analizada.
     """
-    if HAS_RUST and hasattr(astroloom_rs, "compute_3x3_optical_diagnosis_rs") and len(star_profiles) > 0:
-        arr = np.ascontiguousarray(star_profiles, dtype=np.float32)
-        return astroloom_rs.compute_3x3_optical_diagnosis_rs(arr, int(h), int(w))
-
-    fwhm_grid_vals: List[List[List[float]]] = [[[] for _ in range(3)] for _ in range(3)]
-    ecc_grid_vals: List[List[List[float]]] = [[[] for _ in range(3)] for _ in range(3)]
-
-    cell_h = max(1.0, h / 3.0)
-    cell_w = max(1.0, w / 3.0)
-
-    for cx, cy, fwhm, ecc in star_profiles:
-        r = min(2, max(0, int(cy / cell_h)))
-        c = min(2, max(0, int(cx / cell_w)))
-        fwhm_grid_vals[r][c].append(fwhm)
-        ecc_grid_vals[r][c].append(ecc)
-
-    grid_fwhm: List[List[float]] = [[float("nan")] * 3 for _ in range(3)]
-    grid_ecc: List[List[float]] = [[float("nan")] * 3 for _ in range(3)]
-    grid_counts: List[List[int]] = [[0] * 3 for _ in range(3)]
-
-    valid_cells = 0
-    for r in range(3):
-        for c in range(3):
-            cnt = len(fwhm_grid_vals[r][c])
-            grid_counts[r][c] = cnt
-            if cnt >= 2:
-                grid_fwhm[r][c] = round(float(np.median(fwhm_grid_vals[r][c])), 2)
-                grid_ecc[r][c] = round(float(np.median(ecc_grid_vals[r][c])), 3)
-                valid_cells += 1
-
-    total_profiled = len(star_profiles)
-    if total_profiled < 6 or valid_cells < 3:
+    if len(star_profiles) == 0:
         return {
-            "grid_fwhm": grid_fwhm,
-            "grid_ecc": grid_ecc,
-            "grid_counts": grid_counts,
+            "grid_fwhm": [[float("nan")] * 3 for _ in range(3)],
+            "grid_ecc": [[float("nan")] * 3 for _ in range(3)],
+            "grid_counts": [[0] * 3 for _ in range(3)],
             "curvature_ratio": 0.0,
             "tilt_x": 0.0,
             "tilt_y": 0.0,
@@ -176,79 +145,8 @@ def compute_3x3_optical_diagnosis(
             "defect_type": "INSUFFICIENT_DATA",
             "diagnosis_msg": "Estrellas insuficientes para diagnóstico de campo"
         }
-
-    # 1. Curvatura de campo (Centro vs 4 Esquinas)
-    f_center = grid_fwhm[1][1]
-    if math.isnan(f_center):
-        adj_center = [grid_fwhm[r][c] for r, c in [(0, 1), (1, 0), (1, 2), (2, 1)] if not math.isnan(grid_fwhm[r][c])]
-        f_center = float(np.median(adj_center)) if adj_center else float("nan")
-
-    corner_indices = [(0, 0), (0, 2), (2, 0), (2, 2)]
-    corner_fwhms = [grid_fwhm[r][c] for r, c in corner_indices if not math.isnan(grid_fwhm[r][c])]
-
-    if len(corner_fwhms) >= 2 and not math.isnan(f_center) and f_center > 0.5:
-        med_corner = float(np.median(corner_fwhms))
-        curvature_ratio = max(0.0, (med_corner - f_center) / f_center)
-        corner_spread = float((max(corner_fwhms) - min(corner_fwhms)) / max(1e-3, med_corner))
-    else:
-        curvature_ratio = 0.0
-        corner_spread = 0.0
-
-    # 2. Inclinación de sensor / Flexión (Tilt)
-    left_vals = [grid_fwhm[r][0] for r in range(3) if not math.isnan(grid_fwhm[r][0])]
-    right_vals = [grid_fwhm[r][2] for r in range(3) if not math.isnan(grid_fwhm[r][2])]
-
-    if left_vals and right_vals:
-        med_l = float(np.median(left_vals))
-        med_r = float(np.median(right_vals))
-        tilt_x = abs(med_l - med_r) / max(0.5, min(med_l, med_r))
-    else:
-        tilt_x = 0.0
-
-    top_vals = [grid_fwhm[0][c] for c in range(3) if not math.isnan(grid_fwhm[0][c])]
-    bot_vals = [grid_fwhm[2][c] for c in range(3) if not math.isnan(grid_fwhm[2][c])]
-
-    if top_vals and bot_vals:
-        med_t = float(np.median(top_vals))
-        med_b = float(np.median(bot_vals))
-        tilt_y = abs(med_t - med_b) / max(0.5, min(med_t, med_b))
-    else:
-        tilt_y = 0.0
-
-    total_tilt = float(math.hypot(tilt_x, tilt_y))
-
-    # 3. Clasificación del diagnóstico
-    TILT_THRESH = 0.18
-    CURV_THRESH = 0.20
-
-    if total_tilt >= TILT_THRESH and curvature_ratio >= CURV_THRESH:
-        defect_type = "COMBINED"
-        diagnosis_msg = f"Curvatura (+{curvature_ratio*100:.0f}%) e Inclinación/Tilt ({total_tilt*100:.0f}%)"
-    elif total_tilt >= TILT_THRESH:
-        defect_type = "SENSOR_TILT"
-        axis = "horizontal (izq/der)" if tilt_x >= tilt_y else "vertical (sup/inf)"
-        diagnosis_msg = f"Inclinación/Tilt mecánico {axis} ({total_tilt*100:.0f}%)"
-    elif curvature_ratio >= CURV_THRESH and corner_spread <= 0.25:
-        defect_type = "FIELD_CURVATURE"
-        diagnosis_msg = f"Curvatura de campo simétrica (+{curvature_ratio*100:.0f}% FWHM esquinas)"
-    elif curvature_ratio >= 0.25 and corner_spread > 0.25:
-        defect_type = "SENSOR_TILT"
-        diagnosis_msg = f"Degradación asimétrica de esquinas (posible flexión/tilt)"
-    else:
-        defect_type = "OK"
-        diagnosis_msg = "Óptica bien corregida (campo plano y simétrico)"
-
-    return {
-        "grid_fwhm": grid_fwhm,
-        "grid_ecc": grid_ecc,
-        "grid_counts": grid_counts,
-        "curvature_ratio": round(curvature_ratio, 3),
-        "tilt_x": round(tilt_x, 3),
-        "tilt_y": round(tilt_y, 3),
-        "total_tilt": round(total_tilt, 3),
-        "defect_type": defect_type,
-        "diagnosis_msg": diagnosis_msg
-    }
+    arr = np.ascontiguousarray(star_profiles, dtype=np.float32)
+    return astroloom_rs.compute_3x3_optical_diagnosis_rs(arr, int(h), int(w))
 
 
 def extract_star_metrics(

@@ -10,12 +10,9 @@ protección analítica (HP/LP) y preservando la fidelidad cromática en espacio 
 from typing import Optional, Dict
 import numpy as np
 import cv2
+import astroloom_rs
 
-try:
-    import astroloom_rs
-    HAS_RUST = True
-except ImportError:
-    HAS_RUST = False
+HAS_RUST = True
 
 
 def compute_ghs_lut(
@@ -44,88 +41,11 @@ def compute_ghs_lut(
     Retorna:
     - np.ndarray de float32 de forma (lut_size,) con valores estrictamente acotados en [0.0, 1.0].
     """
-    if HAS_RUST and hasattr(astroloom_rs, "compute_ghs_lut_rs"):
-        try:
-            return astroloom_rs.compute_ghs_lut_rs(
-                float(sp), float(d), float(b),
-                float(hp), float(lp), float(bp),
-                int(lut_size)
-            )
-        except Exception:
-            pass
-
-    x = np.linspace(0.0, 1.0, lut_size, dtype=np.float32)
-
-    # 1. Ajuste preliminar de Punto Negro (BP)
-    if bp > 0.0:
-        x_adj = np.clip((x - bp) / max(1e-6, 1.0 - bp), 0.0, 1.0)
-        sp_eff = float(np.clip((sp - bp) / max(1e-6, 1.0 - bp), 1e-5, 1.0 - 1e-5))
-    elif bp < 0.0:
-        x_adj = np.clip(x - bp, 0.0, 1.0)
-        sp_eff = float(np.clip(sp - bp, 1e-5, 1.0 - 1e-5))
-    else:
-        x_adj = x
-        sp_eff = float(np.clip(sp, 1e-5, 1.0 - 1e-5))
-
-    # Si la intensidad de estirado es nula, devolver directamente la rampa lineal
-    if d <= 1e-6:
-        return x_adj.astype(np.float32)
-
-    d = float(max(0.0, d))
-    b = float(max(0.0, b))
-    hp = float(np.clip(hp, 0.0, 0.99))
-    lp = float(np.clip(lp, 0.0, 0.99))
-
-    # Umbrales analíticos de protección
-    hp_thresh = 1.0 - hp * (1.0 - sp_eff)
-    lp_thresh = lp * sp_eff
-
-    ds = d * max(1e-6, b) if b > 0.0 else d
-    bs = max(1e-6, b)
-
-    # Curva GHS base por ramas inferior y superior simétricas
-    def q_raw(val):
-        diff_lower = np.maximum(0.0, sp_eff - val)
-        diff_upper = np.maximum(0.0, val - sp_eff)
-        if b <= 1e-6:
-            ql = np.exp(-d * diff_lower)
-            qu = 2.0 - np.exp(-d * diff_upper)
-        else:
-            ql = (1.0 + ds * diff_lower)**(-1.0 / bs)
-            qu = 2.0 - (1.0 + ds * diff_upper)**(-1.0 / bs)
-        return np.where(val < sp_eff, ql, qu)
-
-    # Primera derivada analítica para empalme C1 suave en zonas de protección
-    def q_deriv(val):
-        diff_lower = np.maximum(0.0, sp_eff - val)
-        diff_upper = np.maximum(0.0, val - sp_eff)
-        if b <= 1e-6:
-            dl = d * np.exp(-d * diff_lower)
-            du = d * np.exp(-d * diff_upper)
-        else:
-            dl = d * (1.0 + ds * diff_lower)**(-1.0 / bs - 1.0)
-            du = d * (1.0 + ds * diff_upper)**(-1.0 / bs - 1.0)
-        return np.where(val < sp_eff, dl, du)
-
-    q_hp = q_raw(hp_thresh)
-    s_hp = q_deriv(hp_thresh)
-
-    q_lp = q_raw(lp_thresh)
-    s_lp = q_deriv(lp_thresh)
-
-    def eval_q(v):
-        base = q_raw(v)
-        res = np.where(v > hp_thresh, q_hp + s_hp * (v - hp_thresh), base)
-        res = np.where(v < lp_thresh, q_lp - s_lp * (lp_thresh - v), res)
-        return res
-
-    q0 = eval_q(0.0)
-    q1 = eval_q(1.0)
-
-    qv = eval_q(x_adj)
-    denom = max(1e-7, float(q1 - q0))
-    lut = np.clip((qv - q0) / denom, 0.0, 1.0).astype(np.float32)
-    return lut
+    return astroloom_rs.compute_ghs_lut_rs(
+        float(sp), float(d), float(b),
+        float(hp), float(lp), float(bp),
+        int(lut_size)
+    )
 
 
 def apply_ghs_stretch(
@@ -142,48 +62,13 @@ def apply_ghs_stretch(
 ) -> np.ndarray:
     """
     Aplica Estirado Hiperbólico Generalizado a una imagen 2D o 3D (RGB) en float32 [0.0, 1.0].
-
-    Parámetros:
-    - img: Imagen en float32 [0.0, 1.0] (H, W) o (H, W, 3).
-    - sp, d, b, hp, lp, bp: Parámetros del modelo GHS.
-    - color_mode: "luma" (preserva saturación y matices calculando el estirado sobre la luminancia Rec. 709)
-                  o "rgb" (aplica el estirado a cada canal RGB de forma vinculada).
-    - precomputed_lut: LUT ya calculada para evitar recomputaciones redundantes.
     """
-    if precomputed_lut is not None:
-        lut = precomputed_lut
-    else:
-        lut = compute_ghs_lut(sp=sp, d=d, b=b, hp=hp, lp=lp, bp=bp, lut_size=lut_size)
-
-    if HAS_RUST and hasattr(astroloom_rs, "apply_ghs_stretch_rs"):
-        try:
-            img_c = np.ascontiguousarray(img, dtype=np.float32)
-            lut_c = np.ascontiguousarray(lut, dtype=np.float32)
-            return astroloom_rs.apply_ghs_stretch_rs(img_c, lut_c, str(color_mode))
-        except Exception:
-            pass
-
-    max_idx = len(lut) - 1
-
-    # Caso monocromo / 2D
-    if img.ndim == 2:
-        idx = np.clip(img * max_idx, 0, max_idx).astype(np.uint16)
-        return lut[idx].astype(np.float32)
-
-    # Caso RGB
-    if color_mode == "luma":
-        # Luminancia estándar Rec. 709
-        lum = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
-        lum = np.clip(lum, 0.0, 1.0)
-        idx_lum = np.clip(lum * max_idx, 0, max_idx).astype(np.uint16)
-        lum_stretched = lut[idx_lum]
-        ratio = (lum_stretched + 1e-6) / (lum + 1e-6)
-        out = img * ratio[..., np.newaxis]
-        return np.clip(out, 0.0, 1.0).astype(np.float32)
-    else:
-        # Modo RGB directo canal por canal
-        idx = np.clip(img * max_idx, 0, max_idx).astype(np.uint16)
-        return lut[idx].astype(np.float32)
+    lut = precomputed_lut if precomputed_lut is not None else compute_ghs_lut(
+        sp=sp, d=d, b=b, hp=hp, lp=lp, bp=bp, lut_size=lut_size
+    )
+    img_c = np.ascontiguousarray(img, dtype=np.float32)
+    lut_c = np.ascontiguousarray(lut, dtype=np.float32)
+    return astroloom_rs.apply_ghs_stretch_rs(img_c, lut_c, str(color_mode))
 
 
 def estimate_ghs_params(

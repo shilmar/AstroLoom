@@ -231,32 +231,12 @@ def manual_stretch(
     midtone: float = 0.1,
     highlight_protection: float = 0.0
 ) -> np.ndarray:
-    if HAS_RUST and hasattr(astroloom_rs, "manual_stretch_rs") and isinstance(img_float, np.ndarray):
-        return astroloom_rs.manual_stretch_rs(
-            np.ascontiguousarray(img_float, dtype=np.float32),
-            float(black_point),
-            float(midtone),
-            float(highlight_protection),
-        )
-
-    # 1. Recorte y re-escalado del punto negro
-    clipped = np.clip((img_float - black_point) / max(1e-6, 1.0 - black_point), 0.0, 1.0)
-    # 2. Aplicación directa de curva MTF con el 'm' elegido
-    stretched = mtf_curve(clipped, max(1e-5, min(0.9999, midtone)))
-
-    # 3. Compresión suave de altas luces para proteger núcleos estelares
-    if highlight_protection > 1e-4:
-        hp = float(np.clip(highlight_protection, 0.0, 1.0))
-        knee = 1.0 - (0.35 * hp)  # Umbral de compresión entre 0.65 y 1.0
-        mask_hl = stretched > knee
-        if np.any(mask_hl):
-            scale = 1.0 - knee
-            u = (stretched[mask_hl] - knee) / scale
-            c = 0.40 * hp
-            u_comp = u - c * u * (1.0 - u)
-            stretched[mask_hl] = knee + scale * u_comp
-
-    return np.clip(stretched, 0.0, 1.0).astype(np.float32)
+    return astroloom_rs.manual_stretch_rs(
+        np.ascontiguousarray(img_float, dtype=np.float32),
+        float(black_point),
+        float(midtone),
+        float(highlight_protection),
+    )
     
 def apply_white_balance(img_rgb: np.ndarray, temp_factor: float = 0.0, tint_factor: float = 0.0) -> np.ndarray:
     """
@@ -294,42 +274,12 @@ def apply_scnr_green(
     if img_rgb is None or amount <= 1e-4:
         return img_rgb
 
-    if HAS_RUST and hasattr(astroloom_rs, "apply_scnr_green_rs"):
-        return astroloom_rs.apply_scnr_green_rs(
-            np.ascontiguousarray(img_rgb, dtype=np.float32),
-            float(amount),
-            bool(method == "max"),
-            bool(preserve_lightness)
-        )
-
-    img = np.clip(np.asarray(img_rgb, dtype=np.float32), 0.0, 1.0)
-    r = img[..., 0]
-    g = img[..., 1]
-    b = img[..., 2]
-
-    if method == "max":
-        neutral = np.maximum(r, b)
-    else:
-        neutral = 0.5 * (r + b)
-
-    excess = np.maximum(0.0, g - neutral)
-    if np.max(excess) < 1e-6:
-        return img
-
-    amt = float(np.clip(amount, 0.0, 1.0))
-    g_corr = np.maximum(0.0, g - amt * excess)
-
-    if preserve_lightness:
-        y_orig = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        y_corr = 0.2126 * r + 0.7152 * g_corr + 0.0722 * b
-        scale = np.where(y_corr > 1e-6, y_orig / np.maximum(1e-6, y_corr), 1.0)
-        scale = np.minimum(scale, 1.5)
-        r_out = np.clip(r * scale, 0.0, 1.0)
-        g_out = np.clip(g_corr * scale, 0.0, 1.0)
-        b_out = np.clip(b * scale, 0.0, 1.0)
-        return np.stack([r_out, g_out, b_out], axis=-1).astype(np.float32)
-    else:
-        return np.stack([r, g_corr, b], axis=-1).astype(np.float32)
+    return astroloom_rs.apply_scnr_green_rs(
+        np.ascontiguousarray(img_rgb, dtype=np.float32),
+        float(amount),
+        bool(method == "max"),
+        bool(preserve_lightness)
+    )
 
     
 def adjust_vibrance(img_rgb: np.ndarray, vibrance: float = 0.0) -> np.ndarray:
@@ -535,36 +485,11 @@ def apply_clarity(img_rgb: np.ndarray, strength: float = 0.0, ref_min_dim: int |
     if abs(strength) < 1e-4:
         return img_rgb
 
-    if (
-        HAS_RUST
-        and hasattr(astroloom_rs, "apply_clarity_rs")
-        and img_rgb.ndim == 3
-        and img_rgb.shape[2] == 3
-    ):
-        return astroloom_rs.apply_clarity_rs(
-            np.ascontiguousarray(img_rgb, dtype=np.float32),
-            float(strength),
-            int(ref_min_dim) if ref_min_dim is not None else None,
-        )
-
-    # Luminancia perceptual
-    lum = 0.2126 * img_rgb[..., 0] + 0.7152 * img_rgb[..., 1] + 0.0722 * img_rgb[..., 2]
-    
-    h, w = img_rgb.shape[:2]
-    base_dim = int(ref_min_dim) if ref_min_dim is not None else min(h, w)
-    r = int(max(9, (base_dim // 35) | 1))
-    if r % 2 == 0:
-        r += 1
-
-    lum_blur = cv2.GaussianBlur(lum, (r, r), sigmaX=r / 3.0)
-    high_freq = lum - lum_blur
-
-    # Con strength hasta 2.0 usamos una respuesta suave para evitar saturación dura
-    factor = strength * 0.85
-    new_lum = np.clip(lum + high_freq * factor, 1e-6, 1.0)
-
-    ratio = (new_lum / np.maximum(1e-6, lum))[..., np.newaxis]
-    return np.clip(img_rgb * ratio, 0.0, 1.0).astype(np.float32)
+    return astroloom_rs.apply_clarity_rs(
+        np.ascontiguousarray(img_rgb, dtype=np.float32),
+        float(strength),
+        int(ref_min_dim) if ref_min_dim is not None else None,
+    )
 
 
 def apply_dehaze(
@@ -574,49 +499,18 @@ def apply_dehaze(
     global_airlight_p95: float | None = None,
 ) -> np.ndarray:
     """
-    Borrar Neblina (Dehaze) con compensación de velo atmosférico y saturación.
+    Borrar Neblina (Dehaze) con compensación de velo atmosférico y saturación (Rust).
     strength: -2.0 a +2.0 (0.0 neutro).
     """
     if abs(strength) < 1e-4:
         return img_rgb
 
-    if (
-        HAS_RUST
-        and hasattr(astroloom_rs, "apply_dehaze_rs")
-        and img_rgb.ndim == 3
-        and img_rgb.shape[2] == 3
-    ):
-        return astroloom_rs.apply_dehaze_rs(
-            np.ascontiguousarray(img_rgb, dtype=np.float32),
-            float(strength),
-            int(ref_min_dim) if ref_min_dim is not None else None,
-            float(global_airlight_p95) if global_airlight_p95 is not None else None,
-        )
-
-    dark_ch = np.min(img_rgb, axis=2)
-    h, w = img_rgb.shape[:2]
-    base_dim = int(ref_min_dim) if ref_min_dim is not None else min(h, w)
-    r = int(max(15, (base_dim // 25) | 1))
-    if r % 2 == 0:
-        r += 1
-        
-    haze_map = cv2.GaussianBlur(dark_ch, (r, r), sigmaX=r / 2.5)
-
-    if strength > 0:
-        # Transmisión escalada para tolerar valores de hasta 2.0 sin colapsar a 0
-        t = np.clip(1.0 - (strength * 0.45) * haze_map, 0.12, 1.0)[..., np.newaxis]
-        p95 = float(global_airlight_p95) if global_airlight_p95 is not None else float(np.percentile(haze_map, 95))
-        airlight = p95 * min(0.65, 0.35 * strength)
-        out = (img_rgb - airlight * (1.0 - t)) / t
-        
-        # Realce dinámico de saturación en zonas rescatadas de la bruma
-        lum = (0.2126 * out[..., 0] + 0.7152 * out[..., 1] + 0.0722 * out[..., 2])[..., np.newaxis]
-        out = lum + (out - lum) * (1.0 + strength * 0.25)
-    else:
-        factor = min(0.85, abs(strength) * 0.35)
-        out = img_rgb * (1.0 - factor) + haze_map[..., np.newaxis] * factor
-
-    return np.clip(out, 0.0, 1.0).astype(np.float32)
+    return astroloom_rs.apply_dehaze_rs(
+        np.ascontiguousarray(img_rgb, dtype=np.float32),
+        float(strength),
+        int(ref_min_dim) if ref_min_dim is not None else None,
+        float(global_airlight_p95) if global_airlight_p95 is not None else None,
+    )
     
 def descomponer_ondiculas(imagen: np.ndarray, niveles: int = 5) -> tuple[list[np.ndarray], np.ndarray]:
     """
@@ -793,32 +687,11 @@ def apply_hue_luma_curves_fused(
     if not has_hue and not has_luma:
         return img_rgb
 
-    if HAS_RUST and hasattr(astroloom_rs, 'apply_hue_luma_curves_fused_rs'):
-        try:
-            img_c = np.ascontiguousarray(img_rgb, dtype=np.float32)
-            lut_h_c = np.ascontiguousarray(lut_hue_sat, dtype=np.float32) if has_hue else None
-            lut_l_c = np.ascontiguousarray(lut_luma_sat, dtype=np.float32) if has_luma else None
-            mask_c = np.ascontiguousarray(sky_mask[..., 0] if sky_mask.ndim == 3 else sky_mask, dtype=np.float32) if sky_mask is not None else None
-            return astroloom_rs.apply_hue_luma_curves_fused_rs(img_c, lut_h_c, lut_l_c, mask_c)
-        except Exception:
-            pass
-
-    # Fallback OpenCV
-    out = img_rgb
-    mask_3d = (sky_mask[..., np.newaxis] if sky_mask.ndim == 2 else sky_mask) if sky_mask is not None else None
-    if has_hue:
-        curved_h = apply_hue_vs_sat_curve(out, lut_hue_sat)
-        if mask_3d is not None:
-            out = (curved_h * mask_3d) + (out * (1.0 - mask_3d))
-        else:
-            out = curved_h
-    if has_luma:
-        curved_l = apply_luma_vs_sat_curve(out, lut_luma_sat)
-        if mask_3d is not None:
-            out = (curved_l * mask_3d) + (out * (1.0 - mask_3d))
-        else:
-            out = curved_l
-    return out
+    img_c = np.ascontiguousarray(img_rgb, dtype=np.float32)
+    lut_h_c = np.ascontiguousarray(lut_hue_sat, dtype=np.float32) if has_hue else None
+    lut_l_c = np.ascontiguousarray(lut_luma_sat, dtype=np.float32) if has_luma else None
+    mask_c = np.ascontiguousarray(sky_mask[..., 0] if sky_mask.ndim == 3 else sky_mask, dtype=np.float32) if sky_mask is not None else None
+    return astroloom_rs.apply_hue_luma_curves_fused_rs(img_c, lut_h_c, lut_l_c, mask_c)
 
 
 def auto_stretch_adaptive_starless(
@@ -853,133 +726,27 @@ def auto_stretch_adaptive_starless(
 
     img = np.clip(img_starless, 0.0, 1.0).astype(np.float32)
     h, w = img.shape[:2]
-
-    # 1. Filtrar píxeles mediante sky_mask
-    if sky_mask is not None:
-        mask = sky_mask
-        if mask.ndim == 3:
-            mask = mask[..., 0]
-        if mask.shape[:2] != (h, w):
-            mask = cv2.resize(mask.astype(np.float32), (w, h), interpolation=cv2.INTER_NEAREST)
-        is_sky = mask > 0.5
-        if np.count_nonzero(is_sky) < 100:
-            is_sky = np.ones((h, w), dtype=bool)
+    if img.ndim == 2:
+        img_c = np.ascontiguousarray(np.repeat(img[..., np.newaxis], 3, axis=2), dtype=np.float32)
     else:
-        is_sky = np.ones((h, w), dtype=bool)
-
-    is_color = (img.ndim == 3 and img.shape[2] >= 3)
-    if HAS_RUST and is_color:
         img_c = np.ascontiguousarray(img[..., :3], dtype=np.float32)
-        mask_c = None
-        if sky_mask is not None:
-            mask_c = sky_mask[..., 0] if sky_mask.ndim == 3 else sky_mask
-            if mask_c.shape[:2] != (h, w):
-                mask_c = cv2.resize(mask_c.astype(np.float32), (w, h), interpolation=cv2.INTER_NEAREST)
-            if feather_radius > 0:
-                k = int(feather_radius) * 2 + 1
-                mask_c = cv2.GaussianBlur(mask_c.astype(np.float32), (k, k), 0)
-            mask_c = np.ascontiguousarray(mask_c, dtype=np.float32)
 
-        return astroloom_rs.auto_stretch_adaptive_starless_rs(
-            img_c,
-            mask_c,
-            target_bg=float(target_bg),
-            shadow_clip_sigma=float(shadow_clip_sigma),
-            saturation_boost=float(saturation_boost),
-            unlinked=bool(unlinked)
-        )
-
-    channels = [img[..., c] for c in range(3)] if is_color else [img if img.ndim == 2 else img[..., 0]]
-    out_channels = []
-
-    if unlinked or not is_color:
-        for ch in channels:
-            samples = ch[is_sky]
-            # Submuestreo estadístico si supera 500k elementos para mantener cómputo <15ms
-            if samples.size > 500_000:
-                stride = max(1, samples.size // 500_000)
-                sub_samples = samples[::stride]
-            else:
-                sub_samples = samples
-
-            m_c = float(np.median(sub_samples))
-            sigma_c = float(1.4826 * np.median(np.abs(sub_samples - m_c)))
-            if sigma_c < 1e-6:
-                sigma_c = float(np.std(sub_samples))
-            if sigma_c < 1e-6:
-                c0 = 0.0
-            else:
-                c0 = float(np.clip(m_c - shadow_clip_sigma * sigma_c, 0.0, max(0.0, m_c - 1e-4)))
-
-            denom_norm = max(1e-7, 1.0 - c0)
-            x_norm = np.clip((ch - c0) / denom_norm, 0.0, 1.0)
-            delta = float(np.clip((m_c - c0) / denom_norm, 1e-5, 1.0 - 1e-5))
-
-            denom_m = delta * (1.0 - 2.0 * target_bg) + target_bg
-            m = (delta * (1.0 - target_bg)) / denom_m if abs(denom_m) > 1e-7 else 0.5
-            m = float(np.clip(m, 1e-5, 1.0 - 1e-5))
-
-            # Curva analítica MTF(x, m) = ((m - 1.0) * x) / ((2m - 1.0) * x - m)
-            num = (m - 1.0) * x_norm
-            den = (2.0 * m - 1.0) * x_norm - m
-            out_ch = np.where(np.abs(den) > 1e-7, num / den, 0.0)
-            out_channels.append(np.clip(out_ch, 0.0, 1.0))
-    else:
-        # Modo vinculado (Linked): mediana y dispersión conjuntas
-        all_samples = [ch[is_sky] for ch in channels]
-        combined = np.concatenate(all_samples)
-        if combined.size > 500_000:
-            stride = max(1, combined.size // 500_000)
-            sub_samples = combined[::stride]
-        else:
-            sub_samples = combined
-
-        m_c = float(np.median(sub_samples))
-        sigma_c = float(1.4826 * np.median(np.abs(sub_samples - m_c)))
-        if sigma_c < 1e-6:
-            sigma_c = float(np.std(sub_samples))
-        if sigma_c < 1e-6:
-            c0 = 0.0
-        else:
-            c0 = float(np.clip(m_c - shadow_clip_sigma * sigma_c, 0.0, max(0.0, m_c - 1e-4)))
-
-        denom_norm = max(1e-7, 1.0 - c0)
-        delta = float(np.clip((m_c - c0) / denom_norm, 1e-5, 1.0 - 1e-5))
-        denom_m = delta * (1.0 - 2.0 * target_bg) + target_bg
-        m = (delta * (1.0 - target_bg)) / denom_m if abs(denom_m) > 1e-7 else 0.5
-        m = float(np.clip(m, 1e-5, 1.0 - 1e-5))
-
-        for ch in channels:
-            x_norm = np.clip((ch - c0) / denom_norm, 0.0, 1.0)
-            num = (m - 1.0) * x_norm
-            den = (2.0 * m - 1.0) * x_norm - m
-            out_ch = np.where(np.abs(den) > 1e-7, num / den, 0.0)
-            out_channels.append(np.clip(out_ch, 0.0, 1.0))
-
-    if is_color:
-        out = np.dstack(out_channels).astype(np.float32)
-        # Post-procesado de color: Conversión temporal a HSV para multiplicar S por saturation_boost
-        if abs(saturation_boost - 1.0) > 1e-4:
-            hsv = cv2.cvtColor(out, cv2.COLOR_RGB2HSV)
-            hsv[..., 1] = np.clip(hsv[..., 1] * saturation_boost, 0.0, 1.0)
-            out = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
-    else:
-        out = out_channels[0].astype(np.float32)
-        if img.ndim == 3:
-            out = out[..., np.newaxis]
-
-    # Preservar el suelo original si se proporcionó sky_mask, con suavizado opcional de transición
+    mask_c = None
     if sky_mask is not None:
-        mask_f = mask.astype(np.float32)
+        mask_c = sky_mask[..., 0] if sky_mask.ndim == 3 else sky_mask
+        if mask_c.shape[:2] != (h, w):
+            mask_c = cv2.resize(mask_c.astype(np.float32), (w, h), interpolation=cv2.INTER_NEAREST)
         if feather_radius > 0:
             k = int(feather_radius) * 2 + 1
-            mask_f = cv2.GaussianBlur(mask_f, (k, k), 0)
-        if is_color:
-            mask_f = mask_f[..., np.newaxis]
-        elif img.ndim == 3 and mask_f.ndim == 2:
-            mask_f = mask_f[..., np.newaxis]
+            mask_c = cv2.GaussianBlur(mask_c.astype(np.float32), (k, k), 0)
+        mask_c = np.ascontiguousarray(mask_c, dtype=np.float32)
 
-        # Mezcla: píxeles de cielo reciben el estirado; píxeles de suelo conservan img_starless original
-        out = out * mask_f + img * (1.0 - mask_f)
-
-    return np.clip(out, 0.0, 1.0).astype(np.float32)
+    out = astroloom_rs.auto_stretch_adaptive_starless_rs(
+        img_c,
+        mask_c,
+        target_bg=float(target_bg),
+        shadow_clip_sigma=float(shadow_clip_sigma),
+        saturation_boost=float(saturation_boost),
+        unlinked=bool(unlinked)
+    )
+    return out[..., 0] if img.ndim == 2 else out

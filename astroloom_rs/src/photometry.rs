@@ -385,8 +385,9 @@ pub fn apply_dualband_palette_rs<'py>(
                 }
             });
         } else if palette_upper == "FORAXX" {
-            let max_ha = ha_vec.par_iter().cloned().reduce(|| 0.0f32, f32::max) + 1e-6;
-            let max_o3 = oiii_vec.par_iter().cloned().reduce(|| 0.0f32, f32::max) + 1e-6;
+            // Normalizar por percentil 99 para que estrellas saturadas no aplasten la nebulosa
+            let p99_ha = percentile_f32_sampled(&ha_vec, 99.0).max(1e-5);
+            let p99_o3 = percentile_f32_sampled(&oiii_vec, 99.0).max(1e-5);
 
             buf.par_chunks_mut(w * 3).enumerate().for_each(|(y, row_slice)| {
                 let offset = y * w;
@@ -394,8 +395,8 @@ pub fn apply_dualband_palette_rs<'py>(
                     let ha = ha_vec[offset + x];
                     let o3 = oiii_vec[offset + x];
 
-                    let norm_ha = (ha / max_ha).clamp(0.0, 1.0);
-                    let norm_o3 = (o3 / max_o3).clamp(0.0, 1.0);
+                    let norm_ha = (ha / p99_ha).clamp(0.0, 1.0);
+                    let norm_o3 = (o3 / p99_o3).clamp(0.0, 1.0);
                     let prod = norm_ha * norm_o3;
                     let exp = (1.0 - prod).max(0.01);
                     let f = prod.powf(exp);
@@ -408,6 +409,7 @@ pub fn apply_dualband_palette_rs<'py>(
                 }
             });
         } else if palette_upper == "CANNISTRA" {
+            // Paleta bicolor clásica Steve Cannistra: G sintético = 30% Ha + 70% OIII
             buf.par_chunks_mut(w * 3).enumerate().for_each(|(y, row_slice)| {
                 let offset = y * w;
                 for x in 0..w {
@@ -415,7 +417,7 @@ pub fn apply_dualband_palette_rs<'py>(
                     let o3 = oiii_vec[offset + x];
                     let idx = x * 3;
                     row_slice[idx] = ha + med_bg;
-                    row_slice[idx + 1] = o3.max(0.50 * ha) + med_bg;
+                    row_slice[idx + 1] = (0.30 * ha + 0.70 * o3) + med_bg;
                     row_slice[idx + 2] = o3 + med_bg;
                 }
             });

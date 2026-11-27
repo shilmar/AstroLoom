@@ -1,25 +1,17 @@
 """
 core/project_io.py - Motor de serialización y deserialización de proyectos AstroLoom Developer (.devloom).
 Guarda y carga sesiones completas preservando sliders, curvas, máscaras 16-bit y capas StarNet.
-Acelerado por Rust con Rayon y PNG nativo de 16 bits (astroloom_rs) con respaldo transparente
-en OpenCV + zipfile de Python.
+Impulsado por Rust con Rayon y PNG nativo de 16 bits (astroloom_rs).
 """
 from __future__ import annotations
 
 import json
 import os
-import zipfile
 from typing import Any, Callable, Dict, List, Optional, Tuple
-import cv2
 import numpy as np
+import astroloom_rs
 
-try:
-    import astroloom_rs
-    HAS_RUST_PROJECT_IO = hasattr(astroloom_rs, "write_devloom_project_rs") and hasattr(
-        astroloom_rs, "read_devloom_project_rs"
-    )
-except Exception:
-    HAS_RUST_PROJECT_IO = False
+HAS_RUST_PROJECT_IO = True
 
 
 def save_devloom_project(
@@ -150,80 +142,27 @@ def save_devloom_project(
     }
     manifest_json = json.dumps(manifest, indent=2, ensure_ascii=False)
 
-    # 2. Vía nativa ultra-rápida en Rust (Rayon multicore)
-    if HAS_RUST_PROJECT_IO:
-        try:
-            _notify(20, "Comprimiendo capas y máscaras en paralelo (Rust/Rayon)...")
-            images_list: List[Tuple[str, np.ndarray]] = []
-            if master_mask_ref and master_sky_mask is not None:
-                images_list.append((master_mask_ref, np.ascontiguousarray(master_sky_mask, dtype=np.float32)))
+    # 2. Escritura nativa paralela en Rust (Rayon multicore)
+    _notify(20, "Comprimiendo capas y máscaras en paralelo (Rust/Rayon)...")
+    images_list: List[Tuple[str, np.ndarray]] = []
+    if master_mask_ref and master_sky_mask is not None:
+        images_list.append((master_mask_ref, np.ascontiguousarray(master_sky_mask, dtype=np.float32)))
 
-            for b_name, b_arr in layer_images_to_encode:
-                images_list.append((b_name, np.ascontiguousarray(b_arr, dtype=np.float32)))
+    for b_name, b_arr in layer_images_to_encode:
+        images_list.append((b_name, np.ascontiguousarray(b_arr, dtype=np.float32)))
 
-            for s_name, s_arr in starnet_images:
-                images_list.append((s_name, np.ascontiguousarray(s_arr, dtype=np.float32)))
+    for s_name, s_arr in starnet_images:
+        images_list.append((s_name, np.ascontiguousarray(s_arr, dtype=np.float32)))
 
-            for ai_name, ai_arr in ai_denoise_images:
-                images_list.append((ai_name, np.ascontiguousarray(ai_arr, dtype=np.float32)))
+    for ai_name, ai_arr in ai_denoise_images:
+        images_list.append((ai_name, np.ascontiguousarray(ai_arr, dtype=np.float32)))
 
-            if has_cropped_base and cropped_base_image is not None:
-                images_list.append(("base/cropped_base.png", np.ascontiguousarray(cropped_base_image, dtype=np.float32)))
+    if has_cropped_base and cropped_base_image is not None:
+        images_list.append(("base/cropped_base.png", np.ascontiguousarray(cropped_base_image, dtype=np.float32)))
 
-            ok = astroloom_rs.write_devloom_project_rs(file_path, manifest_json, images_list)
-            if ok:
-                _notify(100, "Proyecto guardado con éxito.")
-                return True
-        except Exception:
-            # Fallback transparente a Python puro si surge algún problema en Rust
-            pass
-
-    # 3. Respaldo en Python puro (zipfile + OpenCV)
-    with zipfile.ZipFile(file_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        if master_mask_ref and master_sky_mask is not None:
-            _notify(15, "Comprimiendo máscara maestra de horizonte (16-bit)...")
-            u16 = np.clip(master_sky_mask * 65535.0, 0, 65535).astype(np.uint16)
-            ok, buf = cv2.imencode(".png", u16, [cv2.IMWRITE_PNG_COMPRESSION, 6])
-            if ok:
-                zf.writestr(master_mask_ref, buf.tobytes())
-
-        _notify(25, "Comprimiendo máscaras de capas de ajuste locales...")
-        for b_name, b_arr in layer_images_to_encode:
-            u16_b = np.clip(b_arr * 65535.0, 0, 65535).astype(np.uint16)
-            ok, buf = cv2.imencode(".png", u16_b, [cv2.IMWRITE_PNG_COMPRESSION, 6])
-            if ok:
-                zf.writestr(b_name, buf.tobytes())
-
-        if has_starnet:
-            for s_name, s_arr in starnet_images:
-                _notify(60, f"Comprimiendo capa StarNet ({s_name})...")
-                u16_s = np.clip(s_arr * 65535.0, 0, 65535).astype(np.uint16)
-                bgr_s = cv2.cvtColor(u16_s, cv2.COLOR_RGB2BGR) if u16_s.ndim == 3 else u16_s
-                ok, buf = cv2.imencode(".png", bgr_s, [cv2.IMWRITE_PNG_COMPRESSION, 6])
-                if ok:
-                    zf.writestr(s_name, buf.tobytes())
-
-        for ai_name, ai_arr in ai_denoise_images:
-            _notify(75, f"Comprimiendo caché de reducción de ruido IA ({ai_name})...")
-            u16_ai = np.clip(ai_arr * 65535.0, 0, 65535).astype(np.uint16)
-            bgr_ai = cv2.cvtColor(u16_ai, cv2.COLOR_RGB2BGR) if u16_ai.ndim == 3 else u16_ai
-            ok, buf = cv2.imencode(".png", bgr_ai, [cv2.IMWRITE_PNG_COMPRESSION, 6])
-            if ok:
-                zf.writestr(ai_name, buf.tobytes())
-
-        if has_cropped_base and cropped_base_image is not None:
-            _notify(85, "Comprimiendo imagen base recortada (16-bit)...")
-            u16_cb = np.clip(cropped_base_image * 65535.0, 0, 65535).astype(np.uint16)
-            bgr_cb = cv2.cvtColor(u16_cb, cv2.COLOR_RGB2BGR) if u16_cb.ndim == 3 else u16_cb
-            ok, buf = cv2.imencode(".png", bgr_cb, [cv2.IMWRITE_PNG_COMPRESSION, 6])
-            if ok:
-                zf.writestr("base/cropped_base.png", buf.tobytes())
-
-        _notify(90, "Escribiendo project.json y metadatos...")
-        zf.writestr("project.json", manifest_json)
-
+    ok = astroloom_rs.write_devloom_project_rs(file_path, manifest_json, images_list)
     _notify(100, "Proyecto guardado con éxito.")
-    return True
+    return bool(ok)
 
 
 def load_devloom_project(
@@ -251,171 +190,40 @@ def load_devloom_project(
 
     _notify(5, "Abriendo archivo .devloom...")
 
-    # 1. Vía nativa ultra-rápida en Rust (Rayon multicore)
-    if HAS_RUST_PROJECT_IO:
-        try:
-            _notify(20, "Descomprimiendo y decodificando capas en paralelo (Rust/Rayon)...")
-            manifest_json_str, images_dict = astroloom_rs.read_devloom_project_rs(file_path)
-            manifest = json.loads(manifest_json_str)
+    # 1. Lectura nativa paralela en Rust (Rayon multicore)
+    _notify(20, "Descomprimiendo y decodificando capas en paralelo (Rust/Rayon)...")
+    manifest_json_str, images_dict = astroloom_rs.read_devloom_project_rs(file_path)
+    manifest = json.loads(manifest_json_str)
 
-            master_sky = None
-            mask_ref = manifest.get("master_sky_mask")
-            if mask_ref and mask_ref in images_dict:
-                master_sky = images_dict[mask_ref]
+    master_sky = None
+    mask_ref = manifest.get("master_sky_mask")
+    if mask_ref and mask_ref in images_dict:
+        master_sky = images_dict[mask_ref]
 
-            layers = manifest.get("mask_layers", [])
-            for layer in layers:
-                mask_file = layer.get("mask_file")
-                if mask_file and mask_file in images_dict:
-                    layer["brush_mask"] = images_dict[mask_file]
-                raster_file = layer.get("raster_file")
-                if raster_file and raster_file in images_dict:
-                    layer["image_data"] = images_dict[raster_file]
+    layers = manifest.get("mask_layers", [])
+    for layer in layers:
+        mask_file = layer.get("mask_file")
+        if mask_file and mask_file in images_dict:
+            layer["brush_mask"] = images_dict[mask_file]
+        raster_file = layer.get("raster_file")
+        if raster_file and raster_file in images_dict:
+            layer["image_data"] = images_dict[raster_file]
 
-            starnet_out = {
-                "image_starless": images_dict.get("starnet/starless.png"),
-                "image_stars": images_dict.get("starnet/stars.png"),
-                "raw_linear_starless": images_dict.get("starnet/raw_linear_starless.png"),
-            }
+    starnet_out = {
+        "image_starless": images_dict.get("starnet/starless.png"),
+        "image_stars": images_dict.get("starnet/stars.png"),
+        "raw_linear_starless": images_dict.get("starnet/raw_linear_starless.png"),
+    }
 
-            ai_meta = manifest.get("ai_denoise") or {}
-            ai_denoise_out = {
-                "starless_ai": images_dict.get("ai_denoise/starless_ai.png"),
-                "ground_ai": images_dict.get("ai_denoise/ground_ai.png"),
-                "starless_ai_enabled": bool(ai_meta.get("starless_ai_enabled", False)),
-                "ground_ai_enabled": bool(ai_meta.get("ground_ai_enabled", False)),
-            }
+    ai_meta = manifest.get("ai_denoise") or {}
+    ai_denoise_out = {
+        "starless_ai": images_dict.get("ai_denoise/starless_ai.png"),
+        "ground_ai": images_dict.get("ai_denoise/ground_ai.png"),
+        "starless_ai_enabled": bool(ai_meta.get("starless_ai_enabled", False)),
+        "ground_ai_enabled": bool(ai_meta.get("ground_ai_enabled", False)),
+    }
 
-            cropped_base = images_dict.get("base/cropped_base.png")
-
-            _notify(100, "Lectura de proyecto finalizada.")
-            return {
-                "manifest": manifest,
-                "source_image": manifest.get("source_image", {}),
-                "developer_state": manifest.get("developer_state", {}),
-                "master_sky_mask": master_sky,
-                "mask_layers": layers,
-                "starnet": starnet_out,
-                "ai_denoise": ai_denoise_out,
-                "cropped_base_image": cropped_base,
-                "has_starnet": manifest.get("has_starnet", False),
-                "starless_is_stretched": manifest.get("starless_is_stretched", False),
-            }
-        except Exception:
-            # Fallback transparente si falla la descompresión en Rust
-            pass
-
-    # 2. Respaldo en Python puro (zipfile + OpenCV)
-    with zipfile.ZipFile(file_path, "r") as zf:
-        namelist = set(zf.namelist())
-        if "project.json" not in namelist:
-            raise ValueError("El archivo no es un contenedor .devloom válido (falta project.json).")
-
-        _notify(15, "Leyendo project.json y parámetros...")
-        manifest = json.loads(zf.read("project.json").decode("utf-8"))
-
-        master_sky = None
-        mask_ref = manifest.get("master_sky_mask")
-        if mask_ref and mask_ref in namelist:
-            _notify(30, "Decodificando máscara maestra de horizonte (16-bit)...")
-            raw_b = zf.read(mask_ref)
-            arr = np.frombuffer(raw_b, np.uint8)
-            dec = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
-            if dec is not None:
-                div = 65535.0 if dec.dtype == np.uint16 else 255.0
-                master_sky = dec.astype(np.float32) / div
-
-        _notify(45, "Decodificando máscaras de capas locales (16-bit)...")
-        layers = manifest.get("mask_layers", [])
-        for layer in layers:
-            mask_file = layer.get("mask_file")
-            if mask_file and mask_file in namelist:
-                raw_b = zf.read(mask_file)
-                arr = np.frombuffer(raw_b, np.uint8)
-                dec = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
-                if dec is not None:
-                    div = 65535.0 if dec.dtype == np.uint16 else 255.0
-                    layer["brush_mask"] = dec.astype(np.float32) / div
-
-            raster_file = layer.get("raster_file")
-            if raster_file and raster_file in namelist:
-                raw_b = zf.read(raster_file)
-                arr = np.frombuffer(raw_b, np.uint8)
-                dec = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
-                if dec is not None:
-                    if dec.ndim == 3:
-                        dec = cv2.cvtColor(dec, cv2.COLOR_BGR2RGB)
-                    div = 65535.0 if dec.dtype == np.uint16 else 255.0
-                    layer["image_data"] = dec.astype(np.float32) / div
-
-        starnet_out = {
-            "image_starless": None,
-            "image_stars": None,
-            "raw_linear_starless": None,
-        }
-
-        if "starnet/starless.png" in namelist:
-            _notify(60, "Extrayendo capa StarNet Fondo Nebular (16-bit)...")
-            raw_b = zf.read("starnet/starless.png")
-            arr = np.frombuffer(raw_b, np.uint8)
-            dec = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
-            if dec is not None:
-                if dec.ndim == 3:
-                    dec = cv2.cvtColor(dec, cv2.COLOR_BGR2RGB)
-                div = 65535.0 if dec.dtype == np.uint16 else 255.0
-                starnet_out["image_starless"] = dec.astype(np.float32) / div
-
-        if "starnet/stars.png" in namelist:
-            _notify(80, "Extrayendo capa StarNet Estrellas (16-bit)...")
-            raw_b = zf.read("starnet/stars.png")
-            arr = np.frombuffer(raw_b, np.uint8)
-            dec = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
-            if dec is not None:
-                if dec.ndim == 3:
-                    dec = cv2.cvtColor(dec, cv2.COLOR_BGR2RGB)
-                div = 65535.0 if dec.dtype == np.uint16 else 255.0
-                starnet_out["image_stars"] = dec.astype(np.float32) / div
-
-        if "starnet/raw_linear_starless.png" in namelist:
-            _notify(90, "Extrayendo capa StarNet Lineal (16-bit)...")
-            raw_b = zf.read("starnet/raw_linear_starless.png")
-            arr = np.frombuffer(raw_b, np.uint8)
-            dec = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
-            if dec is not None:
-                if dec.ndim == 3:
-                    dec = cv2.cvtColor(dec, cv2.COLOR_BGR2RGB)
-                div = 65535.0 if dec.dtype == np.uint16 else 255.0
-                starnet_out["raw_linear_starless"] = dec.astype(np.float32) / div
-
-        ai_meta = manifest.get("ai_denoise") or {}
-        ai_denoise_out = {
-            "starless_ai": None,
-            "ground_ai": None,
-            "starless_ai_enabled": bool(ai_meta.get("starless_ai_enabled", False)),
-            "ground_ai_enabled": bool(ai_meta.get("ground_ai_enabled", False)),
-        }
-        for key, zip_name in (("starless_ai", "ai_denoise/starless_ai.png"), ("ground_ai", "ai_denoise/ground_ai.png")):
-            if zip_name in namelist:
-                raw_b = zf.read(zip_name)
-                arr = np.frombuffer(raw_b, np.uint8)
-                dec = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
-                if dec is not None:
-                    if dec.ndim == 3:
-                        dec = cv2.cvtColor(dec, cv2.COLOR_BGR2RGB)
-                    div = 65535.0 if dec.dtype == np.uint16 else 255.0
-                    ai_denoise_out[key] = dec.astype(np.float32) / div
-
-        cropped_base = None
-        if "base/cropped_base.png" in namelist:
-            _notify(95, "Extrayendo imagen base recortada (16-bit)...")
-            raw_b = zf.read("base/cropped_base.png")
-            arr = np.frombuffer(raw_b, np.uint8)
-            dec = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
-            if dec is not None:
-                if dec.ndim == 3:
-                    dec = cv2.cvtColor(dec, cv2.COLOR_BGR2RGB)
-                div = 65535.0 if dec.dtype == np.uint16 else 255.0
-                cropped_base = dec.astype(np.float32) / div
+    cropped_base = images_dict.get("base/cropped_base.png")
 
     _notify(100, "Lectura de proyecto finalizada.")
     return {

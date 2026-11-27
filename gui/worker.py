@@ -11,8 +11,7 @@ import time
 import cv2
 import numpy as np
 import tifffile
-import multiprocessing as mp
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, List, Dict, Tuple, Callable, Any, Union
 
 from PySide6.QtCore import QThread, Signal
@@ -45,21 +44,6 @@ from core.icc_manager import (
 )
 
 
-def _terminate_executor_processes(executor: ProcessPoolExecutor):
-    """Fuerza la terminación inmediata y segura de los procesos hijos."""
-    if executor is None:
-        return
-    try:
-        for pid, process in list(executor._processes.items()):
-            try:
-                process.terminate()
-                process.join(timeout=0.05)
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-
 class StackingWorker(QThread):
     progress_changed = Signal(int)
     status_changed = Signal(str)
@@ -79,7 +63,6 @@ class StackingWorker(QThread):
         self.status_changed.emit("Deteniendo tareas y liberando recursos...")
         if self._executor is not None:
             try:
-                _terminate_executor_processes(self._executor)
                 self._executor.shutdown(wait=False, cancel_futures=True)
             except Exception:
                 pass

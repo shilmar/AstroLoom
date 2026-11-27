@@ -11,12 +11,9 @@ Implementa un motor de filtrado adaptativo de alto rendimiento en CPU:
 from typing import Optional
 import numpy as np
 import cv2
+import astroloom_rs
 
-try:
-    import astroloom_rs
-    HAS_RUST = True
-except ImportError:
-    HAS_RUST = False
+HAS_RUST = True
 
 
 def compute_denoise_mask(
@@ -86,12 +83,7 @@ def apply_astro_denoise(
     if strength <= 1e-4 and color_strength <= 1e-4:
         return img_rgb
 
-    if (
-        HAS_RUST
-        and hasattr(astroloom_rs, "astro_denoise_rs")
-        and img_rgb.ndim == 3
-        and img_rgb.shape[2] == 3
-    ):
+    if img_rgb.ndim == 3 and img_rgb.shape[2] == 3:
         h, w = img_rgb.shape[:2]
         m_c = None
         if sky_mask is not None:
@@ -111,61 +103,18 @@ def apply_astro_denoise(
             bool(is_full_res),
         )
 
-    # Conversión a espacio YCrCb para desacoplar Luminancia y Croma
+    # Ruta 2D monocroma
     safe_input = np.clip(img_rgb, 0.0, 1.0).astype(np.float32)
-    ycrcb = cv2.cvtColor(safe_input, cv2.COLOR_RGB2YCrCb)
-    y = ycrcb[..., 0]
-    cr = ycrcb[..., 1]
-    cb = ycrcb[..., 2]
-
-    # --- 1. REDUCCIÓN DE RUIDO CROMÁTICO (COLOR NOISE) ---
-    if color_strength > 1e-4:
-        blend_c = float(np.clip(color_strength, 0.0, 1.0))
-        if is_draft:
-            cr_clean = cv2.GaussianBlur(cr, (5, 5), 1.0 + 3.5 * color_strength)
-            cb_clean = cv2.GaussianBlur(cb, (5, 5), 1.0 + 3.5 * color_strength)
-        else:
-            # Submuestreo multiescala para abarcar manchas de demosaicing (8-16px) sin sangrado
-            scale_factor = 0.25 if (is_full_res and min(cr.shape[:2]) >= 128) else 0.5
-            w_sub = max(16, int(round(cr.shape[1] * scale_factor)))
-            h_sub = max(16, int(round(cr.shape[0] * scale_factor)))
-            cr_sub = cv2.resize(cr, (w_sub, h_sub), interpolation=cv2.INTER_AREA)
-            cb_sub = cv2.resize(cb, (w_sub, h_sub), interpolation=cv2.INTER_AREA)
-
-            sigma_sub = float(1.2 + 2.8 * color_strength)
-            ksize_sub = int(max(3, round(3.0 + 4.0 * color_strength)))
-            if ksize_sub % 2 == 0:
-                ksize_sub += 1
-            cr_sub_clean = cv2.GaussianBlur(cr_sub, (ksize_sub, ksize_sub), sigma_sub)
-            cb_sub_clean = cv2.GaussianBlur(cb_sub, (ksize_sub, ksize_sub), sigma_sub)
-
-            cr_clean = cv2.resize(cr_sub_clean, (cr.shape[1], cr.shape[0]), interpolation=cv2.INTER_LINEAR)
-            cb_clean = cv2.resize(cb_sub_clean, (cb.shape[1], cb.shape[0]), interpolation=cv2.INTER_LINEAR)
-
-        ycrcb[..., 1] = cr * (1.0 - blend_c) + cr_clean * blend_c
-        ycrcb[..., 2] = cb * (1.0 - blend_c) + cb_clean * blend_c
-
-    # --- 2. REDUCCIÓN DE RUIDO DE LUMINANCIA CON MÁSCARA ADAPTATIVA ---
-    if strength > 1e-4:
-        # Calcular máscara combinada (sombras profundas + protección de gradientes)
-        spatial_mask = compute_denoise_mask(safe_input, masking=masking, sky_mask=sky_mask)
-
-        # Filtrado preservador de bordes O(1) paralelo en Rust (Self Guided Filter) con respaldo OpenCV bilateral
-        sigma_color = float(0.03 + 0.12 * strength)
-        if HAS_RUST and hasattr(astroloom_rs, "self_guided_filter_rs"):
-            r_gf = 2 if is_draft else (4 if is_full_res else 3)
-            eps_gf = float(sigma_color * sigma_color)
-            y_c = np.ascontiguousarray(y, dtype=np.float32)
-            y_filtered = astroloom_rs.self_guided_filter_rs(y_c, radius=r_gf, eps=eps_gf)
-        else:
-            d = 5 if is_draft else (9 if is_full_res else 7)
-            sigma_space = float((2.0 + 5.0 * strength) * (1.8 if is_full_res else 1.0))
-            y_filtered = cv2.bilateralFilter(y, d=d, sigmaColor=sigma_color, sigmaSpace=sigma_space)
-
-        # Modulación proporcional por píxel
-        blend_y = np.clip(strength * spatial_mask, 0.0, 1.0)
-        ycrcb[..., 0] = y * (1.0 - blend_y) + y_filtered * blend_y
-
-    out_rgb = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
-    return np.clip(out_rgb, 0.0, 1.0).astype(np.float32)
+    if strength <= 1e-4:
+        return safe_input
+    spatial_mask = compute_denoise_mask(safe_input, masking=masking, sky_mask=sky_mask)
+    sigma_color = float(0.03 + 0.12 * strength)
+    r_gf = 2 if is_draft else (4 if is_full_res else 3)
+    y_filtered = astroloom_rs.self_guided_filter_rs(
+        np.ascontiguousarray(safe_input, dtype=np.float32),
+        radius=r_gf,
+        eps=float(sigma_color * sigma_color),
+    )
+    blend_y = np.clip(strength * spatial_mask, 0.0, 1.0)
+    return np.clip(safe_input * (1.0 - blend_y) + y_filtered * blend_y, 0.0, 1.0).astype(np.float32)
 

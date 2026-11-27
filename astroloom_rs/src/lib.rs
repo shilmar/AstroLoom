@@ -26,7 +26,6 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stacking::kappa_sigma_kernel, m)?)?;
     m.add_function(wrap_pyfunction!(stacking::percentile_kernel, m)?)?;
     m.add_function(wrap_pyfunction!(stacking::median_kernel, m)?)?;
-    m.add_function(wrap_pyfunction!(stacking::compute_tps_grid_rs, m)?)?;
 
     // 2. Motor RBF y Neutralización de Fondo (core/background_extraction.py)
     m.add_function(wrap_pyfunction!(background::fit_and_eval_rbf_proxy, m)?)?;
@@ -120,7 +119,6 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // 11. Astrometría por Triángulos, Cribado 3x3 y Mallas TPS - Prioridad 9 (core/panorama.py, core/frame_culling.py y core/stacking.py)
     m.add_function(wrap_pyfunction!(astrometry::find_max_inscribed_rect_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(astrometry::match_star_triangles_ransac_rs, m)?)?;
     m.add_function(wrap_pyfunction!(astrometry::compute_tps_remap_grid_rs, m)?)?;
     m.add_function(wrap_pyfunction!(astrometry::compute_3x3_optical_diagnosis_rs, m)?)?;
     m.add_function(wrap_pyfunction!(astrometry::analyze_frame_quality_3x3_rs, m)?)?;
@@ -143,7 +141,6 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 14. Puente de Renderizado Directo a Qt - Prioridad 12 (gui/canvas.py)
     m.add_function(wrap_pyfunction!(renderer::render_canvas_frame_rs, m)?)?;
     m.add_function(wrap_pyfunction!(renderer::apply_display_lut16_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(renderer::apply_display_lut16_dual_rs, m)?)?;
 
     // 15. Tiling ONNX y Filtro Guiado - Prioridad 13 / Fase 16 (core/starnet_onnx.py, core/ai_horizon.py, core/ai_denoise.py)
     m.add_function(wrap_pyfunction!(ai_preprocessing::fast_guided_filter_rs, m)?)?;
@@ -151,9 +148,6 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ai_preprocessing::get_tile_coords_rs, m)?)?;
     m.add_function(wrap_pyfunction!(ai_preprocessing::accumulate_tile_hann_inplace_rs, m)?)?;
     m.add_function(wrap_pyfunction!(ai_preprocessing::reconstruct_hann_tiling_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(ai_preprocessing::recompose_hann_tiles_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(ai_preprocessing::place_tile_cropped_inplace_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(ai_preprocessing::recompose_cropped_tiles_rs, m)?)?;
     m.add_function(wrap_pyfunction!(ai_preprocessing::prepare_starnet_tiles_rs, m)?)?;
     m.add_function(wrap_pyfunction!(ai_preprocessing::assemble_starnet_tiles_rs, m)?)?;
 

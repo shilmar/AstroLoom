@@ -1,6 +1,5 @@
 import os
 import json
-import tempfile
 import threading
 
 _CONFIG_LOCK = threading.RLock()
@@ -29,7 +28,6 @@ DEFAULT_CONFIG = {
 
     # Parámetros del motor de apilado y hardware
     "kappa": 2.2,
-    "default_kappa": 2.2,
     "storage_strategy": "auto",
     "use_gpu": True,
     "cpu_workers": def_workers,
@@ -119,51 +117,63 @@ def ensure_workspace_directories(config: dict) -> bool:
     return modified
 
 
-def load_config() -> dict:
+def load_config(force_reload: bool = False) -> dict:
     """
-    Carga la configuración de la aplicación de forma tolerante a fallos:
+    Carga la configuración de la aplicación con caché en memoria thread-safe:
     1. Si config.json no existe, intenta leer config.default.json o usa DEFAULT_CONFIG.
     2. Si config.json existe pero contiene rutas inválidas o de otra máquina,
        las repara automáticamente con fallback seguro y persiste la corrección.
     """
-    config = DEFAULT_CONFIG.copy()
-    config_loaded_from_disk = False
+    global _CACHED_CONFIG
+    with _CONFIG_LOCK:
+        if not force_reload and _CACHED_CONFIG is not None:
+            return _CACHED_CONFIG.copy()
 
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-                if isinstance(saved, dict):
-                    config.update(saved)
-                    config_loaded_from_disk = True
-        except Exception as e:
-            print(f"[ConfigManager] Error leyendo config.json: {e}. Se usarán valores por defecto.")
-    elif os.path.exists(DEFAULT_TEMPLATE_FILE):
-        try:
-            with open(DEFAULT_TEMPLATE_FILE, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-                if isinstance(saved, dict):
-                    config.update(saved)
-        except Exception as e:
-            print(f"[ConfigManager] Error leyendo config.default.json: {e}")
+        config = DEFAULT_CONFIG.copy()
+        config_loaded_from_disk = False
 
-    # Validar y crear directorios de forma segura (sin excepciones no controladas)
-    healed = ensure_workspace_directories(config)
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    saved = json.load(f)
+                    if isinstance(saved, dict):
+                        if "default_kappa" in saved and "kappa" not in saved:
+                            saved["kappa"] = saved["default_kappa"]
+                        config.update(saved)
+                        config_loaded_from_disk = True
+            except Exception as e:
+                print(f"[ConfigManager] Error leyendo config.json: {e}. Se usarán valores por defecto.")
+        elif os.path.exists(DEFAULT_TEMPLATE_FILE):
+            try:
+                with open(DEFAULT_TEMPLATE_FILE, "r", encoding="utf-8") as f:
+                    saved = json.load(f)
+                    if isinstance(saved, dict):
+                        config.update(saved)
+            except Exception as e:
+                print(f"[ConfigManager] Error leyendo config.default.json: {e}")
 
-    # Si no existía config.json o hubo rutas corruptas/reparadas, persistir para estabilizar
-    if not config_loaded_from_disk or healed:
-        save_config(config)
+        # Validar y crear directorios de forma segura (sin excepciones no controladas)
+        healed = ensure_workspace_directories(config)
 
-    return config
+        # Si no existía config.json o hubo rutas corruptas/reparadas, persistir para estabilizar
+        if not config_loaded_from_disk or healed:
+            save_config(config)
+        else:
+            _CACHED_CONFIG = config.copy()
+
+        return config
 
 
 def save_config(config: dict) -> None:
-    ensure_workspace_directories(config)
-    try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        print(f"[ConfigManager] Error guardando config.json: {e}")
+    global _CACHED_CONFIG
+    with _CONFIG_LOCK:
+        ensure_workspace_directories(config)
+        try:
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=4, ensure_ascii=False)
+            _CACHED_CONFIG = config.copy()
+        except Exception as e:
+            print(f"[ConfigManager] Error guardando config.json: {e}")
 
 
 def get_config_val(key: str, default=None):

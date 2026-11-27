@@ -21,7 +21,6 @@ from core.masking import refine_mask_guided, apply_direct_brush_to_mask
 from core.stacking import load_image_as_float32, scan_raw_batch_metadata
 from gui.canvas import MaskCanvas
 from gui.widgets.viewer_toolbar import CanvasFooterBar
-from gui.widgets.drop_widgets import DropListWidget
 from gui.widgets.series_table_widget import SeriesFilesTableWidget
 from gui.worker import StackingWorker, SubstackingWorker, QualityCullingWorker, AIHorizonWorker, ModelDownloadWorker
 from core.gpu_backend import is_gpu_enabled
@@ -36,122 +35,6 @@ from gui.theme import (
 from gui.icons import get_icon, ICON_COLOR_DEFAULT, ICON_COLOR_ACTIVE, ICON_COLOR_MUTED
 from gui.widgets.collapsible_section import CollapsibleSection
 from gui.widgets.precision_slider import PrecisionSliderRow
-
-
-class FileListRow(QWidget):
-    """Widget de fila con casilla de inclusión, etiqueta de referencia, badge de calidad y botón de borrado."""
-    delete_requested = Signal(str, str)         # (tab_name, filepath)
-    include_toggled = Signal(str, str, bool)    # (tab_name, filepath, is_included)
-
-    def __init__(self, filepath: str, tab_name: str, is_ref: bool = False, is_included: bool = True, parent=None):
-        super().__init__(parent)
-        self.filepath = filepath
-        self.tab_name = tab_name
-        self._is_included = is_included
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(6)
-
-        # Casilla de inclusión (para Lights)
-        self.chk_include = QCheckBox()
-        self.chk_include.setChecked(is_included)
-        self.chk_include.setToolTip("Incluir / descartar esta toma del apilado")
-        self.chk_include.toggled.connect(self._on_include_toggled)
-        if tab_name != "Lights":
-            self.chk_include.setVisible(False)
-        layout.addWidget(self.chk_include)
-
-        # Badge de calidad (FWHM / Redondez / Cribado)
-        self.lbl_quality = QLabel("")
-        self.lbl_quality.setVisible(False)
-        layout.addWidget(self.lbl_quality)
-
-        # Indicador de referencia / activo tipo badge
-        self.lbl_ref = QLabel()
-        self.set_as_reference(is_ref)
-        layout.addWidget(self.lbl_ref)
-
-        # Nombre del archivo
-        self.lbl_name = QLabel(os.path.basename(filepath))
-        self.lbl_name.setToolTip(filepath)
-        self.lbl_name.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self._update_name_style()
-        layout.addWidget(self.lbl_name)
-
-        # Botón de eliminar individual (Cruz roja minimalista)
-        self.btn_del = QPushButton("×")
-        self.btn_del.setFixedSize(18, 18)
-        self.btn_del.setToolTip("Eliminar esta toma de la lista")
-        self.btn_del.setStyleSheet(
-            "QPushButton { color: #a1a1aa; background: transparent; border: 1px solid #2e2e35; border-radius: 3px; font-weight: bold; font-size: 13px; line-height: 14px; padding: 0px; } "
-            "QPushButton:hover { background: #b91c1c; color: #ffffff; border-color: #ef4444; }"
-        )
-        self.btn_del.clicked.connect(lambda: self.delete_requested.emit(self.tab_name, self.filepath))
-        layout.addWidget(self.btn_del)
-
-    def set_as_reference(self, is_ref: bool):
-        if is_ref:
-            self.lbl_ref.setText("REF")
-            self.lbl_ref.setStyleSheet("color: #2f81f7; font-weight: bold; font-size: 9px; background-color: rgba(47, 129, 247, 0.15); border: 1px solid #2f81f7; border-radius: 3px; padding: 1px 4px;")
-            self.lbl_ref.setVisible(True)
-        else:
-            self.lbl_ref.setText("")
-            self.lbl_ref.setVisible(False)
-
-    def set_quality_result(self, res):
-        """Asigna y muestra el badge de calidad óptica del frame culling."""
-        if res is None:
-            self.lbl_quality.setVisible(False)
-            return
-        self.lbl_quality.setVisible(True)
-
-        fwhm_str = f"{res.fwhm:.1f} px" if (res.fwhm is not None and not np.isnan(res.fwhm) and res.fwhm > 0) else "N/D"
-        c_ecc_str = f"{res.center_ecc:.2f}" if (res.center_ecc is not None and not np.isnan(res.center_ecc)) else "N/D"
-        cor_ecc_str = f"{res.corner_ecc:.2f}" if (res.corner_ecc is not None and not np.isnan(res.corner_ecc)) else "N/D"
-        tip = (
-            f"Puntuación: {res.score:.1f}%\n"
-            f"Nitidez (FWHM): {fwhm_str}\n"
-            f"Redondez centro (eje óptico): {c_ecc_str}\n"
-            f"Coma esquinas: {cor_ecc_str}\n"
-            f"Estrellas detectadas: {res.star_count}"
-        )
-        if getattr(res, "optical_diagnosis_msg", ""):
-            tip += f"\nÓptica: {res.optical_diagnosis_msg}"
-        if res.defect_reason:
-            tip += f"\nMotivo: {res.defect_reason}"
-        self.lbl_quality.setToolTip(tip)
-
-        score_int = int(round(res.score))
-        if res.status == "EXCELLENT":
-            self.lbl_quality.setText(f"● {score_int}%")
-            self.lbl_quality.setStyleSheet("color: #4ade80; background-color: #132b1e; border: 1px solid #22c55e; border-radius: 3px; padding: 1px 5px; font-size: 10px; font-weight: bold;")
-        elif res.status == "ACCEPTABLE":
-            self.lbl_quality.setText(f"● {score_int}%")
-            self.lbl_quality.setStyleSheet("color: #facc15; background-color: #2e2612; border: 1px solid #eab308; border-radius: 3px; padding: 1px 5px; font-size: 10px; font-weight: bold;")
-        else:
-            defect_type = "Movida" if "Movida" in res.status_label else ("Nubes" if "Nubes" in res.status_label else ("Desenfoque" if "Desenfoque" in res.status_label else ""))
-            suffix = f" {defect_type}" if defect_type else ""
-            self.lbl_quality.setText(f"● {score_int}%{suffix}")
-            self.lbl_quality.setStyleSheet("color: #f87171; background-color: #2e141a; border: 1px solid #ef4444; border-radius: 3px; padding: 1px 5px; font-size: 10px; font-weight: bold;")
-
-    def set_included(self, is_included: bool):
-        self.chk_include.blockSignals(True)
-        self.chk_include.setChecked(is_included)
-        self.chk_include.blockSignals(False)
-        self._is_included = is_included
-        self._update_name_style()
-
-    def _on_include_toggled(self, checked: bool):
-        self._is_included = checked
-        self._update_name_style()
-        self.include_toggled.emit(self.tab_name, self.filepath, checked)
-
-    def _update_name_style(self):
-        if self._is_included:
-            self.lbl_name.setStyleSheet("color: #eceff4; font-size: 11px;")
-        else:
-            self.lbl_name.setStyleSheet("color: #546e7a; font-size: 11px; text-decoration: line-through;")
 
 
 class StackerTab(QWidget):

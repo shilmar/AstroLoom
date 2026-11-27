@@ -7,14 +7,9 @@ import numpy as np
 import cv2
 
 from core.stretch import (
-    apply_white_balance,
-    apply_scnr_green,
-    adjust_vibrance,
     apply_ghs_stretch,
     manual_stretch,
     apply_curve_lut,
-    apply_hue_vs_sat_curve,
-    apply_luma_vs_sat_curve,
     apply_hue_luma_curves_fused,
     adjust_contrast,
 )
@@ -31,22 +26,13 @@ from core.mask_layers import (
     apply_blend_mode,
     MASK_TYPE_IMAGE_RASTER,
     BLEND_MODE_NORMAL,
-    BLEND_MODE_SCREEN,
-    BLEND_MODE_LUMINOSITY,
-    BLEND_MODE_SOFT_LIGHT,
-    BLEND_MODE_OVERLAY,
-    BLEND_MODE_MULTIPLY,
-    ALL_BLEND_MODES,
 )
-from core.dualband import apply_dualband_palette, unclip_stars, unpurple
+from core.dualband import apply_dualband_palette, unclip_stars
 from core.pcc import apply_pcc_gains
 from gui.developer.developer_state import DeveloperState
+import astroloom_rs
 
-try:
-    import astroloom_rs
-    HAS_RUST = True
-except ImportError:
-    HAS_RUST = False
+HAS_RUST = True
 
 
 class ResolutionPyramid:
@@ -298,37 +284,6 @@ def apply_developer_pipeline(
                         mtf_bp=0.0,
                         sky_mask=mask_2d
                     )
-                else:
-                    if unpurple_amt > 1e-4:
-                        img = unpurple(img, amount=unpurple_amt)
-
-                    if scnr_amt > 1e-4:
-                        img = apply_scnr_green(img, amount=scnr_amt)
-
-                    # 1. Balance de blancos
-                    if abs(temp_val) > 1e-5 or abs(tint_val) > 1e-5:
-                        img = apply_white_balance(img, temp_val, tint_val)
-
-                    # 2. Saturación diferencial cielo / suelo
-                    if sat_sky_val != 1.0 or sat_gnd_val != 1.0:
-                        hsv = cv2.cvtColor(np.clip(img, 0.0, 1.0), cv2.COLOR_RGB2HSV)
-                        if precomputed_mask is None or sat_sky_val == sat_gnd_val:
-                            hsv[..., 1] = np.clip(hsv[..., 1] * sat_sky_val, 0.0, 1.0)
-                            img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
-                        else:
-                            hsv_sky = hsv.copy()
-                            hsv_sky[..., 1] = np.clip(hsv_sky[..., 1] * sat_sky_val, 0.0, 1.0)
-                            rgb_sky = cv2.cvtColor(hsv_sky, cv2.COLOR_HSV2RGB)
-
-                            hsv_gnd = hsv.copy()
-                            hsv_gnd[..., 1] = np.clip(hsv_gnd[..., 1] * sat_gnd_val, 0.0, 1.0)
-                            rgb_gnd = cv2.cvtColor(hsv_gnd, cv2.COLOR_HSV2RGB)
-
-                            img = (rgb_sky * precomputed_mask) + (rgb_gnd * (1.0 - precomputed_mask))
-
-                    # 3. Intensidad / Vibrance
-                    if abs(vibrance_val) > 1e-4:
-                        img = adjust_vibrance(img, vibrance_val)
 
                 milestone_pre_lp = img
 

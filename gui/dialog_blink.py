@@ -56,17 +56,11 @@ def _fast_load_and_stretch(filepath: str, auto_stretch: bool = True, max_dim: in
                 rgb = raw.postprocess(half_size=True, use_camera_wb=True)
                 img_rgb = rgb.astype(np.float32) / 255.0
         elif ext in ['.fits', '.fit', '.fts']:
-            data = None
             try:
                 from core.fits_io import read_fits
                 data = read_fits(filepath)
             except Exception:
-                try:
-                    from astropy.io import fits
-                    with fits.open(filepath) as hdul:
-                        data = hdul[0].data if hdul[0].data is not None else hdul[1].data
-                except Exception:
-                    data = None
+                data = None
 
             if data is not None:
                 data = np.nan_to_num(data.astype(np.float32))

@@ -272,8 +272,7 @@ STYLE_SPECIAL_ACTION_BTN = f"""
     }}
 """
 
-# Alias para acciones de IA y transferencia entre módulos
-STYLE_AI_BTN = STYLE_SPECIAL_ACTION_BTN
+# Alias para acciones de transferencia entre módulos
 STYLE_TRANSFER_BTN = STYLE_SPECIAL_ACTION_BTN
 
 # Botones Secundarios / Ajustes (Cargar, Guardar, Limpiar, Añadir tomas)
@@ -300,27 +299,6 @@ STYLE_SECONDARY_BTN = f"""
         background-color: {BG_PANEL};
         color: {TEXT_MUTED};
         border-color: #242429;
-    }}
-"""
-
-# Botón de peligro / eliminación secundario
-STYLE_DANGER_BTN = f"""
-    QPushButton {{
-        font-weight: 500;
-        font-size: 11px;
-        background-color: {BG_INPUT};
-        color: #f87171;
-        border: 1px solid {BORDER_BASE};
-        border-radius: 4px;
-        padding: 5px 10px;
-    }}
-    QPushButton:hover {{
-        background-color: #383840;
-        border-color: {ACCENT_RED};
-        color: #ffffff;
-    }}
-    QPushButton:pressed {{
-        background-color: {BG_CARD};
     }}
 """
 

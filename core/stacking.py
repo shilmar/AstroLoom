@@ -807,82 +807,12 @@ def compute_tps_remap_grid(
         return None
 
     # Motor nativo fusionado en Rust sin asignación de matrices temporales ni scipy
-    if HAS_RUST and hasattr(astroloom_rs, "compute_tps_remap_grid_rs"):
-        return astroloom_rs.compute_tps_remap_grid_rs(
-            np.ascontiguousarray(src_pts, dtype=np.float32),
-            np.ascontiguousarray(dst_pts, dtype=np.float32),
-            np.ascontiguousarray(H_matrix, dtype=np.float64),
-            int(w), int(h), int(grid_size), int(min_inliers)
-        )
-
-    try:
-        H_inv = np.linalg.inv(H_matrix)
-        dst_raw = dst_pts.reshape(-1, 2)
-        src_raw = src_pts.reshape(-1, 2)
-
-        dst_hom = np.hstack([dst_raw, np.ones((len(dst_raw), 1), dtype=np.float32)])
-        src_proj = (H_inv @ dst_hom.T).T
-        src_proj = src_proj[:, :2] / np.maximum(1e-6, src_proj[:, 2:3])
-
-        residuals = src_raw - src_proj
-        max_res = float(np.max(np.linalg.norm(residuals, axis=1)))
-
-        # Solo aplicar TPS si los residuos ópticos son apreciables (> 0.35 px) pero no anómalos (< 10.0 px)
-        if max_res < 0.35 or max_res > 10.0:
-            return None
-
-        # Binning espacial regular (6x6) para evitar singularidades y sobredimensionamiento
-        grid_bins = 6
-        bx = np.linspace(0, w, grid_bins + 1)
-        by = np.linspace(0, h, grid_bins + 1)
-        bin_centers = []
-        bin_residuals = []
-
-        for i in range(grid_bins):
-            for j in range(grid_bins):
-                m = (dst_raw[:, 0] >= bx[j]) & (dst_raw[:, 0] < bx[j+1]) & (dst_raw[:, 1] >= by[i]) & (dst_raw[:, 1] < by[i+1])
-                if np.sum(m) >= 1:
-                    bin_centers.append([0.5 * (bx[j] + bx[j+1]), 0.5 * (by[i] + by[i+1])])
-                    bin_residuals.append(np.median(residuals[m], axis=0))
-
-        if len(bin_centers) < 12:
-            return None
-
-        bin_centers = np.ascontiguousarray(bin_centers, dtype=np.float32)
-        bin_residuals = np.ascontiguousarray(bin_residuals, dtype=np.float32)
-
-        # 1. Cómputo TPS acelerado en Rust sin dependencias externas (máxima prioridad)
-        if HAS_RUST and hasattr(astroloom_rs, "compute_tps_grid_rs"):
-            disp_grid = astroloom_rs.compute_tps_grid_rs(
-                bin_centers, bin_residuals, grid_size, grid_size, float(w), float(h), 2.0
-            )
-        else:
-            try:
-                from scipy.interpolate import RBFInterpolator
-            except ImportError:
-                return None
-            rbf = RBFInterpolator(bin_centers, bin_residuals, kernel="thin_plate_spline", smoothing=2.0)
-            gx = np.linspace(0, w - 1, grid_size, dtype=np.float32)
-            gy = np.linspace(0, h - 1, grid_size, dtype=np.float32)
-            grid_x, grid_y = np.meshgrid(gx, gy)
-            grid_pts = np.column_stack([grid_x.ravel(), grid_y.ravel()])
-            disp_grid = rbf(grid_pts).reshape(grid_size, grid_size, 2).astype(np.float32)
-
-        # Límite físico estricto: deformación residual óptica no debe exceder 10.0 px ni ser NaN
-        if float(np.max(np.abs(disp_grid))) > 10.0 or np.isnan(disp_grid).any():
-            return None
-
-        disp_x = cv2.resize(disp_grid[..., 0], (w, h), interpolation=cv2.INTER_CUBIC)
-        disp_y = cv2.resize(disp_grid[..., 1], (w, h), interpolation=cv2.INTER_CUBIC)
-
-        base_y, base_x = np.indices((h, w), dtype=np.float32)
-        denom = 1.0 / np.maximum(1e-6, H_inv[2, 0] * base_x + H_inv[2, 1] * base_y + H_inv[2, 2])
-        map_x = (H_inv[0, 0] * base_x + H_inv[0, 1] * base_y + H_inv[0, 2]) * denom + disp_x
-        map_y = (H_inv[1, 0] * base_x + H_inv[1, 1] * base_y + H_inv[1, 2]) * denom + disp_y
-
-        return map_x.astype(np.float32), map_y.astype(np.float32)
-    except Exception:
-        return None
+    return astroloom_rs.compute_tps_remap_grid_rs(
+        np.ascontiguousarray(src_pts, dtype=np.float32),
+        np.ascontiguousarray(dst_pts, dtype=np.float32),
+        np.ascontiguousarray(H_matrix, dtype=np.float64),
+        int(w), int(h), int(grid_size), int(min_inliers)
+    )
 
 
 def _load_memmap_master(path: str, h: int, w: int, raw_shape: tuple = None) -> Optional[np.ndarray]:
