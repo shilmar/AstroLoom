@@ -109,6 +109,7 @@ class RenderMixin:
         self._fit_view_pixmap = None
         self._fit_view_orig_rgb = None
         self._fit_view_mask_overlay = None
+        self._zoom_crop_cache = None
 
     def _generate_preview_proxy(self):
         self._invalidate_pipeline_caches()
@@ -202,7 +203,8 @@ class RenderMixin:
         starless: Optional[np.ndarray], 
         mask_3d: Optional[np.ndarray] = None, 
         is_full_res: bool = True,
-        crop_rect: Optional[tuple[int, int, int, int]] = None
+        crop_rect: Optional[tuple[int, int, int, int]] = None,
+        use_cache: Optional[bool] = None,
     ) -> Optional[np.ndarray]:
         """Aplica las mejoras lineales a la capa StarNet (Denoise, Claridad, Dehaze, Ondículas)."""
         if starless is None:
@@ -211,10 +213,13 @@ class RenderMixin:
         if crop_rect is None and getattr(self, 'is_zoomed_100', False):
             crop_rect = getattr(self, '_zoom_crop_rect', None)
 
+        allow_cache = (not is_full_res) if use_cache is None else bool(use_cache)
+
         # Bypass ultra-rápido si todos los filtros lineales están neutros
         is_neutral = (
             getattr(self, 'denoise_strength', 0.0) <= 1e-4 and
             abs(getattr(self, 'clarity_starless_val', 0.0)) <= 1e-4 and
+            abs(getattr(self, 'texture_clarity_starless_val', 0.0)) <= 1e-4 and
             abs(getattr(self, 'dehaze_starless_val', 0.0)) <= 1e-4 and
             abs(getattr(self, 'multiescala_estructura', 0.0)) <= 1e-4 and
             getattr(self, 'multiescala_fondo', 0.0) <= 1e-4 and
@@ -230,12 +235,14 @@ class RenderMixin:
             id(starless),
             id(mask_3d),
             id(getattr(self, '_cache_starless_ai', None)),
+            crop_rect,
             is_full_res,
             is_draft,
             round(float(getattr(self, 'denoise_strength', 0.0)), 4),
             round(float(getattr(self, 'denoise_color_strength', 0.5)), 4),
             round(float(getattr(self, 'denoise_masking', 0.5)), 4),
             round(float(getattr(self, 'clarity_starless_val', 0.0)), 4),
+            round(float(getattr(self, 'texture_clarity_starless_val', 0.0)), 4),
             round(float(getattr(self, 'dehaze_starless_val', 0.0)), 4),
             round(float(getattr(self, 'multiescala_estructura', 0.0)), 4),
             round(float(getattr(self, 'multiescala_fondo', 0.0)), 4),
@@ -247,7 +254,7 @@ class RenderMixin:
             round(float(getattr(self, 'orton_tint_strength', 0.5)), 4),
             getattr(self, 'orton_mode', 'screen')
         )
-        if not is_full_res and self._cache_starless_key == cache_key_full and self._cache_starless_linear is not None:
+        if allow_cache and self._cache_starless_key == cache_key_full and self._cache_starless_linear is not None:
             return self._cache_starless_linear
 
         # Verificación en caché de RAM Nivel 1b (Denoise, Claridad, Ondículas pre-Orton)
@@ -255,17 +262,19 @@ class RenderMixin:
             id(starless),
             id(mask_3d),
             id(getattr(self, '_cache_starless_ai', None)),
+            crop_rect,
             is_full_res,
             is_draft,
             round(float(getattr(self, 'denoise_strength', 0.0)), 4),
             round(float(getattr(self, 'denoise_color_strength', 0.5)), 4),
             round(float(getattr(self, 'denoise_masking', 0.5)), 4),
             round(float(getattr(self, 'clarity_starless_val', 0.0)), 4),
+            round(float(getattr(self, 'texture_clarity_starless_val', 0.0)), 4),
             round(float(getattr(self, 'dehaze_starless_val', 0.0)), 4),
             round(float(getattr(self, 'multiescala_estructura', 0.0)), 4),
             round(float(getattr(self, 'multiescala_fondo', 0.0)), 4),
         )
-        if not is_full_res and self._cache_starless_pre_key == cache_key_pre and self._cache_starless_pre_img is not None:
+        if allow_cache and self._cache_starless_pre_key == cache_key_pre and self._cache_starless_pre_img is not None:
             proc_starless = self._cache_starless_pre_img.copy()
             proc_mask_3d = mask_3d
         else:
@@ -361,7 +370,7 @@ class RenderMixin:
                     sky_mask=proc_mask_3d[..., 0] if proc_mask_3d is not None else None
                 )
 
-            if not is_full_res:
+            if allow_cache:
                 self._cache_starless_pre_key = cache_key_pre
                 self._cache_starless_pre_img = proc_starless.copy()
 
@@ -385,7 +394,7 @@ class RenderMixin:
             processed_starless = cv2.resize(proc_starless, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
         else:
             processed_starless = proc_starless
-            if not is_full_res:
+            if allow_cache:
                 self._cache_starless_key = cache_key_full
                 self._cache_starless_linear = processed_starless
 
@@ -429,55 +438,68 @@ class RenderMixin:
             y1 = max(0, min(h_f - ch, cy - ch // 2))
             x2 = x1 + cw
             y2 = y1 + ch
-            self._zoom_crop_rect = (x1, y1, x2, y2)
+            crop_rect = (x1, y1, x2, y2)
+            self._zoom_crop_rect = crop_rect
 
-            base = self.image_32bit[y1:y2, x1:x2].copy()
-            if self.image_starless is not None:
-                if self.image_starless.shape[:2] == (h_f, w_f):
-                    starless = self.image_starless[y1:y2, x1:x2].copy()
-                else:
-                    h_s, w_s = self.image_starless.shape[:2]
-                    sx = w_s / float(w_f)
-                    sy = h_s / float(h_f)
-                    sx1 = max(0, min(w_s, int(round(x1 * sx))))
-                    sy1 = max(0, min(h_s, int(round(y1 * sy))))
-                    sx2 = max(0, min(w_s, int(round(x2 * sx))))
-                    sy2 = max(0, min(h_s, int(round(y2 * sy))))
-                    sub = self.image_starless[sy1:sy2, sx1:sx2]
-                    starless = cv2.resize(sub, (cw, ch), interpolation=cv2.INTER_LINEAR) if sub.shape[:2] != (ch, cw) else sub.copy()
+            zc_key = (
+                crop_rect,
+                id(self.image_32bit),
+                id(self.image_starless),
+                id(self.image_stars),
+                id(self.current_mask),
+            )
+            cached_zc = getattr(self, '_zoom_crop_cache', None)
+            if cached_zc is not None and cached_zc[0] == zc_key:
+                base, starless, stars, mask_3d = cached_zc[1]
             else:
-                starless = None
+                base = self.image_32bit[y1:y2, x1:x2].copy()
+                if self.image_starless is not None:
+                    if self.image_starless.shape[:2] == (h_f, w_f):
+                        starless = self.image_starless[y1:y2, x1:x2].copy()
+                    else:
+                        h_s, w_s = self.image_starless.shape[:2]
+                        sx = w_s / float(w_f)
+                        sy = h_s / float(h_f)
+                        sx1 = max(0, min(w_s, int(round(x1 * sx))))
+                        sy1 = max(0, min(h_s, int(round(y1 * sy))))
+                        sx2 = max(0, min(w_s, int(round(x2 * sx))))
+                        sy2 = max(0, min(h_s, int(round(y2 * sy))))
+                        sub = self.image_starless[sy1:sy2, sx1:sx2]
+                        starless = cv2.resize(sub, (cw, ch), interpolation=cv2.INTER_LINEAR) if sub.shape[:2] != (ch, cw) else sub.copy()
+                else:
+                    starless = None
 
-            if self.image_stars is not None:
-                if self.image_stars.shape[:2] == (h_f, w_f):
-                    stars = self.image_stars[y1:y2, x1:x2].copy()
+                if self.image_stars is not None:
+                    if self.image_stars.shape[:2] == (h_f, w_f):
+                        stars = self.image_stars[y1:y2, x1:x2].copy()
+                    else:
+                        h_s, w_s = self.image_stars.shape[:2]
+                        sx = w_s / float(w_f)
+                        sy = h_s / float(h_f)
+                        sx1 = max(0, min(w_s, int(round(x1 * sx))))
+                        sy1 = max(0, min(h_s, int(round(y1 * sy))))
+                        sx2 = max(0, min(w_s, int(round(x2 * sx))))
+                        sy2 = max(0, min(h_s, int(round(y2 * sy))))
+                        sub = self.image_stars[sy1:sy2, sx1:sx2]
+                        stars = cv2.resize(sub, (cw, ch), interpolation=cv2.INTER_LINEAR) if sub.shape[:2] != (ch, cw) else sub.copy()
                 else:
-                    h_s, w_s = self.image_stars.shape[:2]
-                    sx = w_s / float(w_f)
-                    sy = h_s / float(h_f)
-                    sx1 = max(0, min(w_s, int(round(x1 * sx))))
-                    sy1 = max(0, min(h_s, int(round(y1 * sy))))
-                    sx2 = max(0, min(w_s, int(round(x2 * sx))))
-                    sy2 = max(0, min(h_s, int(round(y2 * sy))))
-                    sub = self.image_stars[sy1:sy2, sx1:sx2]
-                    stars = cv2.resize(sub, (cw, ch), interpolation=cv2.INTER_LINEAR) if sub.shape[:2] != (ch, cw) else sub.copy()
-            else:
-                stars = None
+                    stars = None
 
-            if self.current_mask is not None:
-                m_clean = self.current_mask[..., 0] if self.current_mask.ndim == 3 else self.current_mask
-                if m_clean.dtype != np.float32:
-                    m_clean = (m_clean / 255.0).astype(np.float32) if m_clean.dtype == np.uint8 else m_clean.astype(np.float32)
-                elif m_clean.max() > 1.05:
-                    m_clean = m_clean / 255.0
-                if m_clean.shape[:2] != (h_f, w_f):
-                    m_f = cv2.resize(m_clean, (w_f, h_f), interpolation=cv2.INTER_LINEAR)
+                if self.current_mask is not None:
+                    m_clean = self.current_mask[..., 0] if self.current_mask.ndim == 3 else self.current_mask
+                    if m_clean.dtype != np.float32:
+                        m_clean = (m_clean / 255.0).astype(np.float32) if m_clean.dtype == np.uint8 else m_clean.astype(np.float32)
+                    elif m_clean.max() > 1.05:
+                        m_clean = m_clean / 255.0
+                    if m_clean.shape[:2] != (h_f, w_f):
+                        m_f = cv2.resize(m_clean, (w_f, h_f), interpolation=cv2.INTER_LINEAR)
+                    else:
+                        m_f = m_clean
+                    m_sub = np.ascontiguousarray(m_f[y1:y2, x1:x2], dtype=np.float32)
+                    mask_3d = np.ascontiguousarray(np.repeat(m_sub[..., np.newaxis], 3, axis=2), dtype=np.float32)
                 else:
-                    m_f = m_clean
-                m_sub = np.ascontiguousarray(m_f[y1:y2, x1:x2], dtype=np.float32)
-                mask_3d = np.ascontiguousarray(np.repeat(m_sub[..., np.newaxis], 3, axis=2), dtype=np.float32)
-            else:
-                mask_3d = None
+                    mask_3d = None
+                self._zoom_crop_cache = (zc_key, (base, starless, stars, mask_3d))
             crop_active = True
         else:
             is_scrubbing = getattr(self, '_is_scrubbing_heavy_slider', False)
@@ -525,7 +547,8 @@ class RenderMixin:
             starless,
             mask_3d=mask_3d,
             is_full_res=(for_export or crop_active),
-            crop_rect=self._zoom_crop_rect if self.is_zoomed_100 else None
+            crop_rect=self._zoom_crop_rect if self.is_zoomed_100 else None,
+            use_cache=(not for_export),
         )
 
         # 4. Mezcla de capas
@@ -657,40 +680,51 @@ class RenderMixin:
 
         # Resolve starless and stars image slices
         if is_zoomed:
-            x1, y1, x2, y2 = self._zoom_crop_rect
-            if self.image_stars is not None and full_shape is not None:
-                h_f, w_f = full_shape
-                if self.image_stars.shape[:2] == (h_f, w_f):
-                    st_img = self.image_stars[y1:y2, x1:x2].copy()
-                else:
-                    h_s, w_s = self.image_stars.shape[:2]
-                    sx = w_s / float(w_f)
-                    sy = h_s / float(h_f)
-                    sx1 = max(0, min(w_s, int(round(x1 * sx))))
-                    sy1 = max(0, min(h_s, int(round(y1 * sy))))
-                    sx2 = max(0, min(w_s, int(round(x2 * sx))))
-                    sy2 = max(0, min(h_s, int(round(y2 * sy))))
-                    sub = self.image_stars[sy1:sy2, sx1:sx2]
-                    st_img = cv2.resize(sub, (x2 - x1, y2 - y1), interpolation=cv2.INTER_LINEAR) if sub.shape[:2] != (y2 - y1, x2 - x1) else sub.copy()
+            zc_key = (
+                self._zoom_crop_rect,
+                id(self.image_32bit),
+                id(self.image_starless),
+                id(self.image_stars),
+                id(self.current_mask),
+            )
+            cached_zc = getattr(self, '_zoom_crop_cache', None)
+            if cached_zc is not None and cached_zc[0] == zc_key:
+                _, sl_img, st_img, _ = cached_zc[1]
             else:
-                st_img = None
+                x1, y1, x2, y2 = self._zoom_crop_rect
+                if self.image_stars is not None and full_shape is not None:
+                    h_f, w_f = full_shape
+                    if self.image_stars.shape[:2] == (h_f, w_f):
+                        st_img = self.image_stars[y1:y2, x1:x2].copy()
+                    else:
+                        h_s, w_s = self.image_stars.shape[:2]
+                        sx = w_s / float(w_f)
+                        sy = h_s / float(h_f)
+                        sx1 = max(0, min(w_s, int(round(x1 * sx))))
+                        sy1 = max(0, min(h_s, int(round(y1 * sy))))
+                        sx2 = max(0, min(w_s, int(round(x2 * sx))))
+                        sy2 = max(0, min(h_s, int(round(y2 * sy))))
+                        sub = self.image_stars[sy1:sy2, sx1:sx2]
+                        st_img = cv2.resize(sub, (x2 - x1, y2 - y1), interpolation=cv2.INTER_LINEAR) if sub.shape[:2] != (y2 - y1, x2 - x1) else sub.copy()
+                else:
+                    st_img = None
 
-            if self.image_starless is not None and full_shape is not None:
-                h_f, w_f = full_shape
-                if self.image_starless.shape[:2] == (h_f, w_f):
-                    sl_img = self.image_starless[y1:y2, x1:x2].copy()
+                if self.image_starless is not None and full_shape is not None:
+                    h_f, w_f = full_shape
+                    if self.image_starless.shape[:2] == (h_f, w_f):
+                        sl_img = self.image_starless[y1:y2, x1:x2].copy()
+                    else:
+                        h_s, w_s = self.image_starless.shape[:2]
+                        sx = w_s / float(w_f)
+                        sy = h_s / float(h_f)
+                        sx1 = max(0, min(w_s, int(round(x1 * sx))))
+                        sy1 = max(0, min(h_s, int(round(y1 * sy))))
+                        sx2 = max(0, min(w_s, int(round(x2 * sx))))
+                        sy2 = max(0, min(h_s, int(round(y2 * sy))))
+                        sub = self.image_starless[sy1:sy2, sx1:sx2]
+                        sl_img = cv2.resize(sub, (x2 - x1, y2 - y1), interpolation=cv2.INTER_LINEAR) if sub.shape[:2] != (y2 - y1, x2 - x1) else sub.copy()
                 else:
-                    h_s, w_s = self.image_starless.shape[:2]
-                    sx = w_s / float(w_f)
-                    sy = h_s / float(h_f)
-                    sx1 = max(0, min(w_s, int(round(x1 * sx))))
-                    sy1 = max(0, min(h_s, int(round(y1 * sy))))
-                    sx2 = max(0, min(w_s, int(round(x2 * sx))))
-                    sy2 = max(0, min(h_s, int(round(y2 * sy))))
-                    sub = self.image_starless[sy1:sy2, sx1:sx2]
-                    sl_img = cv2.resize(sub, (x2 - x1, y2 - y1), interpolation=cv2.INTER_LINEAR) if sub.shape[:2] != (y2 - y1, x2 - x1) else sub.copy()
-            else:
-                sl_img = None
+                    sl_img = None
         elif is_full_res:
             st_img = self.image_stars if self.image_starless is not None else None
             sl_img = self.image_starless
@@ -723,15 +757,26 @@ class RenderMixin:
             bool(mask_layers and len(mask_layers) > 0),
         )
 
-        # Determinar hitos en caché reutilizables mediante caché LRU unificada por hash y dimensiones
+        is_scrubbing = getattr(self, '_is_scrubbing_heavy_slider', False) or getattr(self, '_is_scrubbing_layer_slider', False)
+        is_dragging_antihalo = getattr(self, '_is_dragging_antihalo', False)
+
+        # Determinar hitos en caché reutilizables mediante caché LRU unificada por hash y dimensiones.
+        # Durante scrubbing priorizamos hitos de alta calidad ya existentes (ej. Zoom 1:1 o capas)
+        # y caemos a hitos "_draft" cacheados para evitar recomputar todo el pipeline en cada tick.
         t_shape = target_img.shape[:2]
         if is_preview and hasattr(self, 'buffer_cache'):
-            pre_spatial = self.buffer_cache.get("spatial", key_spatial, t_shape)
-            pre_graded = self.buffer_cache.get("graded", key_graded, t_shape) if pre_spatial is None else None
-            pre_stretched = self.buffer_cache.get("stretch", key_stretch, t_shape) if (pre_spatial is None and pre_graded is None) else None
-            pre_linear = self.buffer_cache.get("linear", key_linear, t_shape) if (pre_spatial is None and pre_graded is None and pre_stretched is None) else None
-            pre_pre_lp = self.buffer_cache.get("pre_lp", key_pre_lp, t_shape) if (pre_spatial is None and pre_graded is None and pre_stretched is None and pre_linear is None) else None
-            pre_stars = self.buffer_cache.get("stars", key_stars, t_shape)
+            def _bc_get(stage: str, key: Any, has_draft_variant: bool = True) -> Optional[np.ndarray]:
+                val = self.buffer_cache.get(stage, key, t_shape)
+                if val is None and is_scrubbing and has_draft_variant:
+                    val = self.buffer_cache.get(f"{stage}_draft", key, t_shape)
+                return val
+
+            pre_spatial = _bc_get("spatial", key_spatial)
+            pre_graded = _bc_get("graded", key_graded) if pre_spatial is None else None
+            pre_stretched = _bc_get("stretch", key_stretch, False) if (pre_spatial is None and pre_graded is None) else None
+            pre_linear = _bc_get("linear", key_linear) if (pre_spatial is None and pre_graded is None and pre_stretched is None) else None
+            pre_pre_lp = _bc_get("pre_lp", key_pre_lp, False) if (pre_spatial is None and pre_graded is None and pre_stretched is None and pre_linear is None) else None
+            pre_stars = _bc_get("stars", key_stars, False)
         else:
             pre_spatial = pre_graded = pre_stretched = pre_linear = pre_pre_lp = pre_stars = None
 
@@ -754,9 +799,6 @@ class RenderMixin:
         # Mask layers (instantánea superficial rápida para aislar el hilo de render)
         raw_layers = self.mask_layers_widget.layers if (apply_mask_layers and hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.layers) else None
         mask_layers = [l.shallow_snapshot() for l in raw_layers] if raw_layers else None
-
-        is_scrubbing = getattr(self, '_is_scrubbing_heavy_slider', False) or getattr(self, '_is_scrubbing_layer_slider', False)
-        is_dragging_antihalo = getattr(self, '_is_dragging_antihalo', False)
 
         cached_gnd_ai = self._cache_ground_ai if getattr(self, 'gnd_ai_denoise_enabled', False) else None
 
@@ -817,14 +859,15 @@ class RenderMixin:
         )
 
         if is_preview:
+            if hasattr(self, 'buffer_cache'):
+                sfx = "_draft" if is_scrubbing else ""
+                self.buffer_cache.put("pre_lp", key_pre_lp, t_shape, out_pre_lp)
+                self.buffer_cache.put(f"linear{sfx}", key_linear, t_shape, out_lin)
+                self.buffer_cache.put("stretch", key_stretch, t_shape, out_str)
+                self.buffer_cache.put(f"graded{sfx}", key_graded, t_shape, out_grd)
+                self.buffer_cache.put(f"spatial{sfx}", key_spatial, t_shape, out_spt)
+                self.buffer_cache.put("stars", key_stars, t_shape, out_stars)
             if not is_scrubbing:
-                if hasattr(self, 'buffer_cache'):
-                    self.buffer_cache.put("pre_lp", key_pre_lp, t_shape, out_pre_lp)
-                    self.buffer_cache.put("linear", key_linear, t_shape, out_lin)
-                    self.buffer_cache.put("stretch", key_stretch, t_shape, out_str)
-                    self.buffer_cache.put("graded", key_graded, t_shape, out_grd)
-                    self.buffer_cache.put("spatial", key_spatial, t_shape, out_spt)
-                    self.buffer_cache.put("stars", key_stars, t_shape, out_stars)
 
                 self._cache_ms_pre_lp_key = key_pre_lp
                 self._cache_ms_pre_lp_img = out_pre_lp
@@ -853,6 +896,36 @@ class RenderMixin:
 
         return final_img
 
+    def _compute_before_image(self) -> Optional[np.ndarray]:
+        """Calcula la imagen de referencia 'Antes' desde la toma cruda original (nunca starless estirado)."""
+        if self.image_32bit is None:
+            return None
+        if self.is_zoomed_100 and getattr(self, '_zoom_crop_rect', None) is not None:
+            x1, y1, x2, y2 = self._zoom_crop_rect
+            cached_zc = getattr(self, '_zoom_crop_cache', None)
+            if cached_zc is not None and cached_zc[0][0] == self._zoom_crop_rect and cached_zc[0][1] == id(self.image_32bit):
+                raw_src = cached_zc[1][0]
+            else:
+                raw_src = self.image_32bit[y1:y2, x1:x2]
+        else:
+            raw_src = self.preview_proxy if self.preview_proxy is not None else self.image_32bit
+
+        if raw_src is None:
+            return None
+
+        if getattr(self, "initial_stretch_mode", "mtf") == "ghs":
+            return apply_ghs_stretch(
+                raw_src,
+                sp=getattr(self, "initial_ghs_sp", 0.02),
+                d=getattr(self, "initial_ghs_d", 5.0),
+                b=getattr(self, "initial_ghs_b", 2.0),
+                hp=getattr(self, "initial_ghs_hp", 0.0),
+                lp=getattr(self, "initial_ghs_lp", 0.0),
+                bp=getattr(self, "initial_ghs_bp", 0.0),
+                color_mode=getattr(self, "initial_ghs_color_mode", "luma"),
+            )
+        return manual_stretch(raw_src, black_point=self.initial_bp, midtone=self.initial_mtf)
+
     def _on_async_preview_ready(self, req_id: int, result: Any):
         if result is None:
             return
@@ -866,15 +939,16 @@ class RenderMixin:
             if is_scrubbing and not getattr(self, '_is_slider_pressed', False) and not getattr(self, '_is_scrubbing_heavy_slider', False) and not getattr(self, '_is_scrubbing_layer_slider', False):
                 # Descartar solicitud de borrador tardía si el usuario ya soltó el deslizador
                 return
+            t_shape = final_img.shape[:2] if hasattr(final_img, 'shape') else ()
+            if hasattr(self, 'buffer_cache') and t_shape:
+                sfx = "_draft" if is_scrubbing else ""
+                self.buffer_cache.put("pre_lp", key_pre_lp, t_shape, out_pre_lp)
+                self.buffer_cache.put(f"linear{sfx}", key_linear, t_shape, out_lin)
+                self.buffer_cache.put("stretch", key_stretch, t_shape, out_str)
+                self.buffer_cache.put(f"graded{sfx}", key_graded, t_shape, out_grd)
+                self.buffer_cache.put(f"spatial{sfx}", key_spatial, t_shape, out_spt)
+                self.buffer_cache.put("stars", key_stars, t_shape, out_stars)
             if not is_scrubbing:
-                t_shape = final_img.shape[:2] if hasattr(final_img, 'shape') else ()
-                if hasattr(self, 'buffer_cache') and t_shape:
-                    self.buffer_cache.put("pre_lp", key_pre_lp, t_shape, out_pre_lp)
-                    self.buffer_cache.put("linear", key_linear, t_shape, out_lin)
-                    self.buffer_cache.put("stretch", key_stretch, t_shape, out_str)
-                    self.buffer_cache.put("graded", key_graded, t_shape, out_grd)
-                    self.buffer_cache.put("spatial", key_spatial, t_shape, out_spt)
-                    self.buffer_cache.put("stars", key_stars, t_shape, out_stars)
 
                 self._cache_ms_pre_lp_key = key_pre_lp
                 self._cache_ms_pre_lp_img = out_pre_lp
@@ -904,9 +978,23 @@ class RenderMixin:
         self._last_rendered_preview = final_img
         base_to_render = getattr(self, '_last_async_base', None)
         if base_to_render is not None:
-            full_shape = self.image_32bit.shape[:2] if self.image_32bit is not None else None
-            self.canvas.set_external_crop(None, full_shape)
+            if self.is_zoomed_100 and getattr(self, '_zoom_crop_rect', None) is not None and self.image_32bit is not None:
+                h_f, w_f = self.image_32bit.shape[:2]
+                rx, ry = self.zoom_rel_coords
+                self.canvas.set_external_crop(
+                    self._zoom_crop_rect,
+                    (h_f, w_f),
+                    sensor_center=(rx * w_f, ry * h_f)
+                )
+            else:
+                full_shape = self.image_32bit.shape[:2] if self.image_32bit is not None else None
+                self.canvas.set_external_crop(None, full_shape)
             self.canvas.load_image(base_to_render, display_stretched=final_img)
+
+            if self.is_zoomed_100 and self.canvas.split_view_enabled:
+                stretched_before = self._compute_before_image()
+                if stretched_before is not None:
+                    self.canvas.set_before_image(stretched_before)
 
         # Actualización fluida y controlada del histograma en vivo
         if not self.is_zoomed_100 and hasattr(self, '_hist_throttle_timer'):
@@ -942,13 +1030,16 @@ class RenderMixin:
                     if not self._preview_throttle_timer.isActive():
                         self._preview_throttle_timer.start(40)
                 else:
-                    self._preview_throttle_timer.start(16)
+                    if not self._preview_throttle_timer.isActive():
+                        self._preview_throttle_timer.start(16)
             else:
                 self._do_update_stretch_preview(synchronous=False)
                 self._refresh_histograms_now()
 
     def _on_refine_preview_timeout(self):
         """Refina progresivamente la previsualización al nivel de alta calidad cuando cesa el arrastre."""
+        if getattr(self, '_is_slider_pressed', False):
+            return
         if getattr(self, '_is_scrubbing_heavy_slider', False) or getattr(self, '_is_scrubbing_layer_slider', False):
             self._is_scrubbing_heavy_slider = False
             self._is_scrubbing_layer_slider = False
@@ -1069,7 +1160,7 @@ class RenderMixin:
             else:
                 if synchronous and getattr(self, 'async_pipeline', None) is not None:
                     self.async_pipeline.cancel_pending()
-                use_async = (not synchronous and not self.is_zoomed_100 and getattr(self, 'async_pipeline', None) is not None)
+                use_async = (not synchronous and getattr(self, 'async_pipeline', None) is not None)
                 stretched = self._apply_pipeline_on_image(
                     base_to_render,
                     precomputed_mask=active_mask,
@@ -1097,20 +1188,9 @@ class RenderMixin:
 
                 # Sincronización del comparador Antes / Después en modo Zoom 1:1
                 if self.is_zoomed_100 and self.canvas.split_view_enabled:
-                    if getattr(self, "initial_stretch_mode", "mtf") == "ghs":
-                        stretched_before = apply_ghs_stretch(
-                            base_to_render,
-                            sp=getattr(self, "initial_ghs_sp", 0.02),
-                            d=getattr(self, "initial_ghs_d", 5.0),
-                            b=getattr(self, "initial_ghs_b", 2.0),
-                            hp=getattr(self, "initial_ghs_hp", 0.0),
-                            lp=getattr(self, "initial_ghs_lp", 0.0),
-                            bp=getattr(self, "initial_ghs_bp", 0.0),
-                            color_mode=getattr(self, "initial_ghs_color_mode", "luma")
-                        )
-                    else:
-                        stretched_before = manual_stretch(base_to_render, black_point=self.initial_bp, midtone=self.initial_mtf)
-                    self.canvas.set_before_image(stretched_before)
+                    stretched_before = self._compute_before_image()
+                    if stretched_before is not None:
+                        self.canvas.set_before_image(stretched_before)
 
                 # Actualización fluida y controlada del histograma en vivo
                 if not self.is_zoomed_100 and hasattr(self, '_hist_throttle_timer'):

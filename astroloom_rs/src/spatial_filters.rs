@@ -495,47 +495,68 @@ pub fn suppress_horizon_halos_rs<'py>(
 
     let out_vec = py.allow_threads(|| {
         let total = h * w;
-        let mut buf = vec![0.0f32; total * 3];
+        let img_owned;
+        let img_slice: &[f32] = match img.as_slice() {
+            Some(s) => s,
+            None => {
+                img_owned = img.to_owned();
+                img_owned.as_slice().unwrap()
+            }
+        };
+        let mask_owned;
+        let mask_slice: &[f32] = match mask.as_slice() {
+            Some(s) => s,
+            None => {
+                mask_owned = mask.to_owned();
+                mask_owned.as_slice().unwrap()
+            }
+        };
 
-        for y in 0..h {
-            for x in 0..w {
-                let idx = (y * w + x) * 3;
-                buf[idx] = unsafe { *img.uget((y, x, 0)) };
-                buf[idx + 1] = unsafe { *img.uget((y, x, 1)) };
-                buf[idx + 2] = unsafe { *img.uget((y, x, 2)) };
+        let mut buf = img_slice.to_vec();
+
+        let r = radius.max(1);
+        let r_sq = r * r;
+        let mut offsets: Vec<(i32, i32)> = Vec::new();
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if (dy != 0 || dx != 0) && (dy * dy + dx * dx) <= r_sq {
+                    offsets.push((dy, dx));
+                }
             }
         }
 
-        let r = radius.max(1);
-        let r_sq = (r * r) as f32;
-
-        // Detect boundary: pixels where dilation - erosion of binary mask > 0
-        let mut min_y = h;
-        let mut max_y = 0;
-        let mut min_x = w;
-        let mut max_x = 0;
-        let mut has_boundary = false;
-
-        let mut boundary = vec![0.0f32; total];
-
-        for y in 0..h {
-            for x in 0..w {
-                let mut has_sky = false;
-                let mut has_gnd = false;
-
-                for dy in -r..=r {
-                    for dx in -r..=r {
-                        if (dy * dy + dx * dx) as f32 <= r_sq {
-                            let ny = (y as i32 + dy).clamp(0, (h - 1) as i32) as usize;
-                            let nx = (x as i32 + dx).clamp(0, (w - 1) as i32) as usize;
-                            let m = unsafe { *mask.uget((ny, nx)) } > 0.5;
-                            if m { has_sky = true; } else { has_gnd = true; }
+        // Parallel boundary detection with early exit per pixel
+        let mut boundary = vec![0u8; total];
+        boundary
+            .par_chunks_mut(w)
+            .enumerate()
+            .for_each(|(y, row_b)| {
+                let yi = y as i32;
+                let h_max = (h - 1) as i32;
+                let w_max = (w - 1) as i32;
+                for x in 0..w {
+                    let center_sky = mask_slice[y * w + x] > 0.5;
+                    let xi = x as i32;
+                    for &(dy, dx) in &offsets {
+                        let ny = (yi + dy).clamp(0, h_max) as usize;
+                        let nx = (xi + dx).clamp(0, w_max) as usize;
+                        if (mask_slice[ny * w + nx] > 0.5) != center_sky {
+                            row_b[x] = 1;
+                            break;
                         }
                     }
                 }
+            });
 
-                if has_sky && has_gnd {
-                    boundary[y * w + x] = 1.0;
+        let mut min_y = h;
+        let mut max_y = 0usize;
+        let mut min_x = w;
+        let mut max_x = 0usize;
+        let mut has_boundary = false;
+        for y in 0..h {
+            let row_off = y * w;
+            for x in 0..w {
+                if boundary[row_off + x] != 0 {
                     has_boundary = true;
                     if y < min_y { min_y = y; }
                     if y > max_y { max_y = y; }
@@ -558,112 +579,108 @@ pub fn suppress_horizon_halos_rs<'py>(
         let sub_h = y2 - y1;
         let sub_w = x2 - x1;
 
-        // Compute inner ground in sub-region (ground eroded by r)
+        // Compute inner ground in sub-region (ground eroded by r) in parallel
         let mut inner_gnd = vec![false; sub_h * sub_w];
-        let mut any_inner_gnd = false;
-
-        for sy in 0..sub_h {
-            let y = y1 + sy;
-            for sx in 0..sub_w {
-                let x = x1 + sx;
-                let mut is_pure_gnd = true;
-                for dy in -r..=r {
-                    for dx in -r..=r {
-                        if (dy * dy + dx * dx) as f32 <= r_sq {
-                            let ny = (y as i32 + dy).clamp(0, (h - 1) as i32) as usize;
-                            let nx = (x as i32 + dx).clamp(0, (w - 1) as i32) as usize;
-                            if unsafe { *mask.uget((ny, nx)) } > 0.5 {
-                                is_pure_gnd = false;
-                                break;
-                            }
+        inner_gnd
+            .par_chunks_mut(sub_w)
+            .enumerate()
+            .for_each(|(sy, row_ig)| {
+                let y = y1 + sy;
+                let yi = y as i32;
+                let h_max = (h - 1) as i32;
+                let w_max = (w - 1) as i32;
+                for sx in 0..sub_w {
+                    let x = x1 + sx;
+                    if mask_slice[y * w + x] > 0.5 {
+                        continue;
+                    }
+                    let xi = x as i32;
+                    let mut is_pure_gnd = true;
+                    for &(dy, dx) in &offsets {
+                        let ny = (yi + dy).clamp(0, h_max) as usize;
+                        let nx = (xi + dx).clamp(0, w_max) as usize;
+                        if mask_slice[ny * w + nx] > 0.5 {
+                            is_pure_gnd = false;
+                            break;
                         }
                     }
-                    if !is_pure_gnd { break; }
+                    row_ig[sx] = is_pure_gnd;
                 }
-                if is_pure_gnd {
-                    inner_gnd[sy * sub_w + sx] = true;
-                    any_inner_gnd = true;
-                }
-            }
-        }
+            });
+        let any_inner_gnd = inner_gnd.iter().any(|&v| v);
 
-        // Bounding-box minimum filter for ground halo clamping
-        for sy in 0..sub_h {
-            let y = y1 + sy;
-            for sx in 0..sub_w {
-                let x = x1 + sx;
-                let idx = y * w + x;
-                let b_val = boundary[idx];
-                let m_val = unsafe { *mask.uget((y, x)) };
+        // Parallel bounding-box clamping reading from immutable img_slice
+        let h_max = (h - 1) as i32;
+        let w_max = (w - 1) as i32;
+        buf[y1 * w * 3..y2 * w * 3]
+            .par_chunks_mut(w * 3)
+            .enumerate()
+            .for_each(|(sy, row_out)| {
+                let y = y1 + sy;
+                let yi = y as i32;
+                for sx in 0..sub_w {
+                    let x = x1 + sx;
+                    let idx = y * w + x;
+                    if boundary[idx] == 0 {
+                        continue;
+                    }
+                    let m_val = mask_slice[idx];
+                    let xi = x as i32;
+                    let c_row = x * 3;
+                    let src_r = img_slice[idx * 3];
+                    let src_g = img_slice[idx * 3 + 1];
+                    let src_b = img_slice[idx * 3 + 2];
 
-                if b_val > 0.0 && m_val < 0.5 {
-                    // Search local ground minimum over inner_gnd within radius r
-                    let mut min_r = 1.0f32;
-                    let mut min_g = 1.0f32;
-                    let mut min_b = 1.0f32;
-
-                    for dy in -r..=r {
-                        for dx in -r..=r {
-                            if (dy * dy + dx * dx) as f32 <= r_sq {
-                                let ny = (y as i32 + dy).clamp(0, (h - 1) as i32) as usize;
-                                let nx = (x as i32 + dx).clamp(0, (w - 1) as i32) as usize;
-                                let is_gnd_candidate = if any_inner_gnd {
-                                    if ny >= y1 && ny < y2 && nx >= x1 && nx < x2 {
-                                        inner_gnd[(ny - y1) * sub_w + (nx - x1)]
-                                    } else {
-                                        let val = unsafe { *mask.uget((ny, nx)) };
-                                        val <= 0.5
-                                    }
+                    if m_val < 0.5 {
+                        let mut min_r = 1.0f32;
+                        let mut min_g = 1.0f32;
+                        let mut min_b = 1.0f32;
+                        for &(dy, dx) in &offsets {
+                            let ny = (yi + dy).clamp(0, h_max) as usize;
+                            let nx = (xi + dx).clamp(0, w_max) as usize;
+                            let is_gnd_candidate = if any_inner_gnd {
+                                if ny >= y1 && ny < y2 && nx >= x1 && nx < x2 {
+                                    inner_gnd[(ny - y1) * sub_w + (nx - x1)]
                                 } else {
-                                    let val = unsafe { *mask.uget((ny, nx)) };
-                                    val <= 0.5
-                                };
-
-                                if is_gnd_candidate {
-                                    let cidx = (ny * w + nx) * 3;
-                                    min_r = min_r.min(buf[cidx]);
-                                    min_g = min_g.min(buf[cidx + 1]);
-                                    min_b = min_b.min(buf[cidx + 2]);
+                                    mask_slice[ny * w + nx] <= 0.5
                                 }
+                            } else {
+                                mask_slice[ny * w + nx] <= 0.5
+                            };
+                            if is_gnd_candidate {
+                                let cidx = (ny * w + nx) * 3;
+                                min_r = min_r.min(img_slice[cidx]);
+                                min_g = min_g.min(img_slice[cidx + 1]);
+                                min_b = min_b.min(img_slice[cidx + 2]);
                             }
                         }
-                    }
-
-                    let w_blend = ((1.0 - m_val) * strength).clamp(0.0, 1.0);
-                    let cidx = idx * 3;
-                    buf[cidx] = buf[cidx] * (1.0 - w_blend) + min_r.min(buf[cidx]) * w_blend;
-                    buf[cidx + 1] = buf[cidx + 1] * (1.0 - w_blend) + min_g.min(buf[cidx + 1]) * w_blend;
-                    buf[cidx + 2] = buf[cidx + 2] * (1.0 - w_blend) + min_b.min(buf[cidx + 2]) * w_blend;
-                } else if suppress_dark_halos && b_val > 0.0 && m_val >= 0.5 {
-                    // Sky maximum filter
-                    let mut max_r = 0.0f32;
-                    let mut max_g = 0.0f32;
-                    let mut max_b = 0.0f32;
-
-                    for dy in -r..=r {
-                        for dx in -r..=r {
-                            if (dy * dy + dx * dx) as f32 <= r_sq {
-                                let ny = (y as i32 + dy).clamp(0, (h - 1) as i32) as usize;
-                                let nx = (x as i32 + dx).clamp(0, (w - 1) as i32) as usize;
-                                let val = unsafe { *mask.uget((ny, nx)) };
-                                if val >= 0.5 {
-                                    let cidx = (ny * w + nx) * 3;
-                                    max_r = max_r.max(buf[cidx]);
-                                    max_g = max_g.max(buf[cidx + 1]);
-                                    max_b = max_b.max(buf[cidx + 2]);
-                                }
+                        let w_blend = ((1.0 - m_val) * strength).clamp(0.0, 1.0);
+                        let inv_w = 1.0 - w_blend;
+                        row_out[c_row] = src_r * inv_w + min_r.min(src_r) * w_blend;
+                        row_out[c_row + 1] = src_g * inv_w + min_g.min(src_g) * w_blend;
+                        row_out[c_row + 2] = src_b * inv_w + min_b.min(src_b) * w_blend;
+                    } else if suppress_dark_halos {
+                        let mut max_r = 0.0f32;
+                        let mut max_g = 0.0f32;
+                        let mut max_b = 0.0f32;
+                        for &(dy, dx) in &offsets {
+                            let ny = (yi + dy).clamp(0, h_max) as usize;
+                            let nx = (xi + dx).clamp(0, w_max) as usize;
+                            if mask_slice[ny * w + nx] >= 0.5 {
+                                let cidx = (ny * w + nx) * 3;
+                                max_r = max_r.max(img_slice[cidx]);
+                                max_g = max_g.max(img_slice[cidx + 1]);
+                                max_b = max_b.max(img_slice[cidx + 2]);
                             }
                         }
+                        let w_blend = (m_val * strength).clamp(0.0, 1.0);
+                        let inv_w = 1.0 - w_blend;
+                        row_out[c_row] = src_r * inv_w + max_r.max(src_r) * w_blend;
+                        row_out[c_row + 1] = src_g * inv_w + max_g.max(src_g) * w_blend;
+                        row_out[c_row + 2] = src_b * inv_w + max_b.max(src_b) * w_blend;
                     }
-
-                    let w_blend = (m_val * strength).clamp(0.0, 1.0);
-                    let cidx = idx * 3;
-                    buf[cidx] = buf[cidx] * (1.0 - w_blend) + max_r.max(buf[cidx]) * w_blend;
-                    buf[cidx + 1] = buf[cidx + 1] * (1.0 - w_blend) + max_g.max(buf[cidx + 1]) * w_blend;
-                    buf[cidx + 2] = buf[cidx + 2] * (1.0 - w_blend) + max_b.max(buf[cidx + 2]) * w_blend;
                 }
-            }
-        }
+            });
 
         buf
     });

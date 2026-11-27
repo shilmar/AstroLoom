@@ -120,17 +120,38 @@ def apply_astronomical_orton(
     sigma1 = max(1.0, float(radius))
     sigma2 = max(2.5, float(radius * 2.5))
 
-    # Optimizamos el cálculo reduciendo resolución si sigma es amplio
-    if (min(h, w) > 250 and sigma1 > 3.0):
-        scale = 0.5
-        small_w = max(64, int(w * scale))
-        small_h = max(64, int(h * scale))
-        small_src = cv2.resize(glow_source, (small_w, small_h), interpolation=cv2.INTER_AREA)
+    # Optimizamos el cálculo reduciendo resolución de forma adaptativa según sigma
+    min_dim = min(h, w)
+    if min_dim > 400 and sigma1 > 12.0:
+        scale1 = 0.25
+    elif min_dim > 250 and sigma1 > 3.0:
+        scale1 = 0.5
+    else:
+        scale1 = 1.0
 
-        blur1 = cv2.GaussianBlur(small_src, (0, 0), sigmaX=sigma1 * scale, sigmaY=sigma1 * scale)
-        blur2 = cv2.GaussianBlur(small_src, (0, 0), sigmaX=sigma2 * scale, sigmaY=sigma2 * scale)
+    if scale1 < 1.0:
+        s1_w = max(64, int(w * scale1))
+        s1_h = max(64, int(h * scale1))
+        src1 = cv2.resize(glow_source, (s1_w, s1_h), interpolation=cv2.INTER_AREA)
+        blur1 = cv2.GaussianBlur(src1, (0, 0), sigmaX=sigma1 * scale1, sigmaY=sigma1 * scale1)
+
+        if min_dim > 512 and sigma2 > 32.0:
+            scale2 = 0.125
+        elif min_dim > 400 and sigma2 > 12.0:
+            scale2 = 0.25
+        else:
+            scale2 = scale1
+
+        if scale2 < scale1:
+            s2_w = max(32, int(w * scale2))
+            s2_h = max(32, int(h * scale2))
+            src2 = cv2.resize(src1, (s2_w, s2_h), interpolation=cv2.INTER_AREA)
+            blur2_s = cv2.GaussianBlur(src2, (0, 0), sigmaX=sigma2 * scale2, sigmaY=sigma2 * scale2)
+            blur2 = cv2.resize(blur2_s, (s1_w, s1_h), interpolation=cv2.INTER_LINEAR)
+        else:
+            blur2 = cv2.GaussianBlur(src1, (0, 0), sigmaX=sigma2 * scale1, sigmaY=sigma2 * scale1)
+
         small_bloom = (blur1 * 0.65) + (blur2 * 0.35)
-
         bloom = cv2.resize(small_bloom, (w, h), interpolation=cv2.INTER_LINEAR)
     else:
         blur1 = cv2.GaussianBlur(glow_source, (0, 0), sigmaX=sigma1, sigmaY=sigma1)

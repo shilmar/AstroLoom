@@ -323,13 +323,14 @@ def richardson_lucy_deconvolve(
     if damping > 0.0:
         med_smooth = cv2.medianBlur((work_channel * 255.0).astype(np.uint8), 3).astype(np.float32) / 255.0
         high_freq = np.abs(work_channel - med_smooth)
-        sigma_noise = float(1.4826 * np.median(high_freq))
+        hf_sample = high_freq[::4, ::4] if high_freq.size >= 16384 else high_freq
+        sigma_noise = float(1.4826 * np.median(hf_sample))
         noise_threshold_sq = float((damping * max(0.002, sigma_noise)) ** 2)
     else:
         noise_threshold_sq = 0.0
 
     # 3. Soporte local de Deringing (máscara de protección de núcleos estelares)
-    if deringing > 0.0:
+    if deringing > 0.0 and np.any(work_channel > 0.65):
         k_star = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         bright_star_mask = cv2.dilate((work_channel > 0.65).astype(np.float32), k_star)
         deringing_floor = work_channel * (1.0 - deringing)
@@ -337,12 +338,9 @@ def richardson_lucy_deconvolve(
         bright_star_mask = None
         deringing_floor = None
 
-    # Inicialización de tensores persistentes en VRAM para evitar saturación del bus PCIe
+    # Inicialización de tensores persistentes en VRAM (escalares directos en kernels OpenCL)
     u_work = None
     u_est = None
-    eps_umat = None
-    ones_umat = None
-    damp_const_umat = None
     u_star_mask = None
     u_inv_star_mask = None
     u_deringing_floor = None
@@ -353,10 +351,6 @@ def richardson_lucy_deconvolve(
             psf_flip_umat = cv2.UMat(psf_flipped)
             u_work = cv2.UMat(work_channel)
             u_est = cv2.UMat(work_channel)
-            eps_umat = cv2.UMat(np.full_like(work_channel, 1e-6))
-            ones_umat = cv2.UMat(np.ones_like(work_channel))
-            if noise_threshold_sq > 0.0:
-                damp_const_umat = cv2.UMat(np.full_like(work_channel, noise_threshold_sq + 1e-7))
             if bright_star_mask is not None and deringing_floor is not None:
                 u_star_mask = cv2.UMat(bright_star_mask)
                 u_inv_star_mask = cv2.UMat(1.0 - bright_star_mask)
@@ -365,7 +359,7 @@ def richardson_lucy_deconvolve(
             use_opencl = False
 
     # 4. Bucle iterativo Richardson-Lucy
-    est = work_channel.copy()
+    est = None if use_opencl else work_channel.copy()
 
     # Si no usamos GPU/OpenCL y el crate Rust está disponible, ejecutamos el solver nativo (Rayon)
     use_rust_engine = (not use_opencl) and HAS_RUST and hasattr(astroloom_rs, "richardson_lucy_deconv_rs")
@@ -414,18 +408,18 @@ def richardson_lucy_deconvolve(
                 pct = int(((it + 1) / float(iterations)) * 100.0)
                 progress_callback(pct, f"Deconvolución Richardson-Lucy: iteración {it + 1}/{iterations}")
 
-            # Convolución y corrección persistente en VRAM (OpenCL UMat con fallback automático a CPU)
+            # Convolución y corrección persistente en VRAM (OpenCL UMat con escalares directos)
             if use_opencl:
                 try:
                     u_conv = cv2.filter2D(u_est, -1, psf_umat, borderType=cv2.BORDER_REFLECT)
-                    u_ratio = cv2.divide(u_work, cv2.add(u_conv, eps_umat))
+                    u_ratio = cv2.divide(u_work, cv2.add(u_conv, 1e-6))
                     u_bproj = cv2.filter2D(u_ratio, -1, psf_flip_umat, borderType=cv2.BORDER_REFLECT)
                     if noise_threshold_sq > 0.0:
-                        u_delta = cv2.subtract(u_bproj, ones_umat)
+                        u_delta = cv2.subtract(u_bproj, 1.0)
                         u_delta_sq = cv2.multiply(u_delta, u_delta)
-                        u_denom = cv2.add(u_delta_sq, damp_const_umat)
+                        u_denom = cv2.add(u_delta_sq, float(noise_threshold_sq + 1e-7))
                         u_damp_w = cv2.divide(u_delta_sq, u_denom)
-                        u_update = cv2.add(ones_umat, cv2.multiply(u_delta, u_damp_w))
+                        u_update = cv2.add(cv2.multiply(u_delta, u_damp_w), 1.0)
                     else:
                         u_update = u_bproj
                     u_est = cv2.multiply(u_est, u_update)

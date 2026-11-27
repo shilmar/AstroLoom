@@ -58,7 +58,8 @@ def compute_edge_mask(
         edge_mask = np.ones((h, w), dtype=np.float32)
     else:
         # Referencia robusta al percentil 99.5 de magnitud para escala invariante
-        p99 = float(np.percentile(mag_smooth, 99.5)) if mag_smooth.size > 0 else 0.5
+        mag_sample = mag_smooth[::4, ::4] if mag_smooth.size >= 16384 else mag_smooth
+        p99 = float(np.percentile(mag_sample, 99.5)) if mag_sample.size > 0 else 0.5
         m_ref = max(0.08, p99)
         threshold = (float(masking) / 100.0) * m_ref
         trans_width = max(1e-4, 0.15 * m_ref)

@@ -428,11 +428,27 @@ class HistoryPresetsMixin:
         self._is_dragging_deconv = False
 
     def _on_layer_slider_pressed(self):
-        """Activa el modo de interacción para capas locales manteniendo la resolución de vista previa nativa."""
+        """Activa el modo de interacción para capas locales, bajando a Draft si hay muchas capas/filtros encima."""
         if hasattr(self, 'async_pipeline'):
             self.async_pipeline.cancel_pending()
+        use_draft = False
+        if hasattr(self, 'mask_layers_widget') and self.mask_layers_widget is not None:
+            sel = self.mask_layers_widget.get_selected_layer()
+            layers = getattr(self.mask_layers_widget, 'layers', [])
+            if sel is not None and layers:
+                idx = next((i for i, l in enumerate(layers) if l.id == sel.id), 0)
+                above = [l for l in layers[:idx] if l.enabled and l.opacity > 1e-4]
+                affected = above + [sel]
+                has_spatial = any(
+                    abs(getattr(l, 'clarity', 0.0)) > 1e-3
+                    or abs(getattr(l, 'texture_clarity', 0.0)) > 1e-3
+                    or getattr(l, 'sharp_amount', 0.0) > 1e-3
+                    or (getattr(l, 'refine_edges', False) and getattr(l, 'refine_strength', 0.0) > 1e-4)
+                    for l in affected
+                )
+                use_draft = (len(above) >= 3) or has_spatial
         self._is_slider_pressed = True
-        self._is_scrubbing_heavy_slider = False
+        self._is_scrubbing_heavy_slider = use_draft
         self._is_scrubbing_lut_slider = False
         self._is_scrubbing_layer_slider = True
         self._is_dragging_deconv = False

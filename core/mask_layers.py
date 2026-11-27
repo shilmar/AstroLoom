@@ -792,13 +792,52 @@ def compute_layer_mask(
     if layer.inverted:
         m = 1.0 - m
 
-    # Refinamiento de bordes por Filtro Cruzado Guiado (guided_cross de LightCraft)
+    # Refinamiento de bordes por Filtro Cruzado Guiado (guided_cross de LightCraft) con caché
     if getattr(layer, "refine_edges", False) and getattr(layer, "refine_strength", 0.0) > 1e-4:
-        m = refine_mask_guided_cross(
-            m, base_rgb,
-            strength=layer.refine_strength,
-            radius=getattr(layer, "refine_radius", None)
+        ref_key = (
+            layer.id,
+            id(base_rgb),
+            (h, w),
+            crop_rect,
+            layer.mask_type,
+            getattr(layer, "brush_mask_version", 0),
+            id(layer.brush_mask),
+            id(layer.custom_mask),
+            id(master_sky_mask),
+            layer.inverted,
+            limit_mode,
+            round(float(layer.luma_min), 4),
+            round(float(layer.luma_max), 4),
+            round(float(layer.feather), 4),
+            round(float(layer.color_hue), 3),
+            round(float(layer.color_tolerance), 3),
+            round(float(layer.color_min_sat), 4),
+            getattr(layer, "linear_p0", None),
+            getattr(layer, "linear_p1", None),
+            getattr(layer, "linear_midpoint", None),
+            getattr(layer, "linear_profile", None),
+            getattr(layer, "linear_symmetric", None),
+            getattr(layer, "linear_span_b", None),
+            getattr(layer, "radial_center", None),
+            getattr(layer, "radial_radius_x", None),
+            getattr(layer, "radial_radius_y", None),
+            getattr(layer, "radial_angle", None),
+            getattr(layer, "radial_feather", None),
+            round(float(layer.refine_strength), 4),
+            getattr(layer, "refine_radius", None),
         )
+        cached_ref = _REFINED_MASK_CACHE.get(ref_key)
+        if cached_ref is not None:
+            m = cached_ref
+        else:
+            m = refine_mask_guided_cross(
+                m, base_rgb,
+                strength=layer.refine_strength,
+                radius=getattr(layer, "refine_radius", None)
+            )
+            if len(_REFINED_MASK_CACHE) >= _MAX_REFINED_MASK_CACHE:
+                _REFINED_MASK_CACHE.pop(next(iter(_REFINED_MASK_CACHE)))
+            _REFINED_MASK_CACHE[ref_key] = m
 
     return np.clip(m, 0.0, 1.0).astype(np.float32)
 
@@ -953,29 +992,54 @@ def apply_local_adjustments_to_image(
         )
         has_clarity = abs(getattr(layer, 'clarity', 0.0)) > 1e-3
         has_tex_clarity = abs(getattr(layer, 'texture_clarity', 0.0)) > 1e-3
-        if has_clarity or has_tex_clarity:
-            c_res = res
+        has_sharp = getattr(layer, 'sharp_amount', 0.0) > 1e-3
+        if has_clarity or has_tex_clarity or has_sharp:
+            eff_w = np.clip(mask_2d * layer.opacity, 0.0, 1.0)
+            ih, iw = res.shape[:2]
+            pad_px = 0
             if has_clarity:
-                from core.stretch import apply_clarity
-                c_res = apply_clarity(c_res, strength=float(layer.clarity))
+                pad_px = max(pad_px, int(max(9, (min(ih, iw) // 35) | 1)) + 4)
             if has_tex_clarity:
-                from core.sharpening import apply_texture_clarity
-                c_res = apply_texture_clarity(c_res, strength=float(layer.texture_clarity))
-            w_3d = (np.clip(mask_2d * layer.opacity, 0.0, 1.0))[..., np.newaxis]
-            res = np.clip((c_res * w_3d) + (res * (1.0 - w_3d)), 0.0, 1.0).astype(np.float32)
+                pad_px = max(pad_px, 12)
+            if has_sharp:
+                pad_px = max(pad_px, int(max(8, round(float(layer.sharp_radius) * 4.0))))
 
-        if getattr(layer, 'sharp_amount', 0.0) > 1e-3:
-            from core.sharpening import compute_edge_mask, apply_unsharp_mask
-            edge_m = compute_edge_mask(res, masking=float(layer.sharp_masking), scope="global")
-            sharp_res = apply_unsharp_mask(
-                res,
-                amount=float(layer.sharp_amount),
-                radius=float(layer.sharp_radius),
-                detail=float(layer.sharp_detail),
-                edge_mask=edge_m
-            )
-            w_3d = (np.clip(mask_2d * layer.opacity, 0.0, 1.0))[..., np.newaxis]
-            res = np.clip((sharp_res * w_3d) + (res * (1.0 - w_3d)), 0.0, 1.0).astype(np.float32)
+            roi = _compute_mask_roi(eff_w, pad_px)
+            if roi is not None:
+                rx1, ry1, rx2, ry2 = roi
+                work_img = np.ascontiguousarray(res[ry1:ry2, rx1:rx2], dtype=np.float32)
+                work_w = np.ascontiguousarray(eff_w[ry1:ry2, rx1:rx2], dtype=np.float32)
+            else:
+                work_img = res
+                work_w = eff_w
+
+            if has_clarity or has_tex_clarity:
+                c_res = work_img
+                if has_clarity:
+                    from core.stretch import apply_clarity
+                    c_res = apply_clarity(c_res, strength=float(layer.clarity))
+                if has_tex_clarity:
+                    from core.sharpening import apply_texture_clarity
+                    c_res = apply_texture_clarity(c_res, strength=float(layer.texture_clarity))
+                work_img = apply_blend_mode(work_img, c_res, BLEND_MODE_NORMAL, work_w)
+
+            if has_sharp:
+                from core.sharpening import compute_edge_mask, apply_unsharp_mask
+                edge_m = compute_edge_mask(work_img, masking=float(layer.sharp_masking), scope="global")
+                sharp_res = apply_unsharp_mask(
+                    work_img,
+                    amount=float(layer.sharp_amount),
+                    radius=float(layer.sharp_radius),
+                    detail=float(layer.sharp_detail),
+                    edge_mask=edge_m
+                )
+                work_img = apply_blend_mode(work_img, sharp_res, BLEND_MODE_NORMAL, work_w)
+
+            if roi is not None:
+                res = res.copy()
+                res[ry1:ry2, rx1:rx2] = work_img
+            else:
+                res = work_img
         return res
 
     # Fallback vectorizado puro en NumPy/OpenCV con paridad matemática exacta a Rust
@@ -1346,13 +1410,32 @@ def apply_blend_mode(
         return apply_normal_blend(canvas, top, weight)
 
 
-# --- Caché de Composición Incremental (Sub-composite Cache) ---
+# --- Caché de Composición Incremental (Sub-composite Cache) y Máscaras Refinadas ---
 _SUBCOMPOSITE_CACHE: Dict[Tuple, np.ndarray] = {}
 _MAX_SUBCOMPOSITE_CACHE = 64
+_REFINED_MASK_CACHE: Dict[Tuple, np.ndarray] = {}
+_MAX_REFINED_MASK_CACHE = 32
+
+
+def _compute_mask_roi(mask_2d: np.ndarray, pad: int) -> Optional[Tuple[int, int, int, int]]:
+    """Devuelve el rectángulo delimitador (x1, y1, x2, y2) si la máscara cubre <75% del lienzo."""
+    h, w = mask_2d.shape[:2]
+    bx, by, bw, bh = cv2.boundingRect((mask_2d > 1e-4).astype(np.uint8))
+    if bw <= 0 or bh <= 0:
+        return None
+    x1 = max(0, bx - pad)
+    y1 = max(0, by - pad)
+    x2 = min(w, bx + bw + pad)
+    y2 = min(h, by + bh + pad)
+    if (x2 - x1) * (y2 - y1) >= int(0.75 * h * w):
+        return None
+    return (x1, y1, x2, y2)
+
 
 def clear_subcomposite_cache() -> None:
-    """Vacía la caché de composiciones parciales de capas."""
+    """Vacía la caché de composiciones parciales de capas y máscaras refinadas."""
     _SUBCOMPOSITE_CACHE.clear()
+    _REFINED_MASK_CACHE.clear()
 
 def _compute_subcomposite_key(
     composite_image: np.ndarray,
@@ -1405,8 +1488,22 @@ def _compute_subcomposite_key(
             getattr(l, "radial_radius_y", None),
             getattr(l, "radial_angle", None),
             getattr(l, "radial_feather", None),
+            float(getattr(l, "luma_min", 0.0)),
+            float(getattr(l, "luma_max", 1.0)),
+            float(getattr(l, "feather", 0.08)),
+            float(getattr(l, "color_hue", 0.0)),
+            float(getattr(l, "color_tolerance", 30.0)),
+            float(getattr(l, "color_min_sat", 0.08)),
+            getattr(l, "limit_mask", LIMIT_MASK_NONE),
+            bool(getattr(l, "refine_edges", False)),
+            float(getattr(l, "refine_strength", 0.0)),
+            getattr(l, "refine_radius", None),
         )
         for l in layers_below
+    )
+    # fast_draft solo altera la salida cuando alguna capa inferior es ráster sin zoom
+    draft_matters = bool(fast_draft) and (crop_rect is None) and any(
+        l.mask_type == MASK_TYPE_IMAGE_RASTER for l in layers_below
     )
     return (
         id(composite_image),
@@ -1415,7 +1512,7 @@ def _compute_subcomposite_key(
         id(starless_image) if starless_image is not None else None,
         id(stars_image) if stars_image is not None else None,
         crop_rect,
-        fast_draft,
+        draft_matters,
         layer_signatures
     )
 
@@ -1464,10 +1561,10 @@ def apply_all_mask_layers(
     # =========================================================================
     # MODO COMPOSITOR MULTICAPA COMPLETO (evaluación Bottom-Up)
     # =========================================================================
-    # Aceleración incremental: reutilizar prefijo ya compuesto si está en caché
+    # Aceleración incremental: reutilizar prefijo ya compuesto si está en caché (también en Zoom 1:1)
     start_cut = len(mask_layers)
     canvas = None
-    if len(mask_layers) > 1 and not crop_rect:
+    if len(mask_layers) > 1:
         for cut in range(1, len(mask_layers)):
             if abort_flag and abort_flag():
                 return None
@@ -1513,7 +1610,7 @@ def apply_all_mask_layers(
         if abort_flag and abort_flag():
             return None
         # Poblar la caché de subcomposición para consultas O(1) de capas superiores
-        if i + 1 < len(mask_layers) and not crop_rect:
+        if i + 1 < len(mask_layers):
             ck = _compute_subcomposite_key(
                 composite_image, mask_layers[i + 1:], master_sky_mask, starless_image, stars_image, crop_rect, fast_draft
             )
@@ -1547,8 +1644,7 @@ def apply_all_mask_layers(
             if gnd_m is not None:
                 eff_m = np.clip(gnd_m * layer.opacity, 0.0, 1.0)
                 # Si el suelo está encima de las estrellas, restaura el suelo limpio sin estrellas debajo
-                w_3d = eff_m[..., np.newaxis]
-                canvas = (composite_image * w_3d) + (canvas * (1.0 - w_3d))
+                canvas = apply_blend_mode(canvas, composite_image, BLEND_MODE_NORMAL, eff_m)
                 canvas = apply_local_adjustments_to_image(canvas, eff_m, layer, fast_draft=fast_draft)
 
         elif layer.mask_type == MASK_TYPE_IMAGE_STARS:

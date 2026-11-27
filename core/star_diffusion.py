@@ -98,45 +98,57 @@ def apply_star_diffusion(
         return img_rgb
 
     # 4. Fuente de emisión estelar
-    star_source = emission_base * star_weight[..., np.newaxis]
-
-    # 5. Recuperación cromática espectral (Star Spectral Color Recovery)
+    # 5. Recuperación cromática espectral dispersa (solo píxeles activos, evita HSV sobre fondo negro)
+    star_source = None
     if color_boost > 1e-4:
-        # Las estrellas muy brillantes tienen núcleos saturados a blanco puro (V > 0.65, S < 0.25).
-        # Los píxeles del perímetro de la estrella conservan su matiz (H) y saturación (S) reales.
-        # Difundimos el color cromático localmente para que el halo refleje el tipo espectral de la estrella.
-        hsv = cv2.cvtColor(np.clip(emission_base, 0.0, 1.0), cv2.COLOR_RGB2HSV)
-        H, S, V = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+        act_y, act_x = np.nonzero(star_peaks > 0.12)
+        if act_y.size > 0:
+            rgb_act = np.clip(emission_base[act_y, act_x], 0.0, 1.0).reshape(-1, 1, 3)
+            hsv_act = cv2.cvtColor(rgb_act, cv2.COLOR_RGB2HSV).reshape(-1, 3)
+            H_act, S_act, _ = hsv_act[:, 0], hsv_act[:, 1], hsv_act[:, 2]
 
-        rad_h = np.deg2rad(H)
-        u = S * np.cos(rad_h)
-        v = S * np.sin(rad_h)
+            valid_sat = S_act > 0.06
+            if np.any(valid_sat):
+                vy = act_y[valid_sat]
+                vx = act_x[valid_sat]
+                rad_h = np.deg2rad(H_act[valid_sat])
+                s_v = S_act[valid_sat]
 
-        valid_color = (star_peaks > 0.12) & (S > 0.06)
-        if np.any(valid_color):
-            u_src = np.where(valid_color, u, 0.0).astype(np.float32)
-            v_src = np.where(valid_color, v, 0.0).astype(np.float32)
-            weight_src = valid_color.astype(np.float32)
+                # Empaquetamos (u, v, weight) en 1 array de 3 canales para 1 solo GaussianBlur
+                uvw = np.zeros((h, w, 3), dtype=np.float32)
+                uvw[vy, vx, 0] = s_v * np.cos(rad_h)
+                uvw[vy, vx, 1] = s_v * np.sin(rad_h)
+                uvw[vy, vx, 2] = 1.0
 
-            k_col = 7
-            u_b = cv2.GaussianBlur(u_src, (k_col, k_col), sigmaX=2.0)
-            v_b = cv2.GaussianBlur(v_src, (k_col, k_col), sigmaX=2.0)
-            w_b = cv2.GaussianBlur(weight_src, (k_col, k_col), sigmaX=2.0) + 1e-4
+                uvw_b = cv2.GaussianBlur(uvw, (7, 7), sigmaX=2.0)
 
-            u_rec = u_b / w_b
-            v_rec = v_b / w_b
-            rec_S = np.clip(np.sqrt(u_rec**2 + v_rec**2) * (1.0 + color_boost * 2.0), 0.0, 1.0)
-            rec_H = (np.rad2deg(np.arctan2(v_rec, u_rec)) % 360.0)
+                # Solo reconstruimos HSV->RGB donde star_weight > 0 (típ. <1% de píxeles)
+                ey, ex = np.nonzero(star_weight > 1e-4)
+                if ey.size > 0:
+                    rgb_em = np.clip(emission_base[ey, ex], 0.0, 1.0).reshape(-1, 1, 3)
+                    hsv_em = cv2.cvtColor(rgb_em, cv2.COLOR_RGB2HSV).reshape(-1, 3)
+                    H_em, S_em, V_em = hsv_em[:, 0], hsv_em[:, 1], hsv_em[:, 2]
 
-            # Infundir en núcleos quemados o con baja saturación
-            is_desaturated_star = (V > 0.50) & (star_peaks > (thr * 0.8))
-            infusion = np.clip(is_desaturated_star.astype(np.float32) * (color_boost * 1.2), 0.0, 1.0)
+                    wb = uvw_b[ey, ex, 2] + 1e-4
+                    u_rec = uvw_b[ey, ex, 0] / wb
+                    v_rec = uvw_b[ey, ex, 1] / wb
+                    rec_S = np.clip(np.sqrt(u_rec * u_rec + v_rec * v_rec) * (1.0 + color_boost * 2.0), 0.0, 1.0)
+                    rec_H = np.rad2deg(np.arctan2(v_rec, u_rec)) % 360.0
 
-            final_H = np.where(infusion > 0, rec_H, H)
-            final_S = np.where(infusion > 0, np.maximum(S, rec_S), S * (1.0 + color_boost * 1.5))
-            final_hsv = np.stack([final_H, np.clip(final_S, 0.0, 1.0), V], axis=-1)
-            boosted_rgb = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2RGB)
-            star_source = boosted_rgb * star_weight[..., np.newaxis]
+                    is_desat = (V_em > 0.50) & (star_peaks[ey, ex] > (thr * 0.8))
+                    final_H = np.where(is_desat, rec_H, H_em)
+                    final_S = np.clip(
+                        np.where(is_desat, np.maximum(S_em, rec_S), S_em * (1.0 + color_boost * 1.5)),
+                        0.0, 1.0
+                    )
+                    final_hsv = np.stack([final_H, final_S, V_em], axis=-1).astype(np.float32).reshape(-1, 1, 3)
+                    boosted_em = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2RGB).reshape(-1, 3)
+
+                    star_source = np.zeros((h, w, 3), dtype=np.float32)
+                    star_source[ey, ex] = boosted_em * star_weight[ey, ex, np.newaxis]
+
+    if star_source is None:
+        star_source = emission_base * star_weight[..., np.newaxis]
 
     # 6. Difusión óptica multi-escala del halo estelar (Star Mist Halo)
     # Semilla de micro-difracción: dilatación elíptica suave de 3x3 para expandir la dispersión
@@ -146,17 +158,38 @@ def apply_star_diffusion(
     sigma1 = max(1.0, float(radius * 0.55))
     sigma2 = max(2.5, float(radius * 1.75))
 
-    # Optimización downscale si la resolución o el radio justifican aceleración
-    if (min(h, w) > 250 and sigma1 > 3.0):
-        scale = 0.5
-        small_w = max(64, int(w * scale))
-        small_h = max(64, int(h * scale))
-        small_src = cv2.resize(seed_source, (small_w, small_h), interpolation=cv2.INTER_AREA)
+    # Optimización downscale adaptativo según sigma (equivalente visualmente a escala completa)
+    min_dim = min(h, w)
+    if min_dim > 400 and sigma1 > 10.0:
+        scale1 = 0.25
+    elif min_dim > 250 and sigma1 > 3.0:
+        scale1 = 0.5
+    else:
+        scale1 = 1.0
 
-        b1 = cv2.GaussianBlur(small_src, (0, 0), sigmaX=sigma1 * scale, sigmaY=sigma1 * scale)
-        b2 = cv2.GaussianBlur(small_src, (0, 0), sigmaX=sigma2 * scale, sigmaY=sigma2 * scale)
+    if scale1 < 1.0:
+        s1_w = max(64, int(w * scale1))
+        s1_h = max(64, int(h * scale1))
+        src1 = cv2.resize(seed_source, (s1_w, s1_h), interpolation=cv2.INTER_AREA)
+        b1 = cv2.GaussianBlur(src1, (0, 0), sigmaX=sigma1 * scale1, sigmaY=sigma1 * scale1)
+
+        if min_dim > 512 and sigma2 > 28.0:
+            scale2 = 0.125
+        elif min_dim > 400 and sigma2 > 10.0:
+            scale2 = 0.25
+        else:
+            scale2 = scale1
+
+        if scale2 < scale1:
+            s2_w = max(32, int(w * scale2))
+            s2_h = max(32, int(h * scale2))
+            src2 = cv2.resize(src1, (s2_w, s2_h), interpolation=cv2.INTER_AREA)
+            b2_s = cv2.GaussianBlur(src2, (0, 0), sigmaX=sigma2 * scale2, sigmaY=sigma2 * scale2)
+            b2 = cv2.resize(b2_s, (s1_w, s1_h), interpolation=cv2.INTER_LINEAR)
+        else:
+            b2 = cv2.GaussianBlur(src1, (0, 0), sigmaX=sigma2 * scale1, sigmaY=sigma2 * scale1)
+
         small_halo = (b1 * 0.60) + (b2 * 0.40)
-
         halo = cv2.resize(small_halo, (w, h), interpolation=cv2.INTER_LINEAR)
     else:
         b1 = cv2.GaussianBlur(seed_source, (0, 0), sigmaX=sigma1, sigmaY=sigma1)

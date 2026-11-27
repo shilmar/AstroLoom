@@ -85,3 +85,83 @@ def test_render_engine_update_stretch_preview(qapp):
     # Call update_stretch_preview immediate
     tab.update_stretch_preview(immediate=True)
     assert tab._last_rendered_preview is not None
+
+
+def test_phase1_zoom_crop_and_draft_cache(qapp):
+    from gui.tab_developer import DeveloperTab
+    from core.mask_layers import MaskLayer, apply_all_mask_layers, clear_subcomposite_cache, MASK_TYPE_LUMA, MASK_TYPE_IMAGE_BASE
+
+    tab = DeveloperTab()
+    tab.image_32bit = np.full((300, 300, 3), 0.4, dtype=np.float32)
+    tab.image_starless = np.full((300, 300, 3), 0.35, dtype=np.float32)
+    tab.image_stars = np.full((300, 300, 3), 0.1, dtype=np.float32)
+    tab.current_mask = np.ones((300, 300), dtype=np.float32)
+    tab.clarity_starless_val = 0.2
+    tab._generate_preview_proxy()
+
+    # 1. Zoom 1:1 reuses crop buffer identity and caches _process_starless_base
+    tab.mask_layers_widget.layers = [
+        MaskLayer(name="Estrellas", layer_kind="image", mask_type="image_stars"),
+        MaskLayer(name="Starless", layer_kind="image", mask_type="image_starless"),
+    ]
+    tab.on_canvas_zoom_toggled(True, 0.5, 0.5)
+    b1, m1 = tab._compose_active_base(for_export=False)
+    b2, m2 = tab._compose_active_base(for_export=False)
+    assert id(b1) == id(b2)
+    assert id(m1) == id(m2)
+
+    # 2. Draft scrubbing populates buffer_cache under _draft without polluting full-quality slots
+    tab.on_canvas_zoom_toggled(False, 0.5, 0.5)
+    tab._is_scrubbing_heavy_slider = True
+    base_d, mask_d = tab._compose_active_base(for_export=False)
+    out_d = tab._apply_pipeline_on_image(base_d, precomputed_mask=mask_d, is_preview=True, asynchronous=False)
+    assert out_d is not None
+    assert any(k[0] == "spatial_draft" for k in tab.buffer_cache._cache.keys())
+    tab._is_scrubbing_heavy_slider = False
+
+    # 3. Subcomposite cache works with crop_rect and invalidates on luma_min change
+    clear_subcomposite_cache()
+    base = np.linspace(0.0, 1.0, 64 * 64 * 3, dtype=np.float32).reshape(64, 64, 3)
+    l_bot = MaskLayer(name="Base", layer_kind="image", mask_type=MASK_TYPE_IMAGE_BASE)
+    l_mid = MaskLayer(name="Luma", mask_type=MASK_TYPE_LUMA, luma_min=0.2, luma_max=0.8, exposure=0.5)
+    l_top = MaskLayer(name="Top", mask_type=MASK_TYPE_LUMA, luma_min=0.5, luma_max=1.0, highlights=-0.2)
+    r1 = apply_all_mask_layers(base, [l_top, l_mid, l_bot], crop_rect=(0, 0, 64, 64), full_image_shape=(128, 128), fast_draft=False)
+    l_mid.luma_min = 0.6
+    r2 = apply_all_mask_layers(base, [l_top, l_mid, l_bot], crop_rect=(0, 0, 64, 64), full_image_shape=(128, 128), fast_draft=True)
+    assert not np.allclose(r1, r2)
+
+    # 4. Split View 'Antes' uses raw image_32bit/preview_proxy, never stretched starless
+    tab.image_32bit = np.full((300, 300, 3), 0.1, dtype=np.float32)
+    tab.image_starless = np.full((300, 300, 3), 0.9, dtype=np.float32)
+    tab.starless_is_stretched = True
+    tab._generate_preview_proxy()
+    before_fit = tab._compute_before_image()
+    assert before_fit is not None and float(before_fit.mean()) < 0.7
+
+
+def test_phase3_refined_mask_cache_and_roi_spatial(qapp):
+    from core.mask_layers import (
+        MaskLayer, compute_layer_mask, apply_local_adjustments_to_image,
+        clear_subcomposite_cache, _REFINED_MASK_CACHE, MASK_TYPE_BRUSH
+    )
+    clear_subcomposite_cache()
+    img = np.random.default_rng(42).uniform(0.1, 0.9, (256, 256, 3)).astype(np.float32)
+    mask = np.zeros((256, 256), dtype=np.float32)
+    mask[80:140, 80:140] = 1.0  # ~5.5% ROI
+
+    # 1. Refined mask cache hit
+    l = MaskLayer(name="Refined", mask_type=MASK_TYPE_BRUSH, refine_edges=True, refine_strength=0.6)
+    l.set_brush_mask(mask)
+    m1 = compute_layer_mask(l, img)
+    assert len(_REFINED_MASK_CACHE) == 1
+    m2 = compute_layer_mask(l, img)
+    assert np.array_equal(m1, m2)
+
+    # 2. ROI spatial filter modifies inside ROI and leaves outside untouched
+    l_fx = MaskLayer(name="LocalFX", mask_type=MASK_TYPE_BRUSH, clarity=0.6, texture_clarity=0.4, sharp_amount=60.0)
+    out = apply_local_adjustments_to_image(img, mask, l_fx)
+    assert np.array_equal(out[:20, :20], img[:20, :20])
+    assert not np.allclose(out[90:130, 90:130], img[90:130, 90:130])
+
+
+

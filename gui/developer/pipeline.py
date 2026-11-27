@@ -27,6 +27,7 @@ from core.orton import apply_astronomical_orton
 from core.star_diffusion import apply_star_diffusion
 from core.mask_layers import (
     apply_all_mask_layers,
+    apply_blend_mode,
     MASK_TYPE_IMAGE_RASTER,
     BLEND_MODE_NORMAL,
     BLEND_MODE_SCREEN,
@@ -381,7 +382,8 @@ def apply_developer_pipeline(
                             gnd_part = np.clip(
                                 (gnd_part - gnd_bp) / max(1e-4, 1.0 - gnd_bp), 0.0, 1.0
                             )
-                    img = (img * precomputed_mask) + (gnd_part * (1.0 - precomputed_mask))
+                    m2 = precomputed_mask[..., 0] if precomputed_mask.ndim == 3 else precomputed_mask
+                    img = apply_blend_mode(gnd_part, img, BLEND_MODE_NORMAL, m2)
 
             # 5b. Reducción de Ruido Lineal Multietapa (cuando StarNet no está separado)
             if image_starless is None and state.denoise_val > 0:
@@ -439,12 +441,10 @@ def apply_developer_pipeline(
                         highlight_protection=getattr(state, "mtf_hp_val", 0.0)
                     )
                 
-                mask_blend = precomputed_mask if precomputed_mask.ndim == 3 else precomputed_mask[..., np.newaxis]
-                if mask_blend.shape[:2] != img.shape[:2]:
-                    mask_blend = cv2.resize(mask_blend, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
-                    if mask_blend.ndim == 2:
-                        mask_blend = mask_blend[..., np.newaxis]
-                stretched = (img * mask_blend) + (stretched_base * (1.0 - mask_blend))
+                m2 = precomputed_mask[..., 0] if precomputed_mask.ndim == 3 else precomputed_mask
+                if m2.shape[:2] != img.shape[:2]:
+                    m2 = cv2.resize(m2, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
+                stretched = apply_blend_mode(stretched_base, img, BLEND_MODE_NORMAL, m2)
             else:
                 stretched = img
         else:
@@ -475,7 +475,8 @@ def apply_developer_pipeline(
             if "rgb" in curve_luts and curve_luts["rgb"] is not None:
                 curved = apply_curve_lut(stretched, curve_luts["rgb"])
                 if precomputed_mask is not None:
-                    stretched = (curved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+                    m2 = precomputed_mask[..., 0] if precomputed_mask.ndim == 3 else precomputed_mask
+                    stretched = apply_blend_mode(stretched, curved, BLEND_MODE_NORMAL, m2)
                 else:
                     stretched = curved
             has_hue_sat = "hue_sat" in curve_luts and curve_luts["hue_sat"] is not None
@@ -493,26 +494,18 @@ def apply_developer_pipeline(
         # 8. Contraste específico del Fondo (Starless)
         contrast_starless = state.contrast_starless_val / 100.0
         if abs(contrast_starless) > 1e-4:
-            if is_scrubbing:
-                sample_s = stretched[::8, ::8]
-                if precomputed_mask is not None:
-                    sample_m = precomputed_mask[::8, ::8]
-                    mask_m_2d = sample_m[..., 0] if sample_m.ndim == 3 else sample_m
-                    sky_median = float(np.median(sample_s[mask_m_2d > 0.5])) if np.any(mask_m_2d > 0.5) else float(np.median(sample_s))
-                else:
-                    sky_median = float(np.median(sample_s))
+            stride = 8 if is_scrubbing else 4
+            sample_s = stretched[::stride, ::stride]
+            if precomputed_mask is not None:
+                sample_m = precomputed_mask[::stride, ::stride]
+                mask_m_2d = sample_m[..., 0] if sample_m.ndim == 3 else sample_m
+                sky_median = float(np.median(sample_s[mask_m_2d > 0.5])) if np.any(mask_m_2d > 0.5) else float(np.median(sample_s))
             else:
-                if precomputed_mask is not None:
-                    mask_2d = precomputed_mask[..., 0] if precomputed_mask.ndim == 3 else precomputed_mask
-                    if np.any(mask_2d > 0.5):
-                        sky_median = float(np.median(stretched[mask_2d > 0.5]))
-                    else:
-                        sky_median = float(np.median(stretched))
-                else:
-                    sky_median = float(np.median(stretched))
+                sky_median = float(np.median(sample_s))
             sn_contrasted = adjust_contrast(stretched, contrast_starless, pivot=sky_median, fast_draft=is_scrubbing)
             if precomputed_mask is not None:
-                stretched = (sn_contrasted * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+                m2 = precomputed_mask[..., 0] if precomputed_mask.ndim == 3 else precomputed_mask
+                stretched = apply_blend_mode(stretched, sn_contrasted, BLEND_MODE_NORMAL, m2)
             else:
                 stretched = sn_contrasted
 
@@ -651,12 +644,14 @@ def apply_developer_pipeline(
             if is_draft_deconv and in_deconv.shape[:2] != (orig_h_dec, orig_w_dec):
                 deconv_full = cv2.resize(deconvolved, (orig_w_dec, orig_h_dec), interpolation=cv2.INTER_LINEAR)
                 if precomputed_mask is not None:
-                    stretched = (deconv_full * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+                    m2 = precomputed_mask[..., 0] if precomputed_mask.ndim == 3 else precomputed_mask
+                    stretched = apply_blend_mode(stretched, deconv_full, BLEND_MODE_NORMAL, m2)
                 else:
                     stretched = deconv_full
             else:
                 if precomputed_mask is not None:
-                    stretched = (deconvolved * precomputed_mask) + (stretched * (1.0 - precomputed_mask))
+                    m2 = precomputed_mask[..., 0] if precomputed_mask.ndim == 3 else precomputed_mask
+                    stretched = apply_blend_mode(stretched, deconvolved, BLEND_MODE_NORMAL, m2)
                 else:
                     stretched = deconvolved
 
@@ -809,30 +804,66 @@ def apply_developer_pipeline(
                     )
                 if star_diff_strength > 1e-4:
                     mask_2d = precomputed_mask[..., 0] if precomputed_mask is not None else None
-                    st_stretched = apply_star_diffusion(
-                        st_stretched,
-                        strength=star_diff_strength,
-                        radius=float(state.star_diff_radius),
-                        threshold=state.star_diff_threshold / 100.0,
-                        color_boost=state.star_diff_color / 100.0,
-                        halo_mode=sd_mode,
-                        sky_mask=mask_2d,
-                        stars_layer=st_stretched,
-                    )
+                    sh_s, sw_s = st_stretched.shape[:2]
+                    if is_scrubbing and max(sh_s, sw_s) > 800:
+                        sc_s = 800.0 / float(max(sh_s, sw_s))
+                        dw_s, dh_s = max(32, int(sw_s * sc_s)), max(32, int(sh_s * sc_s))
+                        in_st = cv2.resize(st_stretched, (dw_s, dh_s), interpolation=cv2.INTER_AREA)
+                        in_m = cv2.resize(mask_2d, (dw_s, dh_s), interpolation=cv2.INTER_AREA) if mask_2d is not None else None
+                        res_st = apply_star_diffusion(
+                            in_st,
+                            strength=star_diff_strength,
+                            radius=float(state.star_diff_radius) * sc_s,
+                            threshold=state.star_diff_threshold / 100.0,
+                            color_boost=state.star_diff_color / 100.0,
+                            halo_mode=sd_mode,
+                            sky_mask=in_m,
+                            stars_layer=in_st,
+                        )
+                        st_stretched = cv2.resize(res_st, (sw_s, sh_s), interpolation=cv2.INTER_LINEAR)
+                    else:
+                        st_stretched = apply_star_diffusion(
+                            st_stretched,
+                            strength=star_diff_strength,
+                            radius=float(state.star_diff_radius),
+                            threshold=state.star_diff_threshold / 100.0,
+                            color_boost=state.star_diff_color / 100.0,
+                            halo_mode=sd_mode,
+                            sky_mask=mask_2d,
+                            stars_layer=st_stretched,
+                        )
             else:
                 st_stretched = np.clip(image_stars * star_intensity, 0.0, 1.0)
                 if star_diff_strength > 1e-4:
                     mask_2d = precomputed_mask[..., 0] if precomputed_mask is not None else None
-                    st_stretched = apply_star_diffusion(
-                        st_stretched,
-                        strength=star_diff_strength,
-                        radius=float(state.star_diff_radius),
-                        threshold=state.star_diff_threshold / 100.0,
-                        color_boost=state.star_diff_color / 100.0,
-                        halo_mode=sd_mode,
-                        sky_mask=mask_2d,
-                        stars_layer=st_stretched,
-                    )
+                    sh_s, sw_s = st_stretched.shape[:2]
+                    if is_scrubbing and max(sh_s, sw_s) > 800:
+                        sc_s = 800.0 / float(max(sh_s, sw_s))
+                        dw_s, dh_s = max(32, int(sw_s * sc_s)), max(32, int(sh_s * sc_s))
+                        in_st = cv2.resize(st_stretched, (dw_s, dh_s), interpolation=cv2.INTER_AREA)
+                        in_m = cv2.resize(mask_2d, (dw_s, dh_s), interpolation=cv2.INTER_AREA) if mask_2d is not None else None
+                        res_st = apply_star_diffusion(
+                            in_st,
+                            strength=star_diff_strength,
+                            radius=float(state.star_diff_radius) * sc_s,
+                            threshold=state.star_diff_threshold / 100.0,
+                            color_boost=state.star_diff_color / 100.0,
+                            halo_mode=sd_mode,
+                            sky_mask=in_m,
+                            stars_layer=in_st,
+                        )
+                        st_stretched = cv2.resize(res_st, (sw_s, sh_s), interpolation=cv2.INTER_LINEAR)
+                    else:
+                        st_stretched = apply_star_diffusion(
+                            st_stretched,
+                            strength=star_diff_strength,
+                            radius=float(state.star_diff_radius),
+                            threshold=state.star_diff_threshold / 100.0,
+                            color_boost=state.star_diff_color / 100.0,
+                            halo_mode=sd_mode,
+                            sky_mask=mask_2d,
+                            stars_layer=st_stretched,
+                        )
         else:
             st_stretched = None
 

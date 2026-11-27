@@ -2201,24 +2201,8 @@ class CanvasToolsMixin:
             self.canvas.set_before_pixmap(self.snapshot_before_pixmap)
             return
 
-        bp = self.initial_bp
-        mtf = self.initial_mtf
-
-        base_to_render, _ = self._compose_active_base(for_export=False)
-        if base_to_render is not None:
-            if getattr(self, "initial_stretch_mode", "mtf") == "ghs":
-                stretched_init = apply_ghs_stretch(
-                    base_to_render,
-                    sp=getattr(self, "initial_ghs_sp", 0.02),
-                    d=getattr(self, "initial_ghs_d", 5.0),
-                    b=getattr(self, "initial_ghs_b", 2.0),
-                    hp=getattr(self, "initial_ghs_hp", 0.0),
-                    lp=getattr(self, "initial_ghs_lp", 0.0),
-                    bp=getattr(self, "initial_ghs_bp", 0.0),
-                    color_mode=getattr(self, "initial_ghs_color_mode", "luma")
-                )
-            else:
-                stretched_init = manual_stretch(base_to_render, black_point=bp, midtone=mtf)
+        stretched_init = self._compute_before_image()
+        if stretched_init is not None:
             self.canvas.set_before_image(stretched_init)
 
     def _update_canvas_info_label(self) -> None:
