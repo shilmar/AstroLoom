@@ -9,20 +9,13 @@ import glob
 import tempfile
 from typing import Optional
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QMainWindow, QTabWidget, QLabel, QWidget, QHBoxLayout, QPushButton
+from PySide6.QtWidgets import QMainWindow, QTabWidget, QLabel, QWidget, QHBoxLayout, QVBoxLayout, QPushButton
 
 from core import APP_VERSION
 from core.i18n import tr, get_i18n
 from gui.theme import apply_theme, STYLE_STATUS_PILL
 from gui.icons import get_icon
 from gui.tab_stacker import StackerTab
-from gui.tab_developer import DeveloperTab
-from gui.tab_eclipse import EclipseTab
-from gui.tab_eclipse_collage import EclipseCollageTab
-from gui.tab_startrails import StartrailsTab
-from gui.tab_meteors import MeteorTab
-from gui.tab_panorama import PanoramaTab
-from gui.tab_settings import SettingsTab
 
 
 class MainWindow(QMainWindow):
@@ -47,13 +40,8 @@ class MainWindow(QMainWindow):
         # Conectar señal de degradación de hardware GPU a CPU
         self.gpu_fallback_signal.connect(self._on_gpu_fallback)
         try:
-            from core.starnet_onnx import add_gpu_fallback_listener as add_sn_listener
-            add_sn_listener(self.gpu_fallback_signal.emit)
-        except Exception:
-            pass
-        try:
-            from core.ai_denoise import add_gpu_fallback_listener as add_dn_listener
-            add_dn_listener(self.gpu_fallback_signal.emit)
+            from core.onnx_runtime import add_gpu_fallback_listener
+            add_gpu_fallback_listener(self.gpu_fallback_signal.emit)
         except Exception:
             pass
 
@@ -153,8 +141,8 @@ class MainWindow(QMainWindow):
             self.tab_widget.setTabText(6, tr("app.tabs.panorama", "7. Panorámicas (Mosaicos)"))
             self.tab_widget.setTabText(7, tr("app.tabs.settings", "8. Configuración / Ajustes"))
 
-        if hasattr(self, 'tab_developer') and hasattr(self.tab_developer, "retranslate_ui"):
-            self.tab_developer.retranslate_ui()
+        if 1 in getattr(self, '_loaded_tabs', {}) and hasattr(self._loaded_tabs[1], "retranslate_ui"):
+            self._loaded_tabs[1].retranslate_ui()
 
     def _update_system_stats(self) -> None:
         """Actualiza el consumo de memoria RAM física del sistema."""
@@ -177,76 +165,145 @@ class MainWindow(QMainWindow):
             self.lbl_ram_monitor.setText("RAM: N/D")
 
     def _setup_ui(self, splash: Optional[object] = None) -> None:
-        """Inicializa las pestañas de navegación y enlaza las señales entre módulos."""
+        """Inicializa el contenedor de pestañas con carga perezosa (lazy) para arranque rápido."""
         self.tab_widget = QTabWidget()
+        self._tab_containers: dict[int, QWidget] = {}
+        self._loaded_tabs: dict[int, QWidget] = {}
 
-        # Instanciar pestañas del flujo de trabajo
         if splash and hasattr(splash, "set_status"):
-            splash.set_status(tr("splash.stacker", "Cargando Apilador y motor CFA..."), 20)
+            splash.set_status(tr("splash.stacker", "Cargando Apilador y motor CFA..."), 30)
         self.tab_stacker = StackerTab()
-
-        if splash and hasattr(splash, "set_status"):
-            splash.set_status(tr("splash.developer", "Cargando Revelador y capas de ajuste..."), 45)
-        self.tab_developer = DeveloperTab()
-
-        if splash and hasattr(splash, "set_status"):
-            splash.set_status(tr("splash.eclipse", "Cargando módulos de Eclipses (HDR y Collage)..."), 65)
-        self.tab_eclipse = EclipseTab()
-        self.tab_eclipse_collage = EclipseCollageTab()
-
-        if splash and hasattr(splash, "set_status"):
-            splash.set_status(tr("splash.star_meteor", "Cargando Trazas de Estrellas y Meteoros..."), 80)
-        self.tab_startrails = StartrailsTab()
-        self.tab_meteors = MeteorTab()
-
-        if splash and hasattr(splash, "set_status"):
-            splash.set_status(tr("splash.pano_settings", "Cargando Panorámicas y Ajustes..."), 95)
-        self.tab_panorama = PanoramaTab()
-        self.tab_settings = SettingsTab()
-
+        self._loaded_tabs[0] = self.tab_stacker
         self.tab_widget.addTab(self.tab_stacker, "1. Apilador (Stacker)")
-        self.tab_widget.addTab(self.tab_developer, "2. Revelador / Editor")
-        self.tab_widget.addTab(self.tab_eclipse, "3. Eclipses (HDR)")
-        self.tab_widget.addTab(self.tab_eclipse_collage, "4. Eclipses (Collage)")
-        self.tab_widget.addTab(self.tab_startrails, "5. Trazas de Estrellas (Startrails)")
-        self.tab_widget.addTab(self.tab_meteors, "6. Lluvias de Meteoros")
-        self.tab_widget.addTab(self.tab_panorama, "7. Panorámicas (Mosaicos)")
-        self.tab_widget.addTab(self.tab_settings, "8. Configuración / Ajustes")
+
+        if splash and hasattr(splash, "set_status"):
+            splash.set_status(tr("splash.developer", "Cargando Revelador y capas de ajuste..."), 70)
+        from gui.tab_developer import DeveloperTab
+        dev_tab = DeveloperTab()
+        self._loaded_tabs[1] = dev_tab
+        self.tab_widget.addTab(dev_tab, "2. Revelador / Editor")
+
+        lazy_titles = [
+            (2, "3. Eclipses (HDR)"),
+            (3, "4. Eclipses (Collage)"),
+            (4, "5. Trazas de Estrellas (Startrails)"),
+            (5, "6. Lluvias de Meteoros"),
+            (6, "7. Panorámicas (Mosaicos)"),
+            (7, "8. Configuración / Ajustes"),
+        ]
+        for idx, title in lazy_titles:
+            container = QWidget()
+            lay = QVBoxLayout(container)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(0)
+            self._tab_containers[idx] = container
+            self.tab_widget.addTab(container, title)
 
         self.setCentralWidget(self.tab_widget)
+        self.tab_widget.currentChanged.connect(self._ensure_tab_loaded)
 
-        # 1. Transferencia automática tras finalizar apilado
+        # Conexiones del Apilador (pestaña 0, siempre cargada)
         self.tab_stacker.stacking_finished.connect(self._on_stacking_finished)
-
-        # 2. Reset del entorno completo al solicitar nueva sesión
-        self.tab_stacker.new_session_requested.connect(self.tab_developer.clear_session)
-
-        # 3. Actualización dinámica del título según la sesión activa
+        self.tab_stacker.new_session_requested.connect(self._on_new_session_requested)
         self.tab_stacker.session_title_changed.connect(self._update_window_title)
 
-        # 4. Transferencia de imagen desde el módulo de Eclipses (HDR) al Revelador
-        self.tab_eclipse.export_to_developer.connect(self._on_eclipse_exported)
-        self.tab_eclipse.export_coronal_stack_to_developer.connect(self._on_eclipse_coronal_stack_exported)
+        if splash and hasattr(splash, "set_status"):
+            splash.set_status(tr("splash.pano_settings", "Interfaz lista."), 95)
 
-        # 5. Transferencia de imagen desde el Collage de Eclipses al Revelador
-        self.tab_eclipse_collage.export_to_developer.connect(self._on_eclipse_exported)
+        # Precarga escalonada en segundo plano de pestañas secundarias (2..7) tras mostrar la ventana
+        self._preload_queue = [2, 3, 4, 5, 6, 7]
+        QTimer.singleShot(250, self._preload_next_tab)
 
-        # 6. Transferencia de imagen desde el módulo de Startrails al Revelador
-        self.tab_startrails.export_to_developer.connect(self._on_startrail_exported)
+    def _preload_next_tab(self) -> None:
+        """Precarga una pestaña secundaria por tick para fluidez instantánea sin bloquear el arranque."""
+        if not getattr(self, "_preload_queue", None):
+            return
+        idx = self._preload_queue.pop(0)
+        if idx not in self._loaded_tabs:
+            self._ensure_tab_loaded(idx)
+        if self._preload_queue:
+            QTimer.singleShot(150, self._preload_next_tab)
 
-        # 7. Proveedor de máscara de horizonte del Apilador para Startrails
-        self.tab_startrails.set_stacker_mask_provider(
-            lambda: getattr(self.tab_stacker, "computed_mask", None)
-        )
+    def open_developer_project(self, project_path: str) -> None:
+        """Conmuta al Revelador y abre un proyecto .devloom/.loom."""
+        self.tab_widget.setCurrentIndex(1)
+        self.tab_developer._on_canvas_files_dropped([project_path])
 
-        # 8. Transferencia de imagen desde el módulo de Panorámicas al Revelador
-        self.tab_panorama.export_to_developer.connect(self._on_panorama_exported)
+    def _ensure_tab_loaded(self, idx: int) -> Optional[QWidget]:
+        """Instancia bajo demanda la pestaña solicitada y conecta sus señales la primera vez."""
+        if idx in self._loaded_tabs:
+            return self._loaded_tabs[idx]
 
-        # 9. Transferencia de imagen desde el módulo de Meteoros al Revelador
-        self.tab_meteors.export_to_developer.connect(self._on_meteor_exported)
-        self.tab_meteors.set_stacker_mask_provider(
-            lambda: getattr(self.tab_stacker, "computed_mask", None)
-        )
+        tab: Optional[QWidget] = None
+        if idx == 1:
+            from gui.tab_developer import DeveloperTab
+            tab = DeveloperTab()
+        elif idx == 2:
+            from gui.tab_eclipse import EclipseTab
+            tab = EclipseTab()
+            tab.export_to_developer.connect(self._on_eclipse_exported)
+            tab.export_coronal_stack_to_developer.connect(self._on_eclipse_coronal_stack_exported)
+        elif idx == 3:
+            from gui.tab_eclipse_collage import EclipseCollageTab
+            tab = EclipseCollageTab()
+            tab.export_to_developer.connect(self._on_eclipse_exported)
+        elif idx == 4:
+            from gui.tab_startrails import StartrailsTab
+            tab = StartrailsTab()
+            tab.export_to_developer.connect(self._on_startrail_exported)
+            tab.set_stacker_mask_provider(lambda: getattr(self.tab_stacker, "computed_mask", None))
+        elif idx == 5:
+            from gui.tab_meteors import MeteorTab
+            tab = MeteorTab()
+            tab.export_to_developer.connect(self._on_meteor_exported)
+            tab.set_stacker_mask_provider(lambda: getattr(self.tab_stacker, "computed_mask", None))
+        elif idx == 6:
+            from gui.tab_panorama import PanoramaTab
+            tab = PanoramaTab()
+            tab.export_to_developer.connect(self._on_panorama_exported)
+        elif idx == 7:
+            from gui.tab_settings import SettingsTab
+            tab = SettingsTab()
+
+        if tab is not None:
+            self._loaded_tabs[idx] = tab
+            container = self._tab_containers.get(idx)
+            if container is not None and container.layout() is not None:
+                container.layout().addWidget(tab)
+        return tab
+
+    @property
+    def tab_developer(self):
+        return self._ensure_tab_loaded(1)
+
+    @property
+    def tab_eclipse(self):
+        return self._ensure_tab_loaded(2)
+
+    @property
+    def tab_eclipse_collage(self):
+        return self._ensure_tab_loaded(3)
+
+    @property
+    def tab_startrails(self):
+        return self._ensure_tab_loaded(4)
+
+    @property
+    def tab_meteors(self):
+        return self._ensure_tab_loaded(5)
+
+    @property
+    def tab_panorama(self):
+        return self._ensure_tab_loaded(6)
+
+    @property
+    def tab_settings(self):
+        return self._ensure_tab_loaded(7)
+
+    def _on_new_session_requested(self) -> None:
+        dev = self._loaded_tabs.get(1)
+        if dev is not None and hasattr(dev, "clear_session"):
+            dev.clear_session()
 
     def _update_window_title(self, session_name: str) -> None:
         """Actualiza el texto de la barra de título con el archivo de proyecto activo."""
@@ -313,9 +370,10 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """Gestiona el cierre ordenado de la aplicación, guardado de proyectos y purga de temporales."""
-        # 1. Comprobar si hay cambios sin guardar en el Revelador
-        if hasattr(self, 'tab_developer') and hasattr(self.tab_developer, '_check_unsaved_changes'):
-            if not self.tab_developer._check_unsaved_changes():
+        # 1. Comprobar si hay cambios sin guardar en el Revelador (solo si se llegó a abrir)
+        dev = self._loaded_tabs.get(1) if hasattr(self, '_loaded_tabs') else None
+        if dev is not None and hasattr(dev, '_check_unsaved_changes'):
+            if not dev._check_unsaved_changes():
                 event.ignore()
                 return
 
@@ -373,9 +431,7 @@ class MainWindow(QMainWindow):
 
         # 1. Si se suelta un proyecto .devloom, conmutar al Revelador y cargarlo
         if first_file.lower().endswith((".devloom", ".loom")):
-            self.tab_widget.setCurrentIndex(1)
-            if hasattr(self, 'tab_developer'):
-                self.tab_developer._on_canvas_files_dropped([first_file])
+            self.open_developer_project(first_file)
             return
 
         # 2. Si no es proyecto, enrutar según la pestaña actualmente activa

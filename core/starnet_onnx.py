@@ -17,17 +17,17 @@ import urllib.request
 import cv2
 import numpy as np
 
-try:
-    import onnxruntime as ort
-    HAS_ONNX = True
-except ImportError:
-    HAS_ONNX = False
-
 import astroloom_rs
 
-HAS_RUST_AI = True
-
 from core.config_manager import get_config_val
+from core.onnx_runtime import (
+    HAS_ONNX,
+    add_gpu_fallback_listener,
+    create_inference_session,
+    notify_gpu_fallback,
+)
+
+HAS_RUST_AI = True
 
 logger = logging.getLogger("AstroLoom.StarNetONNX")
 
@@ -160,95 +160,9 @@ def download_starnet_model(
                 pass
 
 
-_GPU_FALLBACK_LISTENERS: List[Callable[[str], None]] = []
-
-
-def add_gpu_fallback_listener(cb: Callable[[str], None]) -> None:
-    """Registra un callback que se invoca cuando la inferencia degrada de GPU a CPU."""
-    if cb not in _GPU_FALLBACK_LISTENERS:
-        _GPU_FALLBACK_LISTENERS.append(cb)
-
-
-def notify_gpu_fallback(reason: str) -> None:
-    """Notifica a todos los escuchas registrados de una degradación a CPU."""
-    for cb in _GPU_FALLBACK_LISTENERS:
-        try:
-            cb(reason)
-        except Exception:
-            pass
-
-
-def _get_cache_dir(model_path: str) -> str:
-    root = os.path.dirname(os.path.abspath(model_path))
-    cache_dir = os.path.join(root, ".cache")
-    os.makedirs(cache_dir, exist_ok=True)
-    return cache_dir
-
-
-def _get_cached_graph_path(model_path: str, provider_tag: str) -> str:
-    cache_dir = _get_cache_dir(model_path)
-    stem = os.path.splitext(os.path.basename(model_path))[0]
-    return os.path.join(cache_dir, f"{stem}_{provider_tag}_opt.onnx")
-
-
-def _is_cache_valid(cache_path: str, original_path: str) -> bool:
-    try:
-        if not os.path.isfile(cache_path) or os.path.getsize(cache_path) == 0:
-            return False
-        return os.path.getmtime(cache_path) >= os.path.getmtime(original_path)
-    except Exception:
-        return False
-
-
-def _create_inference_session(model_path: str, force_cpu: bool = False) -> "ort.InferenceSession":
-    """
-    Inicializa la sesión ONNX con aceleración GPU (DirectML/CUDA) y fallback a CPU.
-    Reutiliza el grafo optimizado serializado en disco ('models/.cache/') si es válido.
-    """
-    available_providers = ort.get_available_providers()
-    if force_cpu:
-        providers = ["CPUExecutionProvider"]
-        provider_tag = "cpu"
-    else:
-        providers = []
-        if "CUDAExecutionProvider" in available_providers:
-            providers.append("CUDAExecutionProvider")
-        if "DmlExecutionProvider" in available_providers:
-            providers.append("DmlExecutionProvider")
-        providers.append("CPUExecutionProvider")
-        provider_tag = "gpu" if len(providers) > 1 else "cpu"
-
-    opts = ort.SessionOptions()
-    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    cpu_cores = os.cpu_count() or 4
-    opts.intra_op_num_threads = min(16, max(1, cpu_cores))
-    opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-
-    cache_file = _get_cached_graph_path(model_path, provider_tag)
-
-    # 1. Cargar directamente desde caché si existe y no está desfasada
-    if _is_cache_valid(cache_file, model_path):
-        try:
-            return ort.InferenceSession(cache_file, sess_options=opts, providers=providers)
-        except Exception as e:
-            logger.warning(f"Error cargando grafo optimizado en caché ({cache_file}): {e}. Recompilando...")
-            try:
-                os.remove(cache_file)
-            except OSError:
-                pass
-
-    # 2. Configurar serialización del grafo optimizado para futuras sesiones
-    try:
-        opts.optimized_model_filepath = cache_file
-    except Exception:
-        pass
-
-    try:
-        return ort.InferenceSession(model_path, sess_options=opts, providers=providers)
-    except Exception:
-        # Fallback sin ruta de serialización si hubo fallo de I/O
-        opts.optimized_model_filepath = ""
-        return ort.InferenceSession(model_path, sess_options=opts, providers=providers)
+def _create_inference_session(model_path: str, force_cpu: bool = False):
+    """Crea una sesión ONNX para StarNet v2 delegando en core.onnx_runtime."""
+    return create_inference_session(model_path, use_cache=False, force_cpu=force_cpu)
 
 
 def run_starnet_onnx(

@@ -212,8 +212,9 @@ def detect_sky_mask_ai(
     net_in = (net_in - mean) / std
     net_in = net_in.transpose(2, 0, 1)[np.newaxis, ...].astype(np.float32)
 
-    # Inferencia ONNX
-    sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+    # Inferencia ONNX (sesión cacheada en CPU para U²-Net 320x320)
+    from core.onnx_runtime import create_inference_session
+    sess = create_inference_session(path, use_cache=True, force_cpu=True)
     input_name = sess.get_inputs()[0].name
     outputs = sess.run(None, {input_name: net_in})
 

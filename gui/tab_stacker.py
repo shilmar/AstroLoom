@@ -981,6 +981,12 @@ class StackerTab(QWidget):
         """Añade los archivos arrastrados sobre el lienzo directamente a la pestaña de calibración activa."""
         if not paths:
             return
+        devloom_files = [p for p in paths if p.lower().endswith((".devloom", ".loom"))]
+        if devloom_files:
+            win = self.window()
+            if win is not None and hasattr(win, "open_developer_project"):
+                win.open_developer_project(devloom_files[0])
+                return
         idx = self.tabs_files.currentIndex() if hasattr(self, 'tabs_files') else 0
         tab_names = ["Lights", "Darks", "Flats", "Bias", "Suelo"]
         target_name = tab_names[idx] if 0 <= idx < len(tab_names) else "Lights"

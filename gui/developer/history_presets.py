@@ -570,202 +570,29 @@ class HistoryPresetsMixin:
 
     def undo(self):
         """Deshace el último ajuste paramétrico o recorte realizado (Ctrl+Z)."""
-        if not self.undo_stack or self._is_undoing_or_redoing:
-            return
-        self._is_undoing_or_redoing = True
-        try:
-            target = self.undo_stack.pop()
-            if target.get("type") in ("crop", "bg_extract"):
-                op_type = target.get("type")
-                redo_item = {
-                    "type": op_type,
-                    "image_32bit": self.image_32bit.copy(),
-                    "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
-                    "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
-                    "starless_is_stretched": getattr(self, "starless_is_stretched", False),
-                    "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
-                    "current_mask": self.current_mask.copy() if self.current_mask is not None else None,
-                    "_cache_starless_ai": self._cache_starless_ai.copy() if getattr(self, "_cache_starless_ai", None) is not None else None,
-                    "_cache_ground_ai": self._cache_ground_ai.copy() if getattr(self, "_cache_ground_ai", None) is not None else None,
-                    "mask_layers": [l.shallow_snapshot() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
-                    "dust_spots": [dict(s) for s in self.canvas.get_dust_spots()] if hasattr(self, 'canvas') else [],
-                }
-                self.redo_stack.append(redo_item)
-                self.image_32bit = target["image_32bit"]
-                self.image_starless = target["image_starless"]
-                self.raw_linear_starless = target.get("raw_linear_starless")
-                self.starless_is_stretched = target.get("starless_is_stretched", False)
-                self.image_stars = target["image_stars"]
-                self.current_mask = target["current_mask"]
-                self._cache_starless_ai = target.get("_cache_starless_ai")
-                self._cache_ground_ai = target.get("_cache_ground_ai")
-                if "mask_layers" in target and hasattr(self, 'mask_layers_widget'):
-                    self.mask_layers_widget.blockSignals(True)
-                    self.mask_layers_widget.set_state(target["mask_layers"] or [])
-                    self.mask_layers_widget.blockSignals(False)
-                    self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
-                    self.mask_layers_widget.update_active_layer_histogram()
-                    if hasattr(self.mask_layers_widget, '_update_list_and_props_state'):
-                        self.mask_layers_widget._update_list_and_props_state()
-
-                if "dust_spots" in target and hasattr(self, 'canvas'):
-                    self.canvas.set_dust_spots(target["dust_spots"] or [])
-                    if hasattr(self, 'developer_state') and self.developer_state is not None:
-                        self.developer_state.dust_spots = target["dust_spots"] or []
-                    if hasattr(self, 'panel_dust') and self.panel_dust is not None:
-                        self.panel_dust.update_spot_count(len(target["dust_spots"] or []))
-
-                self.snapshot_before_pixmap = None
-                self.has_custom_snapshot = False
-                h, w = self.image_32bit.shape[:2]
-                self.canvas.set_native_image_size((w, h))
-                if self.current_mask is not None:
-                    self.canvas.set_refined_mask(self.current_mask, mode="bicolor")
-                self._generate_preview_proxy()
-                self._generate_before_reference()
-                self.update_stretch_preview(immediate=True)
-                self._update_canvas_info_label()
-                self._update_mask_status_ui()
-                op_label = "extracción de gradiente" if op_type == "bg_extract" else "recorte"
-                self.log_message(f"↺ Deshacer {op_label}: Restaurada imagen ({w}x{h} px)")
-            elif target.get("type") == "starless":
-                redo_item = {
-                    "type": "starless",
-                    "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
-                    "starless_is_stretched": getattr(self, "starless_is_stretched", False),
-                    "_cache_starless_ai": self._cache_starless_ai.copy() if getattr(self, "_cache_starless_ai", None) is not None else None,
-                    "starless_ai_denoise_enabled": getattr(self, "starless_ai_denoise_enabled", False),
-                    "denoise_strength": getattr(self, "denoise_strength", 0.0),
-                    "denoise_slider_val": self.slider_denoise.value() if hasattr(self, 'slider_denoise') else 0,
-                }
-                self.redo_stack.append(redo_item)
-                self.image_starless = target["image_starless"]
-                self.starless_is_stretched = target.get("starless_is_stretched", False)
-                self._cache_starless_ai = target.get("_cache_starless_ai")
-                self.starless_ai_denoise_enabled = target.get("starless_ai_denoise_enabled", False)
-                self.denoise_strength = target.get("denoise_strength", 0.0)
-                dn_slider_val = target.get("denoise_slider_val", int(round(self.denoise_strength * 100)))
-                if hasattr(self, 'slider_denoise'):
-                    self.slider_denoise.setValue(dn_slider_val)
-                has_ai = (self._cache_starless_ai is not None) and self.starless_ai_denoise_enabled
-                if hasattr(self, 'panel_starnet'):
-                    self.panel_starnet.set_ai_denoise_active(has_ai)
-                if hasattr(self, 'mask_layers_widget'):
-                    self.mask_layers_widget.set_ai_denoise_active(has_ai)
-                self._invalidate_pipeline_caches()
-                self._generate_preview_proxy()
-                if hasattr(self, 'mask_layers_widget'):
-                    self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
-                    self.mask_layers_widget.update_active_layer_histogram()
-                self.update_stretch_preview(immediate=True)
-                self.log_message("\u21ba Deshacer: Estirado Adaptativo de Starless revertido")
-            elif target.get("type") == "starnet_separation":
-                if hasattr(self, '_undo_debounce_timer'):
-                    self._undo_debounce_timer.stop()
-                redo_item = {
-                    "type": "starnet_separation",
-                    "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
-                    "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
-                    "starless_is_stretched": getattr(self, "starless_is_stretched", False),
-                    "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
-                    "mask_layers": [l.shallow_snapshot() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
-                }
-                self.redo_stack.append(redo_item)
-                self.image_starless = target["image_starless"]
-                self.raw_linear_starless = target.get("raw_linear_starless")
-                self.starless_is_stretched = target.get("starless_is_stretched", False)
-                self.image_stars = target.get("image_stars")
-                if self.image_starless is None:
-                    self.proxy_starless = None
-                    self.proxy_stars = None
-                    self.draft_starless = None
-                    self.draft_stars = None
-                    self.pyramid_starless = None
-                    self.pyramid_stars = None
-                has_starnet = self.image_starless is not None
-                self._set_starnet_tools_enabled(has_starnet)
-                self.combo_layer.setEnabled(has_starnet)
-                self.slider_stars.setEnabled(has_starnet)
-                if hasattr(self, 'mask_layers_widget'):
-                    self.mask_layers_widget.blockSignals(True)
-                    prev_layers = target.get("mask_layers", [])
-                    if prev_layers:
-                        self.mask_layers_widget.set_state(prev_layers)
-                    else:
-                        self.mask_layers_widget.clear_all_layers()
-                        self.mask_layers_widget.ensure_base_layer()
-                    self.mask_layers_widget.blockSignals(False)
-                    self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
-                    self.mask_layers_widget.update_active_layer_histogram()
-                self._invalidate_pipeline_caches()
-                self._generate_preview_proxy()
-                self.update_stretch_preview(immediate=True)
-                if hasattr(self, '_undo_debounce_timer'):
-                    self._undo_debounce_timer.stop()
-                self._last_committed_state = self._capture_state()
-                self.log_message(f"↺ Deshacer: Separación StarNet revertida ({len(self.undo_stack)} pasos restantes)")
-            elif target.get("type") == "mask":
-                redo_item = {
-                    "type": "mask",
-                    "name": target.get("name", "Máscara"),
-                    "old_mask": target.get("old_mask").copy() if target.get("old_mask") is not None else None,
-                    "new_mask": target.get("new_mask").copy() if target.get("new_mask") is not None else None,
-                }
-                self.redo_stack.append(redo_item)
-                self.current_mask = target.get("old_mask")
-                self.canvas.set_refined_mask(self.current_mask)
-                self._generate_preview_proxy()
-                self.update_stretch_preview(immediate=True)
-                self._update_mask_status_ui()
-                self.log_message("↺ Deshacer: Cambio de máscara revertido")
-            elif target.get("type") == "preset":
-                redo_item = {
-                    "type": "preset",
-                    "preset_name": target.get("preset_name", "Preset"),
-                    "params": self._capture_state(),
-                    "mask": self.current_mask.copy() if self.current_mask is not None else None,
-                    "mask_source_name": getattr(self, '_mask_source_name', ""),
-                    "badge_text": self.sec_presets.lbl_status.text() if hasattr(self, 'sec_presets') and hasattr(self.sec_presets, 'lbl_status') else "",
-                }
-                self.redo_stack.append(redo_item)
-
-                old_mask = target.get("mask")
-                self.current_mask = old_mask.copy() if old_mask is not None else None
-                self._mask_source_name = target.get("mask_source_name", "")
-                self.canvas.set_refined_mask(self.current_mask)
-                self.canvas.set_mask_visible(self.current_mask is not None)
-                self._update_mask_status_ui()
-
-                if hasattr(self, 'sec_presets'):
-                    badge = target.get("badge_text", "")
-                    self.sec_presets.set_status_badge(badge, "#80d8ff" if badge else "")
-
-                self._restore_state(target.get("params", {}))
-                self._last_committed_state = self._capture_state()
-                if hasattr(self, '_undo_debounce_timer'):
-                    self._undo_debounce_timer.stop()
-                self.log_message(f"↺ Deshacer: Preset '{target.get('preset_name', '')}' revertido ({len(self.undo_stack)} pasos restantes)")
-            else:
-                current = self._capture_state()
-                self.redo_stack.append(current)
-                self._restore_state(target)
-                self._last_committed_state = self._capture_state()
-                self.log_message(f"↺ Deshacer aplicado ({len(self.undo_stack)} pasos restantes)")
-        finally:
-            self._is_undoing_or_redoing = False
-            self._mark_dirty()
-            self._update_undo_redo_buttons()
+        self._apply_history_step(is_redo=False)
 
     def redo(self):
         """Rehace el ajuste paramétrico o recorte previamente deshecho (Ctrl+Y / Ctrl+Shift+Z)."""
-        if not self.redo_stack or self._is_undoing_or_redoing:
+        self._apply_history_step(is_redo=True)
+
+    def _apply_history_step(self, is_redo: bool) -> None:
+        """Ejecuta un paso de Deshacer (is_redo=False) o Rehacer (is_redo=True)."""
+        src_stack = self.redo_stack if is_redo else self.undo_stack
+        dst_stack = self.undo_stack if is_redo else self.redo_stack
+        if not src_stack or self._is_undoing_or_redoing:
             return
+
+        verb = "↻ Rehacer" if is_redo else "↺ Deshacer"
+        rem_label = "pasos por rehacer" if is_redo else "pasos restantes"
+
         self._is_undoing_or_redoing = True
         try:
-            target = self.redo_stack.pop()
-            if target.get("type") in ("crop", "bg_extract"):
-                op_type = target.get("type")
-                undo_item = {
+            target = src_stack.pop()
+            op_type = target.get("type")
+
+            if op_type in ("crop", "bg_extract"):
+                dst_stack.append({
                     "type": op_type,
                     "image_32bit": self.image_32bit.copy(),
                     "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
@@ -777,8 +604,7 @@ class HistoryPresetsMixin:
                     "_cache_ground_ai": self._cache_ground_ai.copy() if getattr(self, "_cache_ground_ai", None) is not None else None,
                     "mask_layers": [l.shallow_snapshot() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
                     "dust_spots": [dict(s) for s in self.canvas.get_dust_spots()] if hasattr(self, 'canvas') else [],
-                }
-                self.undo_stack.append(undo_item)
+                })
                 self.image_32bit = target["image_32bit"]
                 self.image_starless = target["image_starless"]
                 self.raw_linear_starless = target.get("raw_linear_starless")
@@ -815,9 +641,10 @@ class HistoryPresetsMixin:
                 self._update_canvas_info_label()
                 self._update_mask_status_ui()
                 op_label = "extracción de gradiente" if op_type == "bg_extract" else "recorte"
-                self.log_message(f"↻ Rehacer {op_label}: Restaurada ({w}x{h} px)")
-            elif target.get("type") == "starless":
-                undo_item = {
+                self.log_message(f"{verb} {op_label}: Restaurada imagen ({w}x{h} px)")
+
+            elif op_type == "starless":
+                dst_stack.append({
                     "type": "starless",
                     "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
                     "starless_is_stretched": getattr(self, "starless_is_stretched", False),
@@ -825,10 +652,9 @@ class HistoryPresetsMixin:
                     "starless_ai_denoise_enabled": getattr(self, "starless_ai_denoise_enabled", False),
                     "denoise_strength": getattr(self, "denoise_strength", 0.0),
                     "denoise_slider_val": self.slider_denoise.value() if hasattr(self, 'slider_denoise') else 0,
-                }
-                self.undo_stack.append(undo_item)
+                })
                 self.image_starless = target["image_starless"]
-                self.starless_is_stretched = target.get("starless_is_stretched", True)
+                self.starless_is_stretched = target.get("starless_is_stretched", is_redo)
                 self._cache_starless_ai = target.get("_cache_starless_ai")
                 self.starless_ai_denoise_enabled = target.get("starless_ai_denoise_enabled", False)
                 self.denoise_strength = target.get("denoise_strength", 0.0)
@@ -846,19 +672,20 @@ class HistoryPresetsMixin:
                     self.mask_layers_widget.invalidate_layer_thumbnail(None, rebuild_now=True)
                     self.mask_layers_widget.update_active_layer_histogram()
                 self.update_stretch_preview(immediate=True)
-                self.log_message("\u21bb Rehacer: Estirado Adaptativo de Starless restaurado")
-            elif target.get("type") == "starnet_separation":
+                action_txt = "restaurado" if is_redo else "revertido"
+                self.log_message(f"{verb}: Estirado Adaptativo de Starless {action_txt}")
+
+            elif op_type == "starnet_separation":
                 if hasattr(self, '_undo_debounce_timer'):
                     self._undo_debounce_timer.stop()
-                undo_item = {
+                dst_stack.append({
                     "type": "starnet_separation",
                     "image_starless": self.image_starless.copy() if self.image_starless is not None else None,
                     "raw_linear_starless": self.raw_linear_starless.copy() if getattr(self, "raw_linear_starless", None) is not None else None,
                     "starless_is_stretched": getattr(self, "starless_is_stretched", False),
                     "image_stars": self.image_stars.copy() if self.image_stars is not None else None,
                     "mask_layers": [l.shallow_snapshot() for l in self.mask_layers_widget.layers] if hasattr(self, 'mask_layers_widget') else [],
-                }
-                self.undo_stack.append(undo_item)
+                })
                 self.image_starless = target["image_starless"]
                 self.raw_linear_starless = target.get("raw_linear_starless")
                 self.starless_is_stretched = target.get("starless_is_stretched", False)
@@ -876,9 +703,9 @@ class HistoryPresetsMixin:
                 self.slider_stars.setEnabled(has_starnet)
                 if hasattr(self, 'mask_layers_widget'):
                     self.mask_layers_widget.blockSignals(True)
-                    next_layers = target.get("mask_layers", [])
-                    if next_layers:
-                        self.mask_layers_widget.set_state(next_layers)
+                    saved_layers = target.get("mask_layers", [])
+                    if saved_layers:
+                        self.mask_layers_widget.set_state(saved_layers)
                     else:
                         self.mask_layers_widget.clear_all_layers()
                         self.mask_layers_widget.ensure_base_layer()
@@ -891,34 +718,38 @@ class HistoryPresetsMixin:
                 if hasattr(self, '_undo_debounce_timer'):
                     self._undo_debounce_timer.stop()
                 self._last_committed_state = self._capture_state()
-                self.log_message(f"↻ Rehacer: Separación StarNet restaurada ({len(self.redo_stack)} pasos por rehacer)")
-            elif target.get("type") == "mask":
-                undo_item = {
+                action_txt = "restaurada" if is_redo else "revertida"
+                self.log_message(f"{verb}: Separación StarNet {action_txt} ({len(src_stack)} {rem_label})")
+
+            elif op_type == "mask":
+                dst_stack.append({
                     "type": "mask",
                     "name": target.get("name", "Máscara"),
-                    "old_mask": self.current_mask.copy() if self.current_mask is not None else None,
-                    "new_mask": target["new_mask"].copy() if target.get("new_mask") is not None else None,
-                }
-                self.undo_stack.append(undo_item)
-                self.current_mask = target.get("new_mask")
+                    "old_mask": (
+                        self.current_mask.copy() if is_redo and self.current_mask is not None
+                        else (target.get("old_mask").copy() if (not is_redo and target.get("old_mask") is not None) else None)
+                    ),
+                    "new_mask": target.get("new_mask").copy() if target.get("new_mask") is not None else None,
+                })
+                self.current_mask = target.get("new_mask" if is_redo else "old_mask")
                 self.canvas.set_refined_mask(self.current_mask)
                 self._generate_preview_proxy()
                 self.update_stretch_preview(immediate=True)
                 self._update_mask_status_ui()
-                self.log_message("↻ Rehacer: Cambio de máscara restablecido")
-            elif target.get("type") == "preset":
-                undo_item = {
+                action_txt = "restablecido" if is_redo else "revertido"
+                self.log_message(f"{verb}: Cambio de máscara {action_txt}")
+
+            elif op_type == "preset":
+                dst_stack.append({
                     "type": "preset",
                     "preset_name": target.get("preset_name", "Preset"),
                     "params": self._capture_state(),
                     "mask": self.current_mask.copy() if self.current_mask is not None else None,
                     "mask_source_name": getattr(self, '_mask_source_name', ""),
                     "badge_text": self.sec_presets.lbl_status.text() if hasattr(self, 'sec_presets') and hasattr(self.sec_presets, 'lbl_status') else "",
-                }
-                self.undo_stack.append(undo_item)
-
-                new_mask = target.get("mask")
-                self.current_mask = new_mask.copy() if new_mask is not None else None
+                })
+                restored_mask = target.get("mask")
+                self.current_mask = restored_mask.copy() if restored_mask is not None else None
                 self._mask_source_name = target.get("mask_source_name", "")
                 self.canvas.set_refined_mask(self.current_mask)
                 self.canvas.set_mask_visible(self.current_mask is not None)
@@ -932,13 +763,14 @@ class HistoryPresetsMixin:
                 self._last_committed_state = self._capture_state()
                 if hasattr(self, '_undo_debounce_timer'):
                     self._undo_debounce_timer.stop()
-                self.log_message(f"↻ Rehacer: Preset '{target.get('preset_name', '')}' restaurado ({len(self.redo_stack)} pasos por rehacer)")
+                action_txt = "restaurado" if is_redo else "revertido"
+                self.log_message(f"{verb}: Preset '{target.get('preset_name', '')}' {action_txt} ({len(src_stack)} {rem_label})")
+
             else:
-                current = self._capture_state()
-                self.undo_stack.append(current)
+                dst_stack.append(self._capture_state())
                 self._restore_state(target)
                 self._last_committed_state = self._capture_state()
-                self.log_message(f"↻ Rehacer aplicado ({len(self.redo_stack)} pasos por rehacer)")
+                self.log_message(f"{verb} aplicado ({len(src_stack)} {rem_label})")
         finally:
             self._is_undoing_or_redoing = False
             self._mark_dirty()

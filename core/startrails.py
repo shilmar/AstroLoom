@@ -945,42 +945,38 @@ def generate_startrail(
         return loaded_frames[idx]
 
     try:
-        if suppress_streaks:
-            prev_clean: Optional[np.ndarray] = None
-            prev_weight: float = 1.0
-            prev_dilated_stars: Optional[np.ndarray] = None
+        prev_weight: float = 1.0
+        prev_dilated_stars: Optional[np.ndarray] = None
 
-            for i in range(n_files):
-                if abort_flag and abort_flag():
-                    raise InterruptedError("Procesamiento de trazas cancelado por el usuario.")
+        for i in range(n_files):
+            if abort_flag and abort_flag():
+                raise InterruptedError("Procesamiento de trazas cancelado por el usuario.")
 
-                fname = os.path.basename(files[i])
-                pct = int(10 + (i / n_files) * 80)
+            fname = os.path.basename(files[i])
+            pct = int(10 + (i / n_files) * 80)
+            tl_tag = " [Time-Lapse]" if timelapse_enabled else ""
 
-                curr = get_frame(i)
-                h, w = curr.shape[:2]
+            curr = get_frame(i)
+            h, w = curr.shape[:2]
 
-                # Ajustar dimensiones de la máscara una sola vez si difiere en resolución
-                if sky_mask_bool is not None and sky_mask_bool.shape[:2] != (h, w):
-                    sm_res = cv2.resize(sky_mask_bool.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
-                    sky_mask_bool = (sm_res > 0)
+            # Ajustar dimensiones de la máscara una sola vez si difiere en resolución
+            if sky_mask_bool is not None and sky_mask_bool.shape[:2] != (h, w):
+                sm_res = cv2.resize(sky_mask_bool.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
+                sky_mask_bool = (sm_res > 0)
 
+            if suppress_streaks:
                 if i == 0 and n_files >= 3:
-                    ref_A = get_frame(1)
-                    ref_B = get_frame(2)
+                    ref_A, ref_B = get_frame(1), get_frame(2)
                 elif i == n_files - 1 and n_files >= 3:
-                    ref_A = get_frame(n_files - 3)
-                    ref_B = get_frame(n_files - 2)
+                    ref_A, ref_B = get_frame(n_files - 3), get_frame(n_files - 2)
                 elif n_files >= 2:
                     ref_A = get_frame(i - 1 if i > 0 else 1)
                     ref_B = get_frame(i + 1 if i < n_files - 1 else 0)
                 else:
-                    ref_A = None
-                    ref_B = None
+                    ref_A, ref_B = None, None
 
-                # Detección y supresión de satélites / aviones (Hough / Morfológico)
                 t0_detect = time.perf_counter()
-                cleaned_img, num_streaks = clean_frame_streaks(
+                work_img, num_streaks = clean_frame_streaks(
                     curr, ref_A, ref_B,
                     sky_mask=sky_mask_bool,
                     sensitivity=streak_sensitivity,
@@ -991,12 +987,9 @@ def generate_startrail(
                 t_streak_detection += dt_detect
                 total_streaks += num_streaks
 
-                # Liberar memoria de fotogramas pasados que ya no se utilizarán
-                keys_to_del = [k for k in list(loaded_frames.keys()) if k < i - 1]
-                for k in keys_to_del:
+                for k in [k for k in list(loaded_frames.keys()) if k < i - 1]:
                     del loaded_frames[k]
 
-                tl_tag = " [Time-Lapse]" if timelapse_enabled else ""
                 if num_streaks > 0:
                     logger.info(
                         f"[DETECCIÓN TRAZAS] Toma {i+1}/{n_files} ({fname}): "
@@ -1009,212 +1002,78 @@ def generate_startrail(
                         )
                 elif progress_callback:
                     progress_callback(pct, f"Integrando toma ({i+1}/{n_files}): {fname}{tl_tag}")
-
-                if i == ref_idx:
-                    ref_frame = cleaned_img.copy()
-
-                curr_weight = comet_weights[i] if (mode == "comet" and comet_weights is not None) else 1.0
-                if mode == "comet" and comet_weights is not None:
-                    frame_sky = cleaned_img * curr_weight
-                else:
-                    frame_sky = cleaned_img
-
-                t0_step_acc = time.perf_counter()
-                if sky_acc is None:
-                    sky_acc = frame_sky.copy()
-                elif HAS_RUST and hasattr(astroloom_rs, "accumulate_startrail_step_rs"):
-                    curr_dilated_stars = None
-                    if fill_gaps:
-                        t0_gap = time.perf_counter()
-                        curr_dilated_stars = extract_dilated_stars(
-                            cleaned_img,
-                            radius=gap_fill_radius,
-                            threshold_factor=gap_fill_threshold_factor,
-                            sky_mask_bool=sky_mask_bool,
-                            kernel=gap_kernel
-                        )
-                        t_gap_fill += time.perf_counter() - t0_gap
-                    w_bridge = (0.5 * (prev_weight + curr_weight)) if (mode == "comet" and comet_weights is not None) else 1.0
-                    astroloom_rs.accumulate_startrail_step_rs(
-                        sky_acc,
-                        np.ascontiguousarray(cleaned_img, dtype=np.float32),
-                        weight=float(curr_weight),
-                        prev_dilated=prev_dilated_stars,
-                        curr_dilated=curr_dilated_stars,
-                        w_bridge=float(w_bridge)
-                    )
-                    if fill_gaps:
-                        prev_dilated_stars = curr_dilated_stars
-                else:
-                    if fill_gaps:
-                        t0_gap = time.perf_counter()
-                        curr_dilated_stars = extract_dilated_stars(
-                            cleaned_img,
-                            radius=gap_fill_radius,
-                            threshold_factor=gap_fill_threshold_factor,
-                            sky_mask_bool=sky_mask_bool,
-                            kernel=gap_kernel
-                        )
-                        if prev_dilated_stars is not None:
-                            bridge = np.minimum(prev_dilated_stars, curr_dilated_stars)
-                            bridge[bridge < 0.005] = 0.0
-                            if mode == "comet" and comet_weights is not None:
-                                w_bridge = 0.5 * (prev_weight + curr_weight)
-                                bridge = bridge * w_bridge
-                            np.maximum(sky_acc, bridge, out=sky_acc)
-                        prev_dilated_stars = curr_dilated_stars
-                        t_gap_fill += time.perf_counter() - t0_gap
-
-                    np.maximum(sky_acc, frame_sky, out=sky_acc)
-
-                if fill_gaps and prev_dilated_stars is None:
-                    t0_gap = time.perf_counter()
-                    prev_dilated_stars = extract_dilated_stars(
-                        cleaned_img,
-                        radius=gap_fill_radius,
-                        threshold_factor=gap_fill_threshold_factor,
-                        sky_mask_bool=sky_mask_bool,
-                        kernel=gap_kernel
-                    )
-                    t_gap_fill += time.perf_counter() - t0_gap
-
-                t_accum += time.perf_counter() - t0_step_acc
-
-                prev_clean = cleaned_img
-                prev_weight = curr_weight
-
-                if timelapse_enabled:
-                    t0_tl = time.perf_counter()
-                    _write_timelapse_frame(i)
-                    t_timelapse += time.perf_counter() - t0_tl
-
-                if use_clean_ground and mask_3c is not None and ground_mode == "average":
-                    t0_gnd = time.perf_counter()
-                    if ground_sum is None:
-                        ground_sum = cleaned_img.astype(np.float64)
-                    else:
-                        ground_sum += cleaned_img
-                    t_ground += time.perf_counter() - t0_gnd
-
-            loaded_frames.clear()
-
-        else:
-            # Acumulación directa estándar con prefetching multihilo concurrente
-            prev_img: Optional[np.ndarray] = None
-            prev_weight: float = 1.0
-            prev_dilated_stars: Optional[np.ndarray] = None
-
-            for i in range(n_files):
-                if abort_flag and abort_flag():
-                    raise InterruptedError("Procesamiento de trazas cancelado por el usuario.")
-
-                fname = os.path.basename(files[i])
-                pct = int(10 + (i / n_files) * 80)
-                tl_tag = " [Time-Lapse]" if timelapse_enabled else ""
+            else:
+                work_img = curr
                 if progress_callback:
                     progress_callback(pct, f"Integrando toma ({i+1}/{n_files}): {fname}{tl_tag}")
 
-                img = get_frame(i)
+            if i == ref_idx:
+                ref_frame = work_img.copy()
 
-                h, w = img.shape[:2]
-                if sky_mask_bool is not None and sky_mask_bool.shape[:2] != (h, w):
-                    sm_res = cv2.resize(sky_mask_bool.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
-                    sky_mask_bool = (sm_res > 0)
+            curr_weight = comet_weights[i] if (mode == "comet" and comet_weights is not None) else 1.0
 
-                if i == ref_idx:
-                    ref_frame = img.copy()
-
-                curr_weight = comet_weights[i] if (mode == "comet" and comet_weights is not None) else 1.0
-                if mode == "comet" and comet_weights is not None:
-                    frame_sky = img * curr_weight
-                else:
-                    frame_sky = img
-
-                t0_step_acc = time.perf_counter()
-                if sky_acc is None:
-                    sky_acc = frame_sky.copy()
-                elif HAS_RUST and hasattr(astroloom_rs, "accumulate_startrail_step_rs"):
-                    curr_dilated_stars = None
-                    if fill_gaps:
-                        t0_gap = time.perf_counter()
-                        curr_dilated_stars = extract_dilated_stars(
-                            img,
-                            radius=gap_fill_radius,
-                            threshold_factor=gap_fill_threshold_factor,
-                            sky_mask_bool=sky_mask_bool,
-                            kernel=gap_kernel
-                        )
-                        t_gap_fill += time.perf_counter() - t0_gap
-                    w_bridge = (0.5 * (prev_weight + curr_weight)) if (mode == "comet" and comet_weights is not None) else 1.0
-                    astroloom_rs.accumulate_startrail_step_rs(
-                        sky_acc,
-                        np.ascontiguousarray(img, dtype=np.float32),
-                        weight=float(curr_weight),
-                        prev_dilated=prev_dilated_stars,
-                        curr_dilated=curr_dilated_stars,
-                        w_bridge=float(w_bridge)
-                    )
-                    if fill_gaps:
-                        prev_dilated_stars = curr_dilated_stars
-                else:
-                    if fill_gaps:
-                        t0_gap = time.perf_counter()
-                        curr_dilated_stars = extract_dilated_stars(
-                            img,
-                            radius=gap_fill_radius,
-                            threshold_factor=gap_fill_threshold_factor,
-                            sky_mask_bool=sky_mask_bool,
-                            kernel=gap_kernel
-                        )
-                        if prev_dilated_stars is not None:
-                            bridge = np.minimum(prev_dilated_stars, curr_dilated_stars)
-                            bridge[bridge < 0.005] = 0.0
-                            if mode == "comet" and comet_weights is not None:
-                                w_bridge = 0.5 * (prev_weight + curr_weight)
-                                bridge = bridge * w_bridge
-                            np.maximum(sky_acc, bridge, out=sky_acc)
-                        prev_dilated_stars = curr_dilated_stars
-                        t_gap_fill += time.perf_counter() - t0_gap
-
-                    np.maximum(sky_acc, frame_sky, out=sky_acc)
-
-                if fill_gaps and prev_dilated_stars is None:
+            t0_step_acc = time.perf_counter()
+            if sky_acc is None:
+                sky_acc = (work_img * curr_weight).astype(np.float32) if (mode == "comet" and comet_weights is not None) else work_img.copy()
+            else:
+                curr_dilated_stars = None
+                if fill_gaps:
                     t0_gap = time.perf_counter()
-                    prev_dilated_stars = extract_dilated_stars(
-                        img,
+                    curr_dilated_stars = extract_dilated_stars(
+                        work_img,
                         radius=gap_fill_radius,
                         threshold_factor=gap_fill_threshold_factor,
                         sky_mask_bool=sky_mask_bool,
                         kernel=gap_kernel
                     )
                     t_gap_fill += time.perf_counter() - t0_gap
+                w_bridge = (0.5 * (prev_weight + curr_weight)) if (mode == "comet" and comet_weights is not None) else 1.0
+                astroloom_rs.accumulate_startrail_step_rs(
+                    sky_acc,
+                    np.ascontiguousarray(work_img, dtype=np.float32),
+                    weight=float(curr_weight),
+                    prev_dilated=prev_dilated_stars,
+                    curr_dilated=curr_dilated_stars,
+                    w_bridge=float(w_bridge)
+                )
+                if fill_gaps:
+                    prev_dilated_stars = curr_dilated_stars
 
-                t_accum += time.perf_counter() - t0_step_acc
+            if fill_gaps and prev_dilated_stars is None:
+                t0_gap = time.perf_counter()
+                prev_dilated_stars = extract_dilated_stars(
+                    work_img,
+                    radius=gap_fill_radius,
+                    threshold_factor=gap_fill_threshold_factor,
+                    sky_mask_bool=sky_mask_bool,
+                    kernel=gap_kernel
+                )
+                t_gap_fill += time.perf_counter() - t0_gap
 
-                prev_img = img
-                prev_weight = curr_weight
+            t_accum += time.perf_counter() - t0_step_acc
+            prev_weight = curr_weight
 
-                if timelapse_enabled:
-                    t0_tl = time.perf_counter()
-                    _write_timelapse_frame(i)
-                    t_timelapse += time.perf_counter() - t0_tl
+            if timelapse_enabled:
+                t0_tl = time.perf_counter()
+                _write_timelapse_frame(i)
+                t_timelapse += time.perf_counter() - t0_tl
 
-                if use_clean_ground and mask_3c is not None and ground_mode == "average":
-                    t0_gnd = time.perf_counter()
-                    if ground_sum is None:
-                        ground_sum = img.astype(np.float64)
-                    else:
-                        ground_sum += img
-                    t_ground += time.perf_counter() - t0_gnd
+            if use_clean_ground and mask_3c is not None and ground_mode == "average":
+                t0_gnd = time.perf_counter()
+                if ground_sum is None:
+                    ground_sum = work_img.astype(np.float64)
+                else:
+                    ground_sum += work_img
+                t_ground += time.perf_counter() - t0_gnd
 
-                # Liberar memoria de la toma procesada
-                if i in loaded_frames:
-                    del loaded_frames[i]
+            if not suppress_streaks and i in loaded_frames:
+                del loaded_frames[i]
+
+        loaded_frames.clear()
 
     finally:
         prefetch_exec.shutdown(wait=False, cancel_futures=True)
         if video_writer is not None:
-            video_writer.release()
             video_writer.release()
 
     if sky_acc is None:

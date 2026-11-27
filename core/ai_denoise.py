@@ -207,112 +207,16 @@ def _get_tile_coords(length: int, tile_size: int, overlap: int) -> List[int]:
     return sorted(list(set(coords)))
 
 
-_GPU_FALLBACK_LISTENERS: List[Callable[[str], None]] = []
-
-
-def add_gpu_fallback_listener(cb: Callable[[str], None]) -> None:
-    """Registra un callback que se invoca cuando la inferencia degrada de GPU a CPU."""
-    if cb not in _GPU_FALLBACK_LISTENERS:
-        _GPU_FALLBACK_LISTENERS.append(cb)
-
-
-def notify_gpu_fallback(reason: str) -> None:
-    """Notifica a todos los escuchas registrados de una degradación a CPU."""
-    for cb in _GPU_FALLBACK_LISTENERS:
-        try:
-            cb(reason)
-        except Exception:
-            pass
-
-
-def _get_cache_dir(model_path: str) -> str:
-    root = os.path.dirname(os.path.abspath(model_path))
-    cache_dir = os.path.join(root, ".cache")
-    os.makedirs(cache_dir, exist_ok=True)
-    return cache_dir
-
-
-def _get_cached_graph_path(model_path: str, provider_tag: str) -> str:
-    cache_dir = _get_cache_dir(model_path)
-    stem = os.path.splitext(os.path.basename(model_path))[0]
-    return os.path.join(cache_dir, f"{stem}_{provider_tag}_opt.onnx")
-
-
-def _is_cache_valid(cache_path: str, original_path: str) -> bool:
-    try:
-        if not os.path.isfile(cache_path) or os.path.getsize(cache_path) == 0:
-            return False
-        return os.path.getmtime(cache_path) >= os.path.getmtime(original_path)
-    except Exception:
-        return False
-
-
-_SESSION_CACHE: dict[str, "ort.InferenceSession"] = {}
-
-
-def clear_session_cache() -> None:
-    """Libera las sesiones ONNX cacheadas para devolver VRAM/RAM al sistema."""
-    _SESSION_CACHE.clear()
-
-
-def _create_inference_session(model_path: str, use_cache: bool = True, force_cpu: bool = False) -> "ort.InferenceSession":
-    """
-    Inicializa o recupera de caché la sesión ONNX con el proveedor de hardware más rápido disponible.
-    Utiliza caché de grafos optimizados serializados en models/.cache/.
-    """
-    abs_path = os.path.abspath(model_path)
-    cache_key = f"{abs_path}_cpu" if force_cpu else abs_path
-    if use_cache and cache_key in _SESSION_CACHE:
-        return _SESSION_CACHE[cache_key]
-
-    available_providers = ort.get_available_providers()
-    if force_cpu:
-        providers = ["CPUExecutionProvider"]
-        provider_tag = "cpu"
-    else:
-        providers = []
-        if "CUDAExecutionProvider" in available_providers:
-            providers.append("CUDAExecutionProvider")
-        if "DmlExecutionProvider" in available_providers:
-            providers.append("DmlExecutionProvider")
-        providers.append("CPUExecutionProvider")
-        provider_tag = "gpu" if len(providers) > 1 else "cpu"
-
-    opts = ort.SessionOptions()
-    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    cpu_cores = os.cpu_count() or 4
-    opts.intra_op_num_threads = min(16, max(1, cpu_cores))
-    opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-
-    cache_file = _get_cached_graph_path(abs_path, provider_tag)
-
-    if _is_cache_valid(cache_file, abs_path):
-        try:
-            sess = ort.InferenceSession(cache_file, sess_options=opts, providers=providers)
-            if use_cache:
-                _SESSION_CACHE[cache_key] = sess
-            return sess
-        except Exception as e:
-            logger.warning(f"Error cargando grafo NAFNet optimizado ({cache_file}): {e}. Recompilando...")
-            try:
-                os.remove(cache_file)
-            except OSError:
-                pass
-
-    try:
-        opts.optimized_model_filepath = cache_file
-    except Exception:
-        pass
-
-    try:
-        sess = ort.InferenceSession(abs_path, sess_options=opts, providers=providers)
-    except Exception:
-        opts.optimized_model_filepath = ""
-        sess = ort.InferenceSession(abs_path, sess_options=opts, providers=providers)
-
-    if use_cache:
-        _SESSION_CACHE[cache_key] = sess
-    return sess
+from core.onnx_runtime import (
+    HAS_ONNX,
+    add_gpu_fallback_listener,
+    clear_session_cache,
+    create_inference_session as _create_inference_session,
+    evict_session,
+    get_cached_session,
+    notify_gpu_fallback,
+    set_cached_session,
+)
 
 
 def _compute_image_stats(img: np.ndarray) -> Tuple[float, float, float]:
@@ -416,12 +320,12 @@ def _run_single_scale_tiled(
                     logger.warning(f"Error GPU en NAFNet ({run_err}). Degradando a CPU...")
                     notify_gpu_fallback(f"NAFNet AI Denoise: {run_err}")
                     import gc
-                    _SESSION_CACHE.pop(os.path.abspath(model_path), None)
+                    evict_session(model_path, force_cpu=False)
                     gc.collect()
                     try:
                         session = _create_inference_session(model_path, use_cache=True, force_cpu=True)
                         # Actualizar caché principal para que pasadas posteriores usen CPU directamente
-                        _SESSION_CACHE[os.path.abspath(model_path)] = session
+                        set_cached_session(model_path, session, force_cpu=False)
                         input_name = session.get_inputs()[0].name
                         output_name = session.get_outputs()[0].name
                         outputs = session.run([output_name], {input_name: tensor_in})
@@ -435,13 +339,9 @@ def _run_single_scale_tiled(
             out_tile = outputs[0].squeeze(0)
             out_tile = np.transpose(out_tile, (1, 2, 0))
 
-            if HAS_RUST_AI and hasattr(astroloom_rs, 'accumulate_tile_hann_inplace_rs'):
-                astroloom_rs.accumulate_tile_hann_inplace_rs(
-                    accumulator_img, accumulator_weights, np.ascontiguousarray(out_tile, dtype=np.float32), hann_win, y, x
-                )
-            else:
-                accumulator_img[y:y + tile_size, x:x + tile_size] += out_tile * hann_win
-                accumulator_weights[y:y + tile_size, x:x + tile_size] += hann_win
+            astroloom_rs.accumulate_tile_hann_inplace_rs(
+                accumulator_img, accumulator_weights, np.ascontiguousarray(out_tile, dtype=np.float32), hann_win, y, x
+            )
 
             current_tile += 1
             if progress_callback and total_tiles_all > 0:
@@ -581,7 +481,7 @@ def run_nafnet_tiled_inference(
     # Pasada 2: Escala media (0.5x) para croma desacoplado
     if use_multiscale:
         # Recuperar sesión actualizada por si Pasada 1 degradó de GPU a CPU
-        session = _SESSION_CACHE.get(os.path.abspath(path), session)
+        session = get_cached_session(path, force_cpu=False) or session
         input_name = session.get_inputs()[0].name
         output_name = session.get_outputs()[0].name
         small_in = cv2.resize(base_stretched, (w_half, h_half), interpolation=cv2.INTER_AREA)
