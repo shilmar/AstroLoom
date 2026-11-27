@@ -3,6 +3,33 @@
 Todas las novedades, mejoras y correcciones notables de **AstroLoom** (anteriormente *Apilator*) se documentan en este archivo.
 El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.19.1] - 2026-11-27
+
+### Añadido
+* **Motor de Teselas Asíncrono 512×512 para Zoom 1:1 (`gui/developer/tile_engine.py`, `gui/developer/render_engine.py`, `gui/tab_developer.py`):**
+  - Rejilla fija de teselas 512×512 con caché LRU, caché de hitos por tesela (`spatial`, `stars`, `linear_u16`) y ruta rápida LUT 1:1.
+  - Prefetch concéntrico progresivo en segundo plano durante reposo (*Phase 3C*) con cancelación instantánea (0 ms) al interactuar.
+* **Kernels Espaciales Nativos en Rust — Fases 2 y 3B (`astroloom_rs/src/spatial_filters.rs`, `astroloom_rs/src/lib.rs`):**
+  - Nuevos kernels Rayon multihilo para ondículas à-trous (`atrous_wavelets_enhance_rs`), claridad (`apply_clarity_rs`), antiniebla (`apply_dehaze_rs`), contraste enmascarado (`adjust_contrast_masked_rs`), filtro autoguiado (`self_guided_filter_rs`), estirado MTF (`manual_stretch_rs`), reducción de ruido astronómica fusionada (`astro_denoise_rs`) y semilla de difusión estelar (`prepare_star_diffusion_seed_rs`), junto con apertura morfológica optimizada a escala 0.5×.
+* **Persistencia de Caché AI Denoise en Proyectos `.devloom` (`core/project_io.py`, `gui/developer/io_project_manager.py`):**
+  - Guardado y carga en 16 bits de las cachés de reducción de ruido IA (`starless_ai` y `ground_ai`) dentro del archivo de proyecto `.devloom`.
+
+### Modificado
+* **Scrubbing Fluido en Vivo 0.5× en Zoom 1:1 (`gui/developer/render_engine.py`, `gui/developer/async_worker.py`, `gui/developer/history_presets.py`):**
+  - Previsualización interactiva a escala 0.5× mientras se arrastran los deslizadores en Zoom 1:1, con refinado atómico completo a resolución 1:1 al soltar.
+* **Optimización del Pipeline de Revelado (`gui/developer/pipeline.py`, `core/mask_layers.py`, `core/deconvolution.py`, `core/orton.py`, `core/star_diffusion.py`, `core/sharpening.py`, `core/denoise.py`, `core/stretch.py`):**
+  - Mejoras en el caché de etapas del pipeline, filtros espaciales y subcomposición de capas.
+* **Créditos de Catálogos Astronómicos (`README.md`, `MANUAL_DE_USUARIO.md`):**
+  - Añadidos reconocimientos a los catálogos Hipparcos, Tycho-2, Gaia DR3, IAU y HYG.
+* **Sincronización Global de Versión:**
+  - Actualización transversal a `v0.19.1` en `core/__init__.py`, motor Rust (`Cargo.toml`, `Cargo.lock`, `pyproject.toml`) y documentación.
+
+### Corregido
+* **Eliminación de Pop-in y Parpadeos en Zoom 1:1 (`gui/developer/tile_engine.py`, `gui/developer/render_engine.py`, `gui/developer/history_presets.py`):**
+  - Intercambio atómico del viewport y coalescencia de deslizadores para evitar aparición progresiva irregular de teselas y destellos de fallback obsoletos.
+* **Deconvolución en Imágenes Pequeñas (`gui/developer/pipeline.py`):**
+  - Corregida la inicialización de `dw_dec`/`dh_dec` al ajustar parámetros de deconvolución en imágenes de ≤800 px.
+
 ## [0.19.0] - 2026-11-26
 
 ### Añadido

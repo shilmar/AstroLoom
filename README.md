@@ -4,7 +4,7 @@
 
 **Suite y Estación de Trabajo Integral para Astrofotografía de Paisaje, Cielo Profundo y Eventos Astronómicos**
 
-[![Version](https://img.shields.io/badge/version-v0.19.0-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
+[![Version](https://img.shields.io/badge/version-v0.19.1-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -43,6 +43,19 @@ Impulsada por una arquitectura híbrida que combina una interfaz gráfica reacti
 | **5. Startrails** | Circumpolares continuas o efecto cometa en streaming $O(1)$, supresión automática de satélites y aviones, relleno de pausas (*gap filling*), recuperación cromática de estrellas y exportación de vídeo 4K. |
 | **6. Lluvias de Meteoros** | Detección algorítmica de bólidos, cribado en galería interactiva, filtros anti-aviones/satélites y reproyección al radiante celeste con flujo neto. |
 | **7. Panorámicas (Mosaicos)** | Cosido 2D multifila de ultra-alta resolución, alineación por asterismos en Rust (<2 ms), fusión híbrida *Dual-Zone* (árboles nítidos sin efecto fantasma) y auto-recorte rectangular $O(H \times W)$. |
+
+---
+
+## 🚀 Novedades de la Versión v0.19.1
+
+* **Motor de Teselas 512×512 y Scrubbing 0.5× para Zoom 1:1 (`gui/developer/tile_engine.py`, `gui/developer/render_engine.py`):**
+  - Rejilla fija asíncrona con caché LRU, caché de hitos por tesela (`spatial`, `stars`, `linear_u16`), prefetch concéntrico progresivo con cancelación en 0 ms, intercambio atómico del viewport sin parpadeos y scrubbing en vivo a 0.5× con refinado 1:1 al soltar.
+* **Kernels Espaciales Nativos en Rust — Fases 2 y 3B (`astroloom_rs/src/spatial_filters.rs`):**
+  - Aceleración Rayon multihilo para ondículas à-trous, claridad, dehaze, contraste enmascarado, filtro autoguiado, estirado MTF, reducción de ruido astronómica fusionada y difusión estelar.
+* **Persistencia de Caché AI Denoise en `.devloom` (`core/project_io.py`):**
+  - Guardado y recarga automática de las capas de reducción de ruido IA (`starless_ai` y `ground_ai`) dentro del proyecto.
+* **Correcciones de Estabilidad en el Revelador (`gui/developer/pipeline.py`):**
+  - Corregido el scrubbing de deconvolución en imágenes de ≤800 px y la coalescencia de deslizadores en Zoom 1:1.
 
 ---
 
