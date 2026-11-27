@@ -1027,6 +1027,10 @@ class HistoryPresetsMixin:
             self.gnd_ev_val = self.panel_ground_sky.slider_gnd_ev.value() / 100.0
             self.gnd_shadows_val = self.panel_ground_sky.slider_gnd_sh.value() / 100.0
             self.gnd_bp_val = self.panel_ground_sky.slider_gnd_bp.value() / 1000.0
+            if hasattr(self.panel_ground_sky, 'slider_gnd_dn'):
+                self.gnd_denoise_val = self.panel_ground_sky.slider_gnd_dn.value() / 100.0
+                if hasattr(self, 'mask_layers_widget'):
+                    self.mask_layers_widget.set_ground_denoise_value(self.panel_ground_sky.slider_gnd_dn.value())
 
         if hasattr(self, 'panel_dust') and self.panel_dust is not None:
             spots = state.get("dust_spots", [])

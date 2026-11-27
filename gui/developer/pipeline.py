@@ -511,12 +511,24 @@ def apply_developer_pipeline(
                     sky_median = float(np.median(sample_s[mask_m_2d > 0.5])) if np.any(mask_m_2d > 0.5) else float(np.median(sample_s))
                 else:
                     sky_median = float(np.median(sample_s))
-            sn_contrasted = adjust_contrast(stretched, contrast_starless, pivot=sky_median, fast_draft=is_scrubbing)
-            if precomputed_mask is not None:
-                m2 = precomputed_mask[..., 0] if precomputed_mask.ndim == 3 else precomputed_mask
-                stretched = apply_blend_mode(stretched, sn_contrasted, BLEND_MODE_NORMAL, m2)
+            if HAS_RUST and hasattr(astroloom_rs, "adjust_contrast_masked_rs") and stretched.ndim == 3 and stretched.shape[2] == 3:
+                m2_c = None
+                if precomputed_mask is not None:
+                    m2 = precomputed_mask[..., 0] if precomputed_mask.ndim == 3 else precomputed_mask
+                    m2_c = np.ascontiguousarray(m2, dtype=np.float32)
+                stretched = astroloom_rs.adjust_contrast_masked_rs(
+                    np.ascontiguousarray(stretched, dtype=np.float32),
+                    float(contrast_starless),
+                    float(sky_median),
+                    m2_c,
+                )
             else:
-                stretched = sn_contrasted
+                sn_contrasted = adjust_contrast(stretched, contrast_starless, pivot=sky_median, fast_draft=is_scrubbing)
+                if precomputed_mask is not None:
+                    m2 = precomputed_mask[..., 0] if precomputed_mask.ndim == 3 else precomputed_mask
+                    stretched = apply_blend_mode(stretched, sn_contrasted, BLEND_MODE_NORMAL, m2)
+                else:
+                    stretched = sn_contrasted
 
         # 9. Contraste Global
         contrast_global = state.contrast_val / 100.0

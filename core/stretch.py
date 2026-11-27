@@ -369,6 +369,19 @@ def adjust_contrast(img_rgb: np.ndarray, contrast: float = 0.0, pivot: float = N
     else:
         pivot = float(np.clip(pivot, 0.10, 0.70))
 
+    if (
+        HAS_RUST
+        and hasattr(astroloom_rs, "adjust_contrast_masked_rs")
+        and img_rgb.ndim == 3
+        and img_rgb.shape[2] == 3
+    ):
+        return astroloom_rs.adjust_contrast_masked_rs(
+            np.ascontiguousarray(img_rgb, dtype=np.float32),
+            float(contrast),
+            float(pivot),
+            None,
+        )
+
     x = np.clip(img_rgb, 0.0, 1.0)
 
     if fast_draft:
@@ -514,6 +527,18 @@ def apply_clarity(img_rgb: np.ndarray, strength: float = 0.0, ref_min_dim: int |
     if abs(strength) < 1e-4:
         return img_rgb
 
+    if (
+        HAS_RUST
+        and hasattr(astroloom_rs, "apply_clarity_rs")
+        and img_rgb.ndim == 3
+        and img_rgb.shape[2] == 3
+    ):
+        return astroloom_rs.apply_clarity_rs(
+            np.ascontiguousarray(img_rgb, dtype=np.float32),
+            float(strength),
+            int(ref_min_dim) if ref_min_dim is not None else None,
+        )
+
     # Luminancia perceptual
     lum = 0.2126 * img_rgb[..., 0] + 0.7152 * img_rgb[..., 1] + 0.0722 * img_rgb[..., 2]
     
@@ -546,6 +571,19 @@ def apply_dehaze(
     """
     if abs(strength) < 1e-4:
         return img_rgb
+
+    if (
+        HAS_RUST
+        and hasattr(astroloom_rs, "apply_dehaze_rs")
+        and img_rgb.ndim == 3
+        and img_rgb.shape[2] == 3
+    ):
+        return astroloom_rs.apply_dehaze_rs(
+            np.ascontiguousarray(img_rgb, dtype=np.float32),
+            float(strength),
+            int(ref_min_dim) if ref_min_dim is not None else None,
+            float(global_airlight_p95) if global_airlight_p95 is not None else None,
+        )
 
     dark_ch = np.min(img_rgb, axis=2)
     h, w = img_rgb.shape[:2]
@@ -617,6 +655,22 @@ def realce_multiescala_ondiculas(
         return imagen_rgb
 
     is_color = (imagen_rgb.ndim == 3 and imagen_rgb.shape[2] == 3)
+    if is_color and HAS_RUST and hasattr(astroloom_rs, "atrous_wavelets_enhance_rs"):
+        h, w = imagen_rgb.shape[:2]
+        m_c = None
+        if sky_mask is not None:
+            m = np.squeeze(sky_mask).astype(np.float32)
+            if m.shape != (h, w):
+                m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
+            m_c = np.ascontiguousarray(m, dtype=np.float32)
+        return astroloom_rs.atrous_wavelets_enhance_rs(
+            np.ascontiguousarray(imagen_rgb, dtype=np.float32),
+            float(fuerza_estructura),
+            float(reduccion_fondo),
+            m_c,
+            float(global_pedestal) if global_pedestal is not None else None,
+        )
+
     if is_color:
         work_lum = 0.2126 * imagen_rgb[:, :, 0] + 0.7152 * imagen_rgb[:, :, 1] + 0.0722 * imagen_rgb[:, :, 2]
         work_lum = np.clip(work_lum, 0.0, 1.0).astype(np.float32)

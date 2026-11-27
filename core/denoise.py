@@ -12,6 +12,12 @@ from typing import Optional
 import numpy as np
 import cv2
 
+try:
+    import astroloom_rs
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
 
 def compute_denoise_mask(
     img_rgb: np.ndarray,
@@ -119,12 +125,17 @@ def apply_astro_denoise(
         # Calcular máscara combinada (sombras profundas + protección de gradientes)
         spatial_mask = compute_denoise_mask(safe_input, masking=masking, sky_mask=sky_mask)
 
-        # Filtrado bilateral en el canal de luminancia
-        d = 5 if is_draft else (9 if is_full_res else 7)
+        # Filtrado preservador de bordes O(1) paralelo en Rust (Self Guided Filter) con respaldo OpenCV bilateral
         sigma_color = float(0.03 + 0.12 * strength)
-        sigma_space = float((2.0 + 5.0 * strength) * (1.8 if is_full_res else 1.0))
-
-        y_filtered = cv2.bilateralFilter(y, d=d, sigmaColor=sigma_color, sigmaSpace=sigma_space)
+        if HAS_RUST and hasattr(astroloom_rs, "self_guided_filter_rs"):
+            r_gf = 2 if is_draft else (4 if is_full_res else 3)
+            eps_gf = float(sigma_color * sigma_color)
+            y_c = np.ascontiguousarray(y, dtype=np.float32)
+            y_filtered = astroloom_rs.self_guided_filter_rs(y_c, radius=r_gf, eps=eps_gf)
+        else:
+            d = 5 if is_draft else (9 if is_full_res else 7)
+            sigma_space = float((2.0 + 5.0 * strength) * (1.8 if is_full_res else 1.0))
+            y_filtered = cv2.bilateralFilter(y, d=d, sigmaColor=sigma_color, sigmaSpace=sigma_space)
 
         # Modulación proporcional por píxel
         blend_y = np.clip(strength * spatial_mask, 0.0, 1.0)

@@ -105,10 +105,15 @@ fn astroloom_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(photometry::apply_dualband_pipeline_fused, m)?)?;
     m.add_function(wrap_pyfunction!(photometry::apply_scnr_green_rs, m)?)?;
 
-    // 10. Supresión Banding CMOS, SDF Anti-Ghosting y Anti-Halo - Prioridad 8 (core/banding.py, core/masking.py y core/stacking.py)
+    // 10. Supresión Banding CMOS, SDF Anti-Ghosting, Anti-Halo y Filtros Espaciales Fase 2
     m.add_function(wrap_pyfunction!(spatial_filters::suppress_cmos_banding_rs, m)?)?;
     m.add_function(wrap_pyfunction!(spatial_filters::compose_sky_ground_sdf_rs, m)?)?;
     m.add_function(wrap_pyfunction!(spatial_filters::suppress_horizon_halos_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(spatial_filters::atrous_wavelets_enhance_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(spatial_filters::apply_clarity_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(spatial_filters::apply_dehaze_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(spatial_filters::adjust_contrast_masked_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(spatial_filters::self_guided_filter_rs, m)?)?;
 
     // 11. Astrometría por Triángulos, Cribado 3x3 y Mallas TPS - Prioridad 9 (core/panorama.py, core/frame_culling.py y core/stacking.py)
     m.add_function(wrap_pyfunction!(astrometry::find_max_inscribed_rect_rs, m)?)?;

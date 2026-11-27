@@ -30,6 +30,7 @@ def save_devloom_project(
     source_image_path: Optional[str] = None,
     starnet_data: Optional[Dict[str, Any]] = None,
     cropped_base_image: Optional[np.ndarray] = None,
+    ai_denoise_data: Optional[Dict[str, Any]] = None,
     progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> bool:
     """
@@ -105,6 +106,21 @@ def save_devloom_project(
 
     has_cropped_base = cropped_base_image is not None and isinstance(cropped_base_image, np.ndarray)
 
+    ai_denoise_images = []
+    ai_denoise_meta = {
+        "starless_ai_enabled": False,
+        "ground_ai_enabled": False,
+    }
+    if ai_denoise_data:
+        sl_ai = ai_denoise_data.get("starless_ai")
+        gnd_ai = ai_denoise_data.get("ground_ai")
+        if sl_ai is not None and isinstance(sl_ai, np.ndarray):
+            ai_denoise_images.append(("ai_denoise/starless_ai.png", sl_ai))
+            ai_denoise_meta["starless_ai_enabled"] = bool(ai_denoise_data.get("starless_ai_enabled", False))
+        if gnd_ai is not None and isinstance(gnd_ai, np.ndarray):
+            ai_denoise_images.append(("ai_denoise/ground_ai.png", gnd_ai))
+            ai_denoise_meta["ground_ai_enabled"] = bool(ai_denoise_data.get("ground_ai_enabled", False))
+
     source_info = {}
     if source_image_path:
         abs_source = os.path.abspath(source_image_path)
@@ -128,6 +144,7 @@ def save_devloom_project(
         "has_starnet": has_starnet,
         "has_cropped_base": has_cropped_base,
         "starless_is_stretched": clean_developer_state.get("starless_is_stretched", False) if clean_developer_state else False,
+        "ai_denoise": ai_denoise_meta,
         "developer_state": clean_developer_state,
         "mask_layers": serialized_layers,
     }
@@ -146,6 +163,9 @@ def save_devloom_project(
 
             for s_name, s_arr in starnet_images:
                 images_list.append((s_name, np.ascontiguousarray(s_arr, dtype=np.float32)))
+
+            for ai_name, ai_arr in ai_denoise_images:
+                images_list.append((ai_name, np.ascontiguousarray(ai_arr, dtype=np.float32)))
 
             if has_cropped_base and cropped_base_image is not None:
                 images_list.append(("base/cropped_base.png", np.ascontiguousarray(cropped_base_image, dtype=np.float32)))
@@ -182,6 +202,14 @@ def save_devloom_project(
                 ok, buf = cv2.imencode(".png", bgr_s, [cv2.IMWRITE_PNG_COMPRESSION, 6])
                 if ok:
                     zf.writestr(s_name, buf.tobytes())
+
+        for ai_name, ai_arr in ai_denoise_images:
+            _notify(75, f"Comprimiendo caché de reducción de ruido IA ({ai_name})...")
+            u16_ai = np.clip(ai_arr * 65535.0, 0, 65535).astype(np.uint16)
+            bgr_ai = cv2.cvtColor(u16_ai, cv2.COLOR_RGB2BGR) if u16_ai.ndim == 3 else u16_ai
+            ok, buf = cv2.imencode(".png", bgr_ai, [cv2.IMWRITE_PNG_COMPRESSION, 6])
+            if ok:
+                zf.writestr(ai_name, buf.tobytes())
 
         if has_cropped_base and cropped_base_image is not None:
             _notify(85, "Comprimiendo imagen base recortada (16-bit)...")
@@ -250,6 +278,14 @@ def load_devloom_project(
                 "raw_linear_starless": images_dict.get("starnet/raw_linear_starless.png"),
             }
 
+            ai_meta = manifest.get("ai_denoise") or {}
+            ai_denoise_out = {
+                "starless_ai": images_dict.get("ai_denoise/starless_ai.png"),
+                "ground_ai": images_dict.get("ai_denoise/ground_ai.png"),
+                "starless_ai_enabled": bool(ai_meta.get("starless_ai_enabled", False)),
+                "ground_ai_enabled": bool(ai_meta.get("ground_ai_enabled", False)),
+            }
+
             cropped_base = images_dict.get("base/cropped_base.png")
 
             _notify(100, "Lectura de proyecto finalizada.")
@@ -260,6 +296,7 @@ def load_devloom_project(
                 "master_sky_mask": master_sky,
                 "mask_layers": layers,
                 "starnet": starnet_out,
+                "ai_denoise": ai_denoise_out,
                 "cropped_base_image": cropped_base,
                 "has_starnet": manifest.get("has_starnet", False),
                 "starless_is_stretched": manifest.get("starless_is_stretched", False),
@@ -350,6 +387,24 @@ def load_devloom_project(
                 div = 65535.0 if dec.dtype == np.uint16 else 255.0
                 starnet_out["raw_linear_starless"] = dec.astype(np.float32) / div
 
+        ai_meta = manifest.get("ai_denoise") or {}
+        ai_denoise_out = {
+            "starless_ai": None,
+            "ground_ai": None,
+            "starless_ai_enabled": bool(ai_meta.get("starless_ai_enabled", False)),
+            "ground_ai_enabled": bool(ai_meta.get("ground_ai_enabled", False)),
+        }
+        for key, zip_name in (("starless_ai", "ai_denoise/starless_ai.png"), ("ground_ai", "ai_denoise/ground_ai.png")):
+            if zip_name in namelist:
+                raw_b = zf.read(zip_name)
+                arr = np.frombuffer(raw_b, np.uint8)
+                dec = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+                if dec is not None:
+                    if dec.ndim == 3:
+                        dec = cv2.cvtColor(dec, cv2.COLOR_BGR2RGB)
+                    div = 65535.0 if dec.dtype == np.uint16 else 255.0
+                    ai_denoise_out[key] = dec.astype(np.float32) / div
+
         cropped_base = None
         if "base/cropped_base.png" in namelist:
             _notify(95, "Extrayendo imagen base recortada (16-bit)...")
@@ -370,6 +425,7 @@ def load_devloom_project(
         "master_sky_mask": master_sky,
         "mask_layers": layers,
         "starnet": starnet_out,
+        "ai_denoise": ai_denoise_out,
         "cropped_base_image": cropped_base,
         "has_starnet": manifest.get("has_starnet", False),
         "starless_is_stretched": manifest.get("starless_is_stretched", False),

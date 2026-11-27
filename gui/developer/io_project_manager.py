@@ -919,6 +919,17 @@ class ProjectIOMixin:
                 except Exception:
                     pass
 
+            ai_denoise_data = None
+            sl_ai_cache = getattr(self, '_cache_starless_ai', None)
+            gnd_ai_cache = getattr(self, '_cache_ground_ai', None)
+            if sl_ai_cache is not None or gnd_ai_cache is not None:
+                ai_denoise_data = {
+                    "starless_ai": sl_ai_cache,
+                    "ground_ai": gnd_ai_cache,
+                    "starless_ai_enabled": bool(getattr(self, 'starless_ai_denoise_enabled', False)),
+                    "ground_ai_enabled": bool(getattr(self, 'gnd_ai_denoise_enabled', False)),
+                }
+
             from core.project_io import save_devloom_project
             ok = save_devloom_project(
                 file_path=filepath,
@@ -928,6 +939,7 @@ class ProjectIOMixin:
                 source_image_path=self.active_filepath,
                 starnet_data=starnet_data,
                 cropped_base_image=cropped_base,
+                ai_denoise_data=ai_denoise_data,
                 progress_callback=on_progress,
             )
 
@@ -1094,6 +1106,20 @@ class ProjectIOMixin:
             on_progress(90, "Restaurando parámetros de revelado y curvas...")
             if dev_state:
                 self._restore_state(dev_state, render_preview=False)
+
+            # 5b. Restaurar cachés de reducción de ruido IA (NAFNet) y estado visual de botones
+            ai_denoise_dict = proj_data.get("ai_denoise") or {}
+            sl_ai = ai_denoise_dict.get("starless_ai")
+            gnd_ai = ai_denoise_dict.get("ground_ai")
+            self._cache_starless_ai = np.ascontiguousarray(sl_ai, dtype=np.float32) if sl_ai is not None else None
+            self.starless_ai_denoise_enabled = bool(ai_denoise_dict.get("starless_ai_enabled", False)) and (self._cache_starless_ai is not None)
+            self._cache_ground_ai = np.ascontiguousarray(gnd_ai, dtype=np.float32) if gnd_ai is not None else None
+            self.gnd_ai_denoise_enabled = bool(ai_denoise_dict.get("ground_ai_enabled", False)) and (self._cache_ground_ai is not None)
+            if hasattr(self, 'panel_starnet'):
+                self.panel_starnet.set_ai_denoise_active(self.starless_ai_denoise_enabled)
+            if hasattr(self, 'mask_layers_widget'):
+                self.mask_layers_widget.set_ai_denoise_active(self.starless_ai_denoise_enabled)
+                self.mask_layers_widget.set_ground_ai_denoise_active(self.gnd_ai_denoise_enabled)
 
             # 6. Resetear historial de Deshacer/Rehacer al estado recién cargado
             self.undo_stack.clear()

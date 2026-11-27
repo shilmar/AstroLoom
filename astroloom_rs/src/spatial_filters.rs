@@ -688,3 +688,584 @@ pub fn suppress_horizon_halos_rs<'py>(
     let out_arr = Array3::from_shape_vec((h, w, c), out_vec).unwrap();
     out_arr.into_pyarray(py)
 }
+
+
+// ============================================================================
+// FASE 2 (ZOOM 1:1): ONDÍCULAS À-TROUS DISPERSAS, CLARITY/DEHAZE O(1) Y CONTRASTE LUT
+// ============================================================================
+
+#[inline(always)]
+fn reflect_idx(pos: isize, len: usize) -> usize {
+    if len <= 1 {
+        return 0;
+    }
+    let m = (len - 1) as isize;
+    let mut v = pos;
+    if v < 0 {
+        v = -v;
+    }
+    if v > m {
+        let cycle = 2 * m;
+        v %= cycle;
+        if v > m {
+            v = cycle - v;
+        }
+    }
+    v as usize
+}
+
+/// 1D horizontal sliding-window box blur (O(1) per pixel regardless of radius), Rayon parallelized.
+fn box_blur_h(src: &[f32], dst: &mut [f32], _h: usize, w: usize, r: usize) {
+    if r == 0 || w <= 1 {
+        dst.copy_from_slice(src);
+        return;
+    }
+    let inv_k = 1.0f32 / (2 * r + 1) as f32;
+    let ri = r as isize;
+    dst.par_chunks_exact_mut(w).enumerate().for_each(|(y, out_row)| {
+        let in_row = &src[y * w..(y + 1) * w];
+        let mut acc = 0.0f64;
+        for dx in -ri..=ri {
+            acc += in_row[reflect_idx(dx, w)] as f64;
+        }
+        out_row[0] = (acc as f32) * inv_k;
+        for x in 1..w {
+            let add_i = reflect_idx(x as isize + ri, w);
+            let sub_i = reflect_idx(x as isize - ri - 1, w);
+            acc += in_row[add_i] as f64 - in_row[sub_i] as f64;
+            out_row[x] = (acc as f32) * inv_k;
+        }
+    });
+}
+
+/// 1D vertical sliding-window box blur (O(1) per pixel regardless of radius), Rayon parallelized over column strips.
+fn box_blur_v(src: &[f32], dst: &mut [f32], h: usize, w: usize, r: usize) {
+    if r == 0 || h <= 1 {
+        dst.copy_from_slice(src);
+        return;
+    }
+    let inv_k = 1.0f32 / (2 * r + 1) as f32;
+    let ri = r as isize;
+    let strip = 64usize;
+    let n_strips = (w + strip - 1) / strip;
+    let dst_ptr = dst.as_mut_ptr() as usize;
+
+    (0..n_strips).into_par_iter().for_each(|s| {
+        let x0 = s * strip;
+        let x1 = (x0 + strip).min(w);
+        let sw = x1 - x0;
+        let mut acc = vec![0.0f64; sw];
+        for dy in -ri..=ri {
+            let ry = reflect_idx(dy, h) * w + x0;
+            for j in 0..sw {
+                acc[j] += src[ry + j] as f64;
+            }
+        }
+        let ptr = dst_ptr as *mut f32;
+        unsafe {
+            for j in 0..sw {
+                *ptr.add(x0 + j) = (acc[j] as f32) * inv_k;
+            }
+            for y in 1..h {
+                let add_row = reflect_idx(y as isize + ri, h) * w + x0;
+                let sub_row = reflect_idx(y as isize - ri - 1, h) * w + x0;
+                let out_row = y * w + x0;
+                for j in 0..sw {
+                    acc[j] += src[add_row + j] as f64 - src[sub_row + j] as f64;
+                    *ptr.add(out_row + j) = (acc[j] as f32) * inv_k;
+                }
+            }
+        }
+    });
+}
+
+/// Fast O(1) Gaussian approximation via 3-pass separable box blur.
+fn fast_gaussian_blur_2d(src: &[f32], h: usize, w: usize, sigma: f32) -> Vec<f32> {
+    if sigma < 0.5 || h <= 1 || w <= 1 {
+        return src.to_vec();
+    }
+    let n = 3.0f32;
+    let w_ideal = ((12.0 * sigma * sigma / n) + 1.0).sqrt();
+    let mut wl = w_ideal.floor() as usize;
+    if wl % 2 == 0 {
+        wl = wl.saturating_sub(1);
+    }
+    wl = wl.max(1);
+    let wu = wl + 2;
+    let m_ideal = (12.0 * sigma * sigma - n * (wl * wl) as f32 - 4.0 * n * wl as f32 - 3.0 * n)
+        / (-4.0 * wl as f32 - 4.0);
+    let m = m_ideal.round().clamp(0.0, n) as usize;
+
+    let mut cur = src.to_vec();
+    let mut tmp = vec![0.0f32; h * w];
+    for pass in 0..3 {
+        let box_w = if pass < m { wl } else { wu };
+        let r = box_w / 2;
+        if r > 0 {
+            box_blur_h(&cur, &mut tmp, h, w, r);
+            box_blur_v(&tmp, &mut cur, h, w, r);
+        }
+    }
+    cur
+}
+
+/// Realce multiescala por ondículas À-Trous B3-Spline dispersas (5 taps reales por eje).
+#[pyfunction]
+#[pyo3(signature = (img_rgb, fuerza_estructura=0.0, reduccion_fondo=0.0, sky_mask=None, global_pedestal=None))]
+pub fn atrous_wavelets_enhance_rs<'py>(
+    py: Python<'py>,
+    img_rgb: PyReadonlyArray3<'py, f32>,
+    fuerza_estructura: f32,
+    reduccion_fondo: f32,
+    sky_mask: Option<PyReadonlyArray2<'py, f32>>,
+    global_pedestal: Option<f32>,
+) -> Bound<'py, PyArray3<f32>> {
+    let img_view = img_rgb.as_array();
+    let (h, w, c) = img_view.dim();
+    let img_slice = img_view.as_slice().expect("img_rgb must be C-contiguous float32");
+    let mask_view = sky_mask.as_ref().map(|m| m.as_array());
+    let mask_slice_opt: Option<&[f32]> = mask_view.as_ref().and_then(|v| v.as_slice());
+    let mask_owned: Option<Vec<f32>> = if mask_slice_opt.is_none() {
+        mask_view.as_ref().map(|v| v.iter().copied().collect())
+    } else {
+        None
+    };
+    let mask_ref: Option<&[f32]> = mask_slice_opt.or(mask_owned.as_deref());
+
+    let out_vec = py.allow_threads(|| {
+        let npix = h * w;
+        let mut lum = vec![0.0f32; npix];
+        lum.par_chunks_exact_mut(w).enumerate().for_each(|(y, row)| {
+            let base = y * w * c;
+            for x in 0..w {
+                let i = base + x * c;
+                let l = 0.2126 * img_slice[i] + 0.7152 * img_slice[i + 1] + 0.0722 * img_slice[i + 2];
+                row[x] = l.clamp(0.0, 1.0);
+            }
+        });
+
+        let pesos = [
+            0.0f32,
+            0.0f32,
+            fuerza_estructura * 0.4,
+            fuerza_estructura * 0.8,
+            fuerza_estructura * 0.6,
+        ];
+
+        let mut cur = lum.clone();
+        let mut tmp = vec![0.0f32; npix];
+        let mut next = vec![0.0f32; npix];
+        let mut delta = vec![0.0f32; npix];
+
+        for nivel in 0..5usize {
+            let s = (1usize << nivel) as isize;
+            let s2 = s * 2;
+
+            tmp.par_chunks_exact_mut(w).enumerate().for_each(|(y, out_row)| {
+                let in_row = &cur[y * w..(y + 1) * w];
+                for x in 0..w {
+                    let xi = x as isize;
+                    let v0 = in_row[reflect_idx(xi - s2, w)];
+                    let v1 = in_row[reflect_idx(xi - s, w)];
+                    let v2 = in_row[x];
+                    let v3 = in_row[reflect_idx(xi + s, w)];
+                    let v4 = in_row[reflect_idx(xi + s2, w)];
+                    out_row[x] = 0.0625 * (v0 + v4) + 0.25 * (v1 + v3) + 0.375 * v2;
+                }
+            });
+
+            let w_delta = pesos[nivel];
+            let acc_detail = w_delta.abs() > 1e-5;
+            next.par_chunks_exact_mut(w)
+                .zip(delta.par_chunks_exact_mut(w))
+                .enumerate()
+                .for_each(|(y, (out_row, d_row))| {
+                    let yi = y as isize;
+                    let r0 = reflect_idx(yi - s2, h) * w;
+                    let r1 = reflect_idx(yi - s, h) * w;
+                    let r2 = y * w;
+                    let r3 = reflect_idx(yi + s, h) * w;
+                    let r4 = reflect_idx(yi + s2, h) * w;
+                    let cur_row = &cur[r2..r2 + w];
+                    for x in 0..w {
+                        let lp = 0.0625 * (tmp[r0 + x] + tmp[r4 + x])
+                            + 0.25 * (tmp[r1 + x] + tmp[r3 + x])
+                            + 0.375 * tmp[r2 + x];
+                        out_row[x] = lp;
+                        if acc_detail {
+                            d_row[x] += (cur_row[x] - lp) * w_delta;
+                        }
+                    }
+                });
+
+            std::mem::swap(&mut cur, &mut next);
+        }
+
+        if reduccion_fondo > 1e-4 {
+            let pedestal = if let Some(gp) = global_pedestal {
+                gp
+            } else {
+                let mut sample = Vec::with_capacity((h / 4 + 1) * (w / 4 + 1));
+                for y in (0..h).step_by(4) {
+                    let row = &cur[y * w..(y + 1) * w];
+                    for x in (0..w).step_by(4) {
+                        sample.push(row[x]);
+                    }
+                }
+                if sample.is_empty() {
+                    0.0
+                } else {
+                    let k = (((sample.len() as f32) * 0.05).round() as usize).min(sample.len() - 1);
+                    sample.select_nth_unstable_by(k, |a, b| a.total_cmp(b));
+                    sample[k]
+                }
+            };
+            let bg_scale = reduccion_fondo * 0.5;
+            delta.par_iter_mut().zip(cur.par_iter()).for_each(|(d, &res)| {
+                *d -= (res - pedestal) * bg_scale;
+            });
+        }
+
+        let mut out = vec![0.0f32; npix * c];
+        out.par_chunks_exact_mut(w * c).enumerate().for_each(|(y, out_row)| {
+            let row_pix = y * w;
+            let row_rgb = row_pix * c;
+            for x in 0..w {
+                let p = row_pix + x;
+                let mut d = delta[p];
+                if let Some(m) = mask_ref {
+                    d *= m[p];
+                }
+                let l = lum[p];
+                let ratio = (l + d) / (l + 1e-6);
+                let i = row_rgb + x * c;
+                let o = x * c;
+                out_row[o] = (img_slice[i] * ratio).clamp(0.0, 1.0);
+                out_row[o + 1] = (img_slice[i + 1] * ratio).clamp(0.0, 1.0);
+                out_row[o + 2] = (img_slice[i + 2] * ratio).clamp(0.0, 1.0);
+            }
+        });
+        out
+    });
+
+    Array3::from_shape_vec((h, w, c), out_vec).unwrap().into_pyarray(py)
+}
+
+/// Contraste local (Claridad) en Rust con desenfoque Gaussiano O(1) y reconstrucción RGB fusionada.
+#[pyfunction]
+#[pyo3(signature = (img_rgb, strength=0.0, ref_min_dim=None))]
+pub fn apply_clarity_rs<'py>(
+    py: Python<'py>,
+    img_rgb: PyReadonlyArray3<'py, f32>,
+    strength: f32,
+    ref_min_dim: Option<usize>,
+) -> Bound<'py, PyArray3<f32>> {
+    let img_view = img_rgb.as_array();
+    let (h, w, c) = img_view.dim();
+    let img_slice = img_view.as_slice().expect("img_rgb must be C-contiguous float32");
+
+    let out_vec = py.allow_threads(|| {
+        let npix = h * w;
+        let mut lum = vec![0.0f32; npix];
+        lum.par_chunks_exact_mut(w).enumerate().for_each(|(y, row)| {
+            let base = y * w * c;
+            for x in 0..w {
+                let i = base + x * c;
+                row[x] = 0.2126 * img_slice[i] + 0.7152 * img_slice[i + 1] + 0.0722 * img_slice[i + 2];
+            }
+        });
+
+        let base_dim = ref_min_dim.unwrap_or_else(|| h.min(w));
+        let mut r = ((base_dim / 35) | 1).max(9);
+        if r % 2 == 0 {
+            r += 1;
+        }
+        let sigma = (r as f32) / 3.0;
+        let lum_blur = fast_gaussian_blur_2d(&lum, h, w, sigma);
+
+        let factor = strength * 0.85;
+        let mut out = vec![0.0f32; npix * c];
+        out.par_chunks_exact_mut(w * c).enumerate().for_each(|(y, out_row)| {
+            let row_pix = y * w;
+            let row_rgb = row_pix * c;
+            for x in 0..w {
+                let p = row_pix + x;
+                let l = lum[p];
+                let new_l = (l + (l - lum_blur[p]) * factor).clamp(1e-6, 1.0);
+                let ratio = new_l / l.max(1e-6);
+                let i = row_rgb + x * c;
+                let o = x * c;
+                out_row[o] = (img_slice[i] * ratio).clamp(0.0, 1.0);
+                out_row[o + 1] = (img_slice[i + 1] * ratio).clamp(0.0, 1.0);
+                out_row[o + 2] = (img_slice[i + 2] * ratio).clamp(0.0, 1.0);
+            }
+        });
+        out
+    });
+
+    Array3::from_shape_vec((h, w, c), out_vec).unwrap().into_pyarray(py)
+}
+
+/// Borrar Neblina (Dehaze) en Rust con desenfoque O(1) del canal oscuro y compensación fusionada.
+#[pyfunction]
+#[pyo3(signature = (img_rgb, strength=0.0, ref_min_dim=None, global_airlight_p95=None))]
+pub fn apply_dehaze_rs<'py>(
+    py: Python<'py>,
+    img_rgb: PyReadonlyArray3<'py, f32>,
+    strength: f32,
+    ref_min_dim: Option<usize>,
+    global_airlight_p95: Option<f32>,
+) -> Bound<'py, PyArray3<f32>> {
+    let img_view = img_rgb.as_array();
+    let (h, w, c) = img_view.dim();
+    let img_slice = img_view.as_slice().expect("img_rgb must be C-contiguous float32");
+
+    let out_vec = py.allow_threads(|| {
+        let npix = h * w;
+        let mut dark = vec![0.0f32; npix];
+        dark.par_chunks_exact_mut(w).enumerate().for_each(|(y, row)| {
+            let base = y * w * c;
+            for x in 0..w {
+                let i = base + x * c;
+                row[x] = img_slice[i].min(img_slice[i + 1]).min(img_slice[i + 2]);
+            }
+        });
+
+        let base_dim = ref_min_dim.unwrap_or_else(|| h.min(w));
+        let mut r = ((base_dim / 25) | 1).max(15);
+        if r % 2 == 0 {
+            r += 1;
+        }
+        let sigma = (r as f32) / 2.5;
+        let haze_map = fast_gaussian_blur_2d(&dark, h, w, sigma);
+
+        let mut out = vec![0.0f32; npix * c];
+        if strength > 0.0 {
+            let p95 = if let Some(gp) = global_airlight_p95 {
+                gp
+            } else {
+                let mut sample = Vec::with_capacity((h / 4 + 1) * (w / 4 + 1));
+                for y in (0..h).step_by(4) {
+                    let row = &haze_map[y * w..(y + 1) * w];
+                    for x in (0..w).step_by(4) {
+                        sample.push(row[x]);
+                    }
+                }
+                if sample.is_empty() {
+                    0.5
+                } else {
+                    let k = (((sample.len() as f32) * 0.95).round() as usize).min(sample.len() - 1);
+                    sample.select_nth_unstable_by(k, |a, b| a.total_cmp(b));
+                    sample[k]
+                }
+            };
+            let airlight = p95 * (0.35 * strength).min(0.65);
+            let s_k = strength * 0.45;
+            let sat_boost = 1.0 + strength * 0.25;
+
+            out.par_chunks_exact_mut(w * c).enumerate().for_each(|(y, out_row)| {
+                let row_pix = y * w;
+                let row_rgb = row_pix * c;
+                for x in 0..w {
+                    let p = row_pix + x;
+                    let t = (1.0 - s_k * haze_map[p]).clamp(0.12, 1.0);
+                    let inv_t = 1.0 / t;
+                    let air_term = airlight * (1.0 - t);
+                    let i = row_rgb + x * c;
+                    let r0 = (img_slice[i] - air_term) * inv_t;
+                    let g0 = (img_slice[i + 1] - air_term) * inv_t;
+                    let b0 = (img_slice[i + 2] - air_term) * inv_t;
+                    let l = 0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0;
+                    let o = x * c;
+                    out_row[o] = (l + (r0 - l) * sat_boost).clamp(0.0, 1.0);
+                    out_row[o + 1] = (l + (g0 - l) * sat_boost).clamp(0.0, 1.0);
+                    out_row[o + 2] = (l + (b0 - l) * sat_boost).clamp(0.0, 1.0);
+                }
+            });
+        } else {
+            let factor = (strength.abs() * 0.35).min(0.85);
+            let inv_f = 1.0 - factor;
+            out.par_chunks_exact_mut(w * c).enumerate().for_each(|(y, out_row)| {
+                let row_pix = y * w;
+                let row_rgb = row_pix * c;
+                for x in 0..w {
+                    let h_val = haze_map[row_pix + x] * factor;
+                    let i = row_rgb + x * c;
+                    let o = x * c;
+                    out_row[o] = (img_slice[i] * inv_f + h_val).clamp(0.0, 1.0);
+                    out_row[o + 1] = (img_slice[i + 1] * inv_f + h_val).clamp(0.0, 1.0);
+                    out_row[o + 2] = (img_slice[i + 2] * inv_f + h_val).clamp(0.0, 1.0);
+                }
+            });
+        }
+        out
+    });
+
+    Array3::from_shape_vec((h, w, c), out_vec).unwrap().into_pyarray(py)
+}
+
+/// Contraste sigmoidal suave con LUT de 4096 niveles (interpolación lineal) y mezcla opcional por máscara.
+#[pyfunction]
+#[pyo3(signature = (img_rgb, contrast=0.0, pivot=0.35, sky_mask=None))]
+pub fn adjust_contrast_masked_rs<'py>(
+    py: Python<'py>,
+    img_rgb: PyReadonlyArray3<'py, f32>,
+    contrast: f32,
+    pivot: f32,
+    sky_mask: Option<PyReadonlyArray2<'py, f32>>,
+) -> Bound<'py, PyArray3<f32>> {
+    let img_view = img_rgb.as_array();
+    let (h, w, c) = img_view.dim();
+    let img_slice = img_view.as_slice().expect("img_rgb must be C-contiguous float32");
+    let mask_view = sky_mask.as_ref().map(|m| m.as_array());
+    let mask_slice_opt: Option<&[f32]> = mask_view.as_ref().and_then(|v| v.as_slice());
+    let mask_owned: Option<Vec<f32>> = if mask_slice_opt.is_none() {
+        mask_view.as_ref().map(|v| v.iter().copied().collect())
+    } else {
+        None
+    };
+    let mask_ref: Option<&[f32]> = mask_slice_opt.or(mask_owned.as_deref());
+
+    let out_vec = py.allow_threads(|| {
+        const LUT_N: usize = 4096;
+        let piv = pivot.clamp(0.10, 0.70);
+        let mut lut = [0.0f32; LUT_N];
+        if contrast > 0.0 {
+            let k = 1.0 + contrast * 9.0;
+            let sig_0 = 1.0 / (1.0 + (k * piv).exp());
+            let sig_1 = 1.0 / (1.0 + (-k * (1.0 - piv)).exp());
+            let inv_span = 1.0 / (sig_1 - sig_0).max(1e-7);
+            let inv_c = 1.0 - contrast;
+            for i in 0..LUT_N {
+                let x = (i as f32) / ((LUT_N - 1) as f32);
+                let sig = 1.0 / (1.0 + (-k * (x - piv)).exp());
+                let norm_s = (sig - sig_0) * inv_span;
+                lut[i] = (inv_c * x + contrast * norm_s).clamp(0.0, 1.0);
+            }
+        } else {
+            let factor = 1.0 + contrast * 0.5;
+            for i in 0..LUT_N {
+                let x = (i as f32) / ((LUT_N - 1) as f32);
+                lut[i] = (piv + (x - piv) * factor).clamp(0.0, 1.0);
+            }
+        }
+
+        let scale = (LUT_N - 1) as f32;
+        let max_idx = LUT_N - 2;
+        #[inline(always)]
+        fn eval_lut(lut: &[f32; LUT_N], v: f32, scale: f32, max_idx: usize) -> f32 {
+            let f = v.clamp(0.0, 1.0) * scale;
+            let idx = (f as usize).min(max_idx);
+            let frac = f - (idx as f32);
+            lut[idx] + (lut[idx + 1] - lut[idx]) * frac
+        }
+
+        let mut out = vec![0.0f32; h * w * c];
+        out.par_chunks_exact_mut(w * c).enumerate().for_each(|(y, out_row)| {
+            let row_pix = y * w;
+            let row_rgb = row_pix * c;
+            for x in 0..w {
+                let i = row_rgb + x * c;
+                let o = x * c;
+                let r0 = img_slice[i];
+                let g0 = img_slice[i + 1];
+                let b0 = img_slice[i + 2];
+                let r1 = eval_lut(&lut, r0, scale, max_idx);
+                let g1 = eval_lut(&lut, g0, scale, max_idx);
+                let b1 = eval_lut(&lut, b0, scale, max_idx);
+                if let Some(m) = mask_ref {
+                    let mw = m[row_pix + x].clamp(0.0, 1.0);
+                    let inv_mw = 1.0 - mw;
+                    out_row[o] = r0 * inv_mw + r1 * mw;
+                    out_row[o + 1] = g0 * inv_mw + g1 * mw;
+                    out_row[o + 2] = b0 * inv_mw + b1 * mw;
+                } else {
+                    out_row[o] = r1;
+                    out_row[o + 1] = g1;
+                    out_row[o + 2] = b1;
+                }
+            }
+        });
+        out
+    });
+
+    Array3::from_shape_vec((h, w, c), out_vec).unwrap().into_pyarray(py)
+}
+
+/// Filtro auto-guiado O(1) 100% paralelo con Rayon usando box_blur_h/box_blur_v (reemplaza SAT secuencial).
+#[pyfunction]
+#[pyo3(signature = (img_2d, radius=4, eps=0.01))]
+pub fn self_guided_filter_rs<'py>(
+    py: Python<'py>,
+    img_2d: PyReadonlyArray2<'py, f32>,
+    radius: usize,
+    eps: f32,
+) -> Bound<'py, numpy::PyArray2<f32>> {
+    let view = img_2d.as_array();
+    let (h, w) = view.dim();
+    let src_opt = view.as_slice();
+    let src_owned: Option<Vec<f32>> = if src_opt.is_none() {
+        Some(view.iter().copied().collect())
+    } else {
+        None
+    };
+    let src: &[f32] = src_opt.unwrap_or_else(|| src_owned.as_deref().unwrap());
+
+    let out_vec = py.allow_threads(|| {
+        let npix = h * w;
+        let r = radius.max(1);
+        let epsilon = eps.max(1e-8);
+        let mut tmp = vec![0.0f32; npix];
+
+        // 1. mean_I = box(I)
+        let mut mean_i = vec![0.0f32; npix];
+        box_blur_h(src, &mut tmp, h, w, r);
+        box_blur_v(&tmp, &mut mean_i, h, w, r);
+
+        // 2. mean_II = box(I * I)
+        let mut ii = vec![0.0f32; npix];
+        ii.par_iter_mut().zip(src.par_iter()).for_each(|(d, &v)| {
+            *d = v * v;
+        });
+        let mut mean_ii = vec![0.0f32; npix];
+        box_blur_h(&ii, &mut tmp, h, w, r);
+        box_blur_v(&tmp, &mut mean_ii, h, w, r);
+
+        // 3. a = var_I / (var_I + eps), b = mean_I * (1 - a)
+        let mut a = ii; // reuse buffer
+        let mut b = mean_ii; // reuse buffer
+        a.par_iter_mut()
+            .zip(b.par_iter_mut())
+            .zip(mean_i.par_iter())
+            .for_each(|((a_out, b_val), &mi)| {
+                let var = (*b_val - mi * mi).max(0.0);
+                let av = var / (var + epsilon);
+                *a_out = av;
+                *b_val = mi * (1.0 - av);
+            });
+
+        // 4. mean_a = box(a), mean_b = box(b)
+        let mut mean_a = mean_i; // reuse buffer
+        box_blur_h(&a, &mut tmp, h, w, r);
+        box_blur_v(&tmp, &mut mean_a, h, w, r);
+
+        let mut mean_b = a; // reuse buffer
+        box_blur_h(&b, &mut tmp, h, w, r);
+        box_blur_v(&tmp, &mut mean_b, h, w, r);
+
+        // 5. q = mean_a * I + mean_b
+        let mut out = b; // reuse buffer
+        out.par_iter_mut()
+            .zip(src.par_iter())
+            .zip(mean_a.par_iter())
+            .zip(mean_b.par_iter())
+            .for_each(|(((q, &v), &ma), &mb)| {
+                *q = (ma * v + mb).clamp(0.0, 1.0);
+            });
+        out
+    });
+
+    numpy::ndarray::Array2::from_shape_vec((h, w), out_vec)
+        .unwrap()
+        .into_pyarray(py)
+}
