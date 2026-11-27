@@ -119,6 +119,7 @@ class RenderMixin:
         self._fit_view_orig_rgb = None
         self._fit_view_mask_overlay = None
         self._zoom_crop_cache = None
+        self._zoom_draft_crop_cache = None
         self._zoom_linear_u16_cache = None
 
     def _generate_preview_proxy(self):
@@ -591,7 +592,10 @@ class RenderMixin:
         precomputed_mask: Optional[np.ndarray] = None,
         apply_mask_layers: bool = True,
         is_preview: bool = True,
-        asynchronous: bool = False
+        asynchronous: bool = False,
+        override_starless: Optional[np.ndarray] = None,
+        override_stars: Optional[np.ndarray] = None,
+        is_zoom_draft: bool = False,
     ) -> Optional[np.ndarray]:
         if target_img is None:
             return None
@@ -696,7 +700,10 @@ class RenderMixin:
         )
 
         # Resolve starless and stars image slices
-        if is_zoomed:
+        if override_starless is not None or override_stars is not None:
+            sl_img = override_starless
+            st_img = override_stars
+        elif is_zoomed:
             zc_key = (
                 self._zoom_crop_rect,
                 id(self.image_32bit),
@@ -822,7 +829,7 @@ class RenderMixin:
         if asynchronous and getattr(self, 'async_pipeline', None) is not None:
             self._last_async_meta = (
                 key_pre_lp, key_linear, key_stretch, key_graded, key_spatial, key_stars,
-                is_zoomed, is_scrubbing, st_img, precomputed_mask
+                is_zoomed, is_scrubbing, st_img, precomputed_mask, is_zoom_draft, crop_rect
             )
             self._last_async_base = target_img
             self.async_pipeline.submit(
@@ -847,6 +854,7 @@ class RenderMixin:
                 precomputed_stretched_stars=pre_stars,
                 is_dragging_deconv=getattr(self, '_is_dragging_deconv', False),
                 is_dragging_antihalo=is_dragging_antihalo,
+                global_stats=(getattr(self, '_cached_global_stats', None) if is_zoom_draft else None),
             )
             return None
 
@@ -951,13 +959,20 @@ class RenderMixin:
             return
 
         meta = getattr(self, '_last_async_meta', None)
+        is_zoom_draft = False
+        draft_rect = None
         if meta is not None:
-            key_pre_lp, key_linear, key_stretch, key_graded, key_spatial, key_stars, is_zoomed, is_scrubbing, st_img, precomputed_mask = meta
+            if len(meta) >= 12:
+                key_pre_lp, key_linear, key_stretch, key_graded, key_spatial, key_stars, is_zoomed, is_scrubbing, st_img, precomputed_mask, is_zoom_draft, draft_rect = meta
+            else:
+                key_pre_lp, key_linear, key_stretch, key_graded, key_spatial, key_stars, is_zoomed, is_scrubbing, st_img, precomputed_mask = meta
             if bool(is_zoomed) != bool(self.is_zoomed_100):
                 # Descartar resultado Fit tardío si ya entramos en Zoom 1:1 (o viceversa)
                 return
             if is_scrubbing and not getattr(self, '_is_slider_pressed', False) and not getattr(self, '_is_scrubbing_heavy_slider', False) and not getattr(self, '_is_scrubbing_layer_slider', False):
                 # Descartar solicitud de borrador tardía si el usuario ya soltó el deslizador
+                return
+            if is_zoom_draft and draft_rect != getattr(self, '_zoom_crop_rect', None):
                 return
             t_shape = final_img.shape[:2] if hasattr(final_img, 'shape') else ()
             if hasattr(self, 'buffer_cache') and t_shape:
@@ -968,6 +983,25 @@ class RenderMixin:
                 self.buffer_cache.put(f"graded{sfx}", key_graded, t_shape, out_grd)
                 self.buffer_cache.put(f"spatial{sfx}", key_spatial, t_shape, out_spt)
                 self.buffer_cache.put("stars", key_stars, t_shape, out_stars)
+
+            # Ruta borrador 0.5x interactivo en Zoom 1:1: escala al mosaico activo y pinta sin tocar external_crop
+            if is_zoom_draft and draft_rect is not None:
+                mx1, my1, mx2, my2 = draft_rect
+                mw, mh = mx2 - mx1, my2 - my1
+                u8_small = cv2.convertScaleAbs(np.clip(final_img, 0.0, 1.0), alpha=255.0)
+                up_u8 = cv2.resize(u8_small, (mw, mh), interpolation=cv2.INTER_LINEAR)
+                self.canvas.update_display_u8(np.ascontiguousarray(up_u8, dtype=np.uint8))
+                self._update_canvas_info_label()
+                if getattr(self, '_deferred_zoom_draft_request', False):
+                    self._deferred_zoom_draft_request = False
+                    if (
+                        getattr(self, '_is_slider_pressed', False)
+                        or getattr(self, '_is_scrubbing_layer_slider', False)
+                        or getattr(self, '_is_scrubbing_heavy_slider', False)
+                    ):
+                        self._request_zoom_100_draft_scrub()
+                return
+
             if not is_scrubbing:
 
                 self._cache_ms_pre_lp_key = key_pre_lp
@@ -1186,9 +1220,23 @@ class RenderMixin:
                     self._update_canvas_info_label()
                     return
 
-            # === RUTA ASÍNCRONA POR TESELAS FIJAS 512x512 EN ZOOM 1:1 ===
+            # === RUTA INTERACTIVA EN ZOOM 1:1 ===
+            # Durante el arrastre continuo de sliders (sin LUT): borrador 0.5x en vivo (~20-60 FPS)
+            # En reposo o al soltar: teselas nativas 512x512 con intercambio atómico
             if self.is_zoomed_100 and not synchronous and hasattr(self, 'tile_manager') and self.image_32bit is not None:
-                self._request_zoom_100_tiles()
+                is_dragging_slider = (
+                    getattr(self, '_is_slider_pressed', False)
+                    or getattr(self, '_is_scrubbing_layer_slider', False)
+                    or getattr(self, '_is_scrubbing_heavy_slider', False)
+                )
+                if (
+                    is_dragging_slider
+                    and getattr(self, '_zoom_crop_rect', None) is not None
+                    and getattr(self, 'async_pipeline', None) is not None
+                ):
+                    self._request_zoom_100_draft_scrub()
+                else:
+                    self._request_zoom_100_tiles()
                 return
 
             base_to_render, active_mask = self._compose_active_base(for_export=False)
@@ -1507,6 +1555,119 @@ class RenderMixin:
                 getattr(self, '_is_scrubbing_layer_slider', False)
                 or getattr(self, '_is_scrubbing_heavy_slider', False)
             ),
+        )
+
+    def _request_zoom_100_draft_scrub(self) -> None:
+        """Renderiza el viewport 1:1 activo a escala 0.5x (~11x menos píxeles) durante el arrastre de sliders."""
+        if (
+            not self.is_zoomed_100
+            or self.image_32bit is None
+            or getattr(self, '_zoom_crop_rect', None) is None
+            or getattr(self, 'async_pipeline', None) is None
+        ):
+            return
+
+        # Coalescencia: si ya hay un frame borrador 0.5x en vuelo, esperar a que termine y encadenar el último valor
+        if self.async_pipeline._active_worker is not None:
+            self._deferred_zoom_draft_request = True
+            return
+
+        self._deferred_zoom_draft_request = False
+        rect = self._zoom_crop_rect
+        x1, y1, x2, y2 = rect
+        h_f, w_f = self.image_32bit.shape[:2]
+        mw, mh = x2 - x1, y2 - y1
+        if mw <= 0 or mh <= 0:
+            return
+        dw = max(64, mw // 2)
+        dh = max(64, mh // 2)
+
+        dc_key = (
+            rect,
+            (dw, dh),
+            id(self.image_32bit),
+            id(self.image_starless),
+            id(self.image_stars),
+            id(self.current_mask),
+        )
+        cached_dc = getattr(self, '_zoom_draft_crop_cache', None)
+        if cached_dc is not None and cached_dc[0] == dc_key:
+            base_d, starless_d, stars_d, mask_d = cached_dc[1]
+        else:
+            from gui.developer.tile_engine import _crop_aligned_slice
+
+            base_sub = _crop_aligned_slice(self.image_32bit, rect, (h_f, w_f))
+            base_d = np.ascontiguousarray(cv2.resize(base_sub, (dw, dh), interpolation=cv2.INTER_AREA), dtype=np.float32)
+
+            sl_sub = _crop_aligned_slice(self.image_starless, rect, (h_f, w_f))
+            starless_d = (
+                np.ascontiguousarray(cv2.resize(sl_sub, (dw, dh), interpolation=cv2.INTER_AREA), dtype=np.float32)
+                if sl_sub is not None
+                else None
+            )
+
+            st_sub = _crop_aligned_slice(self.image_stars, rect, (h_f, w_f))
+            stars_d = (
+                np.ascontiguousarray(cv2.resize(st_sub, (dw, dh), interpolation=cv2.INTER_AREA), dtype=np.float32)
+                if st_sub is not None
+                else None
+            )
+
+            mask_d = None
+            if self.current_mask is not None:
+                m_src = self.current_mask[..., 0] if self.current_mask.ndim == 3 else self.current_mask
+                m_sub = _crop_aligned_slice(m_src, rect, (h_f, w_f))
+                if m_sub is not None:
+                    if float(m_sub.max()) > 1.05:
+                        m_sub = m_sub * (1.0 / 255.0)
+                    m_rs = cv2.resize(m_sub, (dw, dh), interpolation=cv2.INTER_AREA)
+                    mask_d = np.ascontiguousarray(np.repeat(m_rs[..., np.newaxis], 3, axis=2), dtype=np.float32)
+
+            self._zoom_draft_crop_cache = (dc_key, (base_d, starless_d, stars_d, mask_d))
+
+        if starless_d is not None and stars_d is not None:
+            proc_sl = self._process_starless_base(
+                starless_d, mask_3d=mask_d, is_full_res=False, crop_rect=rect, use_cache=True
+            )
+            has_img_layers = hasattr(self, 'mask_layers_widget') and self.mask_layers_widget.has_image_layers()
+            if has_img_layers:
+                target_img = stars_d if self.view_layer_mode == 2 else proc_sl
+            elif self.view_layer_mode == 0:
+                target_img = np.clip(proc_sl + (stars_d * self.star_intensity), 0.0, 1.0)
+            elif self.view_layer_mode == 1:
+                target_img = proc_sl
+            else:
+                target_img = stars_d
+        else:
+            target_img = base_d
+
+        if self.view_layer_mode == 2:
+            if getattr(self, "stretch_mode", "mtf") == "ghs":
+                out_d = apply_ghs_stretch(
+                    target_img,
+                    sp=self.spin_ghs_sp.value(),
+                    d=self.spin_ghs_d.value(),
+                    b=self.spin_ghs_b.value(),
+                    hp=self.spin_ghs_hp.value(),
+                    lp=self.spin_ghs_lp.value(),
+                    bp=self.spin_ghs_bp.value(),
+                    color_mode=getattr(self, "ghs_color_mode", "luma"),
+                )
+            else:
+                out_d = manual_stretch(target_img, black_point=self.spin_bp.value(), midtone=self.spin_mtf.value())
+            u8_small = cv2.convertScaleAbs(np.clip(out_d, 0.0, 1.0), alpha=255.0)
+            up_u8 = cv2.resize(u8_small, (mw, mh), interpolation=cv2.INTER_LINEAR)
+            self.canvas.update_display_u8(np.ascontiguousarray(up_u8, dtype=np.uint8))
+            return
+
+        self._apply_pipeline_on_image(
+            target_img,
+            precomputed_mask=mask_d,
+            is_preview=True,
+            asynchronous=True,
+            override_starless=starless_d,
+            override_stars=stars_d,
+            is_zoom_draft=True,
         )
 
     def _request_zoom_100_tiles(self, emit_incomplete: bool = False, force: bool = False) -> None:

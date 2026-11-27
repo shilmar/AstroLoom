@@ -51,6 +51,7 @@ class PipelineWorker(QRunnable):
         precomputed_pre_lp_base: Optional[np.ndarray] = None,
         is_dragging_deconv: bool = False,
         is_dragging_antihalo: bool = False,
+        global_stats: Optional[Dict[str, float]] = None,
     ):
         super().__init__()
         self.setAutoDelete(True)
@@ -76,6 +77,7 @@ class PipelineWorker(QRunnable):
         self.precomputed_pre_lp_base = precomputed_pre_lp_base
         self.is_dragging_deconv = is_dragging_deconv
         self.is_dragging_antihalo = is_dragging_antihalo
+        self.global_stats = global_stats
 
         self.signals = PipelineSignals()
         self._is_aborted = False
@@ -112,6 +114,7 @@ class PipelineWorker(QRunnable):
                 return_milestones=True,
                 is_dragging_deconv=self.is_dragging_deconv,
                 is_dragging_antihalo=self.is_dragging_antihalo,
+                global_stats=self.global_stats,
                 abort_flag=lambda: self._is_aborted,
             )
 
@@ -168,6 +171,7 @@ class AsyncPipelineManager(QObject):
         precomputed_pre_lp_base: Optional[np.ndarray] = None,
         is_dragging_deconv: bool = False,
         is_dragging_antihalo: bool = False,
+        global_stats: Optional[Dict[str, float]] = None,
     ) -> int:
         """Envía una nueva tarea de renderizado descartando las solicitudes anteriores."""
         # Abortar worker anterior e invalidar solicitudes pendientes en vuelo
@@ -197,6 +201,7 @@ class AsyncPipelineManager(QObject):
             precomputed_pre_lp_base=precomputed_pre_lp_base,
             is_dragging_deconv=is_dragging_deconv,
             is_dragging_antihalo=is_dragging_antihalo,
+            global_stats=global_stats,
         )
         self._active_worker = worker
 

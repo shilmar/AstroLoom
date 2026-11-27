@@ -482,6 +482,9 @@ class HistoryPresetsMixin:
         self._is_dragging_deconv = False
         self._is_dragging_antihalo = False
         if getattr(self, 'is_zoomed_100', False) and hasattr(self, 'tile_manager'):
+            if hasattr(self, 'async_pipeline'):
+                self.async_pipeline.cancel_pending()
+            self._deferred_zoom_draft_request = False
             self._request_zoom_100_tiles(emit_incomplete=False, force=True)
         else:
             self.update_stretch_preview(immediate=True)
