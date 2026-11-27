@@ -411,6 +411,8 @@ class HistoryPresetsMixin:
         """Activa el modo de visualización directa por LUT 1D (>1000 FPS) para estirado y contraste."""
         if hasattr(self, 'async_pipeline'):
             self.async_pipeline.cancel_pending()
+        if getattr(self, 'is_zoomed_100', False) and hasattr(self, 'tile_manager'):
+            self.tile_manager.cancel_all()
         self._is_slider_pressed = True
         self._is_scrubbing_heavy_slider = True
         self._is_scrubbing_lut_slider = True
@@ -475,7 +477,10 @@ class HistoryPresetsMixin:
         self._is_scrubbing_layer_slider = False
         self._is_dragging_deconv = False
         self._is_dragging_antihalo = False
-        self.update_stretch_preview(immediate=True)
+        if getattr(self, 'is_zoomed_100', False) and hasattr(self, 'tile_manager'):
+            self._request_zoom_100_tiles()
+        else:
+            self.update_stretch_preview(immediate=True)
         self._commit_action()
 
     def _on_control_committed(self):

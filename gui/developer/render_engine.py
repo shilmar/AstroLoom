@@ -119,6 +119,7 @@ class RenderMixin:
         self._fit_view_orig_rgb = None
         self._fit_view_mask_overlay = None
         self._zoom_crop_cache = None
+        self._zoom_linear_u16_cache = None
 
     def _generate_preview_proxy(self):
         self._invalidate_pipeline_caches()
@@ -1085,17 +1086,40 @@ class RenderMixin:
             if self.mask_layers_widget.is_curve_editor_expanded():
                 self.mask_layers_widget.update_active_layer_histogram()
 
+    def _get_lut_source_u16(self) -> Optional[np.ndarray]:
+        """Devuelve el buffer lineal uint16 para el fast-path LUT (proxy Fit o mosaico 1:1)."""
+        if self.is_zoomed_100:
+            if not hasattr(self, 'tile_manager') or getattr(self, '_zoom_crop_rect', None) is None:
+                return None
+            cached = getattr(self, '_zoom_linear_u16_cache', None)
+            active_ctx = getattr(self.tile_manager, '_active_ctx', None)
+            active_rect = getattr(self.tile_manager, '_active_rect', None)
+            if (
+                cached is not None
+                and active_ctx is not None
+                and cached[0] == active_rect
+                and cached[1] == active_ctx.linear_key
+            ):
+                return cached[2]
+            assembled = self.tile_manager.assemble_active_linear_u16_mosaic()
+            if assembled is None:
+                return None
+            self._zoom_linear_u16_cache = assembled
+            return assembled[2]
+
+        src_u16 = getattr(self, '_cache_ms_linear_u16', None)
+        if src_u16 is None:
+            return None
+        if getattr(self, 'preview_proxy', None) is not None:
+            if src_u16.shape[:2] != self.preview_proxy.shape[:2]:
+                return None
+        return src_u16
+
     def _is_lut_preview_applicable(self) -> bool:
         """Determina si la previsualización directa por LUT 1D es segura y matemáticamente idéntica."""
         if not getattr(self, '_is_scrubbing_lut_slider', False):
             return False
-        src_u16 = getattr(self, '_cache_ms_linear_u16', None)
-        if src_u16 is None:
-            return False
-        if getattr(self, 'preview_proxy', None) is not None:
-            if src_u16.shape[:2] != self.preview_proxy.shape[:2]:
-                return False
-        if self.view_layer_mode == 2 or self.is_zoomed_100:
+        if self.view_layer_mode == 2:
             return False
         if hasattr(self, 'mask_layers_widget') and len(getattr(self.mask_layers_widget, 'layers', [])) > 0:
             return False
@@ -1105,20 +1129,15 @@ class RenderMixin:
             return False
         if int(getattr(self, 'deconv_iterations', 0)) > 0:
             return False
-        return True
+        return self._get_lut_source_u16() is not None
 
     def _do_update_stretch_preview(self, synchronous: bool = False):
         if getattr(self, '_is_rendering_preview', False):
             return
         self._is_rendering_preview = True
         try:
-            # === RUTA ASÍNCRONA POR TESELAS FIJAS 512x512 EN ZOOM 1:1 ===
-            if self.is_zoomed_100 and not synchronous and hasattr(self, 'tile_manager') and self.image_32bit is not None:
-                self._request_zoom_100_tiles()
-                return
-
             # === RUTA ULTRARRÁPIDA DE VISUALIZACIÓN POR LUT (Display Transfer / STF >500 FPS) ===
-            # Activada estrictamente durante el arrastre continuo de deslizadores de estirado/contraste
+            # Funciona tanto en vista Fit como sobre el mosaico 1:1 durante el arrastre de estirado/contraste
             if self._is_lut_preview_applicable():
                 curve_rgb = self.curve_widget.get_lut("rgb") if (hasattr(self, 'curve_widget') and not self.curve_widget.is_identity("rgb")) else None
                 
@@ -1140,30 +1159,36 @@ class RenderMixin:
                     contrast=contrast_val
                 )
 
-                src_u16 = self._cache_ms_linear_u16
-                h, w = src_u16.shape[:2]
-                if getattr(self, '_scrub_display_buf', None) is None or self._scrub_display_buf.shape[:2] != (h, w):
-                    self._scrub_display_buf = np.empty((h, w, 3), dtype=np.uint8)
+                src_u16 = self._get_lut_source_u16()
+                if src_u16 is not None:
+                    h, w = src_u16.shape[:2]
+                    if getattr(self, '_scrub_display_buf', None) is None or self._scrub_display_buf.shape[:2] != (h, w):
+                        self._scrub_display_buf = np.empty((h, w, 3), dtype=np.uint8)
 
-                apply_display_lut16(src_u16, lut, self._scrub_display_buf)
+                    apply_display_lut16(src_u16, lut, self._scrub_display_buf)
 
-                before_u8 = None
-                if self.canvas.split_view_enabled:
-                    lut_before = compute_combined_stf_lut(
-                        stretch_mode=getattr(self, "initial_stretch_mode", "mtf"),
-                        bp=getattr(self, "initial_bp", 0.0),
-                        mtf=getattr(self, "initial_mtf", 0.1),
-                        ghs_sp=getattr(self, "initial_ghs_sp", 0.02),
-                        ghs_d=getattr(self, "initial_ghs_d", 5.0),
-                        contrast=0.0
-                    )
-                    if getattr(self, '_scrub_before_buf', None) is None or self._scrub_before_buf.shape[:2] != (h, w):
-                        self._scrub_before_buf = np.empty((h, w, 3), dtype=np.uint8)
-                    apply_display_lut16(src_u16, lut_before, self._scrub_before_buf)
-                    before_u8 = self._scrub_before_buf
+                    before_u8 = None
+                    if self.canvas.split_view_enabled:
+                        lut_before = compute_combined_stf_lut(
+                            stretch_mode=getattr(self, "initial_stretch_mode", "mtf"),
+                            bp=getattr(self, "initial_bp", 0.0),
+                            mtf=getattr(self, "initial_mtf", 0.1),
+                            ghs_sp=getattr(self, "initial_ghs_sp", 0.02),
+                            ghs_d=getattr(self, "initial_ghs_d", 5.0),
+                            contrast=0.0
+                        )
+                        if getattr(self, '_scrub_before_buf', None) is None or self._scrub_before_buf.shape[:2] != (h, w):
+                            self._scrub_before_buf = np.empty((h, w, 3), dtype=np.uint8)
+                        apply_display_lut16(src_u16, lut_before, self._scrub_before_buf)
+                        before_u8 = self._scrub_before_buf
 
-                self.canvas.update_display_u8(self._scrub_display_buf, before_u8=before_u8)
-                self._update_canvas_info_label()
+                    self.canvas.update_display_u8(self._scrub_display_buf, before_u8=before_u8)
+                    self._update_canvas_info_label()
+                    return
+
+            # === RUTA ASÍNCRONA POR TESELAS FIJAS 512x512 EN ZOOM 1:1 ===
+            if self.is_zoomed_100 and not synchronous and hasattr(self, 'tile_manager') and self.image_32bit is not None:
+                self._request_zoom_100_tiles()
                 return
 
             base_to_render, active_mask = self._compose_active_base(for_export=False)
@@ -1343,6 +1368,114 @@ class RenderMixin:
         psf_kernel = self._get_current_deconv_psf() if hasattr(self, '_get_current_deconv_psf') else None
         pad_margin = compute_tile_pad_margin(state, starless_params)
 
+        # Claves de hitos por tesela para reutilizar linear/spatial/stars al editar capas o sliders tardíos
+        sp_frozen = self._freeze_for_key(starless_params)
+        linear_key = (
+            id(self.image_32bit),
+            id(self.image_starless),
+            id(self.image_stars) if (not has_image_layers and self.view_layer_mode == 0) else 0,
+            id(self.current_mask),
+            id(cached_sl_ai),
+            id(cached_gnd_ai),
+            int(getattr(self, 'view_layer_mode', 0)),
+            has_image_layers,
+            sp_frozen,
+            state.stars_val if (not has_image_layers and self.view_layer_mode == 0) else 0,
+            state.dualband_mode,
+            state.dualband_oiii_boost,
+            state.unclip_stars_val,
+            state.unpurple_val,
+            state.scnr_green_val,
+            round(float(state.pcc_kr), 4),
+            round(float(state.pcc_kb), 4),
+            state.temp_val,
+            state.tint_val,
+            state.sat_sky_val,
+            state.sat_gnd_val,
+            state.vibrance_val,
+            state.lp_val,
+            round(float(state.lp_cx), 4),
+            round(float(state.lp_cy), 4),
+            round(float(state.lp_w), 4),
+            round(float(state.lp_h), 4),
+            state.lp_tint_idx,
+            tuple(state.lp_custom_tint),
+            state.lp_tint_strength,
+            state.lp_mode_idx,
+            state.lp_legacy_1d,
+            state.gnd_ev_val,
+            state.gnd_sh_val,
+            state.gnd_bp_val,
+            state.gnd_dn_val,
+            bool(getattr(self, 'gnd_ai_denoise_enabled', False)),
+            state.gnd_edge_shift_val,
+            state.denoise_val,
+            state.denoise_color_val,
+            state.denoise_mask_val,
+            state.banding_val,
+            state.banding_dir_idx,
+            state.starless_is_stretched,
+            self._freeze_for_key(state.dust_spots),
+            pad_margin,
+        )
+        spatial_key = (
+            linear_key,
+            state.stretch_mode,
+            state.ghs_color_mode,
+            round(float(state.ghs_sp_val), 5),
+            round(float(state.ghs_d_val), 4),
+            round(float(state.ghs_b_val), 4),
+            round(float(state.ghs_hp_val), 4),
+            round(float(state.ghs_lp_val), 4),
+            round(float(state.ghs_bp_val), 5),
+            round(float(state.bp_val), 5),
+            round(float(state.mtf_val), 5),
+            round(float(state.mtf_hp_val), 4),
+            curve_state,
+            state.contrast_starless_val,
+            state.contrast_val,
+            state.deconv_iterations,
+            state.deconv_fwhm,
+            state.deconv_deringing,
+            state.deconv_damping,
+            state.deconv_aspect,
+            state.deconv_angle,
+            state.deconv_model_idx,
+            state.deconv_scope_idx,
+            state.deconv_luma_only,
+            state.orton_strength,
+            state.orton_radius,
+            state.orton_threshold,
+            state.orton_tint_idx,
+            state.orton_mode_idx,
+            (
+                state.star_diff_strength,
+                state.star_diff_radius,
+                state.star_diff_threshold,
+                state.star_diff_color,
+                state.star_diff_mode_idx,
+            ) if self.image_stars is None else (),
+        )
+        stars_key = (
+            id(self.image_stars),
+            id(self.current_mask),
+            state.stretch_mode,
+            round(float(state.ghs_sp_val), 5),
+            round(float(state.ghs_d_val), 4),
+            round(float(state.ghs_b_val), 4),
+            round(float(state.ghs_hp_val), 4),
+            round(float(state.ghs_lp_val), 4),
+            round(float(state.mtf_val), 5),
+            state.stars_val,
+            state.star_diff_strength,
+            state.star_diff_radius,
+            state.star_diff_threshold,
+            state.star_diff_color,
+            state.star_diff_mode_idx,
+            bool(mask_layers and len(mask_layers) > 0),
+            pad_margin,
+        )
+
         fallback_u8 = getattr(self, '_fit_view_display_u8', None)
         if fallback_u8 is None and getattr(self, '_cached_rendered_image', None) is not None:
             fallback_u8 = cv2.convertScaleAbs(np.clip(self._cached_rendered_image, 0.0, 1.0), alpha=255.0)
@@ -1367,6 +1500,13 @@ class RenderMixin:
             global_stats=global_stats,
             pad_margin=pad_margin,
             fallback_preview_u8=fallback_u8,
+            spatial_key=spatial_key,
+            stars_key=stars_key,
+            linear_key=linear_key,
+            is_scrubbing=bool(
+                getattr(self, '_is_scrubbing_layer_slider', False)
+                or getattr(self, '_is_scrubbing_heavy_slider', False)
+            ),
         )
 
     def _request_zoom_100_tiles(self) -> None:

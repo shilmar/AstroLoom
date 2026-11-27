@@ -37,15 +37,25 @@ DEFAULT_TILE_SIZE = 512
 
 
 class TileCache:
-    """Thread-safe LRU cache for rendered 1:1 uint8 tiles with a strict RAM budget."""
+    """Thread-safe LRU cache for rendered 1:1 uint8 tiles and per-tile milestones with strict RAM budgets."""
 
-    def __init__(self, max_bytes: int = 256 * 1024 * 1024):
+    def __init__(
+        self,
+        max_bytes: int = 256 * 1024 * 1024,
+        milestone_max_bytes: int = 192 * 1024 * 1024,
+    ):
         self._lock = threading.Lock()
         self._cache: OrderedDict[Tuple[int, int, Any], np.ndarray] = OrderedDict()
         self._current_bytes: int = 0
         self._max_bytes: int = max(4 * 1024 * 1024, int(max_bytes))
         self.hits: int = 0
         self.misses: int = 0
+
+        self._milestones: OrderedDict[Tuple[str, int, int, Any], np.ndarray] = OrderedDict()
+        self._milestone_bytes: int = 0
+        self._milestone_max_bytes: int = max(4 * 1024 * 1024, int(milestone_max_bytes))
+        self.milestone_hits: int = 0
+        self.milestone_misses: int = 0
 
     def get(self, tx: int, ty: int, state_key: Any) -> Optional[np.ndarray]:
         k = (tx, ty, state_key)
@@ -80,15 +90,49 @@ class TileCache:
             self._cache[k] = tile_u8
             self._current_bytes += nbytes
 
+    def get_milestone(self, stage: str, tx: int, ty: int, key: Any) -> Optional[np.ndarray]:
+        if key is None:
+            return None
+        k = (stage, tx, ty, key)
+        with self._lock:
+            val = self._milestones.get(k)
+            if val is not None:
+                self._milestones.move_to_end(k)
+                self.milestone_hits += 1
+                return val
+            self.milestone_misses += 1
+            return None
+
+    def put_milestone(self, stage: str, tx: int, ty: int, key: Any, arr: Optional[np.ndarray]) -> None:
+        if arr is None or key is None:
+            return
+        k = (stage, tx, ty, key)
+        nbytes = int(arr.nbytes)
+        if nbytes > self._milestone_max_bytes:
+            return
+        with self._lock:
+            old = self._milestones.pop(k, None)
+            if old is not None:
+                self._milestone_bytes -= int(old.nbytes)
+            while self._milestone_bytes + nbytes > self._milestone_max_bytes and self._milestones:
+                _, evicted = self._milestones.popitem(last=False)
+                self._milestone_bytes -= int(evicted.nbytes)
+            self._milestones[k] = arr
+            self._milestone_bytes += nbytes
+
     def clear(self) -> None:
         with self._lock:
             self._cache.clear()
             self._current_bytes = 0
+            self._milestones.clear()
+            self._milestone_bytes = 0
 
     def reset_stats(self) -> None:
         with self._lock:
             self.hits = 0
             self.misses = 0
+            self.milestone_hits = 0
+            self.milestone_misses = 0
 
     def stats(self) -> Dict[str, int]:
         with self._lock:
@@ -98,6 +142,11 @@ class TileCache:
                 "max_bytes": self._max_bytes,
                 "hits": self.hits,
                 "misses": self.misses,
+                "milestone_entries": len(self._milestones),
+                "milestone_bytes": self._milestone_bytes,
+                "milestone_max_bytes": self._milestone_max_bytes,
+                "milestone_hits": self.milestone_hits,
+                "milestone_misses": self.milestone_misses,
             }
 
     def __len__(self) -> int:
@@ -128,6 +177,10 @@ class TileContext:
     global_stats: Dict[str, float] = field(default_factory=dict)
     pad_margin: int = 64
     fallback_preview_u8: Optional[np.ndarray] = None
+    spatial_key: Any = None
+    stars_key: Any = None
+    linear_key: Any = None
+    is_scrubbing: bool = False
 
 
 def compute_tile_pad_margin(state: DeveloperState, starless_params: Optional[Dict[str, Any]] = None) -> int:
@@ -357,10 +410,12 @@ def render_single_tile(
     ty: int,
     tile_size: int = DEFAULT_TILE_SIZE,
     abort_flag: Optional[Callable[[], bool]] = None,
+    milestone_cache: Optional[TileCache] = None,
 ) -> Optional[np.ndarray]:
     """
     Render a single (tx, ty) tile at native 1:1 resolution with spatial padding,
-    then crop back to the exact inner tile bounds and convert to uint8 RGB.
+    reusing per-tile milestones (spatial, stars) when available, then crop back
+    to the exact inner tile bounds and convert to uint8 RGB.
     """
     if abort_flag and abort_flag():
         return None
@@ -380,9 +435,13 @@ def render_single_tile(
     py2 = min(h_f, iy2 + pad)
     padded_rect = (px1, py1, px2, py2)
 
-    base = _crop_aligned_slice(ctx.image_32bit, padded_rect, ctx.full_shape)
-    starless = _crop_aligned_slice(ctx.image_starless, padded_rect, ctx.full_shape)
-    stars = _crop_aligned_slice(ctx.image_stars, padded_rect, ctx.full_shape)
+    pre_spatial: Optional[np.ndarray] = None
+    pre_stars: Optional[np.ndarray] = None
+    if milestone_cache is not None and ctx.view_layer_mode != 2:
+        if ctx.spatial_key is not None:
+            pre_spatial = milestone_cache.get_milestone("spatial", tx, ty, ctx.spatial_key)
+        if ctx.stars_key is not None:
+            pre_stars = milestone_cache.get_milestone("stars", tx, ty, ctx.stars_key)
 
     mask_3d: Optional[np.ndarray] = None
     if ctx.current_mask is not None:
@@ -396,24 +455,37 @@ def render_single_tile(
     if abort_flag and abort_flag():
         return None
 
-    # Compose active base (starless preproc runs inside worker thread, never on UI thread)
-    if starless is not None and stars is not None:
-        proc_starless = _process_starless_tile(starless, mask_3d, padded_rect, ctx)
-        if ctx.has_image_layers:
-            target_img = stars if ctx.view_layer_mode == 2 else proc_starless
-        else:
-            if ctx.view_layer_mode == 0:
-                star_int = float(ctx.state.stars_val) / 100.0
-                target_img = np.clip(proc_starless + (stars * star_int), 0.0, 1.0)
-            elif ctx.view_layer_mode == 1:
-                target_img = proc_starless
-            else:
-                target_img = stars
+    starless = _crop_aligned_slice(ctx.image_starless, padded_rect, ctx.full_shape)
+    stars = None if pre_stars is not None else _crop_aligned_slice(ctx.image_stars, padded_rect, ctx.full_shape)
+
+    # Skip heavy starless preproc completely when spatial milestone hits
+    if pre_spatial is not None:
+        target_img = pre_spatial
     else:
-        target_img = base
+        base = _crop_aligned_slice(ctx.image_32bit, padded_rect, ctx.full_shape)
+        if starless is not None and (stars is not None or pre_stars is not None):
+            proc_starless = _process_starless_tile(starless, mask_3d, padded_rect, ctx)
+            if ctx.has_image_layers:
+                target_img = (stars if stars is not None else _crop_aligned_slice(ctx.image_stars, padded_rect, ctx.full_shape)) if ctx.view_layer_mode == 2 else proc_starless
+            else:
+                if ctx.view_layer_mode == 0:
+                    st_mix = stars if stars is not None else _crop_aligned_slice(ctx.image_stars, padded_rect, ctx.full_shape)
+                    star_int = float(ctx.state.stars_val) / 100.0
+                    target_img = np.clip(proc_starless + (st_mix * star_int), 0.0, 1.0)
+                elif ctx.view_layer_mode == 1:
+                    target_img = proc_starless
+                else:
+                    target_img = stars if stars is not None else _crop_aligned_slice(ctx.image_stars, padded_rect, ctx.full_shape)
+        else:
+            target_img = base
 
     if abort_flag and abort_flag():
         return None
+
+    ox1 = ix1 - px1
+    oy1 = iy1 - py1
+    ox2 = ox1 + (ix2 - ix1)
+    oy2 = oy1 + (iy2 - iy1)
 
     if ctx.view_layer_mode == 2:
         if ctx.state.stretch_mode == "ghs":
@@ -430,7 +502,12 @@ def render_single_tile(
         else:
             out_padded = manual_stretch(target_img, black_point=ctx.state.bp_val, midtone=ctx.state.mtf_val)
     else:
-        out_padded = apply_developer_pipeline(
+        want_ms = milestone_cache is not None and (
+            (pre_spatial is None and ctx.spatial_key is not None)
+            or (pre_stars is None and ctx.stars_key is not None)
+            or (ctx.linear_key is not None and pre_spatial is None)
+        )
+        res = apply_developer_pipeline(
             target_img=target_img,
             state=ctx.state,
             precomputed_mask=mask_3d,
@@ -440,22 +517,37 @@ def render_single_tile(
             curve_luts=ctx.curve_luts,
             psf_kernel=ctx.psf_kernel,
             is_preview=True,
-            is_scrubbing=False,
+            is_scrubbing=ctx.is_scrubbing,
             crop_rect=padded_rect,
             full_shape=ctx.full_shape,
             cached_ground_ai=ctx.cached_ground_ai,
+            precomputed_spatial_base=pre_spatial,
+            precomputed_stretched_stars=pre_stars,
+            return_milestones=want_ms,
             abort_flag=abort_flag,
             global_stats=ctx.global_stats,
         )
+        if res is None:
+            return None
+        if want_ms:
+            out_padded, _, out_lin, _, _, out_spt, out_stars = res
+            if pre_spatial is None and out_spt is not None and ctx.spatial_key is not None:
+                milestone_cache.put_milestone("spatial", tx, ty, ctx.spatial_key, out_spt)
+            if pre_stars is None and out_stars is not None and ctx.stars_key is not None:
+                milestone_cache.put_milestone("stars", tx, ty, ctx.stars_key, out_stars)
+            if out_lin is not None and ctx.linear_key is not None:
+                inner_lin = out_lin[oy1:oy2, ox1:ox2]
+                inner_lin_u16 = np.clip(inner_lin * 65535.0, 0.0, 65535.0).astype(np.uint16)
+                milestone_cache.put_milestone(
+                    "linear_u16", tx, ty, ctx.linear_key, np.ascontiguousarray(inner_lin_u16)
+                )
+        else:
+            out_padded = res
 
     if out_padded is None or (abort_flag and abort_flag()):
         return None
 
     # Crop back to exact inner tile bounds (discarding spatial halo)
-    ox1 = ix1 - px1
-    oy1 = iy1 - py1
-    ox2 = ox1 + (ix2 - ix1)
-    oy2 = oy1 + (iy2 - iy1)
     inner = out_padded[oy1:oy2, ox1:ox2]
     tile_u8 = cv2.convertScaleAbs(np.clip(inner, 0.0, 1.0), alpha=255.0)
     return np.ascontiguousarray(tile_u8, dtype=np.uint8)
@@ -592,6 +684,34 @@ class TileGridEngine:
 
         return mosaic, missing
 
+    def assemble_linear_u16_mosaic(
+        self,
+        tile_coords: List[Tuple[int, int]],
+        mosaic_rect: Tuple[int, int, int, int],
+        linear_key: Any,
+    ) -> Optional[np.ndarray]:
+        """Assemble a uint16 linear RGB mosaic from cached per-tile linear milestones for 1:1 LUT scrubbing."""
+        if not tile_coords or linear_key is None:
+            return None
+        mx1, my1, mx2, my2 = mosaic_rect
+        mw, mh = mx2 - mx1, my2 - my1
+        ts = self.tile_size
+
+        tiles: List[Tuple[int, int, np.ndarray]] = []
+        for tx, ty in tile_coords:
+            t_u16 = self.cache.get_milestone("linear_u16", tx, ty, linear_key)
+            if t_u16 is None:
+                return None
+            tiles.append((tx, ty, t_u16))
+
+        mosaic = np.empty((mh, mw, 3), dtype=np.uint16)
+        for tx, ty, t_u16 in tiles:
+            ox = tx * ts - mx1
+            oy = ty * ts - my1
+            th, tw = t_u16.shape[:2]
+            mosaic[oy : oy + th, ox : ox + tw] = t_u16
+        return mosaic
+
     def render_viewport_sync(
         self,
         ctx: TileContext,
@@ -619,7 +739,7 @@ class TileGridEngine:
 
         if len(missing) == 1 or workers <= 1:
             for tx, ty in missing:
-                tile_u8 = render_single_tile(ctx, tx, ty, tile_size=ts)
+                tile_u8 = render_single_tile(ctx, tx, ty, tile_size=ts, milestone_cache=self.cache)
                 if tile_u8 is not None:
                     self.cache.put(tx, ty, ctx.state_key, tile_u8)
                     ox = tx * ts - mx1
@@ -628,7 +748,10 @@ class TileGridEngine:
                     mosaic[oy : oy + th, ox : ox + tw] = tile_u8
         else:
             with ThreadPoolExecutor(max_workers=min(workers, len(missing))) as pool:
-                futures = [(tx, ty, pool.submit(render_single_tile, ctx, tx, ty, ts)) for tx, ty in missing]
+                futures = [
+                    (tx, ty, pool.submit(render_single_tile, ctx, tx, ty, ts, None, self.cache))
+                    for tx, ty in missing
+                ]
                 for tx, ty, fut in futures:
                     tile_u8 = fut.result()
                     if tile_u8 is not None:
@@ -656,6 +779,7 @@ class _TileWorker(QRunnable):
         is_prefetch: bool,
         abort_check: Callable[[], bool],
         signals: _TileWorkerSignals,
+        milestone_cache: Optional[TileCache] = None,
     ):
         super().__init__()
         self.setAutoDelete(True)
@@ -667,6 +791,7 @@ class _TileWorker(QRunnable):
         self.is_prefetch = is_prefetch
         self.abort_check = abort_check
         self.signals = signals
+        self.milestone_cache = milestone_cache
 
     def run(self) -> None:
         if self.abort_check():
@@ -678,6 +803,7 @@ class _TileWorker(QRunnable):
                 self.ty,
                 tile_size=self.tile_size,
                 abort_flag=self.abort_check,
+                milestone_cache=self.milestone_cache,
             )
             if tile_u8 is not None and not self.abort_check():
                 self.signals.tile_done.emit(self.gen_id, self.tx, self.ty, tile_u8, self.is_prefetch)
@@ -745,6 +871,22 @@ class AsyncTileManager(QObject):
         self.cancel_all()
         self.engine.cache.clear()
 
+    def assemble_active_linear_u16_mosaic(self) -> Optional[Tuple[Tuple[int, int, int, int], Any, np.ndarray]]:
+        """Assemble the 16-bit linear mosaic for the currently active 1:1 viewport if all tiles are cached."""
+        if (
+            self._active_ctx is None
+            or self._active_rect is None
+            or not self._active_visible
+            or self._active_ctx.linear_key is None
+        ):
+            return None
+        mosaic_u16 = self.engine.assemble_linear_u16_mosaic(
+            self._active_visible, self._active_rect, self._active_ctx.linear_key
+        )
+        if mosaic_u16 is None:
+            return None
+        return self._active_rect, self._active_ctx.linear_key, mosaic_u16
+
     def request_viewport(
         self,
         ctx: TileContext,
@@ -794,6 +936,7 @@ class AsyncTileManager(QObject):
                 is_prefetch=False,
                 abort_check=lambda g=gen: self._gen_id != g,
                 signals=self._worker_signals,
+                milestone_cache=self.engine.cache,
             )
             self.thread_pool.start(worker)
 
@@ -862,6 +1005,7 @@ class AsyncTileManager(QObject):
                 is_prefetch=True,
                 abort_check=lambda g=gen: self._gen_id != g,
                 signals=self._worker_signals,
+                milestone_cache=self.engine.cache,
             )
             self.thread_pool.start(worker)
             scheduled += 1
