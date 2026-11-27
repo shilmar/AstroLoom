@@ -51,8 +51,9 @@ Si experimentas problemas técnicos, deseas reportar una incidencia o necesitas 
 * Lanza AstroLoom manteniendo una ventana de consola secundaria activa donde se muestran en tiempo real las trazas completas (*stack traces*), eventos de inicialización de GPU DirectML y registros de `LogHub`.
 * En caso de cierre o excepción inesperada, la ventana no se cerrará automáticamente, permitiéndote copiar el diagnóstico o capturar la pantalla.
 
-### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.19.1)
-A partir de las versiones **v0.14.0** a **v0.19.1**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
+### ⚡ Motor de Cómputo Nativo en Rust (`astroloom_rs` en v0.19.2)
+A partir de las versiones **v0.14.0** a **v0.19.2**, AstroLoom incorpora un motor de cálculo numérico y renderizado de ultra-alta velocidad programado en Rust (`astroloom_rs` vía `PyO3`, `rust-numpy`, `rayon`, `nalgebra`, `realfft` y compresión paralela), totalmente integrado entre bastidores con la interfaz gráfica:
+* **Deconvolución FFT 2D en Rust, Cero `scipy` y Runtime ONNX Unificado (v0.19.2):** Convolución FFT 2D real en Rust (2–3,3× más rápida que OpenCV, 100% *thread-safe* sin OpenCL/UMat), eliminación total de la dependencia `scipy` (~100–130 MB menos en el ejecutable), gestión unificada de sesiones ONNX con `enable_mem_pattern=False` en DirectML y endurecimiento FFI integral del motor Rust.
 * **Motor de Teselas 512×512 y Kernels Espaciales en Rust para Zoom 1:1 (v0.19.1):** Rejilla fija asíncrona con caché LRU por tesela, prefetch concéntrico en segundo plano con cancelación instantánea, scrubbing fluido a 0.5× al arrastrar deslizadores con refinado atómico 1:1 al soltar y aceleración nativa en Rust para ondículas à-trous, claridad, dehaze, contraste enmascarado, filtro autoguiado, estirado MTF y reducción de ruido astronómica.
 * **Plate Solving Offline y Anotaciones Astronómicas (v0.19.0):** Resolución astrométrica sin conexión en Rust (catálogos estándar y profundos), ajuste radial conjunto con nivelación SO(3) en panorámicas y capa de anotaciones con constelaciones IAU, estrellas nombradas y objetos Messier/NGC.
 * **Fluidez Total a 60-160+ FPS:** El renderizado del lienzo (`MaskCanvas`) vuelca directamente a búferes de memoria continua `BGRA8888` compatibles de forma nativa con `QImage(Format_RGB32)`. Las alertas de clipping (`J`) y el comparador Antes/Después con cortina (`Y`) se procesan en microsegundos sin crear copias intermedias en NumPy ni capas secundarias de `QPixmap`.
@@ -84,9 +85,9 @@ A partir de las versiones **v0.14.0** a **v0.19.1**, AstroLoom incorpora un moto
 * **Tiling ONNX y Filtro Guiado O(1):** Pre y post-procesado acelerado para StarNet++ v2 y NAFNet con ventanas 2D de Hann continuas, y refinado de bordes de horizonte con imágenes integrales (SAT) en ~21 ms.
 * **Resiliencia Automática (*Drop-in Fallback*):** Si en algún entorno el módulo binario no estuviera presente, AstroLoom conmuta de forma transparente y automática a su motor de reserva en Python/NumPy sin que el usuario experimente errores.
 
-### 🖥️ Cabecera de Telemetría Superior y Espacio Útil (v0.16.0 / v0.19.1)
+### 🖥️ Cabecera de Telemetría Superior y Espacio Útil (v0.16.0 / v0.19.2)
 Para maximizar el área de trabajo vertical dedicada al lienzo de revelado y apilado, se ha suprimido la barra de estado inferior (*status bar*), reubicando toda la información de diagnóstico y monitorización en la esquina superior derecha de la barra de pestañas:
-* **Insignia del Motor:** Identifica en todo momento la versión activa de la suite (`● AstroLoom Engine v0.19.1`).
+* **Insignia del Motor:** Identifica en todo momento la versión activa de la suite (`● AstroLoom Engine v0.19.2`).
 * **Píldora de Alerta Fallback GPU $\rightarrow$ CPU:** Si tu tarjeta gráfica se satura de memoria (VRAM) durante la ejecución de StarNet++ o AI Denoise, se enciende una píldora ámbar (`⚠️ Fallback CPU (VRAM)`) indicando que el proceso continuó en CPU de forma segura. Puedes pinchar en ella para ocultarla.
 * **Monitor de RAM en Tiempo Real:** Muestra el porcentaje y los gigabytes de memoria en uso del sistema operativo (`RAM: XX% (used / total GB)`), actualizado mediante telemetría cada 2.5 segundos.
 * **Botón de Registro de Actividad:** Abre una ventana flotante con el histórico cronológico de operaciones, advertencias, tiempos de ejecución y telemetría de depuración.

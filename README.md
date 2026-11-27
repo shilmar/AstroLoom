@@ -4,11 +4,11 @@
 
 **Suite y Estación de Trabajo Integral para Astrofotografía de Paisaje, Cielo Profundo y Eventos Astronómicos**
 
-[![Version](https://img.shields.io/badge/version-v0.19.1-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
+[![Version](https://img.shields.io/badge/version-v0.19.2-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)]()
 
 [**📖 Manual de Usuario**](MANUAL_DE_USUARIO.md) • [**📝 Registro de Cambios**](CHANGELOG.md) • [**🤝 Contribuir**](CONTRIBUTING.md) • [**🗺️ Hoja de Ruta**](ROADMAP.md)
 
@@ -43,6 +43,19 @@ Impulsada por una arquitectura híbrida que combina una interfaz gráfica reacti
 | **5. Startrails** | Circumpolares continuas o efecto cometa en streaming $O(1)$, supresión automática de satélites y aviones, relleno de pausas (*gap filling*), recuperación cromática de estrellas y exportación de vídeo 4K. |
 | **6. Lluvias de Meteoros** | Detección algorítmica de bólidos, cribado en galería interactiva, filtros anti-aviones/satélites y reproyección al radiante celeste con flujo neto. |
 | **7. Panorámicas (Mosaicos)** | Cosido 2D multifila de ultra-alta resolución, alineación por asterismos en Rust (<2 ms), fusión híbrida *Dual-Zone* (árboles nítidos sin efecto fantasma) y auto-recorte rectangular $O(H \times W)$. |
+
+---
+
+## 🚀 Novedades de la Versión v0.19.2
+
+* **Deconvolución FFT 2D Nativa en Rust (`astroloom_rs/src/deconv.rs`, `core/deconvolution.py`):**
+  - Nuevo motor FFT 2D real (`realfft` + `rustfft` + `Rayon`) con frontera reflectiva exacta (`PSNR > 135 dB`, 2–3,3× más rápido que OpenCV, ~0,98 s en 24 MP) y retirada completa de OpenCV `UMat`/OpenCL.
+* **Eliminación de `scipy` (`-100 a -130 MB` en el binario):**
+  - Reemplazados `PchipInterpolator` (curvas tonales y selectivas) y `least_squares` (ajuste de haces en Panorámicas) por implementaciones nativas en NumPy puro con precisión equivalente y hasta 10× mayor velocidad.
+* **Runtime ONNX Unificado (`core/onnx_runtime.py`) y Arranque Escalonado:**
+  - Gestión compartida de sesiones ONNX (DirectML `enable_mem_pattern=False` en Windows, CUDA/ROCm en Linux), precarga suave de pestañas secundarias y soporte de `.devloom` arrastrados sobre el Apilador.
+* **Endurecimiento FFI Rust, Poda de Código Muerto (~4.700L) y Correcciones Críticas:**
+  - Eliminados 50+ `.unwrap()` en Rust, modularizado `astroloom_rs/src/eclipse/`, corregidas costuras en Zoom 1:1 con Deconvolución + StarNet, diferenciación de paletas OSC (`Foraxx`/`Cannistra`), aviso de recorte de sombras por canal y nuevo workflow de CI en GitHub Actions.
 
 ---
 

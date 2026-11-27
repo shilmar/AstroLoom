@@ -3,6 +3,42 @@
 Todas las novedades, mejoras y correcciones notables de **AstroLoom** (anteriormente *Apilator*) se documentan en este archivo.
 El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.19.2] - 2026-11-28
+
+### Añadido
+* **Deconvolución Óptica FFT 2D Nativa en Rust (`astroloom_rs/src/deconv.rs`, `core/deconvolution.py`):**
+  - Nuevo convolucionador FFT 2D real (`realfft` + `rustfft` + `Rayon`) con frontera reflectiva exacta y pre-cálculo único del espectro de la PSF (`PSNR > 135 dB`, 2–3,3× más rápido que OpenCV `filter2D`, ~0,98 s en 24 MP con PSF 51×51).
+  - Retirada completa de la ruta OpenCV `UMat`/OpenCL y de `_OPENCL_LOCK`, haciendo la deconvolución 100% *thread-safe* e independiente de drivers OpenCL.
+* **Runtime ONNX Compartido (`core/onnx_runtime.py`):**
+  - Unifica la gestión de sesiones ONNX, caché en disco (`models/.cache/`), expulsión/liberación de VRAM, listeners de degradación GPU→CPU, `enable_mem_pattern=False` en DirectML (Windows) y soporte de `CUDAExecutionProvider`/`ROCMExecutionProvider` en Linux para StarNet v2, NAFNet y SkySeg Horizon.
+* **Utilidades Compartidas de Exportación (`gui/export_utils.py`) y CI Automatizado (`.github/workflows/ci.yml`, `.github/ci/verify_ci.py`):**
+  - Diálogo y guardado unificado (TIFF 16/32-bit con ICC, PNG 16-bit, JPEG 8-bit) compartido entre Eclipses, Startrails, Meteoros y Panorámicas.
+  - Pipeline de CI en Windows y Ubuntu (`cargo test --no-run`, `cargo clippy -- -D clippy::correctness`, `py_compile`, smoke tests Rust/Core y GUI `offscreen`).
+
+### Modificado
+* **Eliminación Completa de `scipy` (`core/mask_layers.py`, `gui/widgets/curve_widget.py`, `core/panorama.py`, `requirements.txt`, `Astroloom.spec`):**
+  - Sustituidos `PchipInterpolator` por interpolación cúbica monótona de Fritsch–Carlson en NumPy puro (diferencia máxima `8.12e-16`) y `scipy.optimize.least_squares` por un solver Levenberg–Marquardt IRLS `soft_l1` con cotas (misma precisión RMS y ~10× más rápido). Ahorro estimado de 100–130 MB en el binario final.
+* **Poda Masiva de Código Muerto y Fallbacks Python (~4.700 líneas netas eliminadas):**
+  - Eliminados fallbacks Python obsoletos de `astroloom_rs` en toda la suite, módulo huérfano `gui/dialog_eclipse_collage.py`, puente CLI legacy `core/starnet_bridge.py`, `CoreMLExecutionProvider`, 7 exports Rust sin uso en `lib.rs` y métodos GUI huérfanos.
+  - Activada la caché de configuración en `core/config_manager.py` y modularizado `astroloom_rs/src/eclipse.rs` (3.840L) en 7 submódulos bajo `astroloom_rs/src/eclipse/`.
+  - `extract_exposure_info` en `core/eclipse.py` migrado a `astroloom_rs.scan_raw_metadata_rs`; unificados `undo()`/`redo()` en `gui/developer/history_presets.py` y desduplicado `generate_startrail` en `core/startrails.py`.
+* **Arranque con Precarga Escalonada (`gui/main_window.py`, `gui/tab_stacker.py`):**
+  - Apilador y Revelador se cargan durante el splash y las pestañas 3–8 se precargan de forma escalonada en segundo plano; arrastrar un `.devloom` sobre el Apilador conmuta automáticamente al Revelador.
+* **Empaquetado Seguro (`Astroloom.spec`):**
+  - `astroloom_rs` ahora es obligatorio en tiempo de build y `scipy` queda explícitamente excluido.
+* **Sincronización Global de Versión:**
+  - Actualización transversal a `v0.19.2` en `core/__init__.py`, motor Rust (`Cargo.toml`, `Cargo.lock`, `pyproject.toml`) y documentación.
+
+### Corregido
+* **Estabilidad FFI en Rust (`astroloom_rs/src/`):**
+  - Eliminados más de 50 `.unwrap()` y accesos inseguros (ahora devuelven `PyValueError` en lugar de abortar el proceso bajo `panic = "abort"`), corregido stride `* c` en `compute_red_excess_mask_rs` y `blend_meteor_capsule_lighten_rs`, y envuelto `recover_star_trail_colors_rs` en `py.allow_threads` + Rayon + interpolación circular de Hue.
+* **Costuras/Bloques en Zoom 1:1 con Deconvolución y StarNet (`gui/developer/tile_engine.py`, `gui/developer/render_engine.py`):**
+  - Corregido el bug por el que un hit en el milestone `pre_stars` pasaba `image_stars=None` al pipeline en modo `Solo Estrellas`/`Solo Fondo`, provocando un fallback `TOPHAT` inconsistente entre teselas. Corregidas también las claves `deconv_aspect_ratio` y `deconv_angle_deg` en `key_spatial`.
+* **Paletas Dual-Band OSC y Aviso de Recorte de Negros (`astroloom_rs/src/photometry.rs`, `astroloom_rs/src/renderer.rs`, `core/histogram.py`):**
+  - Corregida la normalización de `Foraxx` (percentil 99) y mezcla `Cannistra` para diferenciar claramente las paletas respecto a `HOO`; el aviso de recorte de sombras ahora se dispara si cualquier canal R, G o B cae a 0.
+* **Fugas de RAM/VRAM y Bugs de UI/Core:**
+  - Corregidos paso de maestros CFA y fuga de `curr_gray` en `core/substacking.py`, tensor 4D in-place en `core/starnet_onnx.py`, caché `_MASK_3D_CACHE` por `id()` y slider `unclip_stars_val` en `gui/developer/pipeline.py`, `key_pre_lp` en `render_engine.py`, refresco tras NAFNet, `_timer_ram` al cerrar, Drag & Drop de Collage/Stacker, señal `cancelled` en `QualityCullingWorker`, `before_u8` en split-view y preview PSD en `core/eclipse_collage.py`.
+
 ## [0.19.1] - 2026-11-27
 
 ### Añadido
