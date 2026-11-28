@@ -14,6 +14,10 @@
 
 </div>
 
+<p align="center">
+  <img src="assets/astroloom_demo.webp" alt="Demostración de AstroLoom: Apilador Dual, Revelador 32-bit en Rust, Eclipses HDR, Panorámicas 2D y Startrails" width="840">
+</p>
+
 ---
 
 ## 🔭 ¿Qué es AstroLoom?
