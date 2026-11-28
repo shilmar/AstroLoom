@@ -1,11 +1,16 @@
 import os
+import sys
 import json
 import threading
 
 _CONFIG_LOCK = threading.RLock()
 _CACHED_CONFIG: dict | None = None
 
-APP_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+APP_ROOT = (
+    os.path.dirname(sys.executable)
+    if getattr(sys, "frozen", False)
+    else os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+)
 
 cpu_tot = os.cpu_count() or 4
 def_workers = max(2, cpu_tot - 2) if cpu_tot > 2 else cpu_tot
@@ -152,10 +157,10 @@ def load_config(force_reload: bool = False) -> dict:
                 print(f"[ConfigManager] Error leyendo config.default.json: {e}")
 
         # Validar y crear directorios de forma segura (sin excepciones no controladas)
-        healed = ensure_workspace_directories(config)
+        ensure_workspace_directories(config)
 
-        # Si no existía config.json o hubo rutas corruptas/reparadas, persistir para estabilizar
-        if not config_loaded_from_disk or healed:
+        # Solo persistir automáticamente si no existía config.json en disco
+        if not config_loaded_from_disk:
             save_config(config)
         else:
             _CACHED_CONFIG = config.copy()

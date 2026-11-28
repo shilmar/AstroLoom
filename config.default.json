@@ -3,6 +3,7 @@
     "masks_dir": "sesiones/mascaras",
     "stacked_dir": "imagenes",
     "export_dir": "exportaciones",
+    "presets_dir": "presets",
     "kappa": 2.2,
     "default_kappa": 2.2,
     "storage_strategy": "auto",

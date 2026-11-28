@@ -3,6 +3,25 @@
 Todas las novedades, mejoras y correcciones notables de **AstroLoom** (anteriormente *Apilator*) se documentan en este archivo.
 El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.19.3] - 2026-11-28
+
+### Añadido
+* **Instalador de Windows con Inno Setup (`packaging/AstroLoom.iss`, `.github/workflows/release.yml`):**
+  - Nuevo instalador por usuario (`AstroLoom-Setup-x64.exe`, sin requerir UAC) junto al paquete portable `AstroLoom-windows-x64-portable.zip` y el archivo `AstroLoom-linux-x86_64.tar.gz`.
+
+### Modificado
+* **Empaquetado `one-dir` y Resolución de Rutas Frozen (`Astroloom.spec`, `core/config_manager.py`, `run_app.py`):**
+  - Migración de PyInstaller `--onefile` a modo `one-dir` (`exclude_binaries=True` + `COLLECT`) con `gui/assets` incluido y `upx=False`.
+  - `APP_ROOT` y `ROOT_DIR` resuelven `os.path.dirname(sys.executable)` cuando `sys.frozen` está activo.
+* **Plantilla de Configuración y Control de Versiones (`config.default.json`, `.gitignore`):**
+  - Añadido `"presets_dir": "presets"` a `config.default.json`; excluidos `config.json` y `ROADMAP.md` del seguimiento de Git y retirado `ROADMAP.md` junto a su enlace en `README.md`.
+* **Sincronización de Versión (`v0.19.3`):**
+  - Actualizada la versión a `0.19.3` en `core/__init__.py`, `astroloom_rs` (`Cargo.toml`, `Cargo.lock`, `pyproject.toml`), `packaging/AstroLoom.iss` y documentación.
+
+### Corregido
+* **Sobrescritura Silenciosa de `config.json` (`core/config_manager.py`):**
+  - `load_config()` ya no llama a `save_config()` cuando solo normaliza o repara rutas en memoria; únicamente persiste automáticamente cuando `config.json` no existía en disco.
+
 ## [0.19.2] - 2026-11-28
 
 ### Añadido

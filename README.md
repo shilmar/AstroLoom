@@ -4,13 +4,13 @@
 
 **Suite y Estación de Trabajo Integral para Astrofotografía de Paisaje, Cielo Profundo y Eventos Astronómicos**
 
-[![Version](https://img.shields.io/badge/version-v0.19.2-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
+[![Version](https://img.shields.io/badge/version-v0.19.3-blue.svg)](https://github.com/shilmar/AstroLoom/releases)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)]()
 
-[**📖 Manual de Usuario**](MANUAL_DE_USUARIO.md) • [**📝 Registro de Cambios**](CHANGELOG.md) • [**🤝 Contribuir**](CONTRIBUTING.md) • [**🗺️ Hoja de Ruta**](ROADMAP.md)
+[**📖 Manual de Usuario**](MANUAL_DE_USUARIO.md) • [**📝 Registro de Cambios**](CHANGELOG.md) • [**🤝 Contribuir**](CONTRIBUTING.md)
 
 </div>
 
@@ -47,6 +47,18 @@ Impulsada por una arquitectura híbrida que combina una interfaz gráfica reacti
 | **5. Startrails** | Circumpolares continuas o efecto cometa en streaming $O(1)$, supresión automática de satélites y aviones, relleno de pausas (*gap filling*), recuperación cromática de estrellas y exportación de vídeo 4K. |
 | **6. Lluvias de Meteoros** | Detección algorítmica de bólidos, cribado en galería interactiva, filtros anti-aviones/satélites y reproyección al radiante celeste con flujo neto. |
 | **7. Panorámicas (Mosaicos)** | Cosido 2D multifila de ultra-alta resolución, alineación por asterismos en Rust (<2 ms), fusión híbrida *Dual-Zone* (árboles nítidos sin efecto fantasma) y auto-recorte rectangular $O(H \times W)$. |
+
+---
+
+## 🚀 Novedades de la Versión v0.19.3
+
+* **Instalador de Windows y Empaquetado `one-dir` (`Astroloom.spec`, `packaging/AstroLoom.iss`, `.github/workflows/release.yml`):**
+  - Transición del binario PyInstaller a distribución `one-dir` (arranque más rápido sin descompresión temporal), inclusión de `gui/assets`, nuevo instalador de Windows por usuario con Inno Setup (`AstroLoom-Setup-x64.exe`) y archivo portable `.zip`.
+  - Resolución de rutas en binarios empaquetados (`sys.frozen`) en `core/config_manager.py` y `run_app.py`.
+* **Gestión Limpia de Configuración Local (`core/config_manager.py`, `config.default.json`, `.gitignore`):**
+  - `load_config()` ya no sobrescribe automáticamente un `config.json` existente al validar rutas en memoria; actualizada la plantilla `config.default.json` con `presets_dir` y excluido `config.json` del repositorio para no ensuciar el árbol con ajustes locales.
+* **Limpieza del Repositorio:**
+  - Retirado `ROADMAP.md` del repositorio público y su enlace en `README.md`.
 
 ---
 

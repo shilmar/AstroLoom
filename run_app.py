@@ -9,7 +9,11 @@ import traceback
 from datetime import datetime
 import faulthandler
 
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = (
+    os.path.dirname(sys.executable)
+    if getattr(sys, "frozen", False)
+    else os.path.dirname(os.path.abspath(__file__))
+)
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 

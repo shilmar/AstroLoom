@@ -37,22 +37,28 @@ jobs:
         run: |
           pip install ./astroloom_rs
 
-      - name: Build Executable with PyInstaller
+      - name: Build Executable with PyInstaller (one-dir)
         run: |
           pyinstaller --clean Astroloom.spec
 
-      - name: Compress Release Archive
+      - name: Compress Windows Portable Archive
         shell: pwsh
         run: |
-          Compress-Archive -Path dist\AstroLoom.exe -DestinationPath dist\AstroLoom-windows-x64.zip
+          Compress-Archive -Path dist\AstroLoom -DestinationPath dist\AstroLoom-windows-x64-portable.zip
+
+      - name: Build Windows Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $ver = if ($env:GITHUB_REF_NAME -match '^v(.+)$') { $Matches[1] } else { '0.0.0-dev' }
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" packaging\AstroLoom.iss
 
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v7
         with:
           name: windows-binaries
           path: |
-            dist/AstroLoom.exe
-            dist/AstroLoom-windows-x64.zip
+            dist/AstroLoom-Setup-x64.exe
+            dist/AstroLoom-windows-x64-portable.zip
 
   build-linux:
     name: Build Linux Executable
@@ -89,13 +95,13 @@ jobs:
         run: |
           pip install ./astroloom_rs
 
-      - name: Build Executable with PyInstaller
+      - name: Build Executable with PyInstaller (one-dir)
         run: |
           pyinstaller --clean Astroloom.spec
 
       - name: Compress Linux Release Archive
         run: |
-          chmod +x dist/AstroLoom
+          chmod +x dist/AstroLoom/AstroLoom
           tar -czvf dist/AstroLoom-linux-x86_64.tar.gz -C dist AstroLoom
 
       - name: Upload Linux Artifacts
@@ -103,7 +109,6 @@ jobs:
         with:
           name: linux-binaries
           path: |
-            dist/AstroLoom
             dist/AstroLoom-linux-x86_64.tar.gz
 
   publish-release:
@@ -122,8 +127,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: |
-            release-assets/AstroLoom.exe
-            release-assets/AstroLoom-windows-x64.zip
-            release-assets/AstroLoom
+            release-assets/AstroLoom-Setup-x64.exe
+            release-assets/AstroLoom-windows-x64-portable.zip
             release-assets/AstroLoom-linux-x86_64.tar.gz
           generate_release_notes: true

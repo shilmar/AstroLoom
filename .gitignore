@@ -74,6 +74,8 @@ models/catalogs/
 graphify-out/
 # Desarrollo interno
 INDEX.md
+ROADMAP.md
+config.json
 docs/
 scripts/
 .archify/
